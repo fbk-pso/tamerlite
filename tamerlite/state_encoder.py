@@ -1,5 +1,5 @@
 import numpy as np
-from pyparsing import List
+from typing import List
 import unified_planning as up
 import unified_planning.model
 
@@ -187,7 +187,7 @@ class GeneralStateEncoder:
             self._actions_pos[a.name] = actions_pos[str(oa)]
         self._sg = StateGeometry(num_fluents, num_actions, num_constants, num_fluents, tn_size)
 
-        self._cse = CoreStateEncoder(self._sg.num_actions, self._sg.tn_size, self._fluents_str, 
+        self._cse = CoreStateEncoder(self._sg.num_actions, self._sg.tn_size, self._fluents_str,
                                      self._actions, self._actions_pos, self._objects, self._events)
 
     @property
@@ -197,7 +197,7 @@ class GeneralStateEncoder:
     def get_state_as_vector(self, state, constants_vec, goals_vec) -> List[float]:
         # vectorization of the fluents value
         res = self._cse.get_fluents_as_vector(state)
-        
+
         res.extend(constants_vec)
         res.extend(goals_vec)
 
