@@ -29,6 +29,7 @@ jobs:
           working-directory: rustamer
       - run: |
           python3 -m pip install --find-links rustamer/target/wheels/ rustamer
+          python3 -m pip install .
           git clone https://github.com/aiplan4eu/unified-planning.git
           python3 -m pip install unified-planning/
           echo -e "[engine tamerlite]\nmodule_name: tamerlite.engine\nclass_name: TamerLite" > .up.ini
