@@ -27,8 +27,8 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           working-directory: rustamer
-          command: develop
       - run: |
+          python3 -m pip install --find-links rustamer/dist/ rustamer
           git clone https://github.com/aiplan4eu/unified-planning.git
           python3 -m pip install unified-planning/
           echo -e "[engine tamerlite]\nmodule_name: tamerlite.engine\nclass_name: TamerLite" > .up.ini
