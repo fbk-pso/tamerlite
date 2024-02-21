@@ -99,6 +99,7 @@ jobs:
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:
+          working-directory: rustamer
           command: sdist
           args: --out dist
       - name: Upload sdist
@@ -106,6 +107,24 @@ jobs:
         with:
           name: wheels
           path: rustamer/dist
+
+  tamerlite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
+      - name: Build wheels
+        run: |
+          python3 -m pip install wheel
+          python3 setup.py sdist --format=gztar
+          python3 setup.py bdist_wheel
+      - name: Upload wheels
+        uses: actions/upload-artifact@v3
+        with:
+          name: wheels
+          path: dist
 
   # release:
   #   name: Release
