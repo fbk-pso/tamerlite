@@ -221,6 +221,11 @@ impl HFF {
                 }
             }
         }
+        for c in goals.iter() {
+            if is_numeric_condition(c) {
+                numeric_conds.insert(c.to_vec());
+            }
+        }
 
         let events_len: HashMap<String, usize> = events.iter().map(|(a, ev)| (a.to_string(), ev.len())).collect();
         let res = HFF {
@@ -260,8 +265,7 @@ impl HFF {
         for c in self.numeric_conds.iter() {
             if evaluate(c.to_vec(), state)?.v == ExpressionNode::Bool(true) {
                 costs.insert(c.to_vec(), 0.0);
-            }
-            else {
+            } else {
                 costs.insert(c.to_vec(), 1.0);
             }
             lp.push(c.to_vec());
