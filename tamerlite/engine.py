@@ -15,7 +15,6 @@ from tamerlite.core import evaluate, make_fluent_node
 from tamerlite.core import HFF, HAdd, CustomHeuristic
 from tamerlite.converter import Converter
 from tamerlite.encoder import Encoder, get_encoders
-from tamerlite.rl_heuristics import RLHeuristic, RLRank
 
 
 credits = up.engines.Credits('TamerLite',
@@ -161,11 +160,13 @@ class TamerLite(
             w = 1 if params.weight is None else params.weight
         elif h == "rl_heuristic":
             assert rl_params is not None and rl_params.max_plan_size is not None and rl_params.gamma is not None
+            from tamerlite.rl_heuristics import RLHeuristic
             hrl = RLHeuristic(state_encoder, rl_params.model, rl_params.model_class, rl_params.max_plan_size, rl_params.gamma)
             h = CustomHeuristic(hrl.eval)
             w = 0.8 if params.weight is None else params.weight
         elif h == "rl_rank":
             assert rl_params is not None
+            from tamerlite.rl_heuristics import RLRank
             hrl = RLRank(state_encoder, rl_params.model, rl_params.model_class)
             h = CustomHeuristic(hrl.eval)
             w = 1 if params.weight is None else params.weight

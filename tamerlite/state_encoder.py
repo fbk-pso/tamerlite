@@ -1,4 +1,3 @@
-import numpy as np
 from typing import List
 import unified_planning as up
 import unified_planning.model
@@ -209,4 +208,4 @@ class GeneralStateEncoder:
         tn = self._cse.get_tn_as_vector(state)
         res.extend(tn)
 
-        return np.array(res)
+        return res
