@@ -202,15 +202,15 @@ pub fn split_expression(exp: &Vec<PyExpressionNode>) -> PyResult<Vec<Vec<PyExpre
                 for e in exp.iter().skip(last).take(*i+1-last) {
                     match e.to_expression_node() {
                         ExpressionNode::And(v) => {
-                            let operands = v.iter().map(|&j| last - j).collect();
+                            let operands = v.iter().map(|&j| j - last).collect();
                             new_exp.push(make_operator_node("and".to_string(), operands)?);
                         },
                         ExpressionNode::Plus(v) => {
-                            let operands = v.iter().map(|&j| last - j).collect();
+                            let operands = v.iter().map(|&j| j - last).collect();
                             new_exp.push(make_operator_node("+".to_string(), operands)?);
                         },
                         ExpressionNode::Times(v) => {
-                            let operands = v.iter().map(|&j| last - j).collect();
+                            let operands = v.iter().map(|&j| j - last).collect();
                             new_exp.push(make_operator_node("*".to_string(), operands)?);
                         },
                         ExpressionNode::Equals(i1, i2) => {
