@@ -97,7 +97,7 @@ class HFF(Heuristic):
         if isinstance(exp[-1], Op) and exp[-1].kind == "==": # equals between a fluent and an object
             i1 = exp[-1].operands[0]
             i2 = exp[-1].operands[1]
-            if isinstance(exp[i1], str) and isinstance(exp[i2], str) and exp[i1] in self._fluents and exp[i2] in self._objects:
+            if isinstance(exp[i1], str) and isinstance(exp[i2], str) and exp[i1] in self._fluents and exp[i2] in self._objects[self._fluents[exp[i1]]]:
                 return False
         return True
 
