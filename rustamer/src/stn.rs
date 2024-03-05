@@ -141,7 +141,7 @@ Q: num_traits::Num + std::ops::Neg<Output=Q> + PartialOrd + Clone {
         while neighbors.is_some() {
             let n: &Arc<DeltaNeighbors<Q>> = neighbors.as_ref().unwrap();
             if n.dst == *y {
-                return n.bound <= *b
+                return n.bound <= b.clone() + self.tolerance.clone()
             }
             neighbors = &n.next
         }
@@ -157,7 +157,7 @@ Q: num_traits::Num + std::ops::Neg<Output=Q> + PartialOrd + Clone {
     }
 
     fn inc_check(&mut self, x:&i32, y:&i32, b:&Q) -> bool {
-        if self.distances[x].clone() + b.clone() < self.distances[y] {
+        if self.distances[x].clone() + b.clone() < self.distances[y].clone() - self.tolerance.clone() {
             self.distances.insert(*y, self.distances[x].clone() + b.clone());
         }
         else {
@@ -171,7 +171,7 @@ Q: num_traits::Num + std::ops::Neg<Output=Q> + PartialOrd + Clone {
             while neighbors.is_some() {
                 let n: &Arc<DeltaNeighbors<Q>> = neighbors.as_ref().unwrap();
                 let val = self.distances[c].clone() + n.bound.clone();
-                if val < self.distances[&n.dst] {
+                if val < self.distances[&n.dst].clone() - self.tolerance.clone() {
                     if n.dst == *y && self.equals_with_tolerance(&n.bound, b) {
                         return false; // Cycle detected
                     }
