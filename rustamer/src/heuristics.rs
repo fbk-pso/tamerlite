@@ -39,7 +39,7 @@ impl Heuristic {
         Ok(Heuristic {hff: Some(HFF::new(fluents, objects, events, goal, true)?), hcustom: None})
     }
 
-    pub fn eval(&self, state: &State) -> PyResult<Option<f32>> {
+    pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
         if self.hff.is_some() {
             let h = self.hff.as_ref().unwrap();
             h.eval(state)
@@ -62,7 +62,7 @@ impl CustomHeuristic {
         Ok(CustomHeuristic { callable })
     }
 
-    pub fn eval(&self, state: &State) -> PyResult<Option<f32>> {
+    pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
         Python::with_gil(|py| {
             let args = PyTuple::new(py, &[state.clone().into_py(py)]);
             let r = self.callable.call(py, args, None)?;
@@ -81,7 +81,7 @@ struct Operator {
     action: String,
     conditions: Vec<Vec<PyExpressionNode>>,
     effects: Vec<(String, PyExpressionNode)>,
-    cost: f32,
+    cost: f64,
 }
 
 impl Eq for Operator {}
@@ -115,7 +115,7 @@ fn is_numeric_condition(cond: &Vec<PyExpressionNode>) -> bool {
     true
 }
 
-fn cost(exp: &Vec<Vec<PyExpressionNode>>, costs: &HashMap<Vec<PyExpressionNode>, f32>) -> Option<f32> {
+fn cost(exp: &Vec<Vec<PyExpressionNode>>, costs: &HashMap<Vec<PyExpressionNode>, f64>) -> Option<f64> {
     let mut res = 0.0;
     for g in exp.iter() {
         let c = costs.get(g);
@@ -241,7 +241,7 @@ impl HFF {
         Ok(res)
     }
 
-    pub fn eval(&self, state: &State) -> PyResult<Option<f32>> {
+    pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
         let mut costs = HashMap::new();
         let mut lp = Vec::new();
 
@@ -344,7 +344,7 @@ impl HFF {
 
         let mut res = 0.0;
         for (a, (j, _)) in state.todo.iter() {
-            res += (self.events[a] - j) as f32;
+            res += (self.events[a] - j) as f64;
         }
 
         if let Some(hv) = h {
@@ -366,7 +366,7 @@ impl HFF {
         }
         for a in relaxed_plan.iter() {
             if ! state.todo.contains_key(a) {
-                res += self.events[a] as f32;
+                res += self.events[a] as f64;
             }
         }
 

@@ -154,9 +154,9 @@ class Encoder:
     def goal(self) -> Expression:
         return self._goal
 
-    def build_plan(self, plan: List[Union[str, Tuple[Fraction, str, Optional[Fraction]]]]) -> Plan:
+    def build_plan(self, plan: List[Tuple[Optional[Fraction], str, Optional[Fraction]]]) -> Plan:
         if self._is_temporal:
-            return TimeTriggeredPlan([(Fraction(s), self._problem.action(a)(), Fraction(d)) for s, a, d in plan])
+            return TimeTriggeredPlan([(Fraction(s), self._problem.action(a)(), Fraction(d) if d else None) for s, a, d in plan])
         else:
             return SequentialPlan([self._problem.action(a)() for _, a, _ in plan])
 

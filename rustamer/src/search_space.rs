@@ -3,7 +3,7 @@ use std::{
     vec::Vec
 };
 use multiset::HashMultiSet;
-
+use std::hash::{Hash, Hasher};
 use num_rational::BigRational;
 use pyo3::{exceptions::PyException, prelude::*};
 
@@ -19,15 +19,20 @@ pub struct State {
     pub temporal_network: Option<DeltaSTN<f32>>,
     pub todo: HashMap<String, (usize, usize)>,
     pub active_conditions: HashMultiSet<Vec<PyExpressionNode>>,
-    pub g: f32,
+    pub g: f64,
     pub path: Vec<(Event, usize)>,
 }
 
 #[pymethods]
 impl State {
     #[getter]
-    fn g(&self) -> f32 {
+    fn g(&self) -> f64 {
         self.g
+    }
+
+    #[getter]
+    fn todo(&self) -> HashMap<String, (usize, usize)> {
+        self.todo.clone()
     }
 }
 
@@ -66,6 +71,26 @@ impl State {
     }
 }
 
+impl PartialEq for State {
+    fn eq(&self, other: &Self) -> bool {
+        if self.temporal_network.is_none() {
+            self.assignments == other.assignments
+        } else {
+            false
+        }
+    }
+}
+
+impl Eq for State {}
+
+impl Hash for State {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let mut pairs: Vec<_> = self.assignments.iter().collect();
+        pairs.sort_by_key(|i| i.0);
+        Hash::hash(&pairs, state);
+    }
+}
+
 #[pyclass(name = "SearchSpace")]
 #[derive(Debug)]
 pub struct SearchSpace {
@@ -78,7 +103,7 @@ pub struct SearchSpace {
     goal: Option<Vec<PyExpressionNode>>,
     epsilon: f32,
     epsilon_rational: BigRational,
-    is_temporal: bool,
+    pub is_temporal: bool,
     counter: usize,
 }
 

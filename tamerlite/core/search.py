@@ -54,6 +54,8 @@ def gbfs_search(ss: SearchSpace, heuristic: Heuristic, timeout=None):
 def wastar_search(ss: SearchSpace, heuristic: Heuristic, weight: float = 0.5, timeout=None):
     st = time.time()
     open = []
+    closed_set = set()
+    open_set = set()
     init = ss.initial_state()
     heapq.heappush(open, PrioritizedItem(0, init))
     counter = 0
@@ -62,16 +64,23 @@ def wastar_search(ss: SearchSpace, heuristic: Heuristic, weight: float = 0.5, ti
             raise TimeoutError
         item = heapq.heappop(open)
         state = item.state
-        # print(" ".join([ev.action for (ev, _) in state.path]), item.heuristic)
+        if not ss.is_temporal:
+            closed_set.add(state)
+            open_set.discard(state)
+        # print([ev.action for (ev, _) in state.path], item.heuristic)
         counter += 1
         if ss.goal_reached(state):
             print("expanded states:", counter)
             return state.extract_solution()
         for succ_state in ss.get_successor_states(state):
+            if succ_state in closed_set or succ_state in open_set:
+                continue
             h = heuristic.eval(succ_state) if weight > 0 else 0
             if h is not None:
                 f = (1-weight)*succ_state.g + weight*h
                 heapq.heappush(open, PrioritizedItem(f, succ_state))
+                if not ss.is_temporal:
+                    open_set.add(succ_state)
     return None
 
 def ehc_search(ss: SearchSpace, heuristic: Heuristic, timeout=None):
