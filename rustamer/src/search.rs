@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::time::SystemTime;
 use std::{
     collections::BinaryHeap,
+    collections::HashSet,
     vec::Vec
 };
 
@@ -14,7 +15,7 @@ use super::heuristics::*;
 
 #[derive(Debug)]
 struct PrioritizedItem {
-    heuristic: f32,
+    heuristic: f64,
     state: State,
 }
 
@@ -75,7 +76,7 @@ pub fn gbfs_search(ss: &mut SearchSpace, heuristic: &Heuristic, timeout: Option<
 }
 
 #[pyfunction]
-pub fn wastar_search(ss: &mut SearchSpace, heuristic: &Heuristic, weight: f32, timeout: Option<f32>) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
+pub fn wastar_search(ss: &mut SearchSpace, heuristic: &Heuristic, weight: f64, timeout: Option<f32>) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
     let init_h = match heuristic.eval(&init)? {
@@ -85,6 +86,8 @@ pub fn wastar_search(ss: &mut SearchSpace, heuristic: &Heuristic, weight: f32, t
         }
     };
     let mut open = BinaryHeap::new();
+    let mut open_set = HashSet::new();
+    let mut closed_set = HashSet::new();
     open.push(PrioritizedItem{heuristic: init_h, state: init});
     let mut counter = 0;
     while let Some(current) = open.pop() {
@@ -94,16 +97,27 @@ pub fn wastar_search(ss: &mut SearchSpace, heuristic: &Heuristic, weight: f32, t
             }
         }
         let state = current.state;
+        if !ss.is_temporal {
+            closed_set.insert(state.clone());
+            open_set.remove(&state);
+        }
+        // println!("{:?} {:?}", state.path.iter().map(|(ev, _)| &ev.action).collect::<Vec<&String>>(), current.heuristic);
         counter += 1;
         if ss.goal_reached(&state, None)? {
             println!("Expanded states: {}", counter);
             return build_plan(ss, &state);
         } else {
             for s in ss.get_successor_states(&state)? {
+                if open_set.contains(&s) || closed_set.contains(&s) {
+                    continue;
+                }
                 let h = heuristic.eval(&s)?;
                 match h {
                     Some(v) => {
                         let f = weight * v + (1.0 - weight) * s.g;
+                        if !ss.is_temporal {
+                            open_set.insert(s.clone());
+                        }
                         open.push(PrioritizedItem{heuristic: f, state: s});
                     },
                     None => continue,

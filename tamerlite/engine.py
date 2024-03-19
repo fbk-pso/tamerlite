@@ -148,9 +148,9 @@ class TamerLite(
 
     def _get_heuristic(self, params, heuristic, encoder, state_encoder):
         if params is None:
-            h = "custom" if heuristic else "hff"
+            h = "custom" if heuristic else "hadd"
         else:
-            h = "custom" if heuristic and params.heuristic is None else params.heuristic if params.heuristic else "hff"
+            h = "custom" if heuristic and params.heuristic is None else params.heuristic if params.heuristic else "hadd"
             rl_params = params.rl_params
 
         if h == "custom":

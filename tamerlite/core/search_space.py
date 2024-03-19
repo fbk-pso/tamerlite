@@ -131,6 +131,18 @@ class State:
     g: int
     path: List[Tuple[Event, int]]
 
+    def __hash__(self) -> int:
+        res = 0
+        for k, v in self.assignments.items():
+            res += hash(k) + hash(v)
+        return res
+
+    def __eq__(self, oth) -> bool:
+        if self.temporal_network is None:
+            return self.assignments == oth.assignments
+        else:
+            return False
+
     def get_value(self, fluent: str) -> Union[bool, int, Fraction, str]:
         return self.assignments[fluent]
 
@@ -140,7 +152,7 @@ class State:
         tn = self.temporal_network.copy_stn() if self.temporal_network else None
         return State(assignments, tn, todo, self.active_conditions.clone(), self.g, self.path[:])
 
-    def extract_solution(self) -> List[Union[str, Tuple[Fraction, str, Optional[Fraction]]]]:
+    def extract_solution(self) -> List[Tuple[Optional[Fraction], str, Optional[Fraction]]]:
         if self.temporal_network:
             start_time = {}
             end_time = {}
@@ -160,7 +172,7 @@ class State:
         else:
             l = []
             for e in self.path:
-                l.append((None, e[0], None))
+                l.append((None, e[0].action, None))
             return l
 
 
@@ -221,6 +233,10 @@ class SearchSpace:
         self._epsilon = Fraction(1, 100) if epsilon is None else epsilon
         self._is_temporal = False if all([v is None for v in actions_duration.values()]) else True
         self._counter = 0
+
+    @property
+    def is_temporal(self) -> bool:
+        return self._is_temporal
 
     def initial_state(self,
                       initial_state: Optional[Dict[str, Union[bool, int, Fraction, str]]] = None) -> State:

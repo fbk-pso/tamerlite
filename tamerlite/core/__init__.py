@@ -1,4 +1,10 @@
-if False:
+try:
+    import rustamer
+    has_rustamer = True
+except ImportError:
+    has_rustamer = False
+
+if not has_rustamer:
     from tamerlite.core.search import wastar_search, astar_search, gbfs_search
     from tamerlite.core.search import bfs_search, dfs_search, ehc_search
     from tamerlite.core.multiqueue import multiqueue_search
