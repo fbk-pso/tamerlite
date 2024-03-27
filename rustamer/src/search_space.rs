@@ -20,7 +20,7 @@ pub struct State {
     pub todo: HashMap<String, (usize, usize)>,
     pub active_conditions: HashMultiSet<Vec<PyExpressionNode>>,
     pub g: f64,
-    pub path: Vec<(Event, usize)>,
+    pub path: Vec<(String, usize, usize)>,
 }
 
 #[pymethods]
@@ -39,35 +39,6 @@ impl State {
 impl State {
     pub fn get_value(&self, fluent: &String) -> PyExpressionNode {
         self.assignments[fluent].clone()
-    }
-
-    pub fn extract_solution(&self) -> Vec<(Option<f32>, String, Option<f32>)> {
-        let mut res = Vec::new();
-        if self.temporal_network.is_some() {
-            let tn = self.temporal_network.as_ref().unwrap();
-            let mut start_time: HashMap<(String, usize), f32> = HashMap::new();
-            let mut end_time: HashMap<(String, usize), f32> = HashMap::new();
-            for (a, t) in tn.get_actions_timings().iter() {
-                if a.1 {
-                    start_time.insert((a.0.to_string(), a.2), *t);
-                } else {
-                    end_time.insert((a.0.to_string(), a.2), *t);
-                }
-            }
-            for (a, st) in start_time.iter() {
-                let et = end_time[a];
-                let mut d: Option<f32> = Some(et - st);
-                if d.unwrap() < tn.tolerance && d.unwrap() > -tn.tolerance {
-                    d = None;
-                }
-                res.push((Some(*st), a.0.to_string(), d));
-            }
-        } else {
-            for (e, _) in self.path.iter() {
-                res.push((None, e.action.clone(), None));
-            }
-        }
-        res
     }
 }
 
@@ -91,6 +62,86 @@ impl Hash for State {
     }
 }
 
+#[derive(Debug)]
+pub struct TNInterpreter {
+    actions_ids: HashMap<(String, bool, usize), i32>,
+    events_ids: HashMap<(String, usize, usize), i32>,
+    actions_ids_map_back: HashMap<i32, (String, bool, usize)>,
+    events_ids_map_back: HashMap<i32, (String, usize, usize)>,
+    counter: i32,
+}
+
+impl TNInterpreter {
+    fn new() -> Self {
+        TNInterpreter { actions_ids: HashMap::new(), events_ids: HashMap::new(), actions_ids_map_back: HashMap::new(), events_ids_map_back: HashMap::new(), counter: 0 }
+    }
+
+    pub fn clear(&mut self) {
+        self.actions_ids.clear();
+        self.events_ids.clear();
+        self.actions_ids_map_back.clear();
+        self.events_ids_map_back.clear();
+        self.counter = 0;
+    }
+
+    pub fn get_action_id(&mut self, action: (String, bool, usize)) -> i32 {
+        if let Some(id) = self.actions_ids.get(&action) {
+            *id
+        } else {
+            let id = self.counter;
+            self.actions_ids.insert(action.clone(), id);
+            self.actions_ids_map_back.insert(id, action);
+            self.counter += 1;
+            id
+        }
+    }
+
+    pub fn get_event_id(&mut self, event: (String, usize, usize)) -> i32 {
+        if let Some(id) = self.events_ids.get(&event) {
+            *id
+        } else {
+            let id = self.counter;
+            self.events_ids.insert(event.clone(), id);
+            self.events_ids_map_back.insert(id, event);
+            self.counter += 1;
+            id
+        }
+    }
+
+    pub fn get_event_timing<Q>(&self, tn: &DeltaSTN<Q>, event: &(String, usize, usize)) -> Option<Q>
+    where Q: num_traits::Num + std::ops::Neg<Output=Q> + PartialOrd + Clone {
+        let id = self.events_ids.get(event)?;
+        tn.get_model_value(id)
+    }
+
+    pub fn get_actions_timings<Q>(&self, tn: &DeltaSTN<Q>) -> Vec<(&(String, bool, usize), Q)>
+    where Q: num_traits::Num + std::ops::Neg<Output=Q> + PartialOrd + Clone {
+        let mut res: Vec<(&(String, bool, usize), Q)> = Vec::new();
+        for (id, v) in tn.distances.iter() {
+            let a = self.actions_ids_map_back.get(id);
+            if a.is_some() {
+                res.push((a.unwrap(), v.clone() * (- Q::one())));
+            }
+        }
+        res.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        res
+    }
+
+    pub fn get_events_timings<Q>(&self, tn: &DeltaSTN<Q>) -> Vec<(&(String, usize, usize), Q)>
+    where Q: num_traits::Num + std::ops::Neg<Output=Q> + PartialOrd + Clone {
+        let mut res = Vec::new();
+        for (id, v) in tn.distances.iter() {
+            let a = self.events_ids_map_back.get(id);
+            if a.is_some() {
+                res.push((a.unwrap(), v.clone() * (- Q::one())));
+            }
+        }
+        res.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        res
+    }
+
+}
+
 #[pyclass(name = "SearchSpace")]
 #[derive(Debug)]
 pub struct SearchSpace {
@@ -101,6 +152,7 @@ pub struct SearchSpace {
     mutex: HashSet<((String, usize), (String, usize))>,
     initial_state: Option<HashMap<String, PyExpressionNode>>,
     goal: Option<Vec<PyExpressionNode>>,
+    pub tn_interpreter: TNInterpreter,
     epsilon: f32,
     epsilon_rational: BigRational,
     pub is_temporal: bool,
@@ -132,6 +184,7 @@ impl SearchSpace {
             mutex: mutex,
             initial_state: initial_state,
             goal: goal,
+            tn_interpreter: TNInterpreter::new(),
             epsilon: match epsilon.clone() {
                 Some(x) => rational_to_f32(x),
                 None => 0.01,
@@ -144,6 +197,10 @@ impl SearchSpace {
             counter: 0,
         };
         Ok(res)
+    }
+
+    pub fn reset(&mut self) {
+        self.tn_interpreter.clear();
     }
 
     pub fn initial_state(&self, initial_state: Option<HashMap<String, PyExpressionNode>>) -> PyResult<State> {
@@ -188,23 +245,32 @@ impl SearchSpace {
     }
 
     pub fn get_successor_state(&mut self, state: &State, action: &str) -> PyResult<Option<State>> {
-        if let Some(events) = self.events.get(action).cloned() {
-            let mut new_state = state.clone();
-            new_state.g += 1.0;
-
+        if let Some(events) = self.events.get(action) {
             if let Some((index, id)) = state.todo.get(action) {
                 if let Some((_, e)) = events.get(*index) {
+                    // Check if the event is applicable before creating the new state
+                    if !self.is_sat(&e.conditions, state)? { return Ok(None); }
+
+                    let mut new_state = state.clone();
+                    new_state.g += 1.0;
+
                     if index + 1 >= events.len() {
                         new_state.todo.remove(action);
                     } else {
                         new_state.todo.insert(action.to_string(), (index + 1, id + 1));
                     }
-                    if self.expand_event(state, &mut new_state, &e, index, id)? {
+                    if self.expand_event(state, &mut new_state, &e.clone(), index, id)? {
                         return Ok(Some(new_state));
                     }
                 }
             } else {
-                if self.open_action(state, &mut new_state, action, &events)? {
+                // Check if action is applicable before creating the new state
+                if !self.is_sat(&events[0].1.conditions, state)? { return Ok(None); }
+
+                let mut new_state = state.clone();
+                new_state.g += 1.0;
+
+                if self.open_action(state, &mut new_state, action, &events.clone())? {
                     return Ok(Some(new_state));
                 }
             }
@@ -216,10 +282,10 @@ impl SearchSpace {
         if ! state.todo.is_empty() {
             return Ok(false);
         }
-        let g = match goal {
+        let g = match &goal {
             Some(v) => v,
             None => {
-                match self.goal.clone() {
+                match &self.goal {
                     Some(v) => v,
                     None => {
                         return Err(PyException::new_err("The goal must be defined somewhere!"));
@@ -227,18 +293,18 @@ impl SearchSpace {
                 }
             }
         };
-        match evaluate(g, state)?.v {
+        match internal_evaluate(g, state)?.v {
             ExpressionNode::Bool(v) => Ok(v),
             _ => return Err(PyException::new_err("The goal is not a boolean expression!")),
         }
     }
 
     pub fn subgoals_sat(&self, state: &State, goal: Option<Vec<PyExpressionNode>>) -> PyResult<Vec<Vec<PyExpressionNode>>> {
-        let goals = match goal {
-            Some(v) => split_expression(&v)?,
+        let goals = match &goal {
+            Some(v) => split_expression(v)?,
             None => {
-                match self.goal.clone() {
-                    Some(v) => split_expression(&v)?,
+                match &self.goal {
+                    Some(v) => split_expression(v)?,
                     None => {
                         return Err(PyException::new_err("The goal must be defined somewhere!"));
                     },
@@ -247,7 +313,7 @@ impl SearchSpace {
         };
         let mut res = HashSet::new();
         for g in goals.iter() {
-            if evaluate(g.clone(), state)?.to_expression_node() == ExpressionNode::Bool(true) {
+            if internal_evaluate(g, state)?.v == ExpressionNode::Bool(true) {
                 res.insert(g.clone());
             }
         }
@@ -274,19 +340,11 @@ impl SearchSpace {
                         } else {
                             todo.insert(action.to_string(), (index + 1, id + 1));
                         }
-                        let ev = tn.get_event_id((e.clone(), id));
+                        let ev = self.tn_interpreter.get_event_id((e.action.to_string(), e.pos, id));
                         for (e2, id2) in path.iter() {
                             let e_id = (e.action.to_string(), index);
-                            let e2_id = (
-                                e2.action.to_string(),
-                                self.events[&e2.action].iter().enumerate().find_map(|(j, (_, ev))| {
-                                    if *ev == *e2 {
-                                        Some(j)
-                                    } else {
-                                        None
-                                    }
-                                }).unwrap());
-                            let ev2 = tn.get_event_id((e2.clone(), *id2));
+                            let e2_id = (e2.action.to_string(), e2.pos);
+                            let ev2 = self.tn_interpreter.get_event_id((e2.action.to_string(), e2.pos, *id2));
                             if self.mutex.contains(&(e_id, e2_id)) {
                                 let b = -self.epsilon_rational.clone();
                                 tn.add(&ev2, &ev, &b);
@@ -299,7 +357,7 @@ impl SearchSpace {
                             for (j, (_, e2)) in self.events[a].iter().skip(i.0).enumerate() {
                                 let e_id = (e.action.to_string(), index);
                                 let e2_id = (a.to_string(), j + i.0);
-                                let ev2 = tn.get_event_id((e2.clone(), id2));
+                                let ev2 = self.tn_interpreter.get_event_id((e2.action.to_string(), e2.pos, id2));
                                 if self.mutex.contains(&(e_id, e2_id)) {
                                     let b = -self.epsilon_rational.clone();
                                     tn.add(&ev, &ev2, &b);
@@ -312,16 +370,16 @@ impl SearchSpace {
                         path.push((e.clone(), id));
                     }
                 } else {
-                    let start = tn.get_action_id((action.to_string(), true, counter));
-                    let end = tn.get_action_id((action.to_string(), false, counter));
+                    let start = self.tn_interpreter.get_action_id((action.to_string(), true, counter));
+                    let end = self.tn_interpreter.get_action_id((action.to_string(), false, counter));
                     counter += 1;
                     let duration = self.actions_duration[action].as_ref();
                     let mut lb = mk_rational(0, 1);
                     let mut ub = mk_rational(0, 1);
                     if duration.is_some() {
                         let d = duration.unwrap();
-                        lb = -get_rational_from_expression_node(&evaluate(d.0.clone(), &state)?.v)?;
-                        ub = get_rational_from_expression_node(&evaluate(d.1.clone(), &state)?.v)?;
+                        lb = -get_rational_from_expression_node(&internal_evaluate(&d.0, &state)?.v)?;
+                        ub = get_rational_from_expression_node(&internal_evaluate(&d.1, &state)?.v)?;
                         if d.2 {
                             lb -= self.epsilon_rational.clone();
                         }
@@ -333,7 +391,7 @@ impl SearchSpace {
                     tn.add(&end, &start, &ub);
                     let id = counter;
                     for (t, e) in events.iter() {
-                        let ev = tn.get_event_id((e.clone(), counter));
+                        let ev = self.tn_interpreter.get_event_id((e.action.to_string(), e.pos, counter));
                         let b1 = -t.delay.clone();
                         let b2 = t.delay.clone();
                         if t.is_from_start() {
@@ -346,19 +404,11 @@ impl SearchSpace {
                         counter += 1;
                     }
                     let e = events[0].1.clone();
-                    let ev = tn.get_event_id((e.clone(), id));
+                    let ev = self.tn_interpreter.get_event_id((e.action.to_string(), e.pos, id));
                     for (e2, id2) in path.iter() {
                         let e_id = (e.action.to_string(), 0);
-                        let e2_id = (
-                            e2.action.to_string(),
-                            self.events[&e2.action].iter().enumerate().find_map(|(j, (_, ev))| {
-                                if *ev == *e2 {
-                                    Some(j)
-                                } else {
-                                    None
-                                }
-                            }).unwrap());
-                        let ev2 = tn.get_event_id((e2.clone(), *id2));
+                        let e2_id = (e2.action.to_string(), e2.pos);
+                        let ev2 = self.tn_interpreter.get_event_id((e2.action.to_string(), e2.pos, *id2));
                         if self.mutex.contains(&(e_id, e2_id)) {
                             let b = -self.epsilon_rational.clone();
                             tn.add(&ev2, &ev, &b);
@@ -371,7 +421,7 @@ impl SearchSpace {
                         for (j, (_, e2)) in self.events[a].iter().skip(i.0).enumerate() {
                             let e_id = (e.action.to_string(), 0);
                             let e2_id = (a.to_string(), j + i.0);
-                            let ev2 = tn.get_event_id((e2.clone(), id2));
+                            let ev2 = self.tn_interpreter.get_event_id((e2.action.to_string(), e2.pos, id2));
                             if self.mutex.contains(&(e_id, e2_id)) {
                                 let b = -self.epsilon_rational.clone();
                                 tn.add(&ev, &ev2, &b);
@@ -392,7 +442,7 @@ impl SearchSpace {
         let mut res = Vec::new();
         let mut start_time: HashMap<(String, usize), BigRational> = HashMap::new();
         let mut end_time: HashMap<(String, usize), BigRational> = HashMap::new();
-        for (a, t) in tn.get_actions_timings().iter() {
+        for (a, t) in self.tn_interpreter.get_actions_timings(&tn).iter() {
             if a.1 {
                 start_time.insert((a.0.to_string(), a.2), t.clone());
             } else {
@@ -412,15 +462,18 @@ impl SearchSpace {
         Ok(res)
     }
 
-    fn expand_event(&self, state: &State, new_state: &mut State, e: &Event, index: &usize, id: &usize) -> PyResult<bool> {
-        new_state.path.push((e.clone(), *id));
-
-        // check conditions
-        let sat = match evaluate(e.conditions.clone(), state)?.v {
+    fn is_sat(&self, conditions: &Vec<PyExpressionNode>, state: &State) -> PyResult<bool> {
+        let sat = match internal_evaluate(conditions, state)?.v {
             ExpressionNode::Bool(v) => v,
             _ => return Err(PyException::new_err("An action condition is not a boolean expression!")),
         };
-        if !sat { return Ok(false); }
+        Ok(sat)
+    }
+
+    fn expand_event(&mut self, state: &State, new_state: &mut State, e: &Event, index: &usize, id: &usize) -> PyResult<bool> {
+        new_state.path.push((e.action.to_string(), e.pos, *id));
+
+        // check conditions is done before calling this method
 
         // remove end conditions
         for c in e.end_conditions.iter() {
@@ -429,7 +482,7 @@ impl SearchSpace {
 
         // check active conditions
         for c in new_state.active_conditions.iter() {
-            let sat = match evaluate(c.to_vec(), state)?.v {
+            let sat = match internal_evaluate(&c, state)?.v {
                 ExpressionNode::Bool(v) => v,
                 _ => return Err(PyException::new_err("An action condition is not a boolean expression!")),
             };
@@ -443,33 +496,25 @@ impl SearchSpace {
 
         // apply effects
         for eff in e.effects.iter() {
-            new_state.assignments.insert(eff.fluent.clone(), evaluate(eff.value.clone(), state)?);
+            new_state.assignments.insert(eff.fluent.clone(), internal_evaluate(&eff.value, state)?);
         }
 
         // check active conditions
         for c in new_state.active_conditions.iter() {
-            let sat = match evaluate(c.to_vec(), new_state)?.v {
+            let sat = match internal_evaluate(&c, new_state)?.v {
                 ExpressionNode::Bool(v) => v,
                 _ => return Err(PyException::new_err("An action condition is not a boolean expression!")),
             };
             if !sat { return Ok(false); }
         }
 
-        if self.is_temporal {
+        if self.is_temporal { // Add temporal constraints between past or todo events and the current one
             let tn = new_state.temporal_network.as_mut().unwrap();
-            let ev = tn.get_event_id((e.clone(), *id));
-            for (e2, id2) in state.path.iter() {
-                let ev2 = tn.get_event_id((e2.clone(), *id2));
+            let ev = self.tn_interpreter.get_event_id((e.action.to_string(), e.pos, *id));
+            for e2 in state.path.iter() {
+                let ev2 = self.tn_interpreter.get_event_id(e2.clone());
                 let e_id = (e.action.to_string(), *index);
-                let e2_id = (
-                    e2.action.to_string(),
-                    self.events[&e2.action].iter().enumerate().find_map(|(j, (_, ev))| {
-                        if *ev == *e2 {
-                            Some(j)
-                        } else {
-                            None
-                        }
-                    }).unwrap());
+                let e2_id = (e2.0.to_string(), e2.1);
                 if self.mutex.contains(&(e_id, e2_id)) {
                     let b: f32 = -self.epsilon;
                     tn.add(&ev2, &ev, &b);
@@ -482,7 +527,7 @@ impl SearchSpace {
                 for (j, (_, e2)) in self.events[a].iter().skip(i.0).enumerate() {
                     let e_id = (e.action.to_string(), *index);
                     let e2_id = (a.to_string(), j + i.0);
-                    let ev2 = tn.get_event_id((e2.clone(), id2));
+                    let ev2 = self.tn_interpreter.get_event_id((e2.action.to_string(), e2.pos, id2));
                     if self.mutex.contains(&(e_id, e2_id)) {
                         let b: f32 = -self.epsilon;
                         tn.add(&ev, &ev2, &b);
@@ -501,18 +546,18 @@ impl SearchSpace {
 
     fn open_action(&mut self, state: &State, new_state: &mut State, action: &str, events: &Vec<(Timing, Event)>) -> PyResult<bool> {
         let mut id = self.counter;
-        if self.is_temporal {
+        if self.is_temporal { // Add temporal constraints between events of the action
             let tn = new_state.temporal_network.as_mut().unwrap();
-            let start = tn.get_action_id((action.to_string(), true, self.counter));
-            let end = tn.get_action_id((action.to_string(), false, self.counter));
+            let start = self.tn_interpreter.get_action_id((action.to_string(), true, self.counter));
+            let end = self.tn_interpreter.get_action_id((action.to_string(), false, self.counter));
             self.counter += 1;
             let duration = self.actions_duration[action].as_ref();
             let mut lb: f32 = 0.0;
             let mut ub: f32 = 0.0;
             if duration.is_some() {
                 let d = duration.unwrap();
-                lb = -rational_to_f32(get_rational_from_expression_node(&evaluate(d.0.clone(), state)?.v)?);
-                ub = rational_to_f32(get_rational_from_expression_node(&evaluate(d.1.clone(), state)?.v)?);
+                lb = -rational_to_f32(get_rational_from_expression_node(&internal_evaluate(&d.0, state)?.v)?);
+                ub = rational_to_f32(get_rational_from_expression_node(&internal_evaluate(&d.1, state)?.v)?);
                 if d.2 {
                     lb -= self.epsilon;
                 }
@@ -524,7 +569,7 @@ impl SearchSpace {
             tn.add(&end, &start, &ub);
             id = self.counter;
             for (t, e) in events.iter() {
-                let ev = tn.get_event_id((e.clone(), self.counter));
+                let ev = self.tn_interpreter.get_event_id((e.action.to_string(), e.pos, self.counter));
                 let b1 = -rational_to_f32(t.delay.clone());
                 let b2 = rational_to_f32(t.delay.clone());
                 if t.is_from_start() {
@@ -548,13 +593,17 @@ impl SearchSpace {
 
 #[pyfunction]
 pub fn evaluate(exp: Vec<PyExpressionNode>, state: &State) -> PyResult<PyExpressionNode> {
+    internal_evaluate(&exp, state)
+}
+
+pub fn internal_evaluate(exp: &Vec<PyExpressionNode>, state: &State) -> PyResult<PyExpressionNode> {
     let mut res: Vec<ExpressionNode> = vec![];
     for e in exp {
-        match e.to_expression_node() {
+        match &e.v {
             ExpressionNode::And(v) => {
                 let mut val = true;
                 for p in v {
-                    if ExpressionNode::Bool(false) == res[p] {
+                    if ExpressionNode::Bool(false) == res[*p] {
                         val = false;
                         break;
                     }
@@ -562,22 +611,22 @@ pub fn evaluate(exp: Vec<PyExpressionNode>, state: &State) -> PyResult<PyExpress
                 res.push(ExpressionNode::Bool(val));
             },
             ExpressionNode::Not(p) => {
-                if ExpressionNode::Bool(false) == res[p] {
+                if ExpressionNode::Bool(false) == res[*p] {
                     res.push(ExpressionNode::Bool(true));
                 } else {
                     res.push(ExpressionNode::Bool(false));
                 }
             },
             ExpressionNode::Equals(p1, p2) => {
-                if res[p1] == res[p2] {
+                if res[*p1] == res[*p2] {
                     res.push(ExpressionNode::Bool(true));
                 } else {
                     res.push(ExpressionNode::Bool(false));
                 }
             },
             ExpressionNode::LE(p1, p2) => {
-                let val1 = get_rational_from_expression_node(&res[p1])?;
-                let val2 = get_rational_from_expression_node(&res[p2])?;
+                let val1 = get_rational_from_expression_node(&res[*p1])?;
+                let val2 = get_rational_from_expression_node(&res[*p2])?;
                 if val1 <= val2 {
                     res.push(ExpressionNode::Bool(true));
                 } else {
@@ -585,8 +634,8 @@ pub fn evaluate(exp: Vec<PyExpressionNode>, state: &State) -> PyResult<PyExpress
                 }
             },
             ExpressionNode::LT(p1, p2) => {
-                let val1 = get_rational_from_expression_node(&res[p1])?;
-                let val2 = get_rational_from_expression_node(&res[p2])?;
+                let val1 = get_rational_from_expression_node(&res[*p1])?;
+                let val2 = get_rational_from_expression_node(&res[*p2])?;
                 if val1 < val2 {
                     res.push(ExpressionNode::Bool(true));
                 } else {
@@ -606,8 +655,8 @@ pub fn evaluate(exp: Vec<PyExpressionNode>, state: &State) -> PyResult<PyExpress
                 }
             },
             ExpressionNode::Minus(p1, p2) => {
-                let val1 = get_rational_from_expression_node(&res[p1])?;
-                let val2 = get_rational_from_expression_node(&res[p2])?;
+                let val1 = get_rational_from_expression_node(&res[*p1])?;
+                let val2 = get_rational_from_expression_node(&res[*p2])?;
                 let r = val1 - val2;
                 if r.is_integer() {
                     res.push(ExpressionNode::Int(r.to_integer()));
@@ -629,8 +678,8 @@ pub fn evaluate(exp: Vec<PyExpressionNode>, state: &State) -> PyResult<PyExpress
                 }
             },
             ExpressionNode::Div(p1, p2) => {
-                let val1 = get_rational_from_expression_node(&res[p1])?;
-                let val2 = get_rational_from_expression_node(&res[p2])?;
+                let val1 = get_rational_from_expression_node(&res[*p1])?;
+                let val2 = get_rational_from_expression_node(&res[*p2])?;
                 let r = val1 / val2;
                 if r.is_integer() {
                     res.push(ExpressionNode::Int(r.to_integer()));
@@ -640,13 +689,13 @@ pub fn evaluate(exp: Vec<PyExpressionNode>, state: &State) -> PyResult<PyExpress
                 }
             },
             ExpressionNode::Fluent(s) => {
-                res.push(state.get_value(&s).to_expression_node());
+                res.push(state.get_value(&s).v);
             }
-            _ => {
-                res.push(e.to_expression_node());
+            other => {
+                res.push(other.clone());
             }
         }
 
     }
-    Ok(PyExpressionNode { v: res.last().unwrap().clone() })
+    Ok(PyExpressionNode { v: res.last().cloned().unwrap() })
 }

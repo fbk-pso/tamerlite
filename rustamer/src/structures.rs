@@ -19,12 +19,12 @@ impl Effect {
     fn new(fluent: String, value: Vec<PyExpressionNode>) -> Self {
         Effect { fluent, value }
     }
-    
+
     #[getter]
     fn fluent(&self) -> String {
         self.fluent.to_string()
     }
-    
+
     #[getter]
     fn value(&self) -> Vec<PyExpressionNode> {
         self.value.clone()
@@ -66,6 +66,7 @@ impl Timing {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Event {
     pub action: String,
+    pub pos: usize,
     pub conditions: Vec<PyExpressionNode>,
     pub start_conditions: Vec<Vec<PyExpressionNode>>,
     pub end_conditions: Vec<Vec<PyExpressionNode>>,
@@ -77,6 +78,7 @@ impl Event {
     #[new]
     fn new(
         action: String,
+        pos: usize,
         conditions: Vec<PyExpressionNode>,
         start_conditions: Vec<Vec<PyExpressionNode>>,
         end_conditions: Vec<Vec<PyExpressionNode>>,
@@ -84,6 +86,7 @@ impl Event {
     ) -> Self {
         Event {
             action: action,
+            pos: pos,
             conditions: conditions,
             start_conditions: start_conditions,
             end_conditions: end_conditions,

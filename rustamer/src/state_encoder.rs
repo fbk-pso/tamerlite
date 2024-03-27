@@ -6,7 +6,7 @@ use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 
 use crate::utils::{integer_to_f32, rational_to_f32, usize_to_f32};
-use crate::ExpressionNode;
+use crate::{ExpressionNode, SearchSpace};
 
 use super::search_space::State;
 use super::structures::*;
@@ -100,37 +100,21 @@ impl CoreStateEncoder {
         Ok(res)
     }
 
-    pub fn get_tn_as_vector(&self, state: &State) -> PyResult<Vec<f32>> {
+    pub fn get_tn_as_vector(&self, state: &State, search_space: &SearchSpace) -> PyResult<Vec<f32>> {
         let mut res = vec![0.0; self.tn_size];
         if state.temporal_network.is_some() {
             let tn = state.temporal_network.as_ref().unwrap();
             let mut last = -1.0;
             if !state.path.is_empty() {
-                let ev = tn.get_option_event_id(state.path.last().unwrap().clone()).unwrap();
-                last = tn.get_model_value(&ev).unwrap();
+                last = search_space.tn_interpreter.get_event_timing(tn, state.path.last().unwrap()).unwrap();
             }
-            let mut vec = Vec::new();
-            for (ev, t) in tn.get_actions_timings() {
-                if t < last {
-                    vec.push((t, ev.1, ev.0));
-                }
-            }
-            vec.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-            let mut m: HashMap<Event, f32> = HashMap::new();
-            for (ev, t) in tn.get_events_timings() {
-                if t < last {
-                    match m.get(&ev.0) {
-                        Some(v) => {
-                            if t > *v {
-                                m.insert(ev.0, t);
-                            }
-                        },
-                        None => {
-                            m.insert(ev.0, t);
-                        }
-                    }
+            let mut m = HashMap::new();
+            for (ev, t) in search_space.tn_interpreter.get_events_timings(tn) {
+                if t - last >= -tn.tolerance {
+                    break;
                 }
+                m.insert(ev, t);
             }
 
             let mut t_safe = 0.0;
@@ -138,43 +122,32 @@ impl CoreStateEncoder {
             let mut c = 0;
             let mut nea = 0;
             let mut nsa = 0;
-            let mut actions: Vec<String> = Vec::new();
-            for (t, is_start, action) in vec.iter() {
-                if tn.equals_with_tolerance(t, &last) {
+            for (ev, t) in search_space.tn_interpreter.get_actions_timings(tn).iter() {
+                if t - last >= -tn.tolerance {
                     break;
                 }
                 if !tn.equals_with_tolerance(t, &t_last) {
                     c -= nea;
                     if c == 0 {
                         t_safe = t_last;
-                        actions.clear()
                     }
                     c += nsa;
                     nsa = 0;
                     nea = 0;
                 }
-                if *is_start {
+                if ev.1 {
                     nsa += 1;
-                    actions.push(action.to_string());
                 } else {
                     nea += 1;
                 }
                 t_last = *t;
             }
 
-            for a in actions.iter() {
-                let p = self.tn_actions_pos[a];
-                for (i, (_, e)) in self.events[a].iter().enumerate() {
-                    let v = match m.get(e) {
-                        Some(x) => {
-                            if x - t_safe <= tn.tolerance {
-                                continue
-                            }
-                            x - t_safe + 1.0
-                        },
-                        None => continue,
-                    };
-                    res[p+i] = v;
+            for (e, t) in m.iter() {
+                if *t - t_safe > tn.tolerance {
+                    let a = &e.0;
+                    let p = self.tn_actions_pos[a];
+                    res[p+e.1] = *t - t_safe + 1.0;
                 }
             }
         }
