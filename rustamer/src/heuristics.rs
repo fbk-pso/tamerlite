@@ -8,7 +8,7 @@ use std::hash::{Hash, Hasher};
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
-use crate::evaluate;
+use crate::internal_evaluate;
 
 use super::search_space::State;
 use super::expressions::*;
@@ -80,7 +80,7 @@ impl CustomHeuristic {
 struct Operator {
     action: String,
     conditions: Vec<Vec<PyExpressionNode>>,
-    effects: Vec<(String, PyExpressionNode)>,
+    effects: Vec<Vec<PyExpressionNode>>,
     cost: f64,
 }
 
@@ -115,7 +115,7 @@ fn is_numeric_condition(cond: &Vec<PyExpressionNode>) -> bool {
     true
 }
 
-fn cost(exp: &Vec<Vec<PyExpressionNode>>, costs: &HashMap<Vec<PyExpressionNode>, f64>) -> Option<f64> {
+fn cost(exp: &Vec<Vec<PyExpressionNode>>, costs: &HashMap<&Vec<PyExpressionNode>, f64>) -> Option<f64> {
     let mut res = 0.0;
     for g in exp.iter() {
         let c = costs.get(g);
@@ -159,35 +159,39 @@ impl HFF {
                 let mut conditions = Vec::new();
                 let f = format!("__f_{}_{}", a, i);
                 a_extra_fluents.push(vec![make_fluent_node(f.to_string())]);
-                effects.push((f.to_string(), make_bool_constant_node(true)));
+                effects.push(vec![make_fluent_node(f.to_string())]);
                 for eff in e.effects.iter() {
                     let t = fluents[&eff.fluent].clone();
                     if t == "bool" {
                         if eff.value.len() == 1 {
-                            if let ExpressionNode::Bool(_) = eff.value[0].to_expression_node() {
-                                effects.push((eff.fluent.to_string(), eff.value[0].clone()));
+                            if let ExpressionNode::Bool(value) = eff.value[0].to_expression_node() {
+                                if value {
+                                    effects.push(vec![make_fluent_node(eff.fluent.to_string())]);
+                                } else {
+                                    effects.push(vec![make_fluent_node(eff.fluent.to_string()), make_operator_node("not".to_string(), vec![0])?]);
+                                }
                             }
                             else {
-                                effects.push((eff.fluent.to_string(), make_bool_constant_node(true)));
-                                effects.push((eff.fluent.to_string(), make_bool_constant_node(false)));
+                                effects.push(vec![make_fluent_node(eff.fluent.to_string())]);
+                                effects.push(vec![make_fluent_node(eff.fluent.to_string()), make_operator_node("not".to_string(), vec![0])?]);
                             }
                         } else {
-                            effects.push((eff.fluent.to_string(), make_bool_constant_node(true)));
-                            effects.push((eff.fluent.to_string(), make_bool_constant_node(false)));
+                            effects.push(vec![make_fluent_node(eff.fluent.to_string())]);
+                            effects.push(vec![make_fluent_node(eff.fluent.to_string()), make_operator_node("not".to_string(), vec![0])?]);
                         }
                     } else if t != "real" && t != "int" {
                         if eff.value.len() == 1 {
                             if let ExpressionNode::Object(_) = eff.value[0].to_expression_node() {
-                                effects.push((eff.fluent.to_string(), eff.value[0].clone()));
+                                effects.push(vec![make_fluent_node(eff.fluent.to_string()), eff.value[0].clone(), make_operator_node("==".to_string(), vec![0, 1])?]);
                             }
                             else {
                                 for o in objects[&t].iter() {
-                                    effects.push((eff.fluent.to_string(), make_object_node(o.to_string())));
+                                    effects.push(vec![make_fluent_node(eff.fluent.to_string()), make_object_node(o.to_string()), make_operator_node("==".to_string(), vec![0, 1])?]);
                                 }
                             }
                         } else {
                             for o in objects[&t].iter() {
-                                effects.push((eff.fluent.to_string(), make_object_node(o.to_string())));
+                                effects.push(vec![make_fluent_node(eff.fluent.to_string()), make_object_node(o.to_string()), make_operator_node("==".to_string(), vec![0, 1])?]);
                             }
                         }
                     }
@@ -244,6 +248,7 @@ impl HFF {
     pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
         let mut costs = HashMap::new();
         let mut lp = Vec::new();
+        let mut init_lp = Vec::new();
 
         for (f, v) in state.assignments.iter() {
             let k = match v.v {
@@ -258,17 +263,20 @@ impl HFF {
                     vec![make_fluent_node(f.to_string()), v.clone(), make_operator_node("==".to_string(), vec![0, 1])?]
                 }
             };
-            costs.insert(k.to_vec(), 0.0);
-            lp.push(k.to_vec());
+            init_lp.push(k);
+        }
+        for k in init_lp.iter() {
+            costs.insert(k, 0.0);
+            lp.push(k);
         }
 
         for c in self.numeric_conds.iter() {
-            if evaluate(c.to_vec(), state)?.v == ExpressionNode::Bool(true) {
-                costs.insert(c.to_vec(), 0.0);
+            if internal_evaluate(c, state)?.v == ExpressionNode::Bool(true) {
+                costs.insert(c, 0.0);
             } else {
-                costs.insert(c.to_vec(), 1.0);
+                costs.insert(c, 1.0);
             }
-            lp.push(c.to_vec());
+            lp.push(c);
         }
 
         for a in self.events.keys() {
@@ -277,51 +285,41 @@ impl HFF {
                 None => self.extra_fluents.get(a).unwrap().last(),
             };
             if let Some(x) = v {
-                costs.insert(x.to_vec(), 0.0);
-                lp.push(x.to_vec());
+                costs.insert(x, 0.0);
+                lp.push(x);
             }
         }
 
         let mut reached_by = HashMap::new();
         while lp.len() > 0 {
-            let mut lo = self.empty_pre_operators.clone();
+            let mut lo: Vec<&Operator> = self.empty_pre_operators.iter().collect();
             for p in lp.iter() {
-                if let Some(po) = self.precondition_of.get(p) {
-                    lo.extend(po.to_vec());
+                if let Some(po) = self.precondition_of.get(*p) {
+                    for o in po.iter() {
+                        lo.push(o);
+                    }
                 }
             }
             lp.clear();
             let mut new_costs = HashMap::new();
-            let lo_iter: std::collections::HashSet<_> = lo.into_iter().collect();
-            for o in lo_iter.iter() {
+            let lo_iter: std::collections::HashSet<&Operator> = lo.into_iter().collect();
+            for o in lo_iter {
                 if let Some(c) = cost(&o.conditions, &costs) {
-                    for (f, v) in o.effects.iter() {
-                        let k = match v.v {
-                            ExpressionNode::Bool(value) => {
-                                if value {
-                                    vec![make_fluent_node(f.to_string())]
-                                } else {
-                                    vec![make_fluent_node(f.to_string()), make_operator_node("not".to_string(), vec![0])?]
-                                }
-                            }
-                            _ => {
-                                vec![make_fluent_node(f.to_string()), v.clone(), make_operator_node("==".to_string(), vec![0, 1])?]
-                            }
-                        };
-                        let new_cost_k = new_costs.get(&k);
-                        let cost_k = costs.get(&k);
+                    for k in o.effects.iter() {
+                        let new_cost_k = new_costs.get(k);
+                        let cost_k = costs.get(k);
                         if (new_cost_k.is_some() && *new_cost_k.unwrap() > c + o.cost) ||
                         (new_cost_k.is_none() && cost_k.is_none()) ||
                         (new_cost_k.is_none() && *cost_k.unwrap() > c + o.cost) {
-                            reached_by.insert(k.clone(), o.clone());
-                            new_costs.insert(k.clone(), c + o.cost);
-                            lp.push(k.clone());
+                            reached_by.insert(k, o);
+                            new_costs.insert(k, c + o.cost);
+                            lp.push(k);
                         }
                     }
                 }
             }
             for (k, v) in new_costs.iter() {
-                costs.insert(k.to_vec(), *v);
+                costs.insert(*k, *v);
             }
         }
 
@@ -354,13 +352,13 @@ impl HFF {
         }
 
         let mut relaxed_plan = HashSet::new();
-        let mut stack = self.goals.clone();
+        let mut stack: Vec<&Vec<PyExpressionNode>> = self.goals.iter().collect();
         while stack.len() > 0 {
             let g = stack.pop().unwrap();
-            if let Some(o) = reached_by.get(&g) {
+            if let Some(o) = reached_by.get(g) {
                 relaxed_plan.insert(o.action.to_string());
                 for c in o.conditions.iter() {
-                    stack.push(c.clone());
+                    stack.push(c);
                 }
             }
         }

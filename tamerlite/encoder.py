@@ -63,7 +63,7 @@ def get_encoders(domain, problem=None):
     ground_problem = grounding_result.problem
 
     encoder = Encoder(ground_problem, full)
-    gen_state_encoder = GeneralStateEncoder(problem, grounding_result, encoder.events)
+    gen_state_encoder = GeneralStateEncoder(problem, grounding_result, encoder.events, encoder.search_space)
     if full:
         state_encoder = StateEncoder(problem.environment, gen_state_encoder, problem.initial_values, problem.goals)
     else:
@@ -218,6 +218,7 @@ class Encoder:
 
                 self._events[a.name] = []
                 has_ice = False
+                pos = 0
                 for d in sorted(from_start):
                     if d > 0:
                         has_ice = True
@@ -227,7 +228,8 @@ class Encoder:
                     tsc = tuple([self._convert_expression(sc) for sc in lsc])
                     tec = tuple([self._convert_expression(ec) for ec in lec])
                     te = tuple([self._convert_effect(e) for e in le])
-                    self._events[a.name].append((t, Event(a.name, c, tsc, tec, te)))
+                    self._events[a.name].append((t, Event(a.name, pos, c, tsc, tec, te)))
+                    pos += 1
                 for d in sorted(from_end):
                     if d < 0 and has_ice:
                         raise Exception("TamerLite does not support ICE from start and from end inside the same action!")
@@ -237,11 +239,12 @@ class Encoder:
                     tsc = tuple([self._convert_expression(sc) for sc in lsc])
                     tec = tuple([self._convert_expression(ec) for ec in lec])
                     te = tuple([self._convert_effect(e) for e in le])
-                    self._events[a.name].append((t, Event(a.name, c, tsc, tec, te)))
+                    self._events[a.name].append((t, Event(a.name, pos, c, tsc, tec, te)))
+                    pos += 1
             else:
                 t = Timing(True, Fraction(0))
                 te = tuple([self._convert_effect(e) for e in a.effects])
-                self._events[a.name] = [(t, Event(a.name, self._convert_expression(em.And(a.preconditions)), tuple(), tuple(), te))]
+                self._events[a.name] = [(t, Event(a.name, 0, self._convert_expression(em.And(a.preconditions)), tuple(), tuple(), te))]
 
     def _build_mutex(self):
         self._mutex = set()

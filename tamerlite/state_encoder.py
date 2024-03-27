@@ -95,8 +95,9 @@ class StateEncoder:
 
 
 class GeneralStateEncoder:
-    def __init__(self, problem, grounding_result, events):
+    def __init__(self, problem, grounding_result, events, search_space):
         self._events = events
+        self._search_space = search_space
         objects = sorted([o.name for o in problem.all_objects])
         self._objects = {on: float(i / len(objects)) for i, on in enumerate(objects)}
         static_fluents = problem.get_static_fluents()
@@ -205,7 +206,7 @@ class GeneralStateEncoder:
         res.extend(actions)
 
         # vectorization of the temporal network
-        tn = self._cse.get_tn_as_vector(state)
+        tn = self._cse.get_tn_as_vector(state, self._search_space)
         res.extend(tn)
 
         return res

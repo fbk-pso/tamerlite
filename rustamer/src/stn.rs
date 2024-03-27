@@ -5,8 +5,6 @@ use std::sync::Arc;
 
 use regex::Regex;
 
-use super::structures::Event;
-
 
 #[derive(Debug)]
 struct DeltaNeighbors<Q> {
@@ -31,12 +29,9 @@ where Q: Clone {
 #[derive(Debug)]
 pub struct DeltaSTN<Q> {
     constraints: HashMap<i32, Option<Arc<DeltaNeighbors<Q>>>>,
-    distances: HashMap<i32, Q>,
-    actions_ids: HashMap<(String, bool, usize), i32>,
-    events_ids: HashMap<(Event, usize), i32>,
+    pub distances: HashMap<i32, Q>,
     is_sat: bool,
     pub tolerance: Q,
-    counter: i32,
 }
 
 impl<Q> Clone for DeltaSTN<Q> where Q: Clone {
@@ -44,11 +39,8 @@ impl<Q> Clone for DeltaSTN<Q> where Q: Clone {
         DeltaSTN {
             constraints: self.constraints.clone(),
             distances: self.distances.clone(),
-            actions_ids: self.actions_ids.clone(),
-            events_ids: self.events_ids.clone(),
             is_sat: self.is_sat,
             tolerance: self.tolerance.clone(),
-            counter: self.counter,
         }
     }
 }
@@ -60,54 +52,9 @@ Q: num_traits::Num + std::ops::Neg<Output=Q> + PartialOrd + Clone {
         DeltaSTN {
             constraints: HashMap::new(),
             distances: HashMap::new(),
-            actions_ids: HashMap::new(),
-            events_ids: HashMap::new(),
             is_sat: true,
             tolerance: tolerance,
-            counter: 0,
         }
-    }
-
-    pub fn get_action_id(&mut self, action: (String, bool, usize)) -> i32 {
-        if self.actions_ids.contains_key(&action) {
-            *self.actions_ids.get(&action).unwrap()
-        } else {
-            let id = self.counter;
-            self.actions_ids.insert(action, id);
-            self.counter += 1;
-            id
-        }
-    }
-
-    pub fn get_event_id(&mut self, event: (Event, usize)) -> i32 {
-        if self.events_ids.contains_key(&event) {
-            *self.events_ids.get(&event).unwrap()
-        } else {
-            let id = self.counter;
-            self.events_ids.insert(event, id);
-            self.counter += 1;
-            id
-        }
-    }
-
-    pub fn get_option_event_id(&self, event: (Event, usize)) -> Option<i32> {
-        self.events_ids.get(&event).copied()
-    }
-
-    pub fn get_actions_timings(&self) -> HashMap<(String, bool, usize), Q> {
-        let mut res: HashMap<(String, bool, usize), Q> = HashMap::new();
-        for (a, id) in self.actions_ids.iter() {
-            res.insert(a.clone(), self.get_model_value(id).unwrap());
-        }
-        res
-    }
-
-    pub fn get_events_timings(&self) -> HashMap<(Event, usize), Q> {
-        let mut res: HashMap<(Event, usize), Q> = HashMap::new();
-        for (a, id) in self.events_ids.iter() {
-            res.insert(a.clone(), self.get_model_value(id).unwrap());
-        }
-        res
     }
 
     pub fn add(& mut self, x:&i32, y:&i32, b:&Q) {

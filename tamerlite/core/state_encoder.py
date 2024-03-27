@@ -51,7 +51,7 @@ class CoreStateEncoder:
             actions[i] = float(v)
         return actions
 
-    def get_tn_as_vector(self, state: State) -> List[float]:
+    def get_tn_as_vector(self, state: State, search_space) -> List[float]:
         sol = state.temporal_network.distances
         last = -sol[state.path[-1]] if len(state.path) > 0 else -1
         m = {}
