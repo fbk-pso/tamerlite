@@ -50,9 +50,9 @@ impl CoreStateEncoder {
         let mut res = Vec::new();
         for (sfe, _, (lb, ub)) in self.fluents.iter() {
             let v = state.get_value(sfe);
-            match v.to_expression_node() {
+            match &v {
                 ExpressionNode::Bool(v) => {
-                    if v {
+                    if *v {
                         res.push(1.0);
                     }
                     else {
@@ -76,7 +76,7 @@ impl CoreStateEncoder {
                     }
                 },
                 ExpressionNode::Object(v) => {
-                    res.push(self.objects[&v]);
+                    res.push(self.objects[v]);
                 },
                 _ => {
                     return Err(PyException::new_err("State assignment is not a constant!"));
@@ -105,8 +105,8 @@ impl CoreStateEncoder {
         if state.temporal_network.is_some() {
             let tn = state.temporal_network.as_ref().unwrap();
             let mut last = -1.0;
-            if !state.path.is_empty() {
-                last = search_space.tn_interpreter.get_event_timing(tn, state.path.last().unwrap()).unwrap();
+            if state.path.is_some() {
+                last = search_space.tn_interpreter.get_event_timing(tn, &state.path.as_ref().unwrap().payload).unwrap();
             }
 
             let mut m = HashMap::new();

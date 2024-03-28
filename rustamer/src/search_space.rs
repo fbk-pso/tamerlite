@@ -1,6 +1,5 @@
 use std::{
-    collections::{HashSet, HashMap},
-    vec::Vec
+    collections::{HashMap, HashSet}, sync::Arc, vec::Vec
 };
 use multiset::HashMultiSet;
 use std::hash::{Hash, Hasher};
@@ -15,12 +14,12 @@ use super::utils::*;
 #[pyclass]
 #[derive(Debug, Clone)]
 pub struct State {
-    pub assignments: HashMap<String, PyExpressionNode>,
+    pub assignments: HashMap<String, ExpressionNode>,
     pub temporal_network: Option<DeltaSTN<f32>>,
     pub todo: HashMap<String, (usize, usize)>,
-    pub active_conditions: HashMultiSet<Vec<PyExpressionNode>>,
+    pub active_conditions: HashMultiSet<Vec<ExpressionNode>>,
     pub g: f64,
-    pub path: Vec<(String, usize, usize)>,
+    pub path: Option<Arc<PersistentList<(String, usize, usize)>>>
 }
 
 #[pymethods]
@@ -37,8 +36,8 @@ impl State {
 }
 
 impl State {
-    pub fn get_value(&self, fluent: &String) -> PyExpressionNode {
-        self.assignments[fluent].clone()
+    pub fn get_value(&self, fluent: &String) -> &ExpressionNode {
+        &self.assignments[fluent]
     }
 }
 
@@ -146,12 +145,12 @@ impl TNInterpreter {
 #[derive(Debug)]
 pub struct SearchSpace {
     actions_duration:
-        HashMap<String, Option<(Vec<PyExpressionNode>, Vec<PyExpressionNode>, bool, bool)>>,
+        HashMap<String, Option<(Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool)>>,
     events: HashMap<String, Vec<(Timing, Event)>>,
     actions: Vec<String>,
     mutex: HashSet<((String, usize), (String, usize))>,
-    initial_state: Option<HashMap<String, PyExpressionNode>>,
-    goal: Option<Vec<PyExpressionNode>>,
+    initial_state: Option<HashMap<String, ExpressionNode>>,
+    goal: Option<Vec<ExpressionNode>>,
     pub tn_interpreter: TNInterpreter,
     epsilon: f32,
     epsilon_rational: BigRational,
@@ -177,15 +176,32 @@ impl SearchSpace {
         let is_temporal = actions_duration.values().all(|value| !value.is_none());
         let mut actions: Vec<String> = events.keys().cloned().collect();
         actions.sort();
+        let converted_actions_duration: HashMap<String, Option<(Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool)>> = actions_duration
+            .into_iter()
+            .map(|(key, value)| {
+                let converted_value = match value {
+                    Some((vec1, vec2, b1, b2)) => {
+                        Some((
+                            vec1.into_iter().map(|e| e.v).collect(),
+                            vec2.into_iter().map(|e| e.v).collect(),
+                            b1,
+                            b2,
+                        ))
+                    }
+                    None => None,
+                };
+                (key, converted_value)
+            })
+            .collect();
         let res = SearchSpace {
-            actions_duration: actions_duration,
+            actions_duration: converted_actions_duration,
             events: events,
             actions: actions,
             mutex: mutex,
-            initial_state: initial_state,
-            goal: goal,
+            initial_state: initial_state.map(|inner_map| inner_map.into_iter().map(|(k, v)| (k, v.v)).collect()),
+            goal: goal.map(|inner_vec| inner_vec.into_iter().map(|e| e.v).collect()),
             tn_interpreter: TNInterpreter::new(),
-            epsilon: match epsilon.clone() {
+            epsilon: match &epsilon {
                 Some(x) => rational_to_f32(x),
                 None => 0.01,
             },
@@ -205,10 +221,10 @@ impl SearchSpace {
 
     pub fn initial_state(&self, initial_state: Option<HashMap<String, PyExpressionNode>>) -> PyResult<State> {
         let init = match initial_state {
-            Some(v) => v,
+            Some(v) => v.into_iter().map(|(k, v)| (k, v.v)).collect(),
             None => {
-                match self.initial_state.clone() {
-                    Some(v) => v,
+                match &self.initial_state {
+                    Some(v) => v.clone(),
                     None => {
                         return Err(PyException::new_err("The initial state must be defined somewhere!"));
                     },
@@ -225,18 +241,15 @@ impl SearchSpace {
             todo: HashMap::new(),
             active_conditions: HashMultiSet::new(),
             g: 0.0,
-            path: vec![],
+            path: PersistentList::new(),
         })
     }
 
     pub fn get_successor_states(&mut self, state: &State) -> PyResult<Vec<State>> {
         let mut res = Vec::new();
-        let mut actions: Vec<String> = Vec::new();
-        for a in self.actions.iter() {
-            actions.push(a.clone());
-        }
-        for action in  actions {
-            match self.get_successor_state(state, &action)? {
+        let actions: Vec<String> = self.actions.iter().map(|a|a.to_string()).collect();
+        for action in actions.iter() {
+            match self.get_successor_state(state, action)? {
                 Some(s) => res.push(s),
                 None => continue,
             }
@@ -282,6 +295,7 @@ impl SearchSpace {
         if ! state.todo.is_empty() {
             return Ok(false);
         }
+        let goal = goal.map(|g| g.into_iter().map(|e| e.v).collect());
         let g = match &goal {
             Some(v) => v,
             None => {
@@ -293,28 +307,28 @@ impl SearchSpace {
                 }
             }
         };
-        match internal_evaluate(g, state)?.v {
+        match internal_evaluate(&g, state)? {
             ExpressionNode::Bool(v) => Ok(v),
             _ => return Err(PyException::new_err("The goal is not a boolean expression!")),
         }
     }
 
     pub fn subgoals_sat(&self, state: &State, goal: Option<Vec<PyExpressionNode>>) -> PyResult<Vec<Vec<PyExpressionNode>>> {
-        let goals = match &goal {
-            Some(v) => split_expression(v)?,
+        let goals = match goal {
+            Some(v) => split_expression(&v.into_iter().map(|e| e.v).collect())?,
             None => {
                 match &self.goal {
-                    Some(v) => split_expression(v)?,
+                    Some(v) => split_expression(&v)?,
                     None => {
                         return Err(PyException::new_err("The goal must be defined somewhere!"));
                     },
                 }
             }
         };
-        let mut res = HashSet::new();
-        for g in goals.iter() {
-            if internal_evaluate(g, state)?.v == ExpressionNode::Bool(true) {
-                res.insert(g.clone());
+        let mut res: HashSet<_> = HashSet::new();
+        for g in goals {
+            if internal_evaluate(&g, state)? == ExpressionNode::Bool(true) {
+                res.insert(g.into_iter().map(|v| PyExpressionNode {v}).collect() );
             }
         }
         Ok(res.into_iter().collect())
@@ -378,8 +392,8 @@ impl SearchSpace {
                     let mut ub = mk_rational(0, 1);
                     if duration.is_some() {
                         let d = duration.unwrap();
-                        lb = -get_rational_from_expression_node(&internal_evaluate(&d.0, &state)?.v)?;
-                        ub = get_rational_from_expression_node(&internal_evaluate(&d.1, &state)?.v)?;
+                        lb = -get_rational_from_expression_node(&internal_evaluate(&d.0, &state)?)?;
+                        ub = get_rational_from_expression_node(&internal_evaluate(&d.1, &state)?)?;
                         if d.2 {
                             lb -= self.epsilon_rational.clone();
                         }
@@ -462,8 +476,8 @@ impl SearchSpace {
         Ok(res)
     }
 
-    fn is_sat(&self, conditions: &Vec<PyExpressionNode>, state: &State) -> PyResult<bool> {
-        let sat = match internal_evaluate(conditions, state)?.v {
+    fn is_sat(&self, conditions: &Vec<ExpressionNode>, state: &State) -> PyResult<bool> {
+        let sat = match internal_evaluate(conditions, state)? {
             ExpressionNode::Bool(v) => v,
             _ => return Err(PyException::new_err("An action condition is not a boolean expression!")),
         };
@@ -471,7 +485,7 @@ impl SearchSpace {
     }
 
     fn expand_event(&mut self, state: &State, new_state: &mut State, e: &Event, index: &usize, id: &usize) -> PyResult<bool> {
-        new_state.path.push((e.action.to_string(), e.pos, *id));
+        new_state.path = PersistentList::append((e.action.to_string(), e.pos, *id), &new_state.path);
 
         // check conditions is done before calling this method
 
@@ -482,7 +496,7 @@ impl SearchSpace {
 
         // check active conditions
         for c in new_state.active_conditions.iter() {
-            let sat = match internal_evaluate(&c, state)?.v {
+            let sat = match internal_evaluate(&c, state)? {
                 ExpressionNode::Bool(v) => v,
                 _ => return Err(PyException::new_err("An action condition is not a boolean expression!")),
             };
@@ -496,12 +510,12 @@ impl SearchSpace {
 
         // apply effects
         for eff in e.effects.iter() {
-            new_state.assignments.insert(eff.fluent.clone(), internal_evaluate(&eff.value, state)?);
+            new_state.assignments.insert(eff.fluent.to_string(), internal_evaluate(&eff.value, state)?);
         }
 
         // check active conditions
         for c in new_state.active_conditions.iter() {
-            let sat = match internal_evaluate(&c, new_state)?.v {
+            let sat = match internal_evaluate(&c, new_state)? {
                 ExpressionNode::Bool(v) => v,
                 _ => return Err(PyException::new_err("An action condition is not a boolean expression!")),
             };
@@ -511,7 +525,7 @@ impl SearchSpace {
         if self.is_temporal { // Add temporal constraints between past or todo events and the current one
             let tn = new_state.temporal_network.as_mut().unwrap();
             let ev = self.tn_interpreter.get_event_id((e.action.to_string(), e.pos, *id));
-            for e2 in state.path.iter() {
+            for e2 in PersistentList::to_vec(&state.path) {
                 let ev2 = self.tn_interpreter.get_event_id(e2.clone());
                 let e_id = (e.action.to_string(), *index);
                 let e2_id = (e2.0.to_string(), e2.1);
@@ -556,8 +570,8 @@ impl SearchSpace {
             let mut ub: f32 = 0.0;
             if duration.is_some() {
                 let d = duration.unwrap();
-                lb = -rational_to_f32(get_rational_from_expression_node(&internal_evaluate(&d.0, state)?.v)?);
-                ub = rational_to_f32(get_rational_from_expression_node(&internal_evaluate(&d.1, state)?.v)?);
+                lb = -rational_to_f32(&get_rational_from_expression_node(&internal_evaluate(&d.0, state)?)?);
+                ub = rational_to_f32(&get_rational_from_expression_node(&internal_evaluate(&d.1, state)?)?);
                 if d.2 {
                     lb -= self.epsilon;
                 }
@@ -570,8 +584,8 @@ impl SearchSpace {
             id = self.counter;
             for (t, e) in events.iter() {
                 let ev = self.tn_interpreter.get_event_id((e.action.to_string(), e.pos, self.counter));
-                let b1 = -rational_to_f32(t.delay.clone());
-                let b2 = rational_to_f32(t.delay.clone());
+                let b1 = -rational_to_f32(&t.delay);
+                let b2 = rational_to_f32(&t.delay);
                 if t.is_from_start() {
                     tn.add(&start, &ev, &b1);
                     tn.add(&ev, &start, &b2);
@@ -593,54 +607,32 @@ impl SearchSpace {
 
 #[pyfunction]
 pub fn evaluate(exp: Vec<PyExpressionNode>, state: &State) -> PyResult<PyExpressionNode> {
-    internal_evaluate(&exp, state)
+    Ok(PyExpressionNode {v: internal_evaluate(&exp.into_iter().map(|e| e.v).collect(), state)? })
 }
 
-pub fn internal_evaluate(exp: &Vec<PyExpressionNode>, state: &State) -> PyResult<PyExpressionNode> {
+pub fn internal_evaluate(exp: &Vec<ExpressionNode>, state: &State) -> PyResult<ExpressionNode> {
     let mut res: Vec<ExpressionNode> = vec![];
     for e in exp {
-        match &e.v {
+        let value = match &e {
             ExpressionNode::And(v) => {
-                let mut val = true;
-                for p in v {
-                    if ExpressionNode::Bool(false) == res[*p] {
-                        val = false;
-                        break;
-                    }
-                }
-                res.push(ExpressionNode::Bool(val));
+                let val = v.iter().all(|&p| res[p] == ExpressionNode::Bool(true));
+                ExpressionNode::Bool(val)
             },
             ExpressionNode::Not(p) => {
-                if ExpressionNode::Bool(false) == res[*p] {
-                    res.push(ExpressionNode::Bool(true));
-                } else {
-                    res.push(ExpressionNode::Bool(false));
-                }
+                ExpressionNode::Bool(ExpressionNode::Bool(false) == res[*p])
             },
             ExpressionNode::Equals(p1, p2) => {
-                if res[*p1] == res[*p2] {
-                    res.push(ExpressionNode::Bool(true));
-                } else {
-                    res.push(ExpressionNode::Bool(false));
-                }
+                ExpressionNode::Bool(res[*p1] == res[*p2])
             },
             ExpressionNode::LE(p1, p2) => {
                 let val1 = get_rational_from_expression_node(&res[*p1])?;
                 let val2 = get_rational_from_expression_node(&res[*p2])?;
-                if val1 <= val2 {
-                    res.push(ExpressionNode::Bool(true));
-                } else {
-                    res.push(ExpressionNode::Bool(false));
-                }
+                ExpressionNode::Bool(val1 <= val2)
             },
             ExpressionNode::LT(p1, p2) => {
                 let val1 = get_rational_from_expression_node(&res[*p1])?;
                 let val2 = get_rational_from_expression_node(&res[*p2])?;
-                if val1 < val2 {
-                    res.push(ExpressionNode::Bool(true));
-                } else {
-                    res.push(ExpressionNode::Bool(false));
-                }
+                ExpressionNode::Bool(val1 < val2)
             },
             ExpressionNode::Plus(v) => {
                 let mut r = get_rational_from_expression_node(&res[v[0]])?;
@@ -648,10 +640,10 @@ pub fn internal_evaluate(exp: &Vec<PyExpressionNode>, state: &State) -> PyResult
                     r += get_rational_from_expression_node(&res[*p])?;
                 }
                 if r.is_integer() {
-                    res.push(ExpressionNode::Int(r.to_integer()));
+                    ExpressionNode::Int(r.to_integer())
                 }
                 else {
-                    res.push(ExpressionNode::Rational(r));
+                    ExpressionNode::Rational(r)
                 }
             },
             ExpressionNode::Minus(p1, p2) => {
@@ -659,10 +651,10 @@ pub fn internal_evaluate(exp: &Vec<PyExpressionNode>, state: &State) -> PyResult
                 let val2 = get_rational_from_expression_node(&res[*p2])?;
                 let r = val1 - val2;
                 if r.is_integer() {
-                    res.push(ExpressionNode::Int(r.to_integer()));
+                    ExpressionNode::Int(r.to_integer())
                 }
                 else {
-                    res.push(ExpressionNode::Rational(r));
+                    ExpressionNode::Rational(r)
                 }
             },
             ExpressionNode::Times(v) => {
@@ -671,10 +663,10 @@ pub fn internal_evaluate(exp: &Vec<PyExpressionNode>, state: &State) -> PyResult
                     r *= get_rational_from_expression_node(&res[*p])?;
                 }
                 if r.is_integer() {
-                    res.push(ExpressionNode::Int(r.to_integer()));
+                    ExpressionNode::Int(r.to_integer())
                 }
                 else {
-                    res.push(ExpressionNode::Rational(r));
+                    ExpressionNode::Rational(r)
                 }
             },
             ExpressionNode::Div(p1, p2) => {
@@ -682,20 +674,24 @@ pub fn internal_evaluate(exp: &Vec<PyExpressionNode>, state: &State) -> PyResult
                 let val2 = get_rational_from_expression_node(&res[*p2])?;
                 let r = val1 / val2;
                 if r.is_integer() {
-                    res.push(ExpressionNode::Int(r.to_integer()));
+                    ExpressionNode::Int(r.to_integer())
                 }
                 else {
-                    res.push(ExpressionNode::Rational(r));
+                    ExpressionNode::Rational(r)
                 }
             },
             ExpressionNode::Fluent(s) => {
-                res.push(state.get_value(&s).v);
+                state.get_value(&s).clone()
             }
             other => {
-                res.push(other.clone());
+                (*other).clone()
             }
+        };
+        if res.len() == exp.len() - 1 {
+            return Ok(value)
+        } else {
+            res.push(value);
         }
-
     }
-    Ok(PyExpressionNode { v: res.last().cloned().unwrap() })
+    Err(PyException::new_err("Unreachable code"))
 }
