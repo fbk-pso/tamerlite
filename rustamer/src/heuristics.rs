@@ -79,8 +79,8 @@ impl CustomHeuristic {
 #[derive(Debug, Clone, PartialEq)]
 struct Operator {
     action: String,
-    conditions: Vec<Vec<PyExpressionNode>>,
-    effects: Vec<Vec<PyExpressionNode>>,
+    conditions: Vec<Vec<ExpressionNode>>,
+    effects: Vec<Vec<ExpressionNode>>,
     cost: f64,
 }
 
@@ -94,17 +94,17 @@ impl Hash for Operator {
     }
 }
 
-fn is_numeric_condition(cond: &Vec<PyExpressionNode>) -> bool {
+fn is_numeric_condition(cond: &Vec<ExpressionNode>) -> bool {
     if let Some(e) = cond.last() {
-        if let ExpressionNode::Fluent(_) = e.to_expression_node() {
+        if let ExpressionNode::Fluent(_) = e {
             return false;
-        } else if let ExpressionNode::Not(i) = e.to_expression_node() {
-            if let ExpressionNode::Fluent(_) = cond[i].to_expression_node() {
+        } else if let ExpressionNode::Not(i) = e {
+            if let ExpressionNode::Fluent(_) = cond[*i] {
                 return false;
             }
-        } else if let ExpressionNode::Equals(i1, i2) = e.to_expression_node() {
-            if let ExpressionNode::Fluent(_) = cond[i1].to_expression_node() {
-                if let ExpressionNode::Object(_) = cond[i2].to_expression_node() {
+        } else if let ExpressionNode::Equals(i1, i2) = e {
+            if let ExpressionNode::Fluent(_) = cond[*i1] {
+                if let ExpressionNode::Object(_) = cond[*i2] {
                     return false;
                 }
             }
@@ -115,7 +115,7 @@ fn is_numeric_condition(cond: &Vec<PyExpressionNode>) -> bool {
     true
 }
 
-fn cost(exp: &Vec<Vec<PyExpressionNode>>, costs: &HashMap<&Vec<PyExpressionNode>, f64>) -> Option<f64> {
+fn cost(exp: &Vec<Vec<ExpressionNode>>, costs: &HashMap<&Vec<ExpressionNode>, f64>) -> Option<f64> {
     let mut res = 0.0;
     for g in exp.iter() {
         let c = costs.get(g);
@@ -130,12 +130,12 @@ fn cost(exp: &Vec<Vec<PyExpressionNode>>, costs: &HashMap<&Vec<PyExpressionNode>
 
 pub struct HFF {
     events: HashMap<String, usize>,
-    goals: Vec<Vec<PyExpressionNode>>,
-    extra_fluents: HashMap<String, Vec<Vec<PyExpressionNode>>>,
-    extra_goals: Vec<Vec<PyExpressionNode>>,
-    precondition_of: HashMap<Vec<PyExpressionNode>, Vec<Operator>>,
+    goals: Vec<Vec<ExpressionNode>>,
+    extra_fluents: HashMap<String, Vec<Vec<ExpressionNode>>>,
+    extra_goals: Vec<Vec<ExpressionNode>>,
+    precondition_of: HashMap<Vec<ExpressionNode>, Vec<Operator>>,
     empty_pre_operators: Vec<Operator>,
-    numeric_conds: HashSet<Vec<PyExpressionNode>>,
+    numeric_conds: HashSet<Vec<ExpressionNode>>,
     return_hadd: bool,
 }
 
@@ -152,66 +152,66 @@ impl HFF {
         let mut extra_goals = Vec::new();
         for (a, le) in events.iter() {
             let mut a_extra_fluents = Vec::new();
-            let mut cond: Vec<PyExpressionNode> = vec![make_fluent_node(format!("__f_{}_{}", a, le.len()-1))];
+            let mut cond: Vec<ExpressionNode> = vec![ExpressionNode::Fluent(format!("__f_{}_{}", a, le.len()-1))];
             extra_goals.push(cond.clone());
             for (i, (_, e)) in le.iter().enumerate() {
                 let mut effects = Vec::new();
                 let mut conditions = Vec::new();
                 let f = format!("__f_{}_{}", a, i);
-                a_extra_fluents.push(vec![make_fluent_node(f.to_string())]);
-                effects.push(vec![make_fluent_node(f.to_string())]);
+                a_extra_fluents.push(vec![ExpressionNode::Fluent(f.to_string())]);
+                effects.push(vec![ExpressionNode::Fluent(f.to_string())]);
                 for eff in e.effects.iter() {
-                    let t = fluents[&eff.fluent].clone();
+                    let t = fluents[&eff.fluent].to_string();
                     if t == "bool" {
                         if eff.value.len() == 1 {
-                            if let ExpressionNode::Bool(value) = eff.value[0].to_expression_node() {
+                            if let ExpressionNode::Bool(value) = eff.value[0] {
                                 if value {
-                                    effects.push(vec![make_fluent_node(eff.fluent.to_string())]);
+                                    effects.push(vec![ExpressionNode::Fluent(eff.fluent.to_string())]);
                                 } else {
-                                    effects.push(vec![make_fluent_node(eff.fluent.to_string()), make_operator_node("not".to_string(), vec![0])?]);
+                                    effects.push(vec![ExpressionNode::Fluent(eff.fluent.to_string()), make_operator("not".to_string(), vec![0])?]);
                                 }
                             }
                             else {
-                                effects.push(vec![make_fluent_node(eff.fluent.to_string())]);
-                                effects.push(vec![make_fluent_node(eff.fluent.to_string()), make_operator_node("not".to_string(), vec![0])?]);
+                                effects.push(vec![ExpressionNode::Fluent(eff.fluent.to_string())]);
+                                effects.push(vec![ExpressionNode::Fluent(eff.fluent.to_string()), make_operator("not".to_string(), vec![0])?]);
                             }
                         } else {
-                            effects.push(vec![make_fluent_node(eff.fluent.to_string())]);
-                            effects.push(vec![make_fluent_node(eff.fluent.to_string()), make_operator_node("not".to_string(), vec![0])?]);
+                            effects.push(vec![ExpressionNode::Fluent(eff.fluent.to_string())]);
+                            effects.push(vec![ExpressionNode::Fluent(eff.fluent.to_string()), make_operator("not".to_string(), vec![0])?]);
                         }
                     } else if t != "real" && t != "int" {
                         if eff.value.len() == 1 {
-                            if let ExpressionNode::Object(_) = eff.value[0].to_expression_node() {
-                                effects.push(vec![make_fluent_node(eff.fluent.to_string()), eff.value[0].clone(), make_operator_node("==".to_string(), vec![0, 1])?]);
+                            if let ExpressionNode::Object(_) = eff.value[0] {
+                                effects.push(vec![ExpressionNode::Fluent(eff.fluent.to_string()), eff.value[0].clone(), make_operator("==".to_string(), vec![0, 1])?]);
                             }
                             else {
                                 for o in objects[&t].iter() {
-                                    effects.push(vec![make_fluent_node(eff.fluent.to_string()), make_object_node(o.to_string()), make_operator_node("==".to_string(), vec![0, 1])?]);
+                                    effects.push(vec![ExpressionNode::Fluent(eff.fluent.to_string()), ExpressionNode::Object(o.to_string()), make_operator("==".to_string(), vec![0, 1])?]);
                                 }
                             }
                         } else {
                             for o in objects[&t].iter() {
-                                effects.push(vec![make_fluent_node(eff.fluent.to_string()), make_object_node(o.to_string()), make_operator_node("==".to_string(), vec![0, 1])?]);
+                                effects.push(vec![ExpressionNode::Fluent(eff.fluent.to_string()), ExpressionNode::Object(o.to_string()), make_operator("==".to_string(), vec![0, 1])?]);
                             }
                         }
                     }
                 }
                 conditions.push(cond);
-                if e.conditions.len() > 0 && e.conditions != vec![make_bool_constant_node(true)] {
+                if e.conditions.len() > 0 && e.conditions != vec![ExpressionNode::Bool(true)] {
                     conditions.extend(split_expression(&e.conditions)?);
                 }
                 operators.push(Operator { action: a.to_string(), conditions, effects, cost: 1.0 } );
-                cond = vec![make_fluent_node(f.to_string())];
+                cond = vec![ExpressionNode::Fluent(f.to_string())];
             }
             extra_fluents.insert(a.to_string(), a_extra_fluents);
         }
 
-        let goals = split_expression(&goal)?;
-        let mut precondition_of: HashMap<Vec<PyExpressionNode>, Vec<Operator>> = HashMap::new();
-        let mut numeric_conds: HashSet<Vec<PyExpressionNode>> = HashSet::new();
+        let goals = split_expression(&goal.into_iter().map(|e| e.v).collect())?;
+        let mut precondition_of: HashMap<Vec<ExpressionNode>, Vec<Operator>> = HashMap::new();
+        let mut numeric_conds: HashSet<Vec<ExpressionNode>> = HashSet::new();
         let mut empty_pre_operators: Vec<Operator> = Vec::new();
         for o in operators.iter() {
-            if o.conditions.len() == 0 || o.conditions == vec![vec![make_bool_constant_node(true)]] {
+            if o.conditions.len() == 0 || o.conditions == vec![vec![ExpressionNode::Bool(true)]] {
                 empty_pre_operators.push(o.clone());
             }
             for c in o.conditions.iter() {
@@ -251,16 +251,16 @@ impl HFF {
         let mut init_lp = Vec::new();
 
         for (f, v) in state.assignments.iter() {
-            let k = match v.v {
+            let k = match v {
                 ExpressionNode::Bool(value) => {
-                    if value {
-                        vec![make_fluent_node(f.to_string())]
+                    if *value {
+                        vec![ExpressionNode::Fluent(f.to_string())]
                     } else {
-                        vec![make_fluent_node(f.to_string()), make_operator_node("not".to_string(), vec![0])?]
+                        vec![ExpressionNode::Fluent(f.to_string()), make_operator("not".to_string(), vec![0])?]
                     }
                 }
                 _ => {
-                    vec![make_fluent_node(f.to_string()), v.clone(), make_operator_node("==".to_string(), vec![0, 1])?]
+                    vec![ExpressionNode::Fluent(f.to_string()), v.clone(), make_operator("==".to_string(), vec![0, 1])?]
                 }
             };
             init_lp.push(k);
@@ -271,7 +271,7 @@ impl HFF {
         }
 
         for c in self.numeric_conds.iter() {
-            if internal_evaluate(c, state)?.v == ExpressionNode::Bool(true) {
+            if internal_evaluate(c, state)? == ExpressionNode::Bool(true) {
                 costs.insert(c, 0.0);
             } else {
                 costs.insert(c, 1.0);
@@ -352,7 +352,7 @@ impl HFF {
         }
 
         let mut relaxed_plan = HashSet::new();
-        let mut stack: Vec<&Vec<PyExpressionNode>> = self.goals.iter().collect();
+        let mut stack: Vec<&Vec<ExpressionNode>> = self.goals.iter().collect();
         while stack.len() > 0 {
             let g = stack.pop().unwrap();
             if let Some(o) = reached_by.get(g) {
