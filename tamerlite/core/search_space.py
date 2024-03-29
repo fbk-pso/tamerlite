@@ -85,6 +85,7 @@ class Timing:
 @dataclass(eq=True, frozen=True)
 class Event:
     action: str
+    pos: int
     conditions: Expression
     start_conditions: Tuple[Expression, ...]
     end_conditions: Tuple[Expression, ...]
@@ -322,7 +323,7 @@ class SearchSpace:
             e_id = (e.action, index)
             if len(state.path) > 0:
                 for e2, id2 in state.path:
-                    e2_id = (e2.action, [ev for _, ev in self._events[e2.action]].index(e2))
+                    e2_id = (e2.action, e2.pos)
                     if (e_id, e2_id) in self._mutex:
                         new_state.temporal_network.add((e2, id2), (e, id), -self._epsilon)
                     else:

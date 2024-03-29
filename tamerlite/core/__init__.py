@@ -25,6 +25,7 @@ if not has_rustamer:
 else:
     from tamerlite.rustamer import wastar_search, astar_search, gbfs_search
     from tamerlite.rustamer import bfs_search, dfs_search, ehc_search
+    from tamerlite.rustamer import multiqueue_search
     from tamerlite.rustamer import SearchSpace
     from tamerlite.rustamer import HFF, HAdd, CustomHeuristic
     from tamerlite.rustamer import Timing, Effect, Event
@@ -39,6 +40,3 @@ else:
         shift_expression,
     )
     from tamerlite.rustamer import CoreStateEncoder
-
-    def multiqueue_search(*args, **kwargs):
-        raise NotImplementedError

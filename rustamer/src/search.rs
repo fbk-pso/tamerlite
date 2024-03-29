@@ -48,7 +48,7 @@ impl Ord for PrioritizedItem {
     }
 }
 
-fn build_plan(ss: &mut SearchSpace, state: &State) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
+pub fn build_plan(ss: &mut SearchSpace, state: &State) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
     let path = PersistentList::to_vec(&state.path).into_iter().map(|(a, _, _)| a.to_string()).collect();
     let plan = ss.build_plan(path)?;
     let mut res = Vec::new();

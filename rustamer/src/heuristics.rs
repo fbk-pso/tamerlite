@@ -15,7 +15,8 @@ use super::expressions::*;
 use super::structures::*;
 
 
-#[pyclass]
+#[pyclass(frozen)]
+#[derive(Clone, Debug)]
 pub struct Heuristic {
     hff: Option<HFF>,
     hcustom: Option<CustomHeuristic>,
@@ -53,6 +54,7 @@ impl Heuristic {
 
 }
 
+#[derive(Clone, Debug)]
 pub struct CustomHeuristic {
     callable: PyObject
 }
@@ -128,6 +130,7 @@ fn cost(exp: &Vec<Vec<ExpressionNode>>, costs: &HashMap<&Vec<ExpressionNode>, f6
     Some(res)
 }
 
+#[derive(Clone, Debug)]
 pub struct HFF {
     events: HashMap<String, usize>,
     goals: Vec<Vec<ExpressionNode>>,
