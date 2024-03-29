@@ -107,15 +107,15 @@ pub fn multiqueue_search(ss: &mut SearchSpace, heuristics: Vec<(Heuristic, f64)>
                     if open_set.contains(&s) || closed_set.contains(&s) {
                         continue;
                     }
+                    if !ss.is_temporal {
+                        open_set.insert(s.clone());
+                    }
                     let sc = Arc::new(Mutex::new(StateContainer{state: s.clone(), expanded: false}));
                     for (i, (heuristic, weight)) in heuristics.iter().enumerate() {
                         let h = heuristic.eval(&s)?;
                         match h {
                             Some(v) => {
                                 let f = weight * v + (1.0 - weight) * s.g;
-                                if !ss.is_temporal {
-                                    open_set.insert(s.clone());
-                                }
                                 opens[i].push(PrioritizedItem{heuristic: f, state_container: sc.clone()});
                             },
                             None => continue,

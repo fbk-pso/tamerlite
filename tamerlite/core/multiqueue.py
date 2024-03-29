@@ -28,6 +28,8 @@ class PrioritizedItem:
 def multiqueue_search(ss: SearchSpace, heuristics: List[Tuple[Heuristic, float]], timeout: float = None):
     st = time.time()
     opens = []
+    closed_set = set()
+    open_set = set()
     init = ss.initial_state()
     item = PrioritizedItem(0, StateContainer(init, False))
     for _ in heuristics:
@@ -52,6 +54,9 @@ def multiqueue_search(ss: SearchSpace, heuristics: List[Tuple[Heuristic, float]]
             continue
         sc.expanded = True
         state = sc.state
+        if not ss.is_temporal:
+            closed_set.add(state)
+            open_set.discard(state)
         # print(state.path, item.heuristic)
         counter += 1
         state_expanded += 1
@@ -59,6 +64,10 @@ def multiqueue_search(ss: SearchSpace, heuristics: List[Tuple[Heuristic, float]]
             print("expanded states:", state_expanded)
             return state.extract_solution()
         for succ_state in ss.get_successor_states(state):
+            if succ_state in closed_set or succ_state in open_set:
+                continue
+            if not ss.is_temporal:
+                open_set.add(succ_state)
             sc = StateContainer(succ_state, False)
             for i, (heuristic, weight) in enumerate(heuristics):
                 h = heuristic.eval(succ_state) if weight > 0 else 0
