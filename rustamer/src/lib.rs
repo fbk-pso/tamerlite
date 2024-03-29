@@ -4,6 +4,7 @@ mod expressions;
 mod structures;
 mod search_space;
 mod search;
+mod multiqueue;
 mod heuristics;
 mod state_encoder;
 
@@ -11,6 +12,7 @@ use pyo3::prelude::*;
 
 use heuristics::*;
 use search::*;
+use multiqueue::*;
 use search_space::*;
 use expressions::*;
 use structures::*;
@@ -35,6 +37,7 @@ fn rustamer(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(make_fluent_node, m)?)?;
     m.add_function(wrap_pyfunction!(shift_expression, m)?)?;
     m.add_function(wrap_pyfunction!(wastar_search, m)?)?;
+    m.add_function(wrap_pyfunction!(multiqueue_search, m)?)?;
     m.add_function(wrap_pyfunction!(astar_search, m)?)?;
     m.add_function(wrap_pyfunction!(gbfs_search, m)?)?;
     m.add_function(wrap_pyfunction!(ehc_search, m)?)?;
