@@ -238,6 +238,9 @@ class SearchSpace:
     @property
     def is_temporal(self) -> bool:
         return self._is_temporal
+        
+    def reset(self):
+        pass
 
     def initial_state(self,
                       initial_state: Optional[Dict[str, Union[bool, int, Fraction, str]]] = None) -> State:
