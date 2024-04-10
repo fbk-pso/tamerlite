@@ -4,9 +4,9 @@ import numpy as np
 
 
 class RLRank:
-    def __init__(self, state_encoder, model, ModelClass):
+    def __init__(self, state_encoder, model, ModelClass, config):
         self._state_encoder = state_encoder
-        self._model = ModelClass(state_encoder.state_geometry)
+        self._model = ModelClass(state_encoder.state_geometry, config.reward_signal)
         self._model.load_state_dict(torch.load(model))
         self._model.eval()
 
@@ -23,13 +23,14 @@ class RLRank:
 
 
 class RLHeuristic:
-    def __init__(self, state_encoder, model, ModelClass, max_plan_size, config):
+    def __init__(self, state_encoder, model, ModelClass, config):
         self._state_encoder = state_encoder
-        self._model = ModelClass(state_encoder.state_geometry)
+        self._model = ModelClass(state_encoder.state_geometry, config.reward_signal)
         self._model.load_state_dict(torch.load(model))
         self._model.eval()
-        self._max_plan_size = max_plan_size
+        self._delta_h = config.delta_h
         self._gamma = config.gamma
+        self._reward_signal = config.reward_signal
 
     def eval(self, state, ss):
         if ss.goal_reached(state):
@@ -41,9 +42,12 @@ class RLHeuristic:
         s = np.array([state_vec])
         r = self._model(torch.from_numpy(s).float()).detach()[0]
         r = float(r[0])
-        if r == 0:
-            return float(self._max_plan_size)
-        elif r < 0:
-            return float((2 * self._max_plan_size) - min(self._max_plan_size, (math.log(min(1, -r), self._gamma))))
+        if self._reward_signal=="old":
+            if r == 0:
+                return float(self._delta_h)
+            elif r < 0:
+                return float((2 * self._delta_h) - min(self._delta_h, (math.log(min(1, -r), self._gamma))))
+            else:
+                return float(min(self._delta_h, (math.log(min(1, r), self._gamma)+1)))
         else:
-            return float(min(self._max_plan_size, (math.log(min(1, r), self._gamma)+1)))
+            return -float(r)   # min(0, -r)
