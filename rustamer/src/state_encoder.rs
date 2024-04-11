@@ -147,7 +147,10 @@ impl CoreStateEncoder {
                 if *t - t_safe > tn.tolerance {
                     let a = &e.0;
                     let p = self.tn_actions_pos[a];
-                    res[p+e.1] = *t - t_safe + 1.0;
+                    let v = *t - t_safe + 1.0;
+                    if v > res[p+e.1] {
+                        res[p+e.1] = v;
+                    }
                 }
             }
         }
