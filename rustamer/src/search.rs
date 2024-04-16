@@ -80,7 +80,7 @@ pub fn gbfs_search(ss: &mut SearchSpace, heuristic: &Heuristic, timeout: Option<
 pub fn wastar_search(ss: &mut SearchSpace, heuristic: &Heuristic, weight: f64, timeout: Option<f32>) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
-    let init_h = match heuristic.eval(&init)? {
+    let init_h = match heuristic.eval(&init, ss)? {
         Some(v) => v,
         None => {
             return Ok(None);
@@ -112,7 +112,7 @@ pub fn wastar_search(ss: &mut SearchSpace, heuristic: &Heuristic, weight: f64, t
                 if open_set.contains(&s) || closed_set.contains(&s) {
                     continue;
                 }
-                let h = heuristic.eval(&s)?;
+                let h = heuristic.eval(&s, ss)?;
                 match h {
                     Some(v) => {
                         let f = weight * v + (1.0 - weight) * s.g;
@@ -175,7 +175,7 @@ fn basic_search(ss: &mut SearchSpace, bfs: bool, timeout: Option<f32>) -> PyResu
 pub fn ehc_search(ss: &mut SearchSpace, heuristic: &Heuristic, timeout: Option<f32>) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
-    let mut best_h = match heuristic.eval(&init)? {
+    let mut best_h = match heuristic.eval(&init, ss)? {
         Some(v) => v,
         None => {
             return Ok(None);
@@ -197,7 +197,7 @@ pub fn ehc_search(ss: &mut SearchSpace, heuristic: &Heuristic, timeout: Option<f
             return build_plan(ss, &state);
         } else {
             for s in ss.get_successor_states(&state)? {
-                let h = heuristic.eval(&s)?;
+                let h = heuristic.eval(&s, ss)?;
                 match h {
                     Some(v) => {
                         if v < best_h {

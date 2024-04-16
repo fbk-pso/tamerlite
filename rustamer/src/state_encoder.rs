@@ -12,6 +12,7 @@ use super::search_space::State;
 use super::structures::*;
 
 #[pyclass]
+#[derive(Clone)]
 pub struct CoreStateEncoder {
     num_actions: usize,
     tn_size: usize,

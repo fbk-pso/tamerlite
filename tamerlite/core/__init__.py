@@ -9,7 +9,7 @@ if not has_rustamer:
     from tamerlite.core.search import bfs_search, dfs_search, ehc_search
     from tamerlite.core.multiqueue import multiqueue_search
     from tamerlite.core.search_space import SearchSpace
-    from tamerlite.core.heuristics import HFF, HAdd, CustomHeuristic
+    from tamerlite.core.heuristics import HFF, HAdd, CustomHeuristic, RLRank, RLHeuristic
     from tamerlite.core.search_space import Timing, Effect, Event
     from tamerlite.core.search_space import Expression, evaluate, get_fluents
     from tamerlite.core.search_space import (
@@ -27,7 +27,7 @@ else:
     from tamerlite.rustamer import bfs_search, dfs_search, ehc_search
     from tamerlite.rustamer import multiqueue_search
     from tamerlite.rustamer import SearchSpace
-    from tamerlite.rustamer import HFF, HAdd, CustomHeuristic
+    from tamerlite.rustamer import HFF, HAdd, CustomHeuristic, RLRank, RLHeuristic
     from tamerlite.rustamer import Timing, Effect, Event
     from tamerlite.rustamer import Expression, evaluate, get_fluents
     from tamerlite.rustamer import (
