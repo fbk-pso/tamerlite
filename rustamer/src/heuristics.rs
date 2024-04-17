@@ -8,7 +8,8 @@ use std::hash::{Hash, Hasher};
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
-use crate::internal_evaluate;
+use crate::{internal_evaluate, SearchSpace};
+use crate::state_encoder::CoreStateEncoder;
 
 use super::search_space::State;
 use super::expressions::*;
@@ -16,9 +17,10 @@ use super::structures::*;
 
 
 #[pyclass(frozen)]
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Heuristic {
     hff: Option<HFF>,
+    hrl: Option<HRL>,
     hcustom: Option<CustomHeuristic>,
 }
 
@@ -27,29 +29,70 @@ impl Heuristic {
 
     #[staticmethod]
     pub fn custom(callable: PyObject) -> PyResult<Self> {
-        Ok(Heuristic {hff: None, hcustom: Some(CustomHeuristic::new(callable)?)})
+        Ok(Heuristic {hff: None, hrl: None, hcustom: Some(CustomHeuristic::new(callable)?)})
     }
 
     #[staticmethod]
     pub fn hff(fluents: HashMap<String, String>, objects: HashMap<String, Vec<String>>, events: HashMap<String, Vec<(Timing, Event)>>, goal: Vec<PyExpressionNode>) -> PyResult<Self> {
-        Ok(Heuristic {hff: Some(HFF::new(fluents, objects, events, goal, false)?), hcustom: None})
+        Ok(Heuristic {hff: Some(HFF::new(fluents, objects, events, goal, false)?), hrl: None, hcustom: None})
     }
 
     #[staticmethod]
     pub fn hadd(fluents: HashMap<String, String>, objects: HashMap<String, Vec<String>>, events: HashMap<String, Vec<(Timing, Event)>>, goal: Vec<PyExpressionNode>) -> PyResult<Self> {
-        Ok(Heuristic {hff: Some(HFF::new(fluents, objects, events, goal, true)?), hcustom: None})
+        Ok(Heuristic {hff: Some(HFF::new(fluents, objects, events, goal, true)?), hrl: None, hcustom: None})
     }
 
-    pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
+    #[staticmethod]
+    pub fn hrl(ss: &CoreStateEncoder, goals_vec: Vec<f32>, constants_vec: Vec<f32>, callable: PyObject) -> PyResult<Self> {
+        Ok(Heuristic {hff: None, hrl: Some(HRL::new(ss, goals_vec, constants_vec, callable)?), hcustom: None})
+    }
+
+    pub fn eval(&self, state: &State, ss: &SearchSpace) -> PyResult<Option<f64>> {
         if self.hff.is_some() {
             let h = self.hff.as_ref().unwrap();
             h.eval(state)
         } else if self.hcustom.is_some() {
             let h = self.hcustom.as_ref().unwrap();
             h.eval(state)
+        } else if self.hrl.is_some() {
+            let h = self.hrl.as_ref().unwrap();
+            h.eval(state, ss)
         } else {
             Ok(Some(0.0))
         }
+    }
+
+}
+
+#[derive(Clone)]
+pub struct HRL {
+    ss: CoreStateEncoder,
+    goals_vec: Vec<f32>,
+    constants_vec: Vec<f32>,
+    callable: PyObject,
+}
+
+impl HRL {
+    fn new(ss: &CoreStateEncoder, goals_vec: Vec<f32>, constants_vec: Vec<f32>, callable: PyObject) -> PyResult<Self> {
+        Ok(HRL { ss: ss.clone(), goals_vec, constants_vec, callable })
+    }
+
+    pub fn eval(&self, state: &State, ss: &SearchSpace) -> PyResult<Option<f64>> {
+        let mut enc: Vec<f32> = Vec::new();
+        enc.extend(self.ss.get_fluents_as_vector(state)?);
+        enc.extend(self.constants_vec.iter());
+        enc.extend(self.goals_vec.iter());
+        enc.extend(self.ss.get_running_actions_as_vector(state)?);
+        enc.extend(self.ss.get_tn_as_vector(state, ss)?);
+        Python::with_gil(|py| {
+            let args = PyTuple::new(py, &[enc.into_py(py)]);
+            let r = self.callable.call(py, args, None)?;
+            if r.is_none(py) {
+                Ok(None)
+            } else {
+                Ok(Some(r.extract(py)?))
+            }
+        })
     }
 
 }
