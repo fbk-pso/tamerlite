@@ -112,7 +112,7 @@ pub fn multiqueue_search(ss: &mut SearchSpace, heuristics: Vec<(Heuristic, f64)>
                     }
                     let sc = Arc::new(Mutex::new(StateContainer{state: s.clone(), expanded: false}));
                     for (i, (heuristic, weight)) in heuristics.iter().enumerate() {
-                        let h = heuristic.eval(&s)?;
+                        let h = heuristic.eval(&s, ss)?;
                         match h {
                             Some(v) => {
                                 let f = weight * v + (1.0 - weight) * s.g;

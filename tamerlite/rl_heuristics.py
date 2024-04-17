@@ -12,6 +12,9 @@ class RLRank:
 
     def eval(self, state):
         state_vec = self._state_encoder.get_state_as_vector(state)
+        return self.eval_state_vec(state_vec)
+
+    def eval_state_vec(self, state_vec):
         s = np.array([state_vec])
         r = self._model(torch.from_numpy(s).float()).detach()[0]
         return float(-r[0])+2.0
@@ -28,6 +31,9 @@ class RLHeuristic:
 
     def eval(self, state):
         state_vec = self._state_encoder.get_state_as_vector(state)
+        return self.eval_state_vec(state_vec)
+
+    def eval_state_vec(self, state_vec):
         s = np.array([state_vec])
         r = self._model(torch.from_numpy(s).float()).detach()[0]
         r = float(r[0])

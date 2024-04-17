@@ -12,7 +12,7 @@ from tamerlite.core import wastar_search, astar_search, gbfs_search
 from tamerlite.core import bfs_search, dfs_search, ehc_search
 from tamerlite.core import multiqueue_search
 from tamerlite.core import evaluate, make_fluent_node
-from tamerlite.core import HFF, HAdd, CustomHeuristic
+from tamerlite.core import HFF, HAdd, CustomHeuristic, RLRank, RLHeuristic
 from tamerlite.converter import Converter
 from tamerlite.encoder import Encoder, get_encoders
 
@@ -160,15 +160,11 @@ class TamerLite(
             w = 1 if params is None or params.weight is None else params.weight
         elif h == "rl_heuristic":
             assert rl_params is not None and rl_params.max_plan_size is not None and rl_params.gamma is not None
-            from tamerlite.rl_heuristics import RLHeuristic
-            hrl = RLHeuristic(state_encoder, rl_params.model, rl_params.model_class, rl_params.max_plan_size, rl_params.gamma)
-            h = CustomHeuristic(hrl.eval)
+            h = RLHeuristic(state_encoder, rl_params.model, rl_params.model_class, rl_params.max_plan_size, rl_params.gamma)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "rl_rank":
             assert rl_params is not None
-            from tamerlite.rl_heuristics import RLRank
-            hrl = RLRank(state_encoder, rl_params.model, rl_params.model_class)
-            h = CustomHeuristic(hrl.eval)
+            h = RLRank(state_encoder, rl_params.model, rl_params.model_class)
             w = 1 if params is None or params.weight is None else params.weight
         elif h == "hff":
             h = HFF(encoder.fluents, encoder.objects, encoder.events, encoder.goal)
