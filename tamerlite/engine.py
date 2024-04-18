@@ -85,7 +85,7 @@ class MultiqueueParams:
     def domain(self):
         d = None
         for q in self.queues:
-            if q.rl_params.domain is not None:
+            if q.rl_params is not None:
                 assert d is None or d == q.rl_params.domain
                 d = q.rl_params.domain
         return d
