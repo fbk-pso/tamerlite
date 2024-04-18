@@ -29,9 +29,9 @@ def RLRank(state_encoder, model, ModelClass):
     from tamerlite.rl_heuristics import RLRank
     return RLRank(state_encoder, model, ModelClass)
 
-def RLHeuristic(state_encoder, model, ModelClass, max_plan_size, gamma):
+def RLHeuristic(state_encoder, model, ModelClass, max_plan_size, gamma, delta_h, output_range, reward_signal, bootstrap_trunc):
     from tamerlite.rl_heuristics import RLHeuristic
-    return RLHeuristic(state_encoder, model, ModelClass, max_plan_size, gamma)
+    return RLHeuristic(state_encoder, model, ModelClass, max_plan_size, gamma, delta_h, output_range, reward_signal, bootstrap_trunc)
 
 def HAdd(fluents: Dict[str, str], objects: Dict[str, List[str]],
          events: Dict[str, List[Tuple[Timing, Event]]], goals: Expression):

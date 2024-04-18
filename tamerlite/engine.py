@@ -53,9 +53,12 @@ class RLParams:
     domain: up.model.Problem
     model: str
     model_class: Any # Neural Network Class
+    delta_h: int
+    output_range: str
+    reward_signal: str
+    bootstrap_trunc: bool
     max_plan_size: Optional[int] = None
     gamma: Optional[float] = None
-    reward_signal: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -160,8 +163,8 @@ class TamerLite(
             h = CustomHeuristic(rewrite_h)
             w = 1 if params is None or params.weight is None else params.weight
         elif h == "rl_heuristic":
-            assert rl_params is not None and rl_params.max_plan_size is not None and rl_params.gamma is not None and rl_params.reward_signal is not None
-            h = RLHeuristic(state_encoder, rl_params.model, rl_params.model_class, rl_params.max_plan_size, rl_params.gamma, rl_params.reward_signal)
+            assert rl_params is not None and rl_params.max_plan_size is not None and rl_params.gamma is not None and rl_params.delta_h is not None and rl_params.output_range is not None and rl_params.reward_signal is not None and rl_params.bootstrap_trunc is not None
+            h = RLHeuristic(state_encoder, rl_params.model, rl_params.model_class, rl_params.delta_h, rl_params.output_range, rl_params.reward_signal, rl_params.bootstrap_trunc, rl_params.max_plan_size, rl_params.gamma)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "rl_rank":
             assert rl_params is not None
