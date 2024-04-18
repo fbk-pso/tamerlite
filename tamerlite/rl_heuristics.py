@@ -4,12 +4,11 @@ import numpy as np
 
 
 class RLRank:
-    def __init__(self, state_encoder, model, ModelClass):
+    def __init__(self, state_encoder, model, ModelClass, delta_h, output_range, reward_signal, bootstrap_trunc):
         self._state_encoder = state_encoder
-        self._model = ModelClass(state_encoder.state_geometry)
+        self._model = ModelClass(state_encoder.state_geometry, reward_signal, output_range, delta_h, bootstrap_trunc)
         self._model.load_state_dict(torch.load(model))
         self._model.eval()
-        print("pippo")
 
     def eval(self, state):
         state_vec = self._state_encoder.get_state_as_vector(state)

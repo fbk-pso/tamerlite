@@ -25,9 +25,9 @@ class CustomHeuristic(Heuristic):
     def eval(self, state: State) -> Optional[float]:
         return self.callable(state)
 
-def RLRank(state_encoder, model, ModelClass):
+def RLRank(state_encoder, model, ModelClass, delta_h, output_range, reward_signal, bootstrap_trunc):
     from tamerlite.rl_heuristics import RLRank
-    return RLRank(state_encoder, model, ModelClass)
+    return RLRank(state_encoder, model, ModelClass, delta_h, output_range, reward_signal, bootstrap_trunc)
 
 def RLHeuristic(state_encoder, model, ModelClass, max_plan_size, gamma, delta_h, output_range, reward_signal, bootstrap_trunc):
     from tamerlite.rl_heuristics import RLHeuristic
