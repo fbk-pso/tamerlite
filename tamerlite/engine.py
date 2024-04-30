@@ -160,11 +160,11 @@ class TamerLite(
             w = 1 if params is None or params.weight is None else params.weight
         elif h == "rl_heuristic":
             assert rl_params is not None and rl_params.other_params is not None
-            h = RLHeuristic(state_encoder, rl_params.model, rl_params.model_class, rl_params.other_params)
+            h = RLHeuristic(state_encoder, rl_params.model, rl_params.model_class, rl_params.other_params, HAdd(encoder.fluents, encoder.objects, encoder.events, encoder.goal))
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "rl_rank":
             assert rl_params is not None and rl_params.other_params is not None
-            h = RLRank(state_encoder, rl_params.model, rl_params.model_class, rl_params.other_params)
+            h = RLRank(state_encoder, rl_params.model, rl_params.model_class, rl_params.other_params, HAdd(encoder.fluents, encoder.objects, encoder.events, encoder.goal))
             w = 1 if params is None or params.weight is None else params.weight
         elif h == "hff":
             h = HFF(encoder.fluents, encoder.objects, encoder.events, encoder.goal)
