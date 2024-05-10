@@ -16,3 +16,7 @@ num = "0.4.1"
 multiset = "0.0.5"
 num-traits = "0.2.16"
 regex = "1.9.3"
+
+[profile.profiling]
+inherits = "release"
+debug = true
