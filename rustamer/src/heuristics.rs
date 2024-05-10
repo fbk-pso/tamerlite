@@ -179,8 +179,9 @@ pub struct HFF {
     goals: Vec<Vec<ExpressionNode>>,
     extra_fluents: HashMap<String, Vec<Vec<ExpressionNode>>>,
     extra_goals: Vec<Vec<ExpressionNode>>,
-    precondition_of: HashMap<Vec<ExpressionNode>, Vec<Operator>>,
-    empty_pre_operators: Vec<Operator>,
+    operators : Vec<Operator>,
+    precondition_of: HashMap<Vec<ExpressionNode>, Vec<usize>>,
+    empty_pre_operators: HashSet<usize>,
     numeric_conds: HashSet<Vec<ExpressionNode>>,
     return_hadd: bool,
 }
@@ -253,12 +254,12 @@ impl HFF {
         }
 
         let goals = split_expression(&goal.into_iter().map(|e| e.v).collect())?;
-        let mut precondition_of: HashMap<Vec<ExpressionNode>, Vec<Operator>> = HashMap::new();
+        let mut precondition_of: HashMap<Vec<ExpressionNode>, Vec<usize>> = HashMap::new();
         let mut numeric_conds: HashSet<Vec<ExpressionNode>> = HashSet::new();
-        let mut empty_pre_operators: Vec<Operator> = Vec::new();
-        for o in operators.iter() {
+        let mut empty_pre_operators: HashSet<usize> = HashSet::new();
+        for (idx_o, o) in operators.iter().enumerate() {
             if o.conditions.len() == 0 || o.conditions == vec![vec![ExpressionNode::Bool(true)]] {
-                empty_pre_operators.push(o.clone());
+                empty_pre_operators.insert(idx_o);
             }
             for c in o.conditions.iter() {
                 if is_numeric_condition(c) {
@@ -267,7 +268,7 @@ impl HFF {
                     if ! precondition_of.contains_key(c) {
                         precondition_of.insert(c.to_vec(), Vec::new());
                     }
-                    precondition_of.get_mut(c).unwrap().push(o.clone());
+                    precondition_of.get_mut(c).unwrap().push(idx_o);
                 }
             }
         }
@@ -283,6 +284,7 @@ impl HFF {
             goals,
             extra_fluents,
             extra_goals,
+            operators,
             precondition_of,
             empty_pre_operators,
             numeric_conds,
@@ -292,9 +294,9 @@ impl HFF {
     }
 
     pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
-        let mut costs = HashMap::new();
-        let mut lp = Vec::new();
-        let mut init_lp = Vec::new();
+        let mut costs : HashMap<&Vec<ExpressionNode>, f64> = HashMap::new();
+        let mut lp : Vec<&Vec<ExpressionNode>> = Vec::new();
+        let mut init_lp : Vec<Vec<ExpressionNode>> = Vec::new();
 
         for (f, v) in state.assignments.iter() {
             let k = match v {
@@ -336,20 +338,23 @@ impl HFF {
             }
         }
 
-        let mut reached_by = HashMap::new();
+        let mut reached_by : HashMap<&Vec<ExpressionNode>, usize> = HashMap::new();
         while lp.len() > 0 {
-            let mut lo: Vec<&Operator> = self.empty_pre_operators.iter().collect();
+            let mut lo: HashSet<usize> = HashSet::new();
+            for x in self.empty_pre_operators.iter() {
+                lo.insert(*x);
+            }
             for p in lp.iter() {
                 if let Some(po) = self.precondition_of.get(*p) {
-                    for o in po.iter() {
-                        lo.push(o);
+                    for idx_o in po.iter() {
+                        lo.insert(*idx_o);
                     }
                 }
             }
             lp.clear();
             let mut new_costs = HashMap::new();
-            let lo_iter: std::collections::HashSet<&Operator> = lo.into_iter().collect();
-            for o in lo_iter {
+            for idx_o in lo {
+                let o: &Operator = &self.operators[idx_o];
                 if let Some(c) = cost(&o.conditions, &costs) {
                     for k in o.effects.iter() {
                         let new_cost_k = new_costs.get(k);
@@ -357,7 +362,7 @@ impl HFF {
                         if (new_cost_k.is_some() && *new_cost_k.unwrap() > c + o.cost) ||
                         (new_cost_k.is_none() && cost_k.is_none()) ||
                         (new_cost_k.is_none() && *cost_k.unwrap() > c + o.cost) {
-                            reached_by.insert(k, o);
+                            reached_by.insert(k, idx_o);
                             new_costs.insert(k, c + o.cost);
                             lp.push(k);
                         }
@@ -401,7 +406,8 @@ impl HFF {
         let mut stack: Vec<&Vec<ExpressionNode>> = self.goals.iter().collect();
         while stack.len() > 0 {
             let g = stack.pop().unwrap();
-            if let Some(o) = reached_by.get(g) {
+            if let Some(idx_o) = reached_by.get(g) {
+                let o: &Operator = &self.operators[*idx_o];
                 relaxed_plan.insert(o.action.to_string());
                 for c in o.conditions.iter() {
                     stack.push(c);
