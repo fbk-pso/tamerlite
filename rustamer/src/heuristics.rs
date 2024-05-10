@@ -15,6 +15,8 @@ use super::search_space::State;
 use super::expressions::*;
 use super::structures::*;
 
+use std::cell::RefCell;
+
 
 #[pyclass(frozen)]
 #[derive(Clone)]
@@ -127,8 +129,8 @@ impl CustomHeuristic {
 #[derive(Debug, Clone, PartialEq)]
 struct Operator {
     action: String,
-    conditions: Vec<Vec<ExpressionNode>>,
-    effects: Vec<Vec<ExpressionNode>>,
+    conditions: Vec<usize>,
+    effects: Vec<usize>,
     cost: f64,
 }
 
@@ -166,30 +168,18 @@ fn is_numeric_condition(cond: &Vec<ExpressionNode>) -> bool {
     true
 }
 
-fn cost(exp: &Vec<Vec<ExpressionNode>>, costs: &HashMap<&Vec<ExpressionNode>, f64>) -> Option<f64> {
-    let mut res = 0.0;
-    for g in exp.iter() {
-        let c = costs.get(g);
-        if let Some(cost) = c {
-            res += cost;
-        } else {
-            return None;
-        }
-    }
-    Some(res)
-}
-
 #[derive(Clone, Debug)]
 pub struct HFF {
     events: HashMap<String, usize>,
-    goals: Vec<Vec<ExpressionNode>>,
-    extra_fluents: HashMap<String, Vec<Vec<ExpressionNode>>>,
-    extra_goals: Vec<Vec<ExpressionNode>>,
+    goals: Vec<usize>,
+    extra_fluents: HashMap<String, Vec<usize>>,
+    extra_goals: Vec<usize>,
     operators : Vec<Operator>,
-    precondition_of: HashMap<Vec<ExpressionNode>, Vec<usize>>,
+    precondition_of: HashMap<usize, Vec<usize>>,
     empty_pre_operators: HashSet<usize>,
-    numeric_conds: HashSet<Vec<ExpressionNode>>,
+    numeric_conds: HashSet<usize>,
     return_hadd: bool,
+    expression_manager: RefCell<ExpressionManager>,
 }
 
 impl HFF {
@@ -201,59 +191,63 @@ impl HFF {
         return_hadd: bool,
     ) -> PyResult<Self> {
         let mut operators = Vec::new();
-        let mut extra_fluents = HashMap::new();
+        let mut extra_fluents: HashMap<String, Vec<usize>> = HashMap::new();
         let mut extra_goals = Vec::new();
+        let mut expression_manager = ExpressionManager::new();
+
         for (a, le) in events.iter() {
-            let mut a_extra_fluents = Vec::new();
+            let mut a_extra_fluents : Vec<usize> = Vec::new();
             let mut cond: Vec<ExpressionNode> = vec![ExpressionNode::Fluent(format!("__f_{}_{}", a, le.len()-1))];
-            extra_goals.push(cond.clone());
+            extra_goals.push(expression_manager.put(&cond));
             for (i, (_, e)) in le.iter().enumerate() {
-                let mut effects = Vec::new();
-                let mut conditions = Vec::new();
+                let mut effects : Vec<usize> = Vec::new();
+                let mut conditions : Vec<usize> = Vec::new();
                 let f = format!("__f_{}_{}", a, i);
-                a_extra_fluents.push(vec![ExpressionNode::Fluent(f.to_string())]);
-                effects.push(vec![ExpressionNode::Fluent(f.to_string())]);
+                a_extra_fluents.push(expression_manager.put(&vec![ExpressionNode::Fluent(f.to_string())]));
+                effects.push(expression_manager.put(&vec![ExpressionNode::Fluent(f.to_string())]));
                 for eff in e.effects.iter() {
                     let t = fluents[&eff.fluent].to_string();
                     if t == "bool" {
                         if eff.value.len() == 1 {
                             if let ExpressionNode::Bool(value) = eff.value[0] {
                                 if value {
-                                    effects.push(vec![ExpressionNode::Fluent(eff.fluent.to_string())]);
+                                    effects.push(expression_manager.put(&vec![ExpressionNode::Fluent(eff.fluent.to_string())]));
                                 } else {
-                                    effects.push(vec![ExpressionNode::Fluent(eff.fluent.to_string()), make_operator("not".to_string(), vec![0])?]);
+                                    effects.push(expression_manager.put(&vec![ExpressionNode::Fluent(eff.fluent.to_string()), make_operator("not".to_string(), vec![0])?]));
                                 }
                             }
                             else {
-                                effects.push(vec![ExpressionNode::Fluent(eff.fluent.to_string())]);
-                                effects.push(vec![ExpressionNode::Fluent(eff.fluent.to_string()), make_operator("not".to_string(), vec![0])?]);
+                                effects.push(expression_manager.put(&vec![ExpressionNode::Fluent(eff.fluent.to_string())]));
+                                effects.push(expression_manager.put(&vec![ExpressionNode::Fluent(eff.fluent.to_string()), make_operator("not".to_string(), vec![0])?]));
                             }
                         } else {
-                            effects.push(vec![ExpressionNode::Fluent(eff.fluent.to_string())]);
-                            effects.push(vec![ExpressionNode::Fluent(eff.fluent.to_string()), make_operator("not".to_string(), vec![0])?]);
+                            effects.push(expression_manager.put(&vec![ExpressionNode::Fluent(eff.fluent.to_string())]));
+                            effects.push(expression_manager.put(&vec![ExpressionNode::Fluent(eff.fluent.to_string()), make_operator("not".to_string(), vec![0])?]));
                         }
                     } else if t != "real" && t != "int" {
                         if eff.value.len() == 1 {
                             if let ExpressionNode::Object(_) = eff.value[0] {
-                                effects.push(vec![ExpressionNode::Fluent(eff.fluent.to_string()), eff.value[0].clone(), make_operator("==".to_string(), vec![0, 1])?]);
+                                effects.push(expression_manager.put(&vec![ExpressionNode::Fluent(eff.fluent.to_string()), eff.value[0].clone(), make_operator("==".to_string(), vec![0, 1])?]));
                             }
                             else {
                                 for o in objects[&t].iter() {
-                                    effects.push(vec![ExpressionNode::Fluent(eff.fluent.to_string()), ExpressionNode::Object(o.to_string()), make_operator("==".to_string(), vec![0, 1])?]);
+                                    effects.push(expression_manager.put(&vec![ExpressionNode::Fluent(eff.fluent.to_string()), ExpressionNode::Object(o.to_string()), make_operator("==".to_string(), vec![0, 1])?]));
                                 }
                             }
                         } else {
                             for o in objects[&t].iter() {
-                                effects.push(vec![ExpressionNode::Fluent(eff.fluent.to_string()), ExpressionNode::Object(o.to_string()), make_operator("==".to_string(), vec![0, 1])?]);
+                                effects.push(expression_manager.put(&vec![ExpressionNode::Fluent(eff.fluent.to_string()), ExpressionNode::Object(o.to_string()), make_operator("==".to_string(), vec![0, 1])?]));
                             }
                         }
                     }
                 }
-                conditions.push(cond);
+                conditions.push(expression_manager.put(&cond));
                 if e.conditions.len() > 0 && e.conditions != vec![ExpressionNode::Bool(true)] {
-                    conditions.extend(split_expression(&e.conditions)?);
+                    for sc in split_expression(&e.conditions)? {
+                        conditions.push(expression_manager.put(&sc))
+                    }
                 }
-                if !conditions.contains(&vec![ExpressionNode::Bool(false)]) {
+                if !conditions.contains(&expression_manager.put(&vec![ExpressionNode::Bool(false)])) {
                     operators.push(Operator { action: a.to_string(), conditions, effects, cost: 1.0 } );
                 }
                 cond = vec![ExpressionNode::Fluent(f.to_string())];
@@ -262,28 +256,29 @@ impl HFF {
         }
         operators.sort_by(|a, b| a.action.cmp(&b.action));
 
-        let goals = split_expression(&goal.into_iter().map(|e| e.v).collect())?;
-        let mut precondition_of: HashMap<Vec<ExpressionNode>, Vec<usize>> = HashMap::new();
-        let mut numeric_conds: HashSet<Vec<ExpressionNode>> = HashSet::new();
+        let expr_goals = split_expression(&goal.into_iter().map(|e| e.v).collect())?;
+        let goals : Vec<usize> = expr_goals.into_iter().map(|e| expression_manager.put(&e)).collect();
+        let mut precondition_of: HashMap<usize, Vec<usize>> = HashMap::new();
+        let mut numeric_conds: HashSet<usize> = HashSet::new();
         let mut empty_pre_operators: HashSet<usize> = HashSet::new();
         for (idx_o, o) in operators.iter().enumerate() {
-            if o.conditions.len() == 0 || o.conditions == vec![vec![ExpressionNode::Bool(true)]] {
+            if o.conditions.len() == 0 || o.conditions == vec![ expression_manager.put(&vec![ExpressionNode::Bool(true)])] {
                 empty_pre_operators.insert(idx_o);
             }
             for c in o.conditions.iter() {
-                if is_numeric_condition(c) {
-                    numeric_conds.insert(c.to_vec());
+                if is_numeric_condition(expression_manager.force_get(*c)) {
+                    numeric_conds.insert(*c);
                 } else {
                     if ! precondition_of.contains_key(c) {
-                        precondition_of.insert(c.to_vec(), Vec::new());
+                        precondition_of.insert(*c, Vec::new());
                     }
                     precondition_of.get_mut(c).unwrap().push(idx_o);
                 }
             }
         }
         for c in goals.iter() {
-            if is_numeric_condition(c) {
-                numeric_conds.insert(c.to_vec());
+            if is_numeric_condition(expression_manager.force_get(*c)) {
+                numeric_conds.insert(*c);
             }
         }
 
@@ -297,15 +292,18 @@ impl HFF {
             precondition_of,
             empty_pre_operators,
             numeric_conds,
-            return_hadd
+            return_hadd,
+            expression_manager: RefCell::new(expression_manager)
         };
         Ok(res)
     }
 
     pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
-        let mut costs : HashMap<&Vec<ExpressionNode>, f64> = HashMap::new();
-        let mut lp : Vec<&Vec<ExpressionNode>> = Vec::new();
-        let mut init_lp : Vec<Vec<ExpressionNode>> = Vec::new();
+        let mut costs : HashMap<usize, f64> = HashMap::new();
+        let mut lp : Vec<usize> = Vec::new();
+        let mut init_lp : Vec<usize> = Vec::new();
+
+        let mut expression_manager = self.expression_manager.borrow_mut();
 
         for (f, v) in state.assignments.iter() {
             let k = match v {
@@ -320,20 +318,20 @@ impl HFF {
                     vec![ExpressionNode::Fluent(f.to_string()), v.clone(), make_operator("==".to_string(), vec![0, 1])?]
                 }
             };
-            init_lp.push(k);
+            init_lp.push(expression_manager.put(&k));
         }
         for k in init_lp.iter() {
-            costs.insert(k, 0.0);
-            lp.push(k);
+            costs.insert(*k, 0.0);
+            lp.push(*k);
         }
 
         for c in self.numeric_conds.iter() {
-            if internal_evaluate(c, state)? == ExpressionNode::Bool(true) {
-                costs.insert(c, 0.0);
+            if internal_evaluate(expression_manager.force_get(*c), state)? == ExpressionNode::Bool(true) {
+                costs.insert(*c, 0.0);
             } else {
-                costs.insert(c, 1.0);
+                costs.insert(*c, 1.0);
             }
-            lp.push(c);
+            lp.push(*c);
         }
 
         for a in self.events.keys() {
@@ -342,19 +340,19 @@ impl HFF {
                 None => self.extra_fluents.get(a).unwrap().last(),
             };
             if let Some(x) = v {
-                costs.insert(x, 0.0);
-                lp.push(x);
+                costs.insert(*x, 0.0);
+                lp.push(*x);
             }
         }
 
-        let mut reached_by : HashMap<&Vec<ExpressionNode>, usize> = HashMap::new();
+        let mut reached_by : HashMap<usize, usize> = HashMap::new();
         while lp.len() > 0 {
             let mut lo: HashSet<usize> = HashSet::new();
             for x in self.empty_pre_operators.iter() {
                 lo.insert(*x);
             }
             for p in lp.iter() {
-                if let Some(po) = self.precondition_of.get(*p) {
+                if let Some(po) = self.precondition_of.get(p) {
                     for idx_o in po.iter() {
                         lo.insert(*idx_o);
                     }
@@ -364,36 +362,36 @@ impl HFF {
             let mut new_costs = HashMap::new();
             for idx_o in lo {
                 let o: &Operator = &self.operators[idx_o];
-                if let Some(c) = cost(&o.conditions, &costs) {
+                if let Some(c) = self.cost(&o.conditions, &costs) {
                     for k in o.effects.iter() {
                         let new_cost_k = new_costs.get(k);
                         let cost_k = costs.get(k);
                         if (new_cost_k.is_some() && *new_cost_k.unwrap() > c + o.cost) ||
                         (new_cost_k.is_none() && cost_k.is_none()) ||
                         (new_cost_k.is_none() && *cost_k.unwrap() > c + o.cost) {
-                            reached_by.insert(k, idx_o);
+                            reached_by.insert(*k, idx_o);
                             new_costs.insert(k, c + o.cost);
-                            lp.push(k);
+                            lp.push(*k);
                         } else if ((new_cost_k.is_some() && *new_cost_k.unwrap() == c + o.cost) ||
                         (new_cost_k.is_none() && *cost_k.unwrap() == c + o.cost)) && idx_o > reached_by[k] {
-                            reached_by.insert(k, idx_o);
+                            reached_by.insert(*k, idx_o);
                         }
                     }
                 }
             }
             for (k, v) in new_costs.iter() {
-                costs.insert(*k, *v);
+                costs.insert(**k, *v);
             }
         }
 
-        let h = cost(&self.goals, &costs);
+        let h = self.cost(&self.goals, &costs);
 
         if h.is_none() {
             return Ok(None);
         }
 
         if self.return_hadd {
-            match cost(&self.extra_goals, &costs) {
+            match self.cost(&self.extra_goals, &costs) {
                 Some(v) => {
                     return Ok(Some(h.unwrap() + v));
                 },
@@ -415,7 +413,7 @@ impl HFF {
         }
 
         let mut relaxed_plan = HashSet::new();
-        let mut stack: Vec<&Vec<ExpressionNode>> = self.goals.iter().collect();
+        let mut stack: Vec<&usize> = self.goals.iter().collect();
         while stack.len() > 0 {
             let g = stack.pop().unwrap();
             if let Some(idx_o) = reached_by.get(g) {
@@ -433,5 +431,18 @@ impl HFF {
         }
 
         Ok(Some(res))
+    }
+
+    fn cost(&self, exp: &Vec<usize>, costs: &HashMap<usize, f64>) -> Option<f64> {
+        let mut res = 0.0;
+        for g in exp.iter() {
+            let c = costs.get(g);
+            if let Some(cost) = c {
+                res += cost;
+            } else {
+                return None;
+            }
+        }
+        Some(res)
     }
 }
