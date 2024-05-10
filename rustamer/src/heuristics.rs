@@ -129,8 +129,8 @@ impl CustomHeuristic {
 #[derive(Debug, Clone, PartialEq)]
 struct Operator {
     action: String,
-    conditions: Vec<usize>,
-    effects: Vec<usize>,
+    conditions: Vec<Expression>,
+    effects: Vec<Expression>,
     cost: f64,
 }
 
@@ -141,6 +141,17 @@ impl Hash for Operator {
         self.action.hash(state);
         self.conditions.hash(state);
         self.effects.hash(state);
+    }
+}
+
+#[derive(Clone,Copy,Debug,PartialEq,Eq,Hash)]
+struct OperatorID {
+    id : usize
+}
+
+impl OperatorID {
+    fn new(id: usize) -> OperatorID {
+        OperatorID{id}
     }
 }
 
@@ -171,13 +182,13 @@ fn is_numeric_condition(cond: &Vec<ExpressionNode>) -> bool {
 #[derive(Clone, Debug)]
 pub struct HFF {
     events: HashMap<String, usize>,
-    goals: Vec<usize>,
-    extra_fluents: HashMap<String, Vec<usize>>,
-    extra_goals: Vec<usize>,
+    goals: Vec<Expression>,
+    extra_fluents: HashMap<String, Vec<Expression>>,
+    extra_goals: Vec<Expression>,
     operators : Vec<Operator>,
-    precondition_of: HashMap<usize, Vec<usize>>,
-    empty_pre_operators: HashSet<usize>,
-    numeric_conds: HashSet<usize>,
+    precondition_of: HashMap<Expression, Vec<OperatorID>>,
+    empty_pre_operators: HashSet<OperatorID>,
+    numeric_conds: HashSet<Expression>,
     return_hadd: bool,
     expression_manager: RefCell<ExpressionManager>,
 }
@@ -191,17 +202,17 @@ impl HFF {
         return_hadd: bool,
     ) -> PyResult<Self> {
         let mut operators = Vec::new();
-        let mut extra_fluents: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut extra_fluents: HashMap<String, Vec<Expression>> = HashMap::new();
         let mut extra_goals = Vec::new();
         let mut expression_manager = ExpressionManager::new();
 
         for (a, le) in events.iter() {
-            let mut a_extra_fluents : Vec<usize> = Vec::new();
+            let mut a_extra_fluents : Vec<Expression> = Vec::new();
             let mut cond: Vec<ExpressionNode> = vec![ExpressionNode::Fluent(format!("__f_{}_{}", a, le.len()-1))];
             extra_goals.push(expression_manager.put(&cond));
             for (i, (_, e)) in le.iter().enumerate() {
-                let mut effects : Vec<usize> = Vec::new();
-                let mut conditions : Vec<usize> = Vec::new();
+                let mut effects : Vec<Expression> = Vec::new();
+                let mut conditions : Vec<Expression> = Vec::new();
                 let f = format!("__f_{}_{}", a, i);
                 a_extra_fluents.push(expression_manager.put(&vec![ExpressionNode::Fluent(f.to_string())]));
                 effects.push(expression_manager.put(&vec![ExpressionNode::Fluent(f.to_string())]));
@@ -257,27 +268,27 @@ impl HFF {
         operators.sort_by(|a, b| a.action.cmp(&b.action));
 
         let expr_goals = split_expression(&goal.into_iter().map(|e| e.v).collect())?;
-        let goals : Vec<usize> = expr_goals.into_iter().map(|e| expression_manager.put(&e)).collect();
-        let mut precondition_of: HashMap<usize, Vec<usize>> = HashMap::new();
-        let mut numeric_conds: HashSet<usize> = HashSet::new();
-        let mut empty_pre_operators: HashSet<usize> = HashSet::new();
+        let goals : Vec<Expression> = expr_goals.into_iter().map(|e| expression_manager.put(&e)).collect();
+        let mut precondition_of: HashMap<Expression, Vec<OperatorID>> = HashMap::new();
+        let mut numeric_conds: HashSet<Expression> = HashSet::new();
+        let mut empty_pre_operators: HashSet<OperatorID> = HashSet::new();
         for (idx_o, o) in operators.iter().enumerate() {
             if o.conditions.len() == 0 || o.conditions == vec![ expression_manager.put(&vec![ExpressionNode::Bool(true)])] {
-                empty_pre_operators.insert(idx_o);
+                empty_pre_operators.insert(OperatorID::new(idx_o));
             }
             for c in o.conditions.iter() {
-                if is_numeric_condition(expression_manager.force_get(*c)) {
+                if is_numeric_condition(expression_manager.force_get(c)) {
                     numeric_conds.insert(*c);
                 } else {
                     if ! precondition_of.contains_key(c) {
                         precondition_of.insert(*c, Vec::new());
                     }
-                    precondition_of.get_mut(c).unwrap().push(idx_o);
+                    precondition_of.get_mut(c).unwrap().push(OperatorID::new(idx_o));
                 }
             }
         }
         for c in goals.iter() {
-            if is_numeric_condition(expression_manager.force_get(*c)) {
+            if is_numeric_condition(expression_manager.force_get(c)) {
                 numeric_conds.insert(*c);
             }
         }
@@ -299,9 +310,9 @@ impl HFF {
     }
 
     pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
-        let mut costs : HashMap<usize, f64> = HashMap::new();
-        let mut lp : Vec<usize> = Vec::new();
-        let mut init_lp : Vec<usize> = Vec::new();
+        let mut costs : HashMap<Expression, f64> = HashMap::new();
+        let mut lp : Vec<Expression> = Vec::new();
+        let mut init_lp : Vec<Expression> = Vec::new();
 
         let mut expression_manager = self.expression_manager.borrow_mut();
 
@@ -326,7 +337,7 @@ impl HFF {
         }
 
         for c in self.numeric_conds.iter() {
-            if internal_evaluate(expression_manager.force_get(*c), state)? == ExpressionNode::Bool(true) {
+            if internal_evaluate(expression_manager.force_get(c), state)? == ExpressionNode::Bool(true) {
                 costs.insert(*c, 0.0);
             } else {
                 costs.insert(*c, 1.0);
@@ -345,9 +356,9 @@ impl HFF {
             }
         }
 
-        let mut reached_by : HashMap<usize, usize> = HashMap::new();
+        let mut reached_by : HashMap<Expression, OperatorID> = HashMap::new();
         while lp.len() > 0 {
-            let mut lo: HashSet<usize> = HashSet::new();
+            let mut lo: HashSet<OperatorID> = HashSet::new();
             for x in self.empty_pre_operators.iter() {
                 lo.insert(*x);
             }
@@ -360,8 +371,8 @@ impl HFF {
             }
             lp.clear();
             let mut new_costs = HashMap::new();
-            for idx_o in lo {
-                let o: &Operator = &self.operators[idx_o];
+            for oid in lo {
+                let o: &Operator = &self.operators[oid.id];
                 if let Some(c) = self.cost(&o.conditions, &costs) {
                     for k in o.effects.iter() {
                         let new_cost_k = new_costs.get(k);
@@ -369,12 +380,12 @@ impl HFF {
                         if (new_cost_k.is_some() && *new_cost_k.unwrap() > c + o.cost) ||
                         (new_cost_k.is_none() && cost_k.is_none()) ||
                         (new_cost_k.is_none() && *cost_k.unwrap() > c + o.cost) {
-                            reached_by.insert(*k, idx_o);
+                            reached_by.insert(*k, oid);
                             new_costs.insert(k, c + o.cost);
                             lp.push(*k);
                         } else if ((new_cost_k.is_some() && *new_cost_k.unwrap() == c + o.cost) ||
-                        (new_cost_k.is_none() && *cost_k.unwrap() == c + o.cost)) && idx_o > reached_by[k] {
-                            reached_by.insert(*k, idx_o);
+                        (new_cost_k.is_none() && *cost_k.unwrap() == c + o.cost)) && oid.id > reached_by[k].id {
+                            reached_by.insert(*k, oid);
                         }
                     }
                 }
@@ -413,11 +424,11 @@ impl HFF {
         }
 
         let mut relaxed_plan = HashSet::new();
-        let mut stack: Vec<&usize> = self.goals.iter().collect();
+        let mut stack: Vec<&Expression> = self.goals.iter().collect();
         while stack.len() > 0 {
             let g = stack.pop().unwrap();
-            if let Some(idx_o) = reached_by.get(g) {
-                let o: &Operator = &self.operators[*idx_o];
+            if let Some(oid) = reached_by.get(g) {
+                let o: &Operator = &self.operators[oid.id];
                 relaxed_plan.insert(o.action.to_string());
                 for c in o.conditions.iter() {
                     stack.push(c);
@@ -433,7 +444,7 @@ impl HFF {
         Ok(Some(res))
     }
 
-    fn cost(&self, exp: &Vec<usize>, costs: &HashMap<usize, f64>) -> Option<f64> {
+    fn cost(&self, exp: &Vec<Expression>, costs: &HashMap<Expression, f64>) -> Option<f64> {
         let mut res = 0.0;
         for g in exp.iter() {
             let c = costs.get(g);
