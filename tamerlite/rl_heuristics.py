@@ -27,7 +27,7 @@ class RLHeuristic:
         self._model.load_state_dict(torch.load(model))
         self._model.eval()
         self._max_plan_size = max_plan_size
-        self._gamma = config['gamma']
+        self._gamma = config.gamma
 
     def eval(self, state):
         state_vec = self._state_encoder.get_state_as_vector(state)
