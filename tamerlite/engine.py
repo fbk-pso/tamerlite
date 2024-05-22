@@ -7,6 +7,7 @@ import unified_planning.engines.mixins
 from unified_planning.model import ProblemKind, FNode
 from unified_planning.model.state import State
 from typing import IO, Any, Callable, List, Optional, Union
+from argparse import Namespace
 
 from tamerlite.core import wastar_search, astar_search, gbfs_search
 from tamerlite.core import bfs_search, dfs_search, ehc_search
@@ -54,7 +55,7 @@ class RLParams:
     model: str
     model_class: Any # Neural Network Class
     max_plan_size: Optional[int] = None
-    other_params: Optional[dict] = None
+    other_params: Optional[Namespace] = None
 
 
 @dataclass(frozen=True)
