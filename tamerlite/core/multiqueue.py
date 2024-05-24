@@ -70,7 +70,7 @@ def multiqueue_search(ss: SearchSpace, heuristics: List[Tuple[Heuristic, float]]
                 open_set.add(succ_state)
             sc = StateContainer(succ_state, False)
             for i, (heuristic, weight) in enumerate(heuristics):
-                h = heuristic.eval(succ_state) if weight > 0 else 0
+                h = heuristic.eval(succ_state, ss) if weight > 0 else 0
                 if h is not None:
                     f = (1-weight)*succ_state.g + weight*h
                     item = PrioritizedItem(f, sc)
