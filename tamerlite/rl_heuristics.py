@@ -21,13 +21,13 @@ class RLRank:
 
 
 class RLHeuristic:
-    def __init__(self, state_encoder, model, ModelClass, max_plan_size, gamma):
+    def __init__(self, state_encoder, model, ModelClass, max_plan_size, config):
         self._state_encoder = state_encoder
         self._model = ModelClass(state_encoder.state_geometry)
         self._model.load_state_dict(torch.load(model))
         self._model.eval()
         self._max_plan_size = max_plan_size
-        self._gamma = gamma
+        self._gamma = config.gamma
 
     def eval(self, state):
         state_vec = self._state_encoder.get_state_as_vector(state)
