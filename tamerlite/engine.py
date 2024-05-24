@@ -7,6 +7,7 @@ import unified_planning.engines.mixins
 from unified_planning.model import ProblemKind, FNode
 from unified_planning.model.state import State
 from typing import IO, Any, Callable, List, Optional, Union
+from argparse import Namespace
 
 from tamerlite.core import wastar_search, astar_search, gbfs_search
 from tamerlite.core import bfs_search, dfs_search, ehc_search
@@ -54,7 +55,7 @@ class RLParams:
     model: str
     model_class: Any # Neural Network Class
     max_plan_size: Optional[int] = None
-    gamma: Optional[float] = None
+    other_params: Optional[Namespace] = None
 
 
 @dataclass(frozen=True)
@@ -159,8 +160,8 @@ class TamerLite(
             h = CustomHeuristic(rewrite_h)
             w = 1 if params is None or params.weight is None else params.weight
         elif h == "rl_heuristic":
-            assert rl_params is not None and rl_params.max_plan_size is not None and rl_params.gamma is not None
-            h = RLHeuristic(state_encoder, rl_params.model, rl_params.model_class, rl_params.max_plan_size, rl_params.gamma)
+            assert rl_params is not None and rl_params.max_plan_size is not None and rl_params.other_params is not None
+            h = RLHeuristic(state_encoder, rl_params.model, rl_params.model_class, rl_params.max_plan_size, rl_params.other_params)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "rl_rank":
             assert rl_params is not None
