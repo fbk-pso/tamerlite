@@ -81,7 +81,7 @@ class MultiqueueParams:
     def domain(self):
         d = None
         for q in self.queues:
-            if q.rl_params.domain is not None:
+            if q.rl_params and q.rl_params.domain is not None:
                 assert d is None or d == q.rl_params.domain
                 d = q.rl_params.domain
         return d
@@ -148,9 +148,9 @@ class TamerLite(
 
     def _get_heuristic(self, params, heuristic, encoder, state_encoder):
         if params is None:
-            h = "custom" if heuristic else "hadd"
+            h = "custom" if heuristic else "hff"
         else:
-            h = "custom" if heuristic and params.heuristic is None else params.heuristic if params.heuristic else "hadd"
+            h = "custom" if heuristic and params.heuristic is None else params.heuristic if params.heuristic else "hff"
             rl_params = params.rl_params
 
         if h == "custom":

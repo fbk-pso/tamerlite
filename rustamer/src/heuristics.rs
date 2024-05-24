@@ -378,7 +378,7 @@ impl HFF {
         if self.return_hadd {
             match cost(&self.extra_goals, &costs) {
                 Some(v) => {
-                    return Ok(Some(h.unwrap() + 2.0*v));
+                    return Ok(Some(h.unwrap() + v));
                 },
                 None => {
                     return Ok(None);
