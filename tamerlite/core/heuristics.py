@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Callable, List, Dict, Tuple, Union, Optional, Set
 
-from tamerlite.core.search_space import Event, Effect, Expression, State, Timing, evaluate
+from tamerlite.core.search_space import Event, SearchSpace, Expression, State, Timing, evaluate
 from tamerlite.core.search_space import OperatorNode as Op, split_expression
 
 
@@ -14,7 +14,7 @@ class Operator:
 
 
 class Heuristic:
-    def eval(self, state:State) -> Optional[float]:
+    def eval(self, state: State, ss: SearchSpace) -> Optional[float]:
         raise NotImplementedError
 
 
@@ -22,7 +22,7 @@ class CustomHeuristic(Heuristic):
     def __init__(self, callable: Callable[[State], Optional[float]]):
         self.callable = callable
 
-    def eval(self, state: State) -> Optional[float]:
+    def eval(self, state: State, ss: SearchSpace) -> Optional[float]:
         return self.callable(state)
 
 def RLRank(state_encoder, model, ModelClass):
@@ -111,7 +111,7 @@ class HFF(Heuristic):
                     return False
         return True
 
-    def eval(self, state: State) -> Optional[float]:
+    def eval(self, state: State, ss: SearchSpace) -> Optional[float]:
         costs = {}
         lp = []
 
@@ -179,7 +179,7 @@ class HFF(Heuristic):
 
         if self._return_hadd:
             eh = self._cost(self._extra_goals, costs)
-            return h + 2*eh
+            return h + eh
 
         res = 0
         for a, (j, _) in state.todo.items():
