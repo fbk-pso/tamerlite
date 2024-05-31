@@ -173,7 +173,7 @@ impl SearchSpace {
         #[pyo3(from_py_with = "get_option_big_rational")]
         epsilon: Option<BigRational>,
     ) -> PyResult<Self> {
-        let is_temporal = actions_duration.values().all(|value| !value.is_none());
+        let is_temporal = actions_duration.values().any(|value| !value.is_none());
         let mut actions: Vec<String> = events.keys().cloned().collect();
         actions.sort();
         let converted_actions_duration: HashMap<String, Option<(Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool)>> = actions_duration
