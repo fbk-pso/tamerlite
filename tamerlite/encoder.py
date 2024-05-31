@@ -55,7 +55,10 @@ def get_encoders(domain, problem=None):
         for p in a.parameters:
             if p.type.is_user_type():
                 f = is_active_fluents[p.type]
-                a.add_condition(up.model.StartTiming(), f(p))
+                if isinstance(a, up.model.InstantaneousAction):
+                    a.add_precondition(f(p))
+                else:
+                    a.add_condition(up.model.StartTiming(), f(p))
 
     grounder = Grounder(prune_actions=False)
     grounding_result = grounder.compile(problem)
