@@ -84,6 +84,10 @@ class Encoder:
 
     def __init__(self, problem: "up.model.Problem", full: bool = True):
         self._problem = problem
+        if full:
+            self._simplifier = up.model.walkers.Simplifier(problem.environment, problem)
+        else:
+            self._simplifier = problem.environment.simplifier
         self._converter = Converter()
         actions_duration = {}
         self._is_temporal = False
@@ -167,6 +171,7 @@ class Encoder:
         return str(fluent_exp)
 
     def _convert_expression(self, expression: "up.model.FNode") -> Expression:
+        expression = self._simplifier.simplify(expression)
         return self._converter.convert(expression)
 
     def _convert_timing(self, timing: "up.model.Timing") -> Timing:

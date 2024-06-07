@@ -216,6 +216,20 @@ def evaluate(exp: Expression, state: State) -> Union[bool, int, Fraction, str]:
     return res[-1]
 
 
+def simplify(exp: Expression, assignments: Dict[str, Union[bool, int, Fraction, str]]) -> Expression:
+    res = []
+    for e in exp:
+        if isinstance(e, str):
+            v = assignments.get(e, None)
+            if v is None:
+                res.append(e)
+            else:
+                res.append(v)
+        else:
+            res.append(e)
+    return res
+
+
 class SearchSpace:
 
     def __init__(self,
@@ -238,7 +252,7 @@ class SearchSpace:
     @property
     def is_temporal(self) -> bool:
         return self._is_temporal
-        
+
     def reset(self):
         pass
 

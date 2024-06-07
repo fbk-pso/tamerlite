@@ -604,6 +604,22 @@ impl SearchSpace {
 
 }
 
+#[pyfunction]
+pub fn simplify(exp: Vec<PyExpressionNode>, assignments: HashMap<String, PyExpressionNode>) -> PyResult<Vec<PyExpressionNode>> {
+    let mut res: Vec<PyExpressionNode> = vec![];
+    for e in exp {
+        if let ExpressionNode::Fluent(f) = &e.v {
+            if let Some(v) = assignments.get(f) {
+                res.push(v.clone());
+            } else {
+                res.push(e.clone());
+            }
+        } else {
+            res.push(e.clone());
+        }
+    }
+    Ok(res)
+}
 
 #[pyfunction]
 pub fn evaluate(exp: Vec<PyExpressionNode>, state: &State) -> PyResult<PyExpressionNode> {
