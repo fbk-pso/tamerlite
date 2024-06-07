@@ -44,5 +44,6 @@ fn rustamer(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(bfs_search, m)?)?;
     m.add_function(wrap_pyfunction!(dfs_search, m)?)?;
     m.add_function(wrap_pyfunction!(evaluate, m)?)?;
+    m.add_function(wrap_pyfunction!(simplify, m)?)?;
     Ok(())
 }
