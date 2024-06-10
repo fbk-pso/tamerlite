@@ -57,8 +57,16 @@ class Converter(DagWalker):
 
     def walk_plus(self, expression: 'FNode',
                   args: List[Expression]) -> Expression:
-        assert len(args) == 2
-        return args[0] + tuple(shift_expression(args[1], len(args[0]))) + (make_operator_node("+", (len(args[0])-1, len(args[0])+len(args[1])-1)), )
+        assert len(args) >= 2
+        res = args[0]
+        l = len(res)-1
+        operands = [l]
+        for i in range(1, len(args)):
+            res += tuple(shift_expression(args[i], l+1))
+            l += len(args[i])
+            operands.append(l)
+        res += (make_operator_node("+", tuple(operands)), )
+        return res
 
     def walk_minus(self, expression: 'FNode',
                    args: List[Expression]) -> Expression:
@@ -67,8 +75,16 @@ class Converter(DagWalker):
 
     def walk_times(self, expression: 'FNode',
                    args: List[Expression]) -> Expression:
-        assert len(args) == 2
-        return args[0] + tuple(shift_expression(args[1], len(args[0]))) + (make_operator_node("*", (len(args[0])-1, len(args[0])+len(args[1])-1)), )
+        assert len(args) >= 2
+        res = args[0]
+        l = len(res)-1
+        operands = [l]
+        for i in range(1, len(args)):
+            res += tuple(shift_expression(args[i], l+1))
+            l += len(args[i])
+            operands.append(l)
+        res += (make_operator_node("*", tuple(operands)), )
+        return res
 
     def walk_div(self, expression: 'FNode',
                  args: List[Expression]) -> Expression:
