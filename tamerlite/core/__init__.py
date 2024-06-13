@@ -11,7 +11,7 @@ if not has_rustamer:
     from tamerlite.core.search_space import SearchSpace
     from tamerlite.core.heuristics import HFF, HAdd, CustomHeuristic, RLRank, RLHeuristic
     from tamerlite.core.search_space import Timing, Effect, Event
-    from tamerlite.core.search_space import Expression, evaluate, get_fluents
+    from tamerlite.core.search_space import Expression, evaluate, get_fluents, simplify
     from tamerlite.core.search_space import (
         make_bool_constant_node,
         make_fluent_node,
@@ -29,7 +29,7 @@ else:
     from tamerlite.rustamer import SearchSpace
     from tamerlite.rustamer import HFF, HAdd, CustomHeuristic, RLRank, RLHeuristic
     from tamerlite.rustamer import Timing, Effect, Event
-    from tamerlite.rustamer import Expression, evaluate, get_fluents
+    from tamerlite.rustamer import Expression, evaluate, get_fluents, simplify
     from tamerlite.rustamer import (
         make_bool_constant_node,
         make_fluent_node,
