@@ -606,19 +606,289 @@ impl SearchSpace {
 
 #[pyfunction]
 pub fn simplify(exp: Vec<PyExpressionNode>, assignments: HashMap<String, PyExpressionNode>) -> PyResult<Vec<PyExpressionNode>> {
-    let mut res: Vec<PyExpressionNode> = vec![];
-    for e in exp {
-        if let ExpressionNode::Fluent(f) = &e.v {
-            if let Some(v) = assignments.get(f) {
-                res.push(v.clone());
-            } else {
-                res.push(e.clone());
+    // This function simplify the given expression using the given assignments
+
+    // We iterate over the expression elements and we store the simplified value in the res vector
+    // In the to_remove vector we store the index of the elements that can be removed
+    let mut res: Vec<ExpressionNode> = vec![];
+    let mut to_remove = vec![];
+    for e in exp.iter() {
+        let value = match &e.v {
+            ExpressionNode::And(v) => {
+                let mut val = true;
+                let mut unresolved = false;
+                let mut true_to_remove = vec![];
+                for p in v.iter() {
+                    if let ExpressionNode::Bool(pv) = res[*p] {
+                        if pv {
+                            true_to_remove.push(*p);
+                        } else {
+                            val = false;
+                            break;
+                        }
+                    } else {
+                        unresolved = true;
+                    }
+                }
+                if ! unresolved {
+                    to_remove.extend(v.iter().clone());
+                    ExpressionNode::Bool(val)
+                } else {
+                    to_remove.extend(true_to_remove);
+                    e.v.clone()
+                }
+            },
+            ExpressionNode::Not(p) => {
+                if let ExpressionNode::Bool(v) = res[*p] {
+                    to_remove.push(*p);
+                    ExpressionNode::Bool(!v)
+                } else {
+                    e.v.clone()
+                }
+            },
+            ExpressionNode::Equals(p1, p2) => {
+                if res[*p1] == res[*p2] {
+                    to_remove.push(*p1);
+                    to_remove.push(*p2);
+                    ExpressionNode::Bool(true)
+                } else {
+                    let val1 = get_rational_from_expression_node(&res[*p1]);
+                    let val2 = get_rational_from_expression_node(&res[*p2]);
+                    if val1.is_ok() && val2.is_ok() {
+                        to_remove.push(*p1);
+                        to_remove.push(*p2);
+                        ExpressionNode::Bool(val1.unwrap() == val2.unwrap())
+                    } else {
+                        e.v.clone()
+                    }
+                }
+            },
+            ExpressionNode::LE(p1, p2) => {
+                let val1 = get_rational_from_expression_node(&res[*p1]);
+                let val2 = get_rational_from_expression_node(&res[*p2]);
+                if val1.is_ok() && val2.is_ok() {
+                    to_remove.push(*p1);
+                    to_remove.push(*p2);
+                    ExpressionNode::Bool(val1.unwrap() <= val2.unwrap())
+                } else {
+                    e.v.clone()
+                }
+            },
+            ExpressionNode::LT(p1, p2) => {
+                let val1 = get_rational_from_expression_node(&res[*p1]);
+                let val2 = get_rational_from_expression_node(&res[*p2]);
+                if val1.is_ok() && val2.is_ok() {
+                    to_remove.push(*p1);
+                    to_remove.push(*p2);
+                    ExpressionNode::Bool(val1.unwrap() < val2.unwrap())
+                } else {
+                    e.v.clone()
+                }
+            },
+            ExpressionNode::Plus(v) => {
+                let mut to_simplified = true;
+                let mut r = BigRational::from_integer(mk_integer(0));
+                for p in v.iter() {
+                    let val = get_rational_from_expression_node(&res[*p]);
+                    if val.is_ok() {
+                        r += val.unwrap();
+                    } else {
+                        to_simplified = false;
+                        break;
+                    }
+                }
+                if to_simplified {
+                    to_remove.extend(v.iter().clone());
+                    if r.is_integer() {
+                        ExpressionNode::Int(r.to_integer())
+                    }
+                    else {
+                        ExpressionNode::Rational(r)
+                    }
+                } else {
+                    e.v.clone()
+                }
+            },
+            ExpressionNode::Minus(p1, p2) => {
+                let val1 = get_rational_from_expression_node(&res[*p1]);
+                let val2 = get_rational_from_expression_node(&res[*p2]);
+                if val1.is_ok() && val2.is_ok() {
+                    to_remove.push(*p1);
+                    to_remove.push(*p2);
+                    let r = val1.unwrap() - val2.unwrap();
+                    if r.is_integer() {
+                        ExpressionNode::Int(r.to_integer())
+                    }
+                    else {
+                        ExpressionNode::Rational(r)
+                    }
+                } else {
+                    e.v.clone()
+                }
+            },
+            ExpressionNode::Times(v) => {
+                let mut to_simplified = true;
+                let mut r = BigRational::from_integer(mk_integer(1));
+                for p in v.iter() {
+                    let val = get_rational_from_expression_node(&res[*p]);
+                    if val.is_ok() {
+                        r *= val.unwrap();
+                    } else {
+                        to_simplified = false;
+                        break;
+                    }
+                }
+                if to_simplified {
+                    to_remove.extend(v.iter().clone());
+                    if r.is_integer() {
+                        ExpressionNode::Int(r.to_integer())
+                    }
+                    else {
+                        ExpressionNode::Rational(r)
+                    }
+                } else {
+                    e.v.clone()
+                }
+            },
+            ExpressionNode::Div(p1, p2) => {
+                let val1 = get_rational_from_expression_node(&res[*p1]);
+                let val2 = get_rational_from_expression_node(&res[*p2]);
+                if val1.is_ok() && val2.is_ok() {
+                    to_remove.push(*p1);
+                    to_remove.push(*p2);
+                    let r = val1.unwrap() / val2.unwrap();
+                    if r.is_integer() {
+                        ExpressionNode::Int(r.to_integer())
+                    }
+                    else {
+                        ExpressionNode::Rational(r)
+                    }
+                } else {
+                    e.v.clone()
+                }
+            },
+            ExpressionNode::Fluent(s) => {
+                if let Some(v) = assignments.get(s) {
+                    v.v.clone()
+                } else {
+                    e.v.clone()
+                }
             }
-        } else {
-            res.push(e.clone());
+            other => {
+                (*other).clone()
+            }
+        };
+        res.push(value);
+    }
+
+    // We build the simplified expression iterating over the res elements, removing
+    // the ones that are not needed and updating the operands indexes
+    let mut final_res: Vec<PyExpressionNode> = Vec::new();
+    for (i, e) in res.into_iter().enumerate() {
+        if !to_remove.contains(&i) {
+            let ne: ExpressionNode = match e {
+                ExpressionNode::And(v) => {
+                    let mut operands = Vec::new();
+                    for o in v {
+                        if !to_remove.contains(&o) {
+                            let offset = to_remove.iter().filter(|&&x| x < o).count();
+                            operands.push(o - offset);
+                        }
+                    }
+                    ExpressionNode::And(operands)
+                },
+                ExpressionNode::Not(p) => {
+                    if !to_remove.contains(&p) {
+                        let offset = to_remove.iter().filter(|&&x| x < p).count();
+                        ExpressionNode::Not(p - offset)
+                    } else {
+                        ExpressionNode::Not(p)
+                    }
+                },
+                ExpressionNode::Equals(p1, p2) => {
+                    let mut offset1 = 0;
+                    if !to_remove.contains(&p1) {
+                        offset1 = to_remove.iter().filter(|&&x| x < p1).count();
+                    }
+                    let mut offset2 = 0;
+                    if !to_remove.contains(&p2) {
+                        offset2 = to_remove.iter().filter(|&&x| x < p2).count();
+                    }
+                    ExpressionNode::Equals(p1-offset1, p2-offset2)
+                },
+                ExpressionNode::LE(p1, p2) => {
+                    let mut offset1 = 0;
+                    if !to_remove.contains(&p1) {
+                        offset1 = to_remove.iter().filter(|&&x| x < p1).count();
+                    }
+                    let mut offset2 = 0;
+                    if !to_remove.contains(&p2) {
+                        offset2 = to_remove.iter().filter(|&&x| x < p2).count();
+                    }
+                    ExpressionNode::LE(p1-offset1, p2-offset2)
+                },
+                ExpressionNode::LT(p1, p2) => {
+                    let mut offset1 = 0;
+                    if !to_remove.contains(&p1) {
+                        offset1 = to_remove.iter().filter(|&&x| x < p1).count();
+                    }
+                    let mut offset2 = 0;
+                    if !to_remove.contains(&p2) {
+                        offset2 = to_remove.iter().filter(|&&x| x < p2).count();
+                    }
+                    ExpressionNode::LT(p1-offset1, p2-offset2)
+                },
+                ExpressionNode::Plus(v) => {
+                    let mut operands = Vec::new();
+                    for o in v {
+                        if !to_remove.contains(&o) {
+                            let offset = to_remove.iter().filter(|&&x| x < o).count();
+                            operands.push(o - offset);
+                        }
+                    }
+                    ExpressionNode::Plus(operands)
+                },
+                ExpressionNode::Minus(p1, p2) => {
+                    let mut offset1 = 0;
+                    if !to_remove.contains(&p1) {
+                        offset1 = to_remove.iter().filter(|&&x| x < p1).count();
+                    }
+                    let mut offset2 = 0;
+                    if !to_remove.contains(&p2) {
+                        offset2 = to_remove.iter().filter(|&&x| x < p2).count();
+                    }
+                    ExpressionNode::Minus(p1-offset1, p2-offset2)
+                },
+                ExpressionNode::Times(v) => {
+                    let mut operands = Vec::new();
+                    for o in v {
+                        if !to_remove.contains(&o) {
+                            let offset = to_remove.iter().filter(|&&x| x < o).count();
+                            operands.push(o - offset);
+                        }
+                    }
+                    ExpressionNode::Times(operands)
+                },
+                ExpressionNode::Div(p1, p2) => {
+                    let mut offset1 = 0;
+                    if !to_remove.contains(&p1) {
+                        offset1 = to_remove.iter().filter(|&&x| x < p1).count();
+                    }
+                    let mut offset2 = 0;
+                    if !to_remove.contains(&p2) {
+                        offset2 = to_remove.iter().filter(|&&x| x < p2).count();
+                    }
+                    ExpressionNode::Div(p1-offset1, p2-offset2)
+                },
+                _ => {
+                    e
+                }
+            };
+            final_res.push(PyExpressionNode{v: ne})
         }
     }
-    Ok(res)
+
+    Ok(final_res)
 }
 
 #[pyfunction]
