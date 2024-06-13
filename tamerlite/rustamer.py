@@ -12,6 +12,7 @@ from rustamer import (
     make_operator_node,
     make_rational_constant_node,
     shift_expression,
+    simplify,
 )
 from rustamer import CoreStateEncoder, Heuristic
 

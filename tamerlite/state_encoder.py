@@ -198,12 +198,12 @@ class GeneralStateEncoder:
         # vectorization of the fluents value
         res = self._cse.get_fluents_as_vector(state)
 
-        res.extend(constants_vec)
-        res.extend(goals_vec)
-
         # vectorization of the running actions
         actions = self._cse.get_running_actions_as_vector(state)
         res.extend(actions)
+
+        res.extend(constants_vec)
+        res.extend(goals_vec)
 
         # vectorization of the temporal network
         tn = self._cse.get_tn_as_vector(state, self._search_space)
