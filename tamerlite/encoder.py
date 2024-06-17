@@ -6,12 +6,12 @@ from unified_planning.engines.compilers import Grounder
 from fractions import Fraction
 from typing import List, Tuple, Dict, Union, Optional
 
-from tamerlite.core import Expression, Effect, Timing, Event, SearchSpace, get_fluents
+from tamerlite.core import Expression, Effect, Timing, Event, SearchSpace, SearchSpaceMacroAction, get_fluents
 from tamerlite.state_encoder import StateEncoder, GeneralStateEncoder
 from tamerlite.converter import Converter
 
 
-def get_encoders(domain, problem=None):
+def get_encoders(domain, problem=None, macros = None, intermediate_nodes = None):
     """
     Returns the problem encoder, the state encoder and the callable to map back
     the ground actions to their lifted version.
@@ -93,7 +93,7 @@ class Encoder:
     in the search space.
     """
 
-    def __init__(self, problem: "up.model.Problem", full: bool = True):
+    def __init__(self, problem: "up.model.Problem", full: bool = True, macros: Optional[List[str]] = None, intermediate_nodes: Optional[bool] = None):
         self._problem = problem
         if full:
             self._simplifier = up.model.walkers.Simplifier(problem.environment, problem)
@@ -122,6 +122,8 @@ class Encoder:
             self._goal = None
         self._search_space = SearchSpace(actions_duration, self._events, self._mutex,
                                          initial_state, self._goal, problem.epsilon)
+        if macros: 
+            self._search_space = SearchSpaceMacroAction(self._search_space, macros, intermediate_nodes)     
         self._objects = {}
         for ut in problem.user_types:
             self._objects[ut.name] = [o.name for o in problem.objects(ut)]

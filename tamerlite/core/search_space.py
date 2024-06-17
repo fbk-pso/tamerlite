@@ -483,3 +483,80 @@ class SearchSpace:
         else:
             id = self._counter
         return self._expand_event(state, new_state, events[0][1], 0, id)
+    
+
+class SearchSpaceMacroAction:
+
+    def __init__(self, ss : SearchSpace, macros: Optional[List[str]], intermediate_nodes: Optional[bool]):
+        self._ss = ss
+        self._macros = macros
+        self._intermediate_nodes = intermediate_nodes
+
+    @property
+    def is_temporal(self) -> bool:
+        return self._ss.is_temporal()
+        
+    def reset(self):
+        pass
+
+    def initial_state(self,
+                      initial_state: Optional[Dict[str, Union[bool, int, Fraction, str]]] = None) -> State:
+        return self._ss.initial_state(initial_state)
+
+    def get_successor_state(self, state: State, action: str) -> Optional[State]:
+        events = self._ss._events[action]
+        new_state = state.clone()
+        new_state.g = state.g + 1
+        if action in state.todo:
+            index, id = state.todo[action]
+            _, e = events[index]
+            if index+1 >= len(events):
+                new_state.todo.pop(action)
+            else:
+                new_state.todo[action] = index+1, id+1
+            new_state = self._expand_event(state, new_state, e, index, id)
+        else:
+            new_state = self._open_action(state, new_state, action, events)
+        return new_state
+
+    def get_successor_states(self, state: State) -> Iterator[State]:
+        for action in self._ss._actions:
+            new_state = self.get_successor_state(state, action)
+            if new_state:
+                yield new_state
+        if self._macros:
+            for ma in self._macros:
+                new_states = []
+                for a in ma:
+                    new_state = self.get_successor_state(state, a)
+                    new_states.append(new_state)
+                    if not new_state: # applicablity
+                        break
+                if not self._intermediate_nodes:
+                    if new_state: #fully applicable without
+                        yield new_state
+                    # if len(new_states) > 1: # partial applicable without
+                    #      assert new_states[-2] is not None
+                    #      yield new_state
+                else:
+                    if new_state: # fully applicable with
+                        for ns in new_states:
+                            assert new_state is not None
+                            yield new_state
+                    # if len(new_states) > 1: # partial applicable with
+                    #     for ns in new_states[:-1]:
+                    #         assert new_state is not None
+                    #         yield new_state
+
+    def goal_reached(self, state: State, goal: Optional[Fraction] = None) -> bool:
+        return self._ss.goal_reached(state, goal)
+
+
+    def subgoals_sat(self, state: State, goal: Optional[Fraction] = None) -> Set[Expression]:
+        return self._ss.subgoals_sat(state, goal)
+
+    def _expand_event(self, state, new_state, e, index, id):
+        return self._ss._expand_event(state, new_state, e, index, id)
+
+    def _open_action(self, state, new_state, action, events):
+        return self._ss._open_action(state, new_state, action, events)

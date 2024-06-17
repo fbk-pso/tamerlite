@@ -64,20 +64,31 @@ class SearchParams:
     heuristic: Optional[str] = None
     weight: Optional[str] = None
     rl_params: Optional[RLParams] = None
+    macros: Optional[List[str]] = None
+    intermediate_nodes: Optional[bool] = None
 
     def contains_rl(self) -> bool:
         return self.rl_params is not None
+    
+    def contains_macros(self) -> bool:
+        return self.macros is not None
 
     def domain(self):
         return self.rl_params.domain
 
 
+
 @dataclass(frozen=True)
 class MultiqueueParams:
     queues: List[SearchParams]
+    macros = queues[0].macros
+    intermediate_nodes = queues[0].intermediate_nodes
 
     def contains_rl(self) -> bool:
         return any([q.contains_rl() for q in self.queues])
+    
+    def contains_macros(self) -> bool:
+        return any([q.contains_macros() for q in self.queues])
 
     def domain(self):
         d = None
@@ -211,13 +222,19 @@ class TamerLite(
         assert isinstance(problem, up.model.Problem)
         try:
             if self._params is not None and self._params.contains_rl():
-                encoder, state_encoder, map_back_action_instance = get_encoders(self._params.domain(), problem)
+                if self._params.contains_macros():
+                    encoder, state_encoder, map_back_action_instance = get_encoders(self._params.domain(), problem, self._params.macros, self._params.intermediate_nodes)
+                else:
+                    encoder, state_encoder, map_back_action_instance = get_encoders(self._params.domain())
             else:
                 with problem.environment.factory.Compiler(compilation_kind="GROUNDING", problem_kind=problem.kind) as compiler:
                     compilation_res = compiler.compile(problem)
                     map_back_action_instance = compilation_res.map_back_action_instance
                 new_problem = compilation_res.problem
-                encoder = Encoder(new_problem)
+                if self._params is not None and self._params.contains_macros():
+                    encoder = Encoder(new_problem, macros = self._params.macros, intermediate_nodes=self._params.intermediate_nodes)
+                else:
+                    encoder = Encoder(new_problem)
                 state_encoder = None
 
             if isinstance(self._params, MultiqueueParams):
