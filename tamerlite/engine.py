@@ -81,8 +81,14 @@ class SearchParams:
 @dataclass(frozen=True)
 class MultiqueueParams:
     queues: List[SearchParams]
-    macros = queues[0].macros
-    intermediate_nodes = queues[0].intermediate_nodes
+
+    @property
+    def macros(self):
+        return  self.queues[0].macros
+    
+    @property
+    def intermediate_nodes(self):
+        return self.queues[0].intermediate_nodes
 
     def contains_rl(self) -> bool:
         return any([q.contains_rl() for q in self.queues])
@@ -225,7 +231,7 @@ class TamerLite(
                 if self._params.contains_macros():
                     encoder, state_encoder, map_back_action_instance = get_encoders(self._params.domain(), problem, self._params.macros, self._params.intermediate_nodes)
                 else:
-                    encoder, state_encoder, map_back_action_instance = get_encoders(self._params.domain())
+                    encoder, state_encoder, map_back_action_instance = get_encoders(self._params.domain(), problem)
             else:
                 with problem.environment.factory.Compiler(compilation_kind="GROUNDING", problem_kind=problem.kind) as compiler:
                     compilation_res = compiler.compile(problem)
@@ -242,10 +248,10 @@ class TamerLite(
                 for p in self._params.queues:
                     h, w = self._get_heuristic(p, heuristic, encoder, state_encoder)
                     heuristics.append((h, w))
-                plan = multiqueue_search(encoder.search_space, heuristics, timeout)
+                plan, metrics = multiqueue_search(encoder.search_space, heuristics, timeout)
             else:
                 search = self._get_search(self._params, heuristic, encoder, state_encoder)
-                plan = search(encoder.search_space, timeout=timeout)
+                plan, metrics = search(encoder.search_space, timeout=timeout)
 
             if plan:
                 plan = encoder.build_plan(plan)
@@ -253,7 +259,7 @@ class TamerLite(
                 status = up.engines.PlanGenerationResultStatus.SOLVED_SATISFICING
             else:
                 status = up.engines.PlanGenerationResultStatus.UNSOLVABLE_INCOMPLETELY
-            return up.engines.PlanGenerationResult(status, plan, self.name)
+            return up.engines.PlanGenerationResult(status, plan, self.name, metrics)
         except TimeoutError:
             status = up.engines.PlanGenerationResultStatus.TIMEOUT
             return up.engines.PlanGenerationResult(status, None, self.name)

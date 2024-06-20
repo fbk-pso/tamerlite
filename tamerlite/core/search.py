@@ -2,9 +2,9 @@ from collections import deque
 import heapq
 import time
 from dataclasses import dataclass
-from tamerlite.core.search_space import SearchSpace, State
+from tamerlite.core.search_space import SearchSpace, SearchSpaceMacroAction, State
 from tamerlite.core.heuristics import Heuristic
-
+from typing import Union
 
 @dataclass
 class PrioritizedItem:
@@ -18,13 +18,13 @@ class PrioritizedItem:
             return False
         return len(self.state.todo) < len(other.state.todo)
 
-def bfs_search(ss: SearchSpace, timeout=None):
+def bfs_search(ss: Union[SearchSpace, SearchSpaceMacroAction], timeout=None):
     return _basic_search(ss, True, timeout)
 
-def dfs_search(ss: SearchSpace, timeout=None):
+def dfs_search(ss: Union[SearchSpace, SearchSpaceMacroAction], timeout=None):
     return _basic_search(ss, False, timeout)
 
-def _basic_search(ss: SearchSpace, bfs: bool, timeout):
+def _basic_search(ss: Union[SearchSpace, SearchSpaceMacroAction], bfs: bool, timeout):
     st = time.time()
     init = ss.initial_state()
     open = deque()
@@ -39,19 +39,19 @@ def _basic_search(ss: SearchSpace, bfs: bool, timeout):
             state = open.pop()
         counter += 1
         if ss.goal_reached(state):
-            print("Expanded states:", counter)
-            return state.extract_solution()
+            print("expanded states:", counter)
+            return state.extract_solution(), {"expanded_states": str(counter)}
         for succ_state in ss.get_successor_states(state):
             open.append(succ_state)
-    return None
+    return None, None
 
-def astar_search(ss: SearchSpace, heuristic: Heuristic, timeout=None):
+def astar_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heuristic, timeout=None):
     return wastar_search(ss, heuristic, 0.5, timeout)
 
-def gbfs_search(ss: SearchSpace, heuristic: Heuristic, timeout=None):
+def gbfs_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heuristic, timeout=None):
     return wastar_search(ss, heuristic, 1, timeout)
 
-def wastar_search(ss: SearchSpace, heuristic: Heuristic, weight: float = 0.5, timeout=None):
+def wastar_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heuristic, weight: float = 0.5, timeout=None):
     st = time.time()
     open = []
     closed_set = set()
@@ -73,8 +73,8 @@ def wastar_search(ss: SearchSpace, heuristic: Heuristic, weight: float = 0.5, ti
         # print([ev.action for (ev, _) in state.path], item.heuristic)
         counter += 1
         if ss.goal_reached(state):
-            print("Expanded states:", counter)
-            return state.extract_solution()
+            print("expanded states:", counter)
+            return state.extract_solution(), {"expanded_states": str(counter)}
         for succ_state in ss.get_successor_states(state):
             if succ_state in closed_set or succ_state in open_set:
                 continue
@@ -84,9 +84,9 @@ def wastar_search(ss: SearchSpace, heuristic: Heuristic, weight: float = 0.5, ti
                 heapq.heappush(open, PrioritizedItem(f, succ_state))
                 if not ss.is_temporal:
                     open_set.add(succ_state)
-    return None
+    return None, None
 
-def ehc_search(ss: SearchSpace, heuristic: Heuristic, timeout=None):
+def ehc_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heuristic, timeout=None):
     st = time.time()
     init = ss.initial_state()
     open = deque()
@@ -101,8 +101,8 @@ def ehc_search(ss: SearchSpace, heuristic: Heuristic, timeout=None):
         state = open.popleft()
         counter += 1
         if ss.goal_reached(state):
-            print("Expanded states:", counter)
-            return state.extract_solution()
+            print("expanded states:", counter)
+            return state.extract_solution(), {"expanded_states": str(counter)}
         for succ_state in ss.get_successor_states(state):
             h = heuristic.eval(succ_state, ss)
             if h is not None:
@@ -110,4 +110,4 @@ def ehc_search(ss: SearchSpace, heuristic: Heuristic, timeout=None):
                     best_h = h
                     open.clear()
                 open.append(succ_state)
-    return None
+    return None, None

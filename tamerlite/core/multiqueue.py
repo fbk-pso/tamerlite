@@ -62,7 +62,7 @@ def multiqueue_search(ss: SearchSpace, heuristics: List[Tuple[Heuristic, float]]
         state_expanded += 1
         if ss.goal_reached(state):
             print("expanded states:", state_expanded)
-            return state.extract_solution()
+            return state.extract_solution(), {"expanded_states": str(state_expanded)}
         for succ_state in ss.get_successor_states(state):
             if succ_state in closed_set or succ_state in open_set:
                 continue
@@ -75,4 +75,4 @@ def multiqueue_search(ss: SearchSpace, heuristics: List[Tuple[Heuristic, float]]
                     f = (1-weight)*succ_state.g + weight*h
                     item = PrioritizedItem(f, sc)
                     heapq.heappush(opens[i], item)
-    return None
+    return None, None
