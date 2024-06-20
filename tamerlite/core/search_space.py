@@ -494,7 +494,7 @@ class SearchSpaceMacroAction:
 
     @property
     def is_temporal(self) -> bool:
-        return self._ss.is_temporal()
+        return self._ss.is_temporal
         
     def reset(self):
         pass
@@ -504,20 +504,11 @@ class SearchSpaceMacroAction:
         return self._ss.initial_state(initial_state)
 
     def get_successor_state(self, state: State, action: str) -> Optional[State]:
-        events = self._ss._events[action]
-        new_state = state.clone()
-        new_state.g = state.g + 1
-        if action in state.todo:
-            index, id = state.todo[action]
-            _, e = events[index]
-            if index+1 >= len(events):
-                new_state.todo.pop(action)
-            else:
-                new_state.todo[action] = index+1, id+1
-            new_state = self._expand_event(state, new_state, e, index, id)
+        if action in list(self._ss._events.keys()):
+            return self._ss.get_successor_state(state, action)
         else:
-            new_state = self._open_action(state, new_state, action, events)
-        return new_state
+            return None
+            
 
     def get_successor_states(self, state: State) -> Iterator[State]:
         for action in self._ss._actions:
@@ -541,12 +532,12 @@ class SearchSpaceMacroAction:
                 else:
                     if new_state: # fully applicable with
                         for ns in new_states:
-                            assert new_state is not None
-                            yield new_state
+                            assert ns is not None
+                            yield ns
                     # if len(new_states) > 1: # partial applicable with
                     #     for ns in new_states[:-1]:
-                    #         assert new_state is not None
-                    #         yield new_state
+                    #         assert ns is not None
+                    #         yield ns
 
     def goal_reached(self, state: State, goal: Optional[Fraction] = None) -> bool:
         return self._ss.goal_reached(state, goal)
@@ -554,9 +545,3 @@ class SearchSpaceMacroAction:
 
     def subgoals_sat(self, state: State, goal: Optional[Fraction] = None) -> Set[Expression]:
         return self._ss.subgoals_sat(state, goal)
-
-    def _expand_event(self, state, new_state, e, index, id):
-        return self._ss._expand_event(state, new_state, e, index, id)
-
-    def _open_action(self, state, new_state, action, events):
-        return self._ss._open_action(state, new_state, action, events)

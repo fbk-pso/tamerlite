@@ -76,7 +76,7 @@ def get_encoders(domain, problem=None, macros = None, intermediate_nodes = None)
 
     ground_problem = grounding_result.problem
 
-    encoder = Encoder(ground_problem, full)
+    encoder = Encoder(ground_problem, full, macros, intermediate_nodes)
     gen_state_encoder = GeneralStateEncoder(problem, grounding_result, encoder.events, encoder.search_space)
     if full:
         state_encoder = StateEncoder(problem.environment, gen_state_encoder, problem.initial_values, problem.goals)

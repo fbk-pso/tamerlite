@@ -1,8 +1,10 @@
 try:
     import rustamer
-    has_rustamer = True
+    has_rustamer = False
 except ImportError:
     has_rustamer = False
+
+from tamerlite.core.search_space import SearchSpaceMacroAction
 
 if not has_rustamer:
     from tamerlite.core.search import wastar_search, astar_search, gbfs_search
