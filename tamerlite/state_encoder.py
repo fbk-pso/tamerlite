@@ -114,7 +114,10 @@ class StateEncoder:
 class GeneralStateEncoder:
     def __init__(self, problem, grounding_result, events, search_space):
         self._events = events
+        self._grounding_result = grounding_result
         self._search_space = search_space
+        self._problem = problem
+
         objects = sorted([o.name for o in problem.all_objects])
         self._objects = {on: float(i / len(objects)) for i, on in enumerate(objects)}
         static_fluents = problem.get_static_fluents()

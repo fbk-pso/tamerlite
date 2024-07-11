@@ -25,6 +25,7 @@ from typing import List, Tuple, Dict, Union, Optional
 
 from tamerlite.core import Expression, Effect, Timing, Event, SearchSpace, get_fluents
 from tamerlite.state_encoder import StateEncoder, GeneralStateEncoder
+from tamerlite.gnn_encoder import GNNStateEncoder
 from tamerlite.converter import Converter
 
 
