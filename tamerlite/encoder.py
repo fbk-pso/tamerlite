@@ -268,8 +268,10 @@ class Encoder:
         for a1, i1 in ev_list:
             for a2, i2 in ev_list:
                 if a1 == a2:
-                    continue
-                (a_p, a_e) = ev[(a1, i1)]
-                (b_p, b_e) = ev[(a2, i2)]
-                if not a_p.isdisjoint(b_e) or not b_p.isdisjoint(a_e) or not a_e.isdisjoint(b_e):
+                    # Since we do not allow self-overlapping, events of the same action are always mutex
                     self._mutex.add(((a1, i1), (a2, i2)))
+                else:
+                    (a_p, a_e) = ev[(a1, i1)]
+                    (b_p, b_e) = ev[(a2, i2)]
+                    if not a_p.isdisjoint(b_e) or not b_p.isdisjoint(a_e) or not a_e.isdisjoint(b_e):
+                        self._mutex.add(((a1, i1), (a2, i2)))
