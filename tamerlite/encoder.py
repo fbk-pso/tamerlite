@@ -11,7 +11,7 @@ from tamerlite.state_encoder import StateEncoder, GeneralStateEncoder
 from tamerlite.converter import Converter
 
 
-def get_encoders(domain, problem=None, macros = None, intermediate_nodes = None):
+def get_encoders(domain, problem=None, macros = None, macros_usage = None):
     """
     Returns the problem encoder, the state encoder and the callable to map back
     the ground actions to their lifted version.
@@ -76,7 +76,7 @@ def get_encoders(domain, problem=None, macros = None, intermediate_nodes = None)
 
     ground_problem = grounding_result.problem
 
-    encoder = Encoder(ground_problem, full, macros, intermediate_nodes)
+    encoder = Encoder(ground_problem, full, macros, macros_usage)
     gen_state_encoder = GeneralStateEncoder(problem, grounding_result, encoder.events, encoder.search_space)
     if full:
         state_encoder = StateEncoder(problem.environment, gen_state_encoder, problem.initial_values, problem.goals)
@@ -93,7 +93,7 @@ class Encoder:
     in the search space.
     """
 
-    def __init__(self, problem: "up.model.Problem", full: bool = True, macros: Optional[List[str]] = None, intermediate_nodes: Optional[bool] = None):
+    def __init__(self, problem: "up.model.Problem", full: bool = True, macros: Optional[List[str]] = None, macros_usage: Optional[str] = None):
         self._problem = problem
         if full:
             self._simplifier = up.model.walkers.Simplifier(problem.environment, problem)
@@ -123,7 +123,7 @@ class Encoder:
         self._search_space = SearchSpace(actions_duration, self._events, self._mutex,
                                          initial_state, self._goal, problem.epsilon)
         if macros: 
-            self._search_space = SearchSpaceMacroAction(self._search_space, macros, intermediate_nodes)     
+            self._search_space = SearchSpaceMacroAction(self._search_space, macros, macros_usage)     
         self._objects = {}
         for ut in problem.user_types:
             self._objects[ut.name] = [o.name for o in problem.objects(ut)]

@@ -487,10 +487,10 @@ class SearchSpace:
 
 class SearchSpaceMacroAction:
 
-    def __init__(self, ss : SearchSpace, macros: Optional[List[str]], intermediate_nodes: Optional[bool]):
+    def __init__(self, ss : SearchSpace, macros: Optional[List[str]], macros_usage: Optional[str]):
         self._ss = ss
         self._macros = macros
-        self._intermediate_nodes = intermediate_nodes
+        self._macros_usage = macros_usage
 
     @property
     def is_temporal(self) -> bool:
@@ -516,6 +516,7 @@ class SearchSpaceMacroAction:
             if new_state:
                 yield new_state
         if self._macros:
+            assert self._macros_usage is not None
             for ma in self._macros:
                 new_states = []
                 for a in ma:
@@ -523,21 +524,26 @@ class SearchSpaceMacroAction:
                     new_states.append(new_state)
                     if not new_state: # applicablity
                         break
-                if not self._intermediate_nodes:
-                    if new_state: #fully applicable without
-                        yield new_state
-                    # if len(new_states) > 1: # partial applicable without
-                    #      assert new_states[-2] is not None
-                    #      yield new_state
-                else:
-                    if new_state: # fully applicable with
-                        for ns in new_states:
-                            assert ns is not None
-                            yield ns
-                    # if len(new_states) > 1: # partial applicable with
-                    #     for ns in new_states[:-1]:
-                    #         assert ns is not None
-                    #         yield ns
+                if "FA" in self._macros_usage: #fully applicable
+                    if "-" in self._macros_usage: #without
+                        if new_state: 
+                            yield new_state
+                    else: #with
+                        if new_state:
+                            for ns in new_states:
+                                assert ns is not None
+                                yield ns
+                else: #partial applicable
+                    if "-" in self._macros_usage: #without   
+                        if len(new_states) > 1: 
+                            assert new_states[-2] is not None
+                            if new_state:
+                                yield new_state
+                    else:
+                        if len(new_states) > 1: #with
+                            for ns in new_states[:-1]:
+                                assert ns is not None
+                                yield ns
 
     def goal_reached(self, state: State, goal: Optional[Fraction] = None) -> bool:
         return self._ss.goal_reached(state, goal)

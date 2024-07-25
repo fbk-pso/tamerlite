@@ -65,7 +65,7 @@ class SearchParams:
     weight: Optional[str] = None
     rl_params: Optional[RLParams] = None
     macros: Optional[List[str]] = None
-    intermediate_nodes: Optional[bool] = None
+    macros_usage: Optional[str] = None
 
     def contains_rl(self) -> bool:
         return self.rl_params is not None
@@ -87,8 +87,8 @@ class MultiqueueParams:
         return  self.queues[0].macros
     
     @property
-    def intermediate_nodes(self):
-        return self.queues[0].intermediate_nodes
+    def macros_usage(self):
+        return self.queues[0].macros_usage
 
     def contains_rl(self) -> bool:
         return any([q.contains_rl() for q in self.queues])
@@ -229,7 +229,7 @@ class TamerLite(
         try:
             if self._params is not None and self._params.contains_rl():
                 if self._params.contains_macros():
-                    encoder, state_encoder, map_back_action_instance = get_encoders(self._params.domain(), problem, self._params.macros, self._params.intermediate_nodes)
+                    encoder, state_encoder, map_back_action_instance = get_encoders(self._params.domain(), problem, self._params.macros, self._params.macros_usage)
                 else:
                     encoder, state_encoder, map_back_action_instance = get_encoders(self._params.domain(), problem)
             else:
@@ -238,7 +238,7 @@ class TamerLite(
                     map_back_action_instance = compilation_res.map_back_action_instance
                 new_problem = compilation_res.problem
                 if self._params is not None and self._params.contains_macros():
-                    encoder = Encoder(new_problem, macros = self._params.macros, intermediate_nodes=self._params.intermediate_nodes)
+                    encoder = Encoder(new_problem, macros = self._params.macros, macros_usage=self._params.macros_usage)
                 else:
                     encoder = Encoder(new_problem)
                 state_encoder = None
