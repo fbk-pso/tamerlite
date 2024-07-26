@@ -39,8 +39,7 @@ def _basic_search(ss: Union[SearchSpace, SearchSpaceMacroAction], bfs: bool, tim
             state = open.pop()
         counter += 1
         if ss.goal_reached(state):
-            print("expanded states:", counter)
-            return state.extract_solution(), {"expanded_states": str(counter)}
+            return state.extract_solution(), {"Expanded states": str(counter)}
         for succ_state in ss.get_successor_states(state):
             open.append(succ_state)
     return None, None
@@ -73,8 +72,7 @@ def wastar_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heu
         # print([ev.action for (ev, _) in state.path], item.heuristic)
         counter += 1
         if ss.goal_reached(state):
-            print("expanded states:", counter)
-            return state.extract_solution(), {"expanded_states": str(counter)}
+            return state.extract_solution(), {"Expanded states": str(counter)}
         for succ_state in ss.get_successor_states(state):
             if succ_state in closed_set or succ_state in open_set:
                 continue
@@ -101,8 +99,7 @@ def ehc_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heuris
         state = open.popleft()
         counter += 1
         if ss.goal_reached(state):
-            print("expanded states:", counter)
-            return state.extract_solution(), {"expanded_states": str(counter)}
+            return state.extract_solution(), {"Expanded_states": str(counter)}
         for succ_state in ss.get_successor_states(state):
             h = heuristic.eval(succ_state, ss)
             if h is not None:

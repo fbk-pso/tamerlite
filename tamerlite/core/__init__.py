@@ -1,6 +1,6 @@
 try:
     import rustamer
-    has_rustamer = False
+    has_rustamer = True
 except ImportError:
     has_rustamer = False
 
