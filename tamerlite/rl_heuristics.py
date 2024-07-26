@@ -10,7 +10,7 @@ class RLRank:
         self._model.load_state_dict(torch.load(model))
         self._model.eval()
 
-    def eval(self, state):
+    def eval(self, state, ss):
         state_vec = self._state_encoder.get_state_as_vector(state)
         return self.eval_state_vec(state_vec)
 
@@ -29,7 +29,7 @@ class RLHeuristic:
         self._max_plan_size = max_plan_size
         self._gamma = config.gamma
 
-    def eval(self, state):
+    def eval(self, state, ss):
         state_vec = self._state_encoder.get_state_as_vector(state)
         return self.eval_state_vec(state_vec)
 
