@@ -80,9 +80,9 @@ impl HRL {
     pub fn eval(&self, state: &State, ss: &SearchSpace) -> PyResult<Option<f64>> {
         let mut enc: Vec<f32> = Vec::new();
         enc.extend(self.ss.get_fluents_as_vector(state)?);
+        enc.extend(self.ss.get_running_actions_as_vector(state)?);
         enc.extend(self.constants_vec.iter());
         enc.extend(self.goals_vec.iter());
-        enc.extend(self.ss.get_running_actions_as_vector(state)?);
         enc.extend(self.ss.get_tn_as_vector(state, ss)?);
         Python::with_gil(|py| {
             let args = PyTuple::new(py, &[enc.into_py(py)]);
