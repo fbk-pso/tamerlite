@@ -59,14 +59,20 @@ class CoreStateEncoder:
         ee = defaultdict(int)
         sa = {}
         for e, t in state.temporal_network.distances.items():
-            if -t >= last:
+            if -t > last:
                 continue
             if len(e) == 2:
                 v = m.get(e[0], None)
                 if v is None or -t > v:
                     m[e[0]] = -t
             else:
-                if e[1]:
+                oe = (e[0], not e[1], e[2])
+                if state.temporal_network.distances[oe] == t:
+                    if e[1]:
+                        se[-t] += 0
+                        ee[-t] += 0
+                        sa.setdefault(-t, []).append(e[0])
+                elif e[1]:
                     se[-t] += 1
                     sa.setdefault(-t, []).append(e[0])
                 else:
@@ -77,6 +83,7 @@ class CoreStateEncoder:
         actions = []
         for t, nsa in sorted(se.items()):
             if t == last:
+                actions.extend(sa.get(t, []))
                 break
             nea = ee[t]
             c -= nea
@@ -84,8 +91,7 @@ class CoreStateEncoder:
                 t_safe = t
                 actions = []
             c += nsa
-            if nsa > 0:
-                actions.extend(sa[t])
+            actions.extend(sa.get(t, []))
         tn = [0.0 for _ in range(self._tn_size)]
         for a in actions:
             le = self._events[a]
