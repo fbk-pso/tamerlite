@@ -107,6 +107,12 @@ impl TNInterpreter {
         }
     }
 
+    pub fn get_action_timing<Q>(&self, tn: &DeltaSTN<Q>, action: &(String, bool, usize)) -> Option<Q>
+    where Q: num_traits::Num + std::ops::Neg<Output=Q> + PartialOrd + Clone {
+        let id = self.actions_ids.get(action)?;
+        tn.get_model_value(id)
+    }
+
     pub fn get_event_timing<Q>(&self, tn: &DeltaSTN<Q>, event: &(String, usize, usize)) -> Option<Q>
     where Q: num_traits::Num + std::ops::Neg<Output=Q> + PartialOrd + Clone {
         let id = self.events_ids.get(event)?;
