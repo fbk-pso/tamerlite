@@ -47,7 +47,7 @@ class StateEncoder:
         # vectorization of the goal
         w = Dnf(environment)
         self._goals = w.walk(environment.expression_manager.And(goals))[0]
-        self._goals_vec = [-1 for _ in range(self.state_geometry.num_goals)]
+        self._goals_vec = [-1.0 for _ in range(self.state_geometry.num_goals)]
         for g in self._goals:
             if g.is_fluent_exp():
                 i = fluents.index(g)
