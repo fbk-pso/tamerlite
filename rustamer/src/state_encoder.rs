@@ -112,7 +112,7 @@ impl CoreStateEncoder {
 
             let mut m = HashMap::new();
             for (ev, t) in search_space.tn_interpreter.get_events_timings(tn) {
-                if t - last >= -tn.tolerance {
+                if t - last >= tn.tolerance {
                     break;
                 }
                 m.insert(ev, t);
@@ -124,9 +124,6 @@ impl CoreStateEncoder {
             let mut nea = 0;
             let mut nsa = 0;
             for (ev, t) in search_space.tn_interpreter.get_actions_timings(tn).iter() {
-                if t - last >= -tn.tolerance {
-                    break;
-                }
                 if !tn.equals_with_tolerance(t, &t_last) {
                     c -= nea;
                     if c == 0 {
@@ -136,12 +133,17 @@ impl CoreStateEncoder {
                     nsa = 0;
                     nea = 0;
                 }
-                if ev.1 {
-                    nsa += 1;
-                } else {
-                    nea += 1;
+                if !tn.equals_with_tolerance(&search_space.tn_interpreter.get_action_timing(tn, &(ev.0.to_string(), !ev.1, ev.2)).unwrap(), t) {
+                    if ev.1 {
+                        nsa += 1;
+                    } else {
+                        nea += 1;
+                    }
                 }
                 t_last = *t;
+                if t - last >= -tn.tolerance {
+                    break;
+                }
             }
 
             for (e, t) in m.iter() {
