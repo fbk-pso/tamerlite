@@ -160,11 +160,19 @@ class TamerLite(
             w = 1 if params is None or params.weight is None else params.weight
         elif h == "rl_heuristic":
             assert rl_params is not None and rl_params.other_params is not None
-            h = RLHeuristic(state_encoder, rl_params.model, rl_params.model_class, rl_params.other_params, HAdd(encoder.fluents, encoder.objects, encoder.events, encoder.goal))
+            if rl_params.other_params.learning_heuristic == "hadd":
+                heuristic_for_residual = HAdd(encoder.fluents, encoder.objects, encoder.events, encoder.goal)
+            elif rl_params.other_params.learning_heuristic == "hff":
+                heuristic_for_residual = HFF(encoder.fluents, encoder.objects, encoder.events, encoder.goal)
+            h = RLHeuristic(state_encoder, rl_params.model, rl_params.model_class, rl_params.other_params, heuristic_for_residual)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "rl_rank":
             assert rl_params is not None and rl_params.other_params is not None
-            h = RLRank(state_encoder, rl_params.model, rl_params.model_class, rl_params.other_params, HAdd(encoder.fluents, encoder.objects, encoder.events, encoder.goal))
+            if rl_params.other_params.learning_heuristic == "hadd":
+                heuristic_for_residual = HAdd(encoder.fluents, encoder.objects, encoder.events, encoder.goal)
+            elif rl_params.other_params.learning_heuristic == "hff":
+                heuristic_for_residual = HFF(encoder.fluents, encoder.objects, encoder.events, encoder.goal)
+            h = RLRank(state_encoder, rl_params.model, rl_params.model_class, rl_params.other_params, heuristic_for_residual)
             w = 1 if params is None or params.weight is None else params.weight
         elif h == "hff":
             h = HFF(encoder.fluents, encoder.objects, encoder.events, encoder.goal)
