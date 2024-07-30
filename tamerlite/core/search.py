@@ -67,10 +67,10 @@ def wastar_search(ss: SearchSpace, heuristic: Heuristic, weight: float = 0.5, ti
         if not ss.is_temporal:
             closed_set.add(state)
             open_set.discard(state)
-        # print(item.heuristic, [ev.action for (ev, _) in state.path])
+        # print([ev.action for (ev, _) in state.path], item.heuristic)
         counter += 1
         if ss.goal_reached(state):
-            print("Expanded states:", counter)
+            print("expanded states:", counter)
             return state.extract_solution()
         for succ_state in ss.get_successor_states(state):
             if succ_state in closed_set or succ_state in open_set:
