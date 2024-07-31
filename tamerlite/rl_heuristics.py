@@ -6,7 +6,7 @@ import numpy as np
 class RLRank:
     def __init__(self, state_encoder, model, ModelClass, config, sym_h):
         self._state_encoder = state_encoder
-        self._model = ModelClass(state_encoder.state_geometry, config.reward_signal, config.output_range, config.delta_h, config.bootstrap_trunc, config.residual)
+        self._model = ModelClass(state_encoder.state_geometry, config)
         self._model.load_state_dict(torch.load(model))
         self._model.eval()
         self._residual = config.residual
@@ -34,7 +34,7 @@ class RLRank:
 class RLHeuristic:
     def __init__(self, state_encoder, model, ModelClass, config, sym_h):
         self._state_encoder = state_encoder
-        self._model = ModelClass(state_encoder.state_geometry, config.reward_signal, config.output_range, config.delta_h, config.bootstrap_trunc, config.residual)
+        self._model = ModelClass(state_encoder.state_geometry, config)
         self._model.load_state_dict(torch.load(model))
         self._model.eval()
         self._delta_h = config.delta_h
