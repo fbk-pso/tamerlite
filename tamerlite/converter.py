@@ -104,7 +104,13 @@ class Converter(DagWalker):
     def walk_equals(self, expression: 'FNode',
                     args: List[Expression]) -> Expression:
         assert len(args) == 2
-        return args[0] + tuple(shift_expression(args[1], len(args[0]))) + (make_operator_node("==", (len(args[0])-1, len(args[0])+len(args[1])-1)), )
+        if not expression.arg(0).is_fluent_exp() and expression.arg(1).is_fluent_exp():
+            a0 = args[1]
+            a1 = args[0]
+        else:
+            a0 = args[0]
+            a1 = args[1]
+        return a0 + tuple(shift_expression(a1, len(a0))) + (make_operator_node("==", (len(a0)-1, len(a0)+len(a1)-1)), )
 
     def walk_fluent_exp(self, expression: 'FNode',
                         args: List[Expression]) -> Expression:

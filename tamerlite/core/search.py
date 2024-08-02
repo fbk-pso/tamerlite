@@ -57,7 +57,10 @@ def wastar_search(ss: SearchSpace, heuristic: Heuristic, weight: float = 0.5, ti
     closed_set = set()
     open_set = set()
     init = ss.initial_state()
-    heapq.heappush(open, PrioritizedItem(0, init))
+    init_h = heuristic.eval(init, ss)
+    if init_h is None:
+        return None
+    heapq.heappush(open, PrioritizedItem(init_h, init))
     counter = 0
     while open:
         if timeout is not None and time.time() - st > timeout:
