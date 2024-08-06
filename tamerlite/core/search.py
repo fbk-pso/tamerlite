@@ -58,7 +58,7 @@ def wastar_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heu
     init = ss.initial_state()
     init_h = heuristic.eval(init, ss)
     if init_h is None:
-        return None
+        return None, None, None
     heapq.heappush(open, PrioritizedItem(init_h, init))
     counter = 0
     while open:
@@ -72,7 +72,11 @@ def wastar_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heu
         # print([ev.action for (ev, _) in state.path], item.heuristic)
         counter += 1
         if ss.goal_reached(state):
-            return state.extract_solution(), {"Expanded states": str(counter)}
+            print(f"Expanded states: {str(counter)}")
+            if isinstance(ss, SearchSpaceMacroAction):
+                return state.extract_solution(), {"Expanded states": str(counter)}, state.extract_used_macro()
+            else:
+                return state.extract_solution(), {"Expanded states": str(counter)}, [] 
         for succ_state in ss.get_successor_states(state):
             if succ_state in closed_set or succ_state in open_set:
                 continue
@@ -82,7 +86,7 @@ def wastar_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heu
                 heapq.heappush(open, PrioritizedItem(f, succ_state))
                 if not ss.is_temporal:
                     open_set.add(succ_state)
-    return None, None
+    return None, None, None
 
 def ehc_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heuristic, timeout=None):
     st = time.time()
@@ -91,7 +95,7 @@ def ehc_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heuris
     open.append(init)
     best_h = heuristic.eval(init, ss)
     if best_h is None:
-        return None
+        return None, None
     counter = 0
     while len(open) > 0:
         if timeout is not None and time.time() - st > timeout:
