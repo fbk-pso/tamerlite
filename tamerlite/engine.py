@@ -237,8 +237,24 @@ class TamerLite(
                     compilation_res = compiler.compile(problem)
                     map_back_action_instance = compilation_res.map_back_action_instance
                 new_problem = compilation_res.problem
+
                 if self._params is not None and self._params.contains_macros():
-                    encoder = Encoder(new_problem, macros = self._params.macros, macros_usage=self._params.macros_usage)
+
+                    actions = []
+                    for a in new_problem.actions:
+                        actions.append(str(a.name))
+                    new_macros = []
+                    for ma in self._params.macros:
+                        cont = 0
+                        for a in ma:
+                            if str(a) in actions:
+                                cont += 1
+                        if cont == len(ma):
+                            new_macros.append(ma)
+                    macros = new_macros
+                    print(f"Useful macros: {len(macros)}")
+
+                    encoder = Encoder(new_problem, macros = macros, macros_usage=self._params.macros_usage)
                 else:
                     encoder = Encoder(new_problem)
                 state_encoder = None
@@ -251,7 +267,10 @@ class TamerLite(
                 plan, metrics = multiqueue_search(encoder.search_space, heuristics, timeout)
             else:
                 search = self._get_search(self._params, heuristic, encoder, state_encoder)
-                plan, metrics = search(encoder.search_space, timeout=timeout)
+                plan, metrics, macro_selected = search(encoder.search_space, timeout=timeout)
+                print(f"Macros selected:")
+                for ma in macro_selected:
+                    print(f"{ma}:  {self._params.macros.index(ma)}")
 
             if plan:
                 plan = encoder.build_plan(plan)

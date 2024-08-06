@@ -1,5 +1,5 @@
 from unified_planning.model import DeltaSimpleTemporalNetwork
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import List, Tuple, Dict, Iterator, Optional, Union, Set
 
@@ -131,6 +131,8 @@ class State:
     active_conditions: MultiSet
     g: int
     path: List[Tuple[Event, int]]
+    selection: Optional[List[str]] = None
+    father: Optional['State'] = None
 
     def __hash__(self) -> int:
         res = 0
@@ -175,7 +177,21 @@ class State:
             for e in self.path:
                 l.append((None, e[0].action, None))
             return l
+        
+    def extract_used_macro(self) -> List[str]:
+        #count = 0
+        
+        macro_selected = []
+        fath=self.father
+        sel=self.selection
+        while fath is not None:
+            if sel is not None:
+                macro_selected.append(sel)
+            fath = fath.father
+            if fath is not None:
+                sel = fath.selection
 
+        return macro_selected
 
 def evaluate(exp: Expression, state: State) -> Union[bool, int, Fraction, str]:
     res = []
@@ -514,35 +530,46 @@ class SearchSpaceMacroAction:
         for action in self._ss._actions:
             new_state = self.get_successor_state(state, action)
             if new_state:
+                new_state.father = state
                 yield new_state
         if self._macros:
             assert self._macros_usage is not None
             for ma in self._macros:
                 new_states = []
+                s = state
                 for a in ma:
-                    new_state = self.get_successor_state(state, a)
+                    new_state = self.get_successor_state(s, a)
+                    s = new_state
                     new_states.append(new_state)
                     if not new_state: # applicablity
                         break
                 if "FA" in self._macros_usage: #fully applicable
                     if "-" in self._macros_usage: #without
                         if new_state: 
+                            new_state.selection = ma
+                            new_state.father = state
                             yield new_state
                     else: #with
                         if new_state:
                             for ns in new_states:
                                 assert ns is not None
+                                ns.selection = ma
+                                ns.father = state
                                 yield ns
                 else: #partial applicable
                     if "-" in self._macros_usage: #without   
                         if len(new_states) > 1: 
                             assert new_states[-2] is not None
                             if new_state:
+                                new_state.selection = ma 
+                                new_state.father = state
                                 yield new_state
                     else:
                         if len(new_states) > 1: #with
                             for ns in new_states[:-1]:
                                 assert ns is not None
+                                ns.selection = ma
+                                ns.father = state
                                 yield ns
 
     def goal_reached(self, state: State, goal: Optional[Fraction] = None) -> bool:
