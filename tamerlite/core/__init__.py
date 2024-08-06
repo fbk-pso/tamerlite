@@ -1,6 +1,6 @@
 try:
     import rustamer
-    has_rustamer = True
+    has_rustamer = False
 except ImportError:
     has_rustamer = False
 
@@ -25,6 +25,7 @@ if not has_rustamer:
     )
     from tamerlite.core.state_encoder import CoreStateEncoder
 else:
+    print("using Rustamer...")
     from tamerlite.rustamer import wastar_search, astar_search, gbfs_search
     from tamerlite.rustamer import bfs_search, dfs_search, ehc_search
     from tamerlite.rustamer import multiqueue_search
