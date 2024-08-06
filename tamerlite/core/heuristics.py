@@ -168,6 +168,9 @@ class HFF(Heuristic):
                             reached_by[k] = o
                             new_costs[k] = c + o.cost
                             lp.append(k)
+                        elif ((new_cost_k is not None and new_cost_k == c + o.cost) or
+                            (new_cost_k is None and cost_k == c + o.cost)) and o.action > reached_by[k].action:
+                            reached_by[k] = o
 
             for k, v in new_costs.items():
                 costs[k] = v
