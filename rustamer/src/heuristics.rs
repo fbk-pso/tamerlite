@@ -252,6 +252,7 @@ impl HFF {
             }
             extra_fluents.insert(a.to_string(), a_extra_fluents);
         }
+        operators.sort_by(|a, b| a.action.cmp(&b.action));
 
         let goals = split_expression(&goal.into_iter().map(|e| e.v).collect())?;
         let mut precondition_of: HashMap<Vec<ExpressionNode>, Vec<usize>> = HashMap::new();
@@ -365,6 +366,9 @@ impl HFF {
                             reached_by.insert(k, idx_o);
                             new_costs.insert(k, c + o.cost);
                             lp.push(k);
+                        } else if ((new_cost_k.is_some() && *new_cost_k.unwrap() == c + o.cost) ||
+                        (new_cost_k.is_none() && *cost_k.unwrap() == c + o.cost)) && idx_o > reached_by[k] {
+                            reached_by.insert(k, idx_o);
                         }
                     }
                 }
