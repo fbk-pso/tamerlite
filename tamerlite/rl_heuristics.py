@@ -12,6 +12,7 @@ class RLRank:
         self._model.eval()
         self._residual = config.residual
         self._sym_h = sym_h
+        self._delta_h = config.delta_h
 
     def eval(self, state, ss):
         if ss.goal_reached(state):
@@ -22,14 +23,14 @@ class RLRank:
             if sym_h is None:
                 return None
             else:
-                return -self.eval_state_vec(state_vec) + sym_h
+                return -self.eval_state_vec(state_vec) + sym_h + 3*self._delta_h
         else:
-            return self.eval_state_vec(state_vec)
+            return self.eval_state_vec(state_vec)+2.0
 
     def eval_state_vec(self, state_vec):
         s = np.array([state_vec])
         r = self._model(torch.from_numpy(s).float()).detach()[0]
-        return float(-r[0])+2.0
+        return float(-r[0])
 
 
 class RLHeuristic:
@@ -54,7 +55,7 @@ class RLHeuristic:
             if sym_h is None:
                 return None
             else:
-                return -self.eval_state_vec(state_vec) + sym_h
+                return max(0,-self.eval_state_vec(state_vec) + sym_h)
         else:
             return self.eval_state_vec(state_vec)
 
