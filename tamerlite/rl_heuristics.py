@@ -13,6 +13,8 @@ class RLRank:
         self._residual = config.residual
         self._sym_h = sym_h
         self._delta_h = config.delta_h
+        self._reward_signal = config.reward_signal
+        self._gamma = config.gamma
 
     def eval(self, state, ss):
         if ss.goal_reached(state):
@@ -26,7 +28,7 @@ class RLRank:
                 if self._reward_signal=="new":
                     return -self.eval_state_vec(state_vec) + sym_h + 3*self._delta_h
                 else:
-                    return self.eval_state_vec(state_vec + self._gamma**sym_h)
+                    return self.eval_state_vec(state_vec) - self._gamma**(sym_h-1)
         else:
             return self.eval_state_vec(state_vec)+2.0
 
@@ -59,9 +61,15 @@ class RLHeuristic:
                 return None
             else:
                 if self._reward_signal=="new":
-                    return max(0,-self.eval_state_vec(state_vec) + sym_h)
+                    return max(0,self.eval_state_vec(state_vec) + sym_h)
                 else:
-                    return max(0,self.eval_state_vec(state_vec + self._gamma**sym_h))
+                    r = self.eval_state_vec(state_vec) + self._gamma**(sym_h-1)
+                    if r == 0:
+                        return float(self._delta_h)
+                    elif r < 0:
+                        return float((2 * self._delta_h) - min(self._delta_h, (math.log(min(1, -r), self._gamma))))
+                    else:
+                        return float(min(self._delta_h, (math.log(min(1, r), self._gamma)+1)))
         else:
             return self.eval_state_vec(state_vec)
 
@@ -69,12 +77,4 @@ class RLHeuristic:
         s = np.array([state_vec])
         r = self._model(torch.from_numpy(s).float()).detach()[0]
         r = float(r[0])
-        if self._reward_signal=="old":
-            if r == 0:
-                return float(self._delta_h)
-            elif r < 0:
-                return float((2 * self._delta_h) - min(self._delta_h, (math.log(min(1, -r), self._gamma))))
-            else:
-                return float(min(self._delta_h, (math.log(min(1, r), self._gamma)+1)))
-        else:
-            return -float(r)   # min(0, -r)
+        return r   # min(0, -r)
