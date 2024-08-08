@@ -23,7 +23,10 @@ class RLRank:
             if sym_h is None:
                 return None
             else:
-                return -self.eval_state_vec(state_vec) + sym_h + 3*self._delta_h
+                if self._reward_signal=="new":
+                    return -self.eval_state_vec(state_vec) + sym_h + 3*self._delta_h
+                else:
+                    return self.eval_state_vec(state_vec + self._gamma**sym_h)
         else:
             return self.eval_state_vec(state_vec)+2.0
 
@@ -55,7 +58,10 @@ class RLHeuristic:
             if sym_h is None:
                 return None
             else:
-                return max(0,-self.eval_state_vec(state_vec) + sym_h)
+                if self._reward_signal=="new":
+                    return max(0,-self.eval_state_vec(state_vec) + sym_h)
+                else:
+                    return max(0,self.eval_state_vec(state_vec + self._gamma**sym_h))
         else:
             return self.eval_state_vec(state_vec)
 
