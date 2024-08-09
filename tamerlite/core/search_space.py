@@ -551,7 +551,7 @@ class SearchSpaceMacroAction:
                             yield new_state
                     else: #with
                         if new_state:
-                            for ns in new_states:
+                            for ns in new_states[1:]:
                                 assert ns is not None
                                 ns.selection = ma
                                 ns.father = state
@@ -559,14 +559,17 @@ class SearchSpaceMacroAction:
                 else: #partial applicable
                     if "-" in self._macros_usage: #without   
                         if len(new_states) > 1: 
-                            assert new_states[-2] is not None
-                            if new_state:
-                                new_state.selection = ma 
-                                new_state.father = state
-                                yield new_state
+                            if not new_state:
+                                assert new_states[-2] is not None
+                                new_state = new_states[-2]
+                            new_state.selection = ma 
+                            new_state.father = state
+                            yield new_state
                     else:
                         if len(new_states) > 1: #with
-                            for ns in new_states[:-1]:
+                            if not new_state:
+                                new_states = new_states[:-1]
+                            for ns in new_states[1:]:
                                 assert ns is not None
                                 ns.selection = ma
                                 ns.father = state
