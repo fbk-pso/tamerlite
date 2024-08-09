@@ -55,23 +55,24 @@ class RLHeuristic:
         if ss.goal_reached(state):
             return 0
         state_vec = self._state_encoder.get_state_as_vector(state)
+        r = self.eval_state_vec(state_vec)
         if self._residual:
             sym_h = self._sym_h.eval(state, self._encoder.search_space)
             if sym_h is None:
                 return None
+            if self._reward_signal=="new":
+                r += sym_h
+                r = max(0,r)
             else:
-                if self._reward_signal=="new":
-                    return max(0,self.eval_state_vec(state_vec) + sym_h)
-                else:
-                    r = self.eval_state_vec(state_vec) + self._gamma**(sym_h-1)
-                    if r == 0:
-                        return float(self._delta_h)
-                    elif r < 0:
-                        return float((2 * self._delta_h) - min(self._delta_h, (math.log(min(1, -r), self._gamma))))
-                    else:
-                        return float(min(self._delta_h, (math.log(min(1, r), self._gamma)+1)))
-        else:
-            return self.eval_state_vec(state_vec)
+                r += self._gamma**(sym_h-1)
+        if self._reward_signal=="old":
+            if r == 0:
+                return float(self._delta_h)
+            elif r < 0:
+                return float((2 * self._delta_h) - min(self._delta_h, (math.log(min(1, -r), self._gamma))))
+            else:
+                return float(min(self._delta_h, (math.log(min(1, r), self._gamma)+1)))
+        return r
 
     def eval_state_vec(self, state_vec):
         s = np.array([state_vec])
