@@ -177,10 +177,10 @@ class State:
             for e in self.path:
                 l.append((None, e[0].action, None))
             return l
-        
+
     def extract_used_macro(self) -> List[str]:
         #count = 0
-        
+
         macro_selected = []
         fath=self.father
         sel=self.selection
@@ -499,19 +499,24 @@ class SearchSpace:
         else:
             id = self._counter
         return self._expand_event(state, new_state, events[0][1], 0, id)
-    
+
 
 class SearchSpaceMacroAction:
+
+    CACHE_MISS = -1
 
     def __init__(self, ss : SearchSpace, macros: Optional[List[str]], macros_usage: Optional[str]):
         self._ss = ss
         self._macros = macros
         self._macros_usage = macros_usage
+        assert self._macros_usage is not None
+        self._fa = "FA" in self._macros_usage
+        self._minus = "-" in self._macros_usage
 
     @property
     def is_temporal(self) -> bool:
         return self._ss.is_temporal
-        
+
     def reset(self):
         pass
 
@@ -524,28 +529,35 @@ class SearchSpaceMacroAction:
             return self._ss.get_successor_state(state, action)
         else:
             return None
-            
+
 
     def get_successor_states(self, state: State) -> Iterator[State]:
+        macro_cache = {}
         for action in self._ss._actions:
             new_state = self.get_successor_state(state, action)
+            macro_cache[(action,)] = new_state
             if new_state:
                 new_state.father = state
                 yield new_state
         if self._macros:
-            assert self._macros_usage is not None
             for ma in self._macros:
                 new_states = []
                 s = state
-                for a in ma:
-                    new_state = self.get_successor_state(s, a)
+                macro_so_far = []
+                for i, a in enumerate(ma):
+                    macro_so_far.append(a)
+                    key = tuple(macro_so_far)
+                    new_state = macro_cache.get(key, self.CACHE_MISS)
+                    if new_state == self.CACHE_MISS:
+                        new_state = self.get_successor_state(s, a)
+                        macro_cache[key] = new_state
                     s = new_state
                     new_states.append(new_state)
                     if not new_state: # applicablity
                         break
-                if "FA" in self._macros_usage: #fully applicable
-                    if "-" in self._macros_usage: #without
-                        if new_state: 
+                if self._fa: #fully applicable
+                    if self._minus: #without
+                        if new_state:
                             new_state.selection = ma
                             new_state.father = state
                             yield new_state
@@ -557,12 +569,12 @@ class SearchSpaceMacroAction:
                                 ns.father = state
                                 yield ns
                 else: #partial applicable
-                    if "-" in self._macros_usage: #without   
-                        if len(new_states) > 1: 
+                    if self._minus: #without
+                        if len(new_states) > 1:
                             if not new_state:
                                 assert new_states[-2] is not None
                                 new_state = new_states[-2]
-                            new_state.selection = ma 
+                            new_state.selection = ma
                             new_state.father = state
                             yield new_state
                     else:
