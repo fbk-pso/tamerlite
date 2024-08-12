@@ -512,6 +512,7 @@ class SearchSpaceMacroAction:
         assert self._macros_usage is not None
         self._fa = "FA" in self._macros_usage
         self._minus = "-" in self._macros_usage
+        self._plus_caching = False
 
     @property
     def is_temporal(self) -> bool:
@@ -533,6 +534,9 @@ class SearchSpaceMacroAction:
 
     def get_successor_states(self, state: State) -> Iterator[State]:
         macro_cache = {}
+        yielded = None
+        if self._plus_caching:
+            yielded = set()
         for action in self._ss._actions:
             new_state = self.get_successor_state(state, action)
             macro_cache[(action,)] = new_state
@@ -565,9 +569,12 @@ class SearchSpaceMacroAction:
                         if new_state:
                             for ns in new_states[1:]:
                                 assert ns is not None
-                                ns.selection = ma
-                                ns.father = state
-                                yield ns
+                                if (not self._plus_caching) or ns not in yielded:
+                                    ns.selection = ma
+                                    ns.father = state
+                                    if self._plus_caching:
+                                        yielded.add(ns)
+                                    yield ns
                 else: #partial applicable
                     if self._minus: #without
                         if len(new_states) > 1:
@@ -583,9 +590,12 @@ class SearchSpaceMacroAction:
                                 new_states = new_states[:-1]
                             for ns in new_states[1:]:
                                 assert ns is not None
-                                ns.selection = ma
-                                ns.father = state
-                                yield ns
+                                if (not self._plus_caching) or ns not in yielded:
+                                    ns.selection = ma
+                                    ns.father = state
+                                    if self._plus_caching:
+                                        yielded.add(ns)
+                                    yield ns
 
     def goal_reached(self, state: State, goal: Optional[Fraction] = None) -> bool:
         return self._ss.goal_reached(state, goal)
