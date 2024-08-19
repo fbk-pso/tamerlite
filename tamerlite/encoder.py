@@ -1,5 +1,6 @@
 import unified_planning as up
 import unified_planning.model
+from unified_planning.model.fluent import get_all_fluent_exp
 from unified_planning.plans import TimeTriggeredPlan, SequentialPlan, Plan
 from unified_planning.engines.compilers import Grounder
 from fractions import Fraction
@@ -27,18 +28,6 @@ def get_encoders(domain, problem=None):
     else:
         problem = problem.clone()
 
-    em = problem.environment.expression_manager
-    for f in problem.fluents:
-        if f.type.is_bool_type():
-            problem.fluents_defaults[f] = em.FALSE()
-        elif f.type.is_int_type():
-            problem.fluents_defaults[f] = em.Int(0)
-        elif f.type.is_real_type():
-            problem.fluents_defaults[f] = em.Real(Fraction(0))
-        elif f.type.is_user_type():
-            problem.fluents_defaults[f] = em.ObjectExp(next(problem.objects(f.type)))
-        else:
-            raise NotImplementedError()
     is_active_fluents = {}
     for ut in problem.user_types:
         f = up.model.Fluent(f"_is_active_{ut.name}", p=ut)
@@ -51,6 +40,28 @@ def get_encoders(domain, problem=None):
         for obj in domain.all_objects:
             if obj not in problem.all_objects:
                 problem.add_object(obj)
+        domain_initial_values = domain.initial_values
+        initial_values = problem.initial_values
+        for f in problem.fluents:
+            for f_exp in get_all_fluent_exp(problem, f):
+                if f_exp not in initial_values and f_exp in domain_initial_values:
+                    problem.set_initial_value(f_exp, domain_initial_values[f_exp])
+
+    em = problem.environment.expression_manager
+    for f in problem.fluents:
+        if f in problem.fluents_defaults:
+            pass
+        elif f.type.is_bool_type():
+            problem.fluents_defaults[f] = em.FALSE()
+        elif f.type.is_int_type():
+            problem.fluents_defaults[f] = em.Int(0)
+        elif f.type.is_real_type():
+            problem.fluents_defaults[f] = em.Real(Fraction(0))
+        elif f.type.is_user_type():
+            problem.fluents_defaults[f] = em.ObjectExp(next(problem.objects(f.type)))
+        else:
+            raise NotImplementedError()
+
     for a in problem.actions:
         for p in a.parameters:
             if p.type.is_user_type():
