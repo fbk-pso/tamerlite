@@ -1,10 +1,17 @@
-try:
-    import rustamer
-    has_rustamer = True
-except ImportError:
-    has_rustamer = False
+import os
+import sys
+if 'USE_RUSTAMER' in os.environ:
+    if os.environ['USE_RUSTAMER']=="true":
+        import rustamer
+        use_rustamer = True
+    elif os.environ['USE_RUSTAMER']=="false":
+        use_rustamer = False
+    else:
+        sys.exit("USE_RUSTAMER environment variable has wrong value")
+else:
+    sys.exit("USE_RUSTAMER environment variable not set")
 
-if not has_rustamer:
+if not use_rustamer:
     from tamerlite.core.search import wastar_search, astar_search, gbfs_search
     from tamerlite.core.search import bfs_search, dfs_search, ehc_search
     from tamerlite.core.multiqueue import multiqueue_search
