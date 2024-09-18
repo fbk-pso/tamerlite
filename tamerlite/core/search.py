@@ -39,7 +39,7 @@ def _basic_search(ss: SearchSpace, bfs: bool, timeout):
             state = open.pop()
         counter += 1
         if ss.goal_reached(state):
-            print("expanded states:", counter)
+            print("Expanded states:", counter)
             return state.extract_solution()
         for succ_state in ss.get_successor_states(state):
             open.append(succ_state)
