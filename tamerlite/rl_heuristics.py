@@ -27,11 +27,11 @@ class RLRank:
                 return None
             else:
                 if self._reward_signal=="new":
-                    r += sym_h + 3*self._delta_h
+                    r -= sym_h + 3*self._delta_h
                 else:
                     r += self._gamma**(sym_h-1)
         if self._reward_signal=="new":
-            return r
+            return -r
         else:
             return -r+2.0
 
@@ -64,8 +64,8 @@ class RLHeuristic:
             if sym_h is None:
                 return None
             if self._reward_signal=="new":
-                r += sym_h
-                r = max(0,r)
+                r -= sym_h
+                r = min(0,r)
             else:
                 r += self._gamma**(sym_h-1)
         if self._reward_signal=="old":
@@ -75,7 +75,8 @@ class RLHeuristic:
                 return float((2 * self._delta_h) - min(self._delta_h, (math.log(min(1, -r), self._gamma))))
             else:
                 return float(min(self._delta_h, (math.log(min(1, r), self._gamma)+1)))
-        return r
+        else:
+            return -r
 
     def eval_state_vec(self, state_vec):
         s = np.array([state_vec])
