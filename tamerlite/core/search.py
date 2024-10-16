@@ -73,7 +73,7 @@ def wastar_search(ss: SearchSpace, heuristic: Heuristic, weight: float = 0.5, ti
         # print([ev.action for (ev, _) in state.path], item.heuristic)
         counter += 1
         if ss.goal_reached(state):
-            print("expanded states:", counter)
+            print("Expanded states:", counter)
             return state.extract_solution()
         for succ_state in ss.get_successor_states(state):
             if succ_state in closed_set or succ_state in open_set:
@@ -101,7 +101,7 @@ def ehc_search(ss: SearchSpace, heuristic: Heuristic, timeout=None):
         state = open.popleft()
         counter += 1
         if ss.goal_reached(state):
-            print("expanded states:", counter)
+            print("Expanded states:", counter)
             return state.extract_solution()
         for succ_state in ss.get_successor_states(state):
             h = heuristic.eval(succ_state, ss)
