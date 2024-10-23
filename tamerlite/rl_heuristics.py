@@ -4,8 +4,7 @@ import numpy as np
 
 
 class RLRank:
-    def __init__(self, encoder, state_encoder, model, ModelClass, config, sym_h):
-        self._encoder = encoder
+    def __init__(self, state_encoder, model, ModelClass, config, sym_h):
         self._state_encoder = state_encoder
         self._model = ModelClass(state_encoder.state_geometry, config)
         self._model.load_state_dict(torch.load(model))
@@ -22,7 +21,7 @@ class RLRank:
         state_vec = self._state_encoder.get_state_as_vector(state)
         r = self.eval_state_vec(state_vec)
         if self._residual:
-            sym_h = self._sym_h.eval(state, self._encoder.search_space)
+            sym_h = self._sym_h.eval(state, ss)
             if sym_h is None:
                 return None
             else:
@@ -42,8 +41,7 @@ class RLRank:
 
 
 class RLHeuristic:
-    def __init__(self, encoder, state_encoder, model, ModelClass, config, sym_h):
-        self._encoder = encoder
+    def __init__(self, state_encoder, model, ModelClass, config, sym_h):
         self._state_encoder = state_encoder
         self._model = ModelClass(state_encoder.state_geometry, config)
         self._model.load_state_dict(torch.load(model))
@@ -60,7 +58,7 @@ class RLHeuristic:
         state_vec = self._state_encoder.get_state_as_vector(state)
         r = self.eval_state_vec(state_vec)
         if self._residual:
-            sym_h = self._sym_h.eval(state, self._encoder.search_space)
+            sym_h = self._sym_h.eval(state, ss)
             if sym_h is None:
                 return None
             if self._reward_signal=="new":

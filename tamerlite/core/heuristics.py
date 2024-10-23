@@ -25,13 +25,13 @@ class CustomHeuristic(Heuristic):
     def eval(self, state: State, ss: SearchSpace) -> Optional[float]:
         return self.callable(state)
 
-def RLRank(encoder, state_encoder, model, ModelClass, config, sym_h):
+def RLRank(state_encoder, model, ModelClass, config, sym_h):
     from tamerlite.rl_heuristics import RLRank
-    return RLRank(encoder, state_encoder, model, ModelClass, config, sym_h)
+    return RLRank(state_encoder, model, ModelClass, config, sym_h)
 
-def RLHeuristic(encoder, state_encoder, model, ModelClass, config, sym_h):
+def RLHeuristic(state_encoder, model, ModelClass, config, sym_h):
     from tamerlite.rl_heuristics import RLHeuristic
-    return RLHeuristic(encoder, state_encoder, model, ModelClass, config, sym_h)
+    return RLHeuristic(state_encoder, model, ModelClass, config, sym_h)
 
 def HAdd(fluents: Dict[str, str], objects: Dict[str, List[str]],
          events: Dict[str, List[Tuple[Timing, Event]]], goals: Expression):
