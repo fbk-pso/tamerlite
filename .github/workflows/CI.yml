@@ -37,7 +37,7 @@ jobs:
           echo -e "[engine tamerlite]\nmodule_name: tamerlite.engine\nclass_name: TamerLite" > .up.ini
       - name: Run the tests
         run: |
-          python3 unified-planning/up_test_cases/report.py tamerlite
+          USE_RUSTAMER=true python3 unified-planning/up_test_cases/report.py tamerlite
 
   linux:
     runs-on: ubuntu-latest
