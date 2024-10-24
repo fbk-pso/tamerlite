@@ -315,7 +315,7 @@ class TamerLite(
                     heuristics.append((h, w))
                 plan = multiqueue_search(encoder.search_space, heuristics, timeout)
             else:
-                search = self._get_search(self._params, heuristic, encoder, state_encoder, self._params.domain(), problem)
+                search = self._get_search(self._params, heuristic, encoder, state_encoder, self._params.domain() if self._params is not None else None, problem)
                 plan = search(encoder.search_space, timeout=timeout)
 
             if plan:
