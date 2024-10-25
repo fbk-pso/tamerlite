@@ -99,7 +99,7 @@ class Encoder:
             self._simplifier = up.model.walkers.Simplifier(problem.environment, problem)
         else:
             self._simplifier = problem.environment.simplifier
-        self._converter = Converter()
+        self._converter = Converter(problem)
         actions_duration = {}
         self._is_temporal = False
         for a in problem.actions:
