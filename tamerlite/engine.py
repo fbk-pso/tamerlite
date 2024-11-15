@@ -17,6 +17,20 @@ from tamerlite.core import HFF, HAdd, CustomHeuristic, RLRank, RLHeuristic
 from tamerlite.converter import Converter
 from tamerlite.encoder import Encoder, get_encoders
 
+import sys
+import os
+import csv
+
+
+def add_row_to_csv(filename, name, number1, number2):
+
+    # Open the file in append mode
+    with open(filename, mode='a', newline='') as file:
+        writer = csv.writer(file)
+        
+        # Write the provided row of data
+        writer.writerow([name, number1, number2])
+
 
 credits = up.engines.Credits('TamerLite',
                   'FBK PSO Unit',
@@ -252,7 +266,12 @@ class TamerLite(
                         if cont == len(ma):
                             new_macros.append(ma)
                     macros = new_macros
-                    print(f"Useful macros: {len(macros)}")
+                    perc = round(len(macros)*100/len(self._params.macros),1)
+                    print(f"Useful macros: {len(macros)}\nPercentage of useful macros: {perc}%")
+
+                    add_row_to_csv('experiments/test-survival-macros-kitting/survived_macros_analysis_kitting_2.csv', problem.name, len(macros), perc)
+                    
+                    sys.exit()
 
                     encoder = Encoder(new_problem, macros = macros, macros_usage=self._params.macros_usage)
                 else:
