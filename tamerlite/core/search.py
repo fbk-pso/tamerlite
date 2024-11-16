@@ -51,6 +51,7 @@ def gbfs_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heuri
     return wastar_search(ss, heuristic, 1, timeout)
 
 def wastar_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heuristic, weight: float = 0.5, timeout=None):
+    cache_equal_path = True
     st = time.time()
     open = []
     closed_set = set()
@@ -61,6 +62,7 @@ def wastar_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heu
         return None, None, None
     heapq.heappush(open, PrioritizedItem(init_h, init))
     counter = 0
+    skip_counter_macros = 0
     while open:
         if timeout is not None and time.time() - st > timeout:
             raise TimeoutError
@@ -70,22 +72,35 @@ def wastar_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heu
             closed_set.add(state)
             open_set.discard(state)
         # print([ev.action for (ev, _) in state.path], item.heuristic)
+        elif cache_equal_path and isinstance(ss, SearchSpaceMacroAction):
+            closed_set.add(tuple(ev.action for (ev, _) in state.path))
+            open_set.discard(tuple(ev.action for (ev, _) in state.path))
         counter += 1
-        if ss.goal_reached(state):
+        if ss.goal_reached(state):                
             print(f"Expanded states: {str(counter)}")
             if isinstance(ss, SearchSpaceMacroAction):
+                print(f"Skipped states due to states with equal path: {skip_counter_macros}")
                 return state.extract_solution(), {"Expanded states": str(counter)}, state.extract_used_macro()
             else:
                 return state.extract_solution(), {"Expanded states": str(counter)}, [] 
         for succ_state in ss.get_successor_states(state):
             if succ_state in closed_set or succ_state in open_set:
                 continue
+            if cache_equal_path:
+                path = tuple(ev.action for (ev, _) in succ_state.path)
+                if path in closed_set or succ_state in open_set:
+                    skip_counter_macros += 1
+                    continue
             h = heuristic.eval(succ_state, ss) if weight > 0 else 0
             if h is not None:
                 f = (1-weight)*succ_state.g + weight*h
                 heapq.heappush(open, PrioritizedItem(f, succ_state))
                 if not ss.is_temporal:
                     open_set.add(succ_state)
+                elif cache_equal_path and isinstance(ss, SearchSpaceMacroAction):
+                    open_set.add(path)
+    if isinstance(ss, SearchSpaceMacroAction):
+        print(f"Skipped states due to states with equal path: {skip_counter_macros}")   
     return None, None, None
 
 def ehc_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heuristic, timeout=None):
