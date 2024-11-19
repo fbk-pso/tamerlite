@@ -283,9 +283,12 @@ class TamerLite(
                 search = self._get_search(self._params, heuristic, encoder, state_encoder)
                 plan, metrics, macro_selected = search(encoder.search_space, timeout=timeout)
                 print(f"Macros selected:")
+                ma_sel = {}
                 for ma in macro_selected:
-                    print(f"{ma}:  {self._params.macros.index(ma)}")
-
+                    #print(f"{ma}:  {self._params.macros.index(ma)}")
+                    ma_sel[tuple(ma)] = ma_sel.get(tuple(ma), 0) + 1
+                for key, val in ma_sel.items():
+                    print(f"{key} :  {val}")
             if plan:
                 plan = encoder.build_plan(plan)
                 plan = plan.replace_action_instances(map_back_action_instance)

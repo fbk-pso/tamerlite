@@ -3,6 +3,8 @@ from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import List, Tuple, Dict, Iterator, Optional, Union, Set
 
+from tamerlite.core.utils import PrefixTree
+
 
 @dataclass(eq=True, frozen=True)
 class OperatorNode:
@@ -133,6 +135,7 @@ class State:
     path: List[Tuple[Event, int]]
     selection: Optional[List[str]] = None
     father: Optional['State'] = None
+    is_skipped: Optional[bool] = False
 
     def __hash__(self) -> int:
         res = 0
@@ -393,7 +396,7 @@ class SearchSpace:
             new_state = self._open_action(state, new_state, action, events)
         return new_state
 
-    def get_successor_states(self, state: State) -> Iterator[State]:
+    def get_successor_states(self, state: State, search_trie : Optional[PrefixTree]) -> Iterator[State]:
         for action in self._actions:
             new_state = self.get_successor_state(state, action)
             if new_state:
@@ -512,7 +515,7 @@ class SearchSpaceMacroAction:
         assert self._macros_usage is not None
         self._fa = "FA" in self._macros_usage
         self._minus = "-" in self._macros_usage
-        self._plus_caching = False
+        self._cache_equal_path = True
 
     @property
     def is_temporal(self) -> bool:
@@ -532,12 +535,14 @@ class SearchSpaceMacroAction:
             return None
 
 
-    def get_successor_states(self, state: State) -> Iterator[State]:
+    def get_successor_states(self, state: State, search_trie : Optional[PrefixTree] = None) -> Iterator[State]:
         macro_cache = {}
-        yielded = None
-        if self._plus_caching:
-            yielded = set()
+        if search_trie is not None:
+            path = tuple(ev.action for (ev, _) in state.path)
         for action in self._ss._actions:
+            if self._cache_equal_path and not search_trie.insert(path + (action,)):
+                search_trie.counter_skip += 1
+                continue
             new_state = self.get_successor_state(state, action)
             macro_cache[(action,)] = new_state
             if new_state:
@@ -564,38 +569,50 @@ class SearchSpaceMacroAction:
                         if new_state:
                             new_state.selection = ma
                             new_state.father = state
-                            yield new_state
+                            if not self._cache_equal_path or search_trie.insert(path + tuple(ma)):
+                                yield new_state
+                            else:
+                                search_trie.counter_skip += 1
+                                # new_state.is_skipped = True
                     else: #with
                         if new_state:
-                            for ns in new_states[1:]:
+                            for i, ns in enumerate(new_states[1:]):
                                 assert ns is not None
-                                if (not self._plus_caching) or ns not in yielded:
+                                if not self._cache_equal_path or search_trie.insert(path + tuple(a for a in ma[:i+2])):
                                     ns.selection = ma
                                     ns.father = state
-                                    if self._plus_caching:
-                                        yielded.add(ns)
                                     yield ns
+                                else:
+                                    search_trie.counter_skip += 1
+                                    # ns.is_skipped = True
                 else: #partial applicable
                     if self._minus: #without
                         if len(new_states) > 1:
+                            len_ma = len(ma)
                             if not new_state:
                                 assert new_states[-2] is not None
                                 new_state = new_states[-2]
-                            new_state.selection = ma
-                            new_state.father = state
-                            yield new_state
+                                len_ma = len(new_states[:-1])
+                            if not self._cache_equal_path or search_trie.insert(path + tuple(a for a in ma[:len_ma])):
+                                new_state.selection = ma
+                                new_state.father = state
+                                yield new_state
+                            else:
+                                search_trie.counter_skip += 1
+                                # new_state.is_skipped = True
                     else:
                         if len(new_states) > 1: #with
-                            if not new_state:
+                            if not new_state: 
                                 new_states = new_states[:-1]
-                            for ns in new_states[1:]:
+                            for i, ns in enumerate(new_states[1:]):
                                 assert ns is not None
-                                if (not self._plus_caching) or ns not in yielded:
+                                if not self._cache_equal_path or search_trie.insert(path + tuple(a for a in ma[:i+2])):
                                     ns.selection = ma
                                     ns.father = state
-                                    if self._plus_caching:
-                                        yielded.add(ns)
                                     yield ns
+                                else:
+                                    search_trie.counter_skip += 1
+                                    # ns.is_skipped = True
 
     def goal_reached(self, state: State, goal: Optional[Fraction] = None) -> bool:
         return self._ss.goal_reached(state, goal)
