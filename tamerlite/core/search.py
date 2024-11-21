@@ -63,7 +63,7 @@ def wastar_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heu
     heapq.heappush(open, PrioritizedItem(init_h, init))
     search_trie = PrefixTree()
     counter = 0
-    counter_skip = 0
+    # counter_skip = 0
     while open:
         if timeout is not None and time.time() - st > timeout:
             raise TimeoutError
