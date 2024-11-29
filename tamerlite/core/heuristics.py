@@ -108,7 +108,7 @@ class HFF(Heuristic):
                 if exp[i1] in self._fluents and self._fluents[exp[i1]] in self._objects and exp[i2] in self._objects[self._fluents[exp[i1]]]:
                     return False
                 if exp[i2] in self._fluents and self._fluents[exp[i2]] in self._objects and exp[i1] in self._objects[self._fluents[exp[i2]]]:
-                    return False
+                    assert False, "An expression of this form should not be present"
         return True
 
     def eval(self, state: State, ss: SearchSpace) -> Optional[float]:
