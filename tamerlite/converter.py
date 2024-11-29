@@ -16,8 +16,9 @@ from tamerlite.core import (
 
 
 class Converter(DagWalker):
-    def __init__(self):
+    def __init__(self, problem):
         DagWalker.__init__(self)
+        self.static_fluents = problem.get_static_fluents()
 
     def convert(self, expression: 'FNode') -> Expression:
         """Converts the given expression."""
@@ -104,7 +105,7 @@ class Converter(DagWalker):
     def walk_equals(self, expression: 'FNode',
                     args: List[Expression]) -> Expression:
         assert len(args) == 2
-        if not expression.arg(0).is_fluent_exp() and expression.arg(1).is_fluent_exp():
+        if (not expression.arg(0).is_fluent_exp() or expression.arg(0).fluent() in self.static_fluents) and expression.arg(1).is_fluent_exp():
             a0 = args[1]
             a1 = args[0]
         else:
