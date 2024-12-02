@@ -42,4 +42,4 @@ class RLHeuristic:
         elif r < 0:
             return float((2 * self._max_plan_size) - min(self._max_plan_size, (math.log(min(1, -r), self._gamma))))
         else:
-            return float(min(self._max_plan_size, (math.log(min(1, r), self._gamma))))
+            return float(min(self._max_plan_size, (math.log(min(1, r), self._gamma)+1)))
