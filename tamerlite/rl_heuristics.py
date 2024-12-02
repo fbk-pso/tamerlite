@@ -11,6 +11,8 @@ class RLRank:
         self._model.eval()
 
     def eval(self, state, ss):
+        if ss.goal_reached(state):
+            return 0
         state_vec = self._state_encoder.get_state_as_vector(state)
         return self.eval_state_vec(state_vec)
 
@@ -30,6 +32,8 @@ class RLHeuristic:
         self._gamma = config.gamma
 
     def eval(self, state, ss):
+        if ss.goal_reached(state):
+            return 0
         state_vec = self._state_encoder.get_state_as_vector(state)
         return self.eval_state_vec(state_vec)
 
