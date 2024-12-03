@@ -549,7 +549,7 @@ class SearchSpaceMacroAction:
                 new_state.father = state
                 yield new_state
         if self._macros:
-            g_value = state.g
+            #g_value = state.g
             for ma in self._macros:
                 new_states = []
                 s = state
@@ -571,7 +571,7 @@ class SearchSpaceMacroAction:
                             new_state.selection = ma
                             new_state.father = state
                             if not self._cache_equal_path or search_trie.insert(path + tuple(ma)):
-                                new_state.g = g_value + 1
+                                #new_state.g = g_value + 1
                                 yield new_state
                             else:
                                 search_trie.counter_skip += 1
@@ -583,7 +583,7 @@ class SearchSpaceMacroAction:
                                 if not self._cache_equal_path or search_trie.insert(path + tuple(a for a in ma[:i+2])):
                                     ns.selection = ma
                                     ns.father = state
-                                    ns.g = g_value + 1
+                                    #ns.g = g_value + 1
                                     yield ns
                                 else:
                                     search_trie.counter_skip += 1
@@ -599,7 +599,7 @@ class SearchSpaceMacroAction:
                             if not self._cache_equal_path or search_trie.insert(path + tuple(a for a in ma[:len_ma])):
                                 new_state.selection = ma
                                 new_state.father = state
-                                new_state.g = g_value + 1
+                                #new_state.g = g_value + 1
                                 yield new_state
                             else:
                                 search_trie.counter_skip += 1
@@ -613,7 +613,7 @@ class SearchSpaceMacroAction:
                                 if not self._cache_equal_path or search_trie.insert(path + tuple(a for a in ma[:i+2])):
                                     ns.selection = ma
                                     ns.father = state
-                                    ns.g = g_value + 1
+                                    #ns.g = g_value + 1
                                     yield ns
                                 else:
                                     search_trie.counter_skip += 1
