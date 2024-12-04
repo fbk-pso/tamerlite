@@ -74,6 +74,8 @@ def wastar_search(ss: SearchSpace, heuristic: Heuristic, weight: float = 0.5, ti
         counter += 1
         if ss.goal_reached(state):
             print("Expanded states:", counter)
+            events_list = [p[0].action for p in state.path]
+            print("events:", events_list)
             return state.extract_solution()
         for succ_state in ss.get_successor_states(state):
             if succ_state in closed_set or succ_state in open_set:
