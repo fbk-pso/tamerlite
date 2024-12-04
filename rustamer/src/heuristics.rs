@@ -78,6 +78,9 @@ impl HRL {
     }
 
     pub fn eval(&self, state: &State, ss: &SearchSpace) -> PyResult<Option<f64>> {
+        if ss.goal_reached(&state, None)? {
+            return Ok(Some(0.0));
+        }
         let mut enc: Vec<f32> = Vec::new();
         enc.extend(self.ss.get_fluents_as_vector(state)?);
         enc.extend(self.ss.get_running_actions_as_vector(state)?);
