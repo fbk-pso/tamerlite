@@ -15,13 +15,14 @@ class RLRank:
         self._reward_signal = config.reward_signal
         self._gamma = config.gamma
 
-    def eval(self, state, ss):
+    def eval(self, state, ss, sym_h=None):
         if ss.goal_reached(state):
             return 0
         state_vec = self._state_encoder.get_state_as_vector(state)
         r = self.eval_state_vec(state_vec)
         if self._residual:
-            sym_h = self._sym_h.eval(state, ss)
+            if sym_h is None:
+                sym_h = self._sym_h.eval(state, ss)
             if sym_h is None:
                 return None
             else:
