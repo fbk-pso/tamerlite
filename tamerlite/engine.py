@@ -251,9 +251,9 @@ class TamerLite(
 
                 if self._params is not None and self._params.contains_macros():
 
-                    actions = []
+                    actions = set()
                     for a in new_problem.actions:
-                        actions.append(str(a.name))
+                        actions.add(str(a.name))
                     new_macros = []
                     for ma in self._params.macros:
                         cont = 0
