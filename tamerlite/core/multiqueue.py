@@ -61,7 +61,7 @@ def multiqueue_search(ss: SearchSpace, heuristics: List[Tuple[Heuristic, float]]
         counter += 1
         state_expanded += 1
         if ss.goal_reached(state):
-            print("expanded states:", state_expanded)
+            print("Expanded states:", state_expanded)
             return state.extract_solution()
         for succ_state in ss.get_successor_states(state):
             if succ_state in closed_set or succ_state in open_set:
