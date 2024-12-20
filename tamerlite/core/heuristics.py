@@ -74,7 +74,8 @@ class HFF(Heuristic):
                 else:
                     conditions = split_expression(e.conditions) + (cond, )
                 cond = (f, )
-                self._operators.append(Operator(a, conditions, tuple(effects), 1))
+                if (False, ) not in conditions:
+                    self._operators.append(Operator(a, conditions, tuple(effects), 1))
         self._extra_goals = tuple([fe[-1] for fe in self._extra_fluents.values()])
         self._goals = split_expression(goals)
         self._precondition_of = {}
@@ -95,6 +96,8 @@ class HFF(Heuristic):
                 self._numeric_conds.add(c)
 
     def _is_numeric_condition(self, exp: Expression) -> bool:
+        if isinstance(exp[-1], bool): # boolean constant
+            return False
         if isinstance(exp[-1], str): # boolean fluent expression
             return False
         if isinstance(exp[-1], Op) and exp[-1].kind == "not": # not of a boolean fluent expression

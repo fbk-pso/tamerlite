@@ -144,7 +144,10 @@ impl Hash for Operator {
 
 fn is_numeric_condition(cond: &Vec<ExpressionNode>) -> bool {
     if let Some(e) = cond.last() {
-        if let ExpressionNode::Fluent(_) = e {
+        if let ExpressionNode::Bool(_) = e {
+            return false;
+        }
+        else if let ExpressionNode::Fluent(_) = e {
             return false;
         } else if let ExpressionNode::Not(i) = e {
             if let ExpressionNode::Fluent(_) = cond[*i] {
@@ -250,7 +253,9 @@ impl HFF {
                 if e.conditions.len() > 0 && e.conditions != vec![ExpressionNode::Bool(true)] {
                     conditions.extend(split_expression(&e.conditions)?);
                 }
-                operators.push(Operator { action: a.to_string(), conditions, effects, cost: 1.0 } );
+                if !conditions.contains(&vec![ExpressionNode::Bool(false)]) {
+                    operators.push(Operator { action: a.to_string(), conditions, effects, cost: 1.0 } );
+                }
                 cond = vec![ExpressionNode::Fluent(f.to_string())];
             }
             extra_fluents.insert(a.to_string(), a_extra_fluents);
