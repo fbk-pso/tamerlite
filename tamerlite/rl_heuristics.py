@@ -4,9 +4,9 @@ import numpy as np
 
 
 class RLRank:
-    def __init__(self, state_encoder, model, ModelClass):
+    def __init__(self, state_encoder, model, ModelClass, config):
         self._state_encoder = state_encoder
-        self._model = ModelClass(state_encoder.state_geometry)
+        self._model = ModelClass(state_encoder.state_geometry, config)
         self._model.load_state_dict(torch.load(model))
         self._model.eval()
 
@@ -25,7 +25,7 @@ class RLRank:
 class RLHeuristic:
     def __init__(self, state_encoder, model, ModelClass, max_plan_size, config):
         self._state_encoder = state_encoder
-        self._model = ModelClass(state_encoder.state_geometry)
+        self._model = ModelClass(state_encoder.state_geometry, config)
         self._model.load_state_dict(torch.load(model))
         self._model.eval()
         self._max_plan_size = max_plan_size
