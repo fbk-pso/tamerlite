@@ -1,5 +1,8 @@
 from dataclasses import dataclass
-from typing import Callable, List, Dict, Tuple, Union, Optional, Set
+from typing import Callable, List, Dict, Tuple, Union, Optional, Set, Iterable
+from fractions import Fraction
+from collections import defaultdict
+import itertools
 
 from tamerlite.core.search_space import Event, SearchSpace, Expression, State, Timing, evaluate
 from tamerlite.core.search_space import OperatorNode as Op, split_expression
@@ -38,13 +41,18 @@ def HAdd(fluents: Dict[str, str], objects: Dict[str, List[str]],
     return HFF(fluents, objects, events, goals, True)
 
 
-class HFF(Heuristic):
-    def __init__(self, fluents: Dict[str, str], objects: Dict[str, List[str]],
-                 events: Dict[str, List[Tuple[Timing, Event]]], goals: Expression, return_hadd=False):
+class DeleteRelaxationHeuristic(Heuristic):
+    def __init__(
+        self,
+        fluents: Dict[str, str],
+        objects: Dict[str, List[str]],
+        events: Dict[str, List[Tuple[Timing, Event]]],
+        goals: Expression,
+        ignore_real_int=False,
+    ):
         self._fluents = fluents
         self._objects = objects
         self._events = events
-        self._return_hadd = return_hadd
         self._operators = []
         self._extra_fluents = {}
         for a, le in events.items():
@@ -63,6 +71,11 @@ class HFF(Heuristic):
                         else:
                             effects.append((eff.fluent, True))
                             effects.append((eff.fluent, False))
+                    elif not ignore_real_int and (t == "real" or t == "int"):
+                        if len(eff.value) == 1:
+                            effects.append((eff.fluent, eff.value[0]))
+                        else:
+                            effects.append((eff.fluent, eff.value))
                     elif t != "real" and t != "int":
                         if len(eff.value) == 1 and isinstance(eff.value[0], str) and eff.value[0] not in fluents:
                             effects.append((eff.fluent, eff.value[0]))
@@ -113,6 +126,19 @@ class HFF(Heuristic):
                 if exp[i2] in self._fluents and self._fluents[exp[i2]] in self._objects and exp[i1] in self._objects[self._fluents[exp[i2]]]:
                     assert False, "An expression of this form should not be present"
         return True
+
+
+class HFF(DeleteRelaxationHeuristic):
+    def __init__(
+        self,
+        fluents: Dict[str, str],
+        objects: Dict[str, List[str]],
+        events: Dict[str, List[Tuple[Timing, Event]]],
+        goals: Expression,
+        return_hadd=False,
+    ):
+        super().__init__(fluents, objects, events, goals, ignore_real_int=True)
+        self._return_hadd = return_hadd
 
     def eval(self, state: State, ss: SearchSpace) -> Optional[float]:
         costs = {}
@@ -186,6 +212,8 @@ class HFF(Heuristic):
         if self._return_hadd:
             eh = self._cost(self._extra_goals, costs)
             return h + eh
+            # TODO: remove
+            # return max(h, eh)
 
         res = 0
         for a, (j, _) in state.todo.items():
@@ -221,4 +249,153 @@ class HFF(Heuristic):
             if c is None:
                 return None
             res += c
+
+            # TODO: remove
+            # h_max heuristic
+            # res = max(res, c)
         return res
+
+
+class HMax(DeleteRelaxationHeuristic):
+    def __init__(
+        self,
+        fluents: Dict[str, str],
+        objects: Dict[str, List[str]],
+        events: Dict[str, List[Tuple[Timing, Event]]],
+        goals: Expression,
+    ):
+        super().__init__(fluents, objects, events, goals, ignore_real_int=False)
+
+        self.assignments: Dict[str, Set[Union[bool, int, Fraction, str]]] = {}
+        self.assignments_changes: Dict[str, Set[Union[bool, int, Fraction, str]]] = {}
+        self.cache_can_be_true: Dict[int, bool] = {}
+
+    # @cache
+    def _extract_fluents(
+        self,
+        exp: Expression,
+    ) -> Iterable:
+        # return list(filter(lambda expression_node: expression_node in self.assignments, exp))
+        return filter(lambda expression_node: expression_node in self.assignments, exp)
+
+    def _possible_values(
+        self,
+        exp,
+        assignments_changes: Set = None,
+        exp_fluents=None,
+    ):
+        if isinstance(exp, tuple):
+            if exp_fluents is None:
+                exp_fluents = self._extract_fluents(exp)
+            values = map(lambda f: self.assignments[f], exp_fluents)
+            for state_assignments in itertools.product(*values):
+                state_assignments = dict(zip(exp_fluents, state_assignments))
+                state = State(state_assignments, None, None, None, None, None)
+                yield evaluate(exp, state)
+        else:
+            yield exp
+
+    def _exp_can_be_true(
+        self,
+        exp: Expression,
+        assignments_changes: Set,
+    ) -> bool:
+
+        exp_fluents = None
+        id_exp = id(exp)
+        if id_exp in self.cache_can_be_true:
+            if self.cache_can_be_true[id_exp]:
+                return True
+
+            exp_fluents = list(self._extract_fluents(exp))
+            if not any(map(lambda f: f in assignments_changes, exp_fluents)):
+                return False
+
+            possible_values = self._possible_values(
+                exp, assignments_changes, exp_fluents=exp_fluents
+            )
+        else:
+            exp_fluents = list(self._extract_fluents(exp))
+            possible_values = self._possible_values(
+                exp, assignments_changes=None, exp_fluents=exp_fluents
+            )
+
+        for value in possible_values:
+            assert isinstance(value, bool)
+            if value == True:
+                self.cache_can_be_true[id_exp] = True
+                return True
+
+        self.cache_can_be_true[id_exp] = False
+        return False
+
+    def _can_be_true(
+        self,
+        expressions: Tuple[Expression, ...],
+        assignments_changes: Set,
+    ) -> bool:
+
+        for exp in expressions:
+            if not self._exp_can_be_true(exp, assignments_changes):
+                return False
+        return True
+
+    def eval(self, state: State, ss: SearchSpace) -> Optional[float]:
+        self.assignments = {}
+        self.cache_can_be_true = {}
+
+        for f, v in state.assignments.items():
+            assert f not in self.assignments
+            self.assignments[f] = {v}
+
+        # add extra fluents to assignments
+        for action in self._events.keys():
+            j, _ = state.todo.get(action, (None, None))
+            if j is None:
+                idx = len(self._extra_fluents[action]) - 1
+            else:
+                idx = j - 1
+
+            for i, f in enumerate(self._extra_fluents[action]):
+                assert f[0] not in self.assignments
+                self.assignments[f[0]] = {i == idx}
+
+        assignments_changes = set(self.assignments.keys())
+        assignments_changed = True
+        depth = 0
+
+        while assignments_changed:
+            if self._can_be_true(self._goals + self._extra_goals, assignments_changes):
+                # goal satisfied
+                # print("return", depth)
+                return depth
+
+            new_assignments: Dict[str, Set[Union[bool, int, Fraction, str]]] = (
+                defaultdict(set)
+            )
+            for i, operator in enumerate(self._operators):
+                if not self._can_be_true(
+                    operator.conditions, assignments_changes
+                ):
+                    # operator cannot be applied
+                    continue
+
+                for effect in operator.effects:
+                    fluent, value = effect
+                    possible_values = self._possible_values(value)
+                    new_assignments[fluent].update(possible_values)
+
+            # update assignments
+            assignments_changes = set()
+            assignments_changed = False
+            for fluent, vv in new_assignments.items():
+                prev_len = len(self.assignments[fluent])
+                self.assignments[fluent].update(vv)
+                if len(self.assignments[fluent]) > prev_len:
+                    assignments_changes.add(fluent)
+                    assignments_changed = True
+
+            depth += 1
+
+        # print("return", None)
+        return None

@@ -22,6 +22,9 @@ def HFF(fluents, objects, events, goals):
 def HAdd(fluents, objects, events, goals):
     return Heuristic.hadd(fluents, objects, events, goals)
 
+def HMax(fluents, objects, events, goals):
+    return Heuristic.hmax(fluents, objects, events, goals)
+
 def RLRank(state_encoder, model, ModelClass, other_params):
     from tamerlite.rl_heuristics import RLRank
     h = RLRank(state_encoder, model, ModelClass, other_params)
