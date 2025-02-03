@@ -7,7 +7,7 @@ import unified_planning.engines.mixins
 from unified_planning.model import ProblemKind, FNode
 from unified_planning.model.state import State
 from typing import IO, Any, Callable, List, Optional, Union
-from argparse import Namespace
+from types import SimpleNamespace
 
 from tamerlite.core import wastar_search, astar_search, gbfs_search
 from tamerlite.core import bfs_search, dfs_search, ehc_search
@@ -54,7 +54,7 @@ class RLParams:
     domain: up.model.Problem
     model: str
     model_class: Any # Neural Network Class
-    other_params: Optional[Namespace] = None
+    other_params: Optional[SimpleNamespace] = None
 
 
 @dataclass(frozen=True)
