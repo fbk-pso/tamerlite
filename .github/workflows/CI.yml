@@ -142,7 +142,7 @@ jobs:
           python-version: '3.12'
       - name: Build wheels
         run: |
-          python3 -m pip install wheel
+          python3 -m pip install wheel setuptools
           python3 setup.py sdist --format=gztar
           python3 setup.py bdist_wheel
       - name: Upload wheels
