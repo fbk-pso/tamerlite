@@ -22,14 +22,14 @@ def HFF(fluents, objects, events, goals):
 def HAdd(fluents, objects, events, goals):
     return Heuristic.hadd(fluents, objects, events, goals)
 
-def RLRank(state_encoder, model, ModelClass):
+def RLRank(state_encoder, model, ModelClass, other_params):
     from tamerlite.rl_heuristics import RLRank
-    h = RLRank(state_encoder, model, ModelClass)
+    h = RLRank(state_encoder, model, ModelClass, other_params)
     return Heuristic.hrl(state_encoder._general_state_encoder._cse, state_encoder._goals_vec, state_encoder._constants_vec, h.eval_state_vec)
 
-def RLHeuristic(state_encoder, model, ModelClass, max_plan_size, gamma):
+def RLHeuristic(state_encoder, model, ModelClass, other_params):
     from tamerlite.rl_heuristics import RLHeuristic
-    h = RLHeuristic(state_encoder, model, ModelClass, max_plan_size, gamma)
+    h = RLHeuristic(state_encoder, model, ModelClass, other_params)
     return Heuristic.hrl(state_encoder._general_state_encoder._cse, state_encoder._goals_vec, state_encoder._constants_vec, h.eval_state_vec)
 
 def CustomHeuristic(callable):
