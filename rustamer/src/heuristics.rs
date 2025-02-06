@@ -64,7 +64,6 @@ impl Heuristic {
 
 }
 
-#[derive(Clone)]
 pub struct HRL {
     ss: CoreStateEncoder,
     goals_vec: Vec<f32>,
@@ -88,7 +87,7 @@ impl HRL {
         enc.extend(self.goals_vec.iter());
         enc.extend(self.ss.get_tn_as_vector(state, ss)?);
         Python::with_gil(|py| {
-            let args = PyTuple::new(py, &[enc.into_py(py)]);
+            let args = PyTuple::new(py, &[enc.into_pyobject(py)?])?;
             let r = self.callable.call(py, args, None)?;
             if r.is_none(py) {
                 Ok(None)
@@ -100,7 +99,20 @@ impl HRL {
 
 }
 
-#[derive(Clone, Debug)]
+impl Clone for HRL {
+    fn clone(&self) -> Self {
+        Python::with_gil(|py| {
+            HRL {
+                ss: self.ss.clone(),
+                goals_vec: self.goals_vec.clone(),
+                constants_vec: self.constants_vec.clone(),
+                callable: self.callable.clone_ref(py)
+            }
+        })
+    }
+}
+
+#[derive(Debug)]
 pub struct CustomHeuristic {
     callable: PyObject
 }
@@ -112,12 +124,22 @@ impl CustomHeuristic {
 
     pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
         Python::with_gil(|py| {
-            let args = PyTuple::new(py, &[state.clone().into_py(py)]);
+            let args = PyTuple::new(py, &[state.clone().into_pyobject(py)?])?;
             let r = self.callable.call(py, args, None)?;
             if r.is_none(py) {
                 Ok(None)
             } else {
                 Ok(Some(r.extract(py)?))
+            }
+        })
+    }
+}
+
+impl Clone for CustomHeuristic {
+    fn clone(&self) -> Self {
+        Python::with_gil(|py| {
+            CustomHeuristic {
+                callable: self.callable.clone_ref(py)
             }
         })
     }

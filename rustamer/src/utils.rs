@@ -1,17 +1,22 @@
 use num::{rational::BigRational, BigInt, FromPrimitive};
 use pyo3::{exceptions::PyValueError, PyResult, PyAny};
+use pyo3::prelude::*;
+use std::str::FromStr;
 
 use std::sync::Arc;
 
-pub fn get_big_rational(obj: &PyAny) -> PyResult<BigRational> {
-    match obj.to_string().parse::<BigRational>() {
+
+pub fn get_big_rational(obj: &pyo3::Bound<'_, PyAny>) -> PyResult<BigRational> {
+    let string_val: String = obj.extract()?;
+    match BigRational::from_str(&string_val) {
         Ok(n) => Ok(n),
         Err(_) => Err(PyValueError::new_err("Unable to parse Rational number")),
     }
 }
 
-pub fn get_option_big_rational(obj: &PyAny) -> PyResult<Option<BigRational>> {
-    match obj.to_string().parse::<BigRational>() {
+pub fn get_option_big_rational(obj: &pyo3::Bound<'_, PyAny>) -> PyResult<Option<BigRational>> {
+    let string_val: String = obj.extract()?;
+    match BigRational::from_str(&string_val) {
         Ok(n) => Ok(Some(n)),
         Err(_) => Ok(None),
     }

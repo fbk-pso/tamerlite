@@ -67,16 +67,19 @@ pub fn build_plan(ss: &mut SearchSpace, state: &State) -> PyResult<Option<Vec<(O
 }
 
 #[pyfunction]
+#[pyo3(signature = (ss, heuristic, timeout=None))]
 pub fn astar_search(ss: &mut SearchSpace, heuristic: &Heuristic, timeout: Option<f32>) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
     wastar_search(ss, heuristic, 0.5, timeout)
 }
 
 #[pyfunction]
+#[pyo3(signature = (ss, heuristic, timeout=None))]
 pub fn gbfs_search(ss: &mut SearchSpace, heuristic: &Heuristic, timeout: Option<f32>) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
     wastar_search(ss, heuristic, 1.0, timeout)
 }
 
 #[pyfunction]
+#[pyo3(signature = (ss, heuristic, weight, timeout=None))]
 pub fn wastar_search(ss: &mut SearchSpace, heuristic: &Heuristic, weight: f64, timeout: Option<f32>) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
@@ -130,11 +133,13 @@ pub fn wastar_search(ss: &mut SearchSpace, heuristic: &Heuristic, weight: f64, t
 }
 
 #[pyfunction]
+#[pyo3(signature = (ss, timeout=None))]
 pub fn bfs_search(ss: &mut SearchSpace, timeout: Option<f32>) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
     basic_search(ss, true, timeout)
 }
 
 #[pyfunction]
+#[pyo3(signature = (ss, timeout=None))]
 pub fn dfs_search(ss: &mut SearchSpace, timeout: Option<f32>) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
     basic_search(ss, false, timeout)
 }
@@ -172,6 +177,7 @@ fn basic_search(ss: &mut SearchSpace, bfs: bool, timeout: Option<f32>) -> PyResu
 }
 
 #[pyfunction]
+#[pyo3(signature = (ss, heuristic, timeout=None))]
 pub fn ehc_search(ss: &mut SearchSpace, heuristic: &Heuristic, timeout: Option<f32>) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;

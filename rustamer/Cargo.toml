@@ -10,7 +10,7 @@ name = "rustamer"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = "0.19.0"
+pyo3 = "0.23.4"
 num-rational = "0.4.1"
 num = "0.4.1"
 multiset = "0.0.5"
