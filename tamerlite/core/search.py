@@ -73,8 +73,8 @@ def wastar_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heu
             closed_set.add(state)
             open_set.discard(state)
         # print(f"\n{counter})  {[ev.action for (ev, _) in state.path]},  {item.heuristic},  {state.g},  {0.2*state.g+0.8*item.heuristic}")
-        if state.is_skipped:
-            counter_skip += 1
+        # if state.is_skipped:
+        #     counter_skip += 1
         counter += 1
         if ss.goal_reached(state):                
             print(f"Expanded states: {str(counter)}")

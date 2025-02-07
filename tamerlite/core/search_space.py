@@ -548,7 +548,7 @@ class SearchSpaceMacroAction:
                 new_state.father = state
                 yield new_state
         if self._macros:
-            #g_value = state.g
+            g_value = state.g
             for ma in self._macros:
                 new_states = []
                 s = state
