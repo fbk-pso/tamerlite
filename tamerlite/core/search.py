@@ -72,7 +72,7 @@ def wastar_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heu
         if not ss.is_temporal:
             closed_set.add(state)
             open_set.discard(state)
-        print(f"\n{counter})  {[ev.action for (ev, _) in state.path]},  {item.heuristic},  {state.g},  {0.2*state.g+0.8*item.heuristic}")
+        # print(f"\n{counter})  {[ev.action for (ev, _) in state.path]},  {item.heuristic},  {state.g},  {0.2*state.g+0.8*item.heuristic}")
         if state.is_skipped:
             counter_skip += 1
         counter += 1
@@ -85,7 +85,7 @@ def wastar_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heu
                 return state.extract_solution(), {"Expanded states": str(counter)}, state.extract_used_macro()
             else:
                 return state.extract_solution(), {"Expanded states": str(counter)}, [] 
-        to_print = []
+        # to_print = []
         for succ_state in ss.get_successor_states(state, search_trie):
             if succ_state in closed_set or succ_state in open_set:
                 continue
@@ -103,13 +103,13 @@ def wastar_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heu
                 f = (1-weight)*succ_state.g + weight*h
                 lista = [ev.action for (ev, _) in succ_state.path]
                 evento = lista[-1]
-                to_print.append((evento, h, succ_state.g, f)) 
+                # to_print.append((evento, h, succ_state.g, f)) 
                 heapq.heappush(open, PrioritizedItem(f, succ_state))
                 if not ss.is_temporal:
                     open_set.add(succ_state)   
-        to_print = sorted(to_print, key=lambda x: x[1], reverse=True)   
-        for t in to_print:
-             print(t) 
+        # to_print = sorted(to_print, key=lambda x: x[1])   
+        # for t in to_print:
+        #      print(t) 
     if isinstance(ss, SearchSpaceMacroAction):
         # print(f"Skipped states due to states with equal path: {counter_skip}")   
         print(f"Skipped states due to states with equal path: {search_trie.counter_skip}")

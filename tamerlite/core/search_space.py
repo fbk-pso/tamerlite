@@ -533,7 +533,7 @@ class SearchSpaceMacroAction:
             return self._ss.get_successor_state(state, action)
         else:
             return None
-
+        
     def get_successor_states(self, state: State, search_trie : Optional[PrefixTree] = None) -> Iterator[State]:
         macro_cache = {}
         if search_trie is not None:

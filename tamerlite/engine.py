@@ -248,23 +248,30 @@ class TamerLite(
                     compilation_res = compiler.compile(problem)
                     map_back_action_instance = compilation_res.map_back_action_instance
                 new_problem = compilation_res.problem
+                print(f"Number of actions: {len([a for a in new_problem.actions])}")
+                sys.stdout.flush()
 
                 if self._params is not None and self._params.contains_macros():
 
-                    actions = set()
-                    for a in new_problem.actions:
-                        actions.add(str(a.name))
-                    new_macros = []
-                    for ma in self._params.macros:
-                        cont = 0
-                        for a in ma:
-                            if str(a) in actions:
-                                cont += 1
-                        if cont == len(ma):
-                            new_macros.append(ma)
-                    macros = new_macros
-                    perc = round(len(macros)*100/len(self._params.macros),1)
+                    # actions = set()  # if use ground_macros
+                    # for a in new_problem.actions:
+                    #     actions.add(str(a.name))
+                    # new_macros = []
+                    # for ma in self._params.macros:
+                    #     cont = 0
+                    #     for a in ma:
+                    #         if str(a) in actions:
+                    #             cont += 1
+                    #     if cont == len(ma):
+                    #         new_macros.append(ma)
+                    # macros = new_macros
+                    # perc = round(len(macros)*100/len(self._params.macros),1)
+
+                    macros = self._params.macros  #if use lifted_macros
+                    perc = 100
+
                     print(f"Useful macros: {len(macros)}\nPercentage of useful macros: {perc}%")
+                    sys.stdout.flush()
 
                     #add_row_to_csv('experiments/test-survival-macros-kitting/survived_macros_analysis_kitting_2.csv', problem.name, len(macros), perc)
 
@@ -281,14 +288,13 @@ class TamerLite(
                 plan, metrics = multiqueue_search(encoder.search_space, heuristics, timeout)
             else:
                 search = self._get_search(self._params, heuristic, encoder, state_encoder)
-                plan, metrics, macro_selected = search(encoder.search_space, timeout=timeout)
-                print(f"Macros selected:")
+                plan, metrics, macro_used = search(encoder.search_space, timeout=timeout)
                 ma_sel = {}
-                for ma in macro_selected:
+                for ma in macro_used:
                     #print(f"{ma}:  {self._params.macros.index(ma)}")
                     ma_sel[tuple(ma)] = ma_sel.get(tuple(ma), 0) + 1
-                for key, val in ma_sel.items():
-                    print(f"{key} :  {val}")
+                to_print = "|".join("{}:{}".format(key, val) for key, val in ma_sel.items())
+                print(f"Macros used: {to_print}")
             if plan:
                 plan = encoder.build_plan(plan)
                 plan = plan.replace_action_instances(map_back_action_instance)
