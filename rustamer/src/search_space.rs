@@ -167,6 +167,7 @@ pub struct SearchSpace {
 #[pymethods]
 impl SearchSpace {
     #[new]
+    #[pyo3(signature = (actions_duration, events, mutex, initial_state=None, goal=None, epsilon=None))]
     fn new(
         actions_duration: HashMap<
             String,
@@ -225,6 +226,7 @@ impl SearchSpace {
         self.tn_interpreter.clear();
     }
 
+    #[pyo3(signature = (initial_state=None))]
     pub fn initial_state(&self, initial_state: Option<HashMap<String, PyExpressionNode>>) -> PyResult<State> {
         let init = match initial_state {
             Some(v) => v.into_iter().map(|(k, v)| (k, v.v)).collect(),
@@ -297,6 +299,7 @@ impl SearchSpace {
         Ok(None)
     }
 
+    #[pyo3(signature = (state, goal=None))]
     pub fn goal_reached(&self, state: &State, goal: Option<Vec<PyExpressionNode>>) -> PyResult<bool> {
         if ! state.todo.is_empty() {
             return Ok(false);
@@ -319,6 +322,7 @@ impl SearchSpace {
         }
     }
 
+    #[pyo3(signature = (state, goal=None))]
     pub fn subgoals_sat(&self, state: &State, goal: Option<Vec<PyExpressionNode>>) -> PyResult<Vec<Vec<PyExpressionNode>>> {
         let goals = match goal {
             Some(v) => split_expression(&v.into_iter().map(|e| e.v).collect())?,
