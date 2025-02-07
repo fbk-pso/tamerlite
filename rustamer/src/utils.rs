@@ -5,17 +5,31 @@ use std::sync::Arc;
 
 
 pub fn get_big_rational(obj: &pyo3::Bound<'_, PyAny>) -> PyResult<BigRational> {
-    match obj.extract::<i64>() {
-        Ok(val) => Ok(BigRational::from_integer(BigInt::from(val))),
-        Err(_) => Err(PyValueError::new_err("Unable to parse Rational number")),
+    if let Ok(int_n) = obj.extract::<i64>() {
+        return Ok(BigRational::from_integer(BigInt::from(int_n)));
     }
+
+    if let Ok(float_n) = obj.extract::<f64>() {
+        if let Some(n) = BigRational::from_float(float_n) {
+            return Ok(n);
+        }
+    }
+
+    Err(PyValueError::new_err("Unable to parse Rational number"))
 }
 
 pub fn get_option_big_rational(obj: &pyo3::Bound<'_, PyAny>) -> PyResult<Option<BigRational>> {
-    match obj.extract::<i64>() {
-        Ok(val) => Ok(Some(BigRational::from_integer(BigInt::from(val)))),
-        Err(_) => Ok(None),
+    if let Ok(int_n) = obj.extract::<i64>() {
+        return Ok(Some(BigRational::from_integer(BigInt::from(int_n))));
     }
+
+    if let Ok(float_n) = obj.extract::<f64>() {
+        if let Some(n) = BigRational::from_float(float_n) {
+            return Ok(Some(n));
+        }
+    }
+
+    Ok(None)
 }
 
 pub fn mk_rational(n: i32, d: i32) -> BigRational {
