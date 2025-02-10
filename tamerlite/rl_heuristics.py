@@ -19,7 +19,7 @@ class RLRank:
     def eval_state_vec(self, state_vec):
         s = np.array([state_vec])
         r = self._model(torch.from_numpy(s).float()).detach()[0]
-        return float(-r[0])+2.0
+        return float(-r[0])
 
 
 class RLHeuristic:
