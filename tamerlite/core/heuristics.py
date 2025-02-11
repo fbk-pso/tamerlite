@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Callable, List, Dict, Tuple, Union, Optional, Set, Iterable
+from typing import Callable, List, Dict, Tuple, Union, Optional, Set, Iterator
 from fractions import Fraction
 from collections import defaultdict
 import itertools
@@ -11,8 +11,8 @@ from tamerlite.core.search_space import OperatorNode as Op, split_expression
 @dataclass(eq=True, frozen=True)
 class Operator:
     action: str
-    conditions: Tuple[Expression]
-    effects: Tuple[Tuple[str, Union[bool, str]]]
+    conditions: Tuple[Expression, ...]
+    effects: Tuple[Tuple[str, Union[bool, int, str]], ...]
     cost: float
 
 
@@ -53,8 +53,9 @@ class DeleteRelaxationHeuristic(Heuristic):
         self._fluents = fluents
         self._objects = objects
         self._events = events
-        self._operators = []
-        self._extra_fluents = {}
+        self._operators: List[Operator] = []
+        self._extra_fluents: Dict[str, List[Tuple[str]]] = {}
+        self._all_fluents: Set[str] = set(fluents.keys())
         for a, le in events.items():
             self._extra_fluents[a] = []
             cond = (f"__f_{a}_{len(le)-1}", )
@@ -62,6 +63,7 @@ class DeleteRelaxationHeuristic(Heuristic):
                 effects = []
                 f = f"__f_{a}_{i}"
                 self._extra_fluents[a].append((f, ))
+                self._all_fluents.add(f)
                 effects.append((f, True))
                 for eff in e.effects:
                     t = fluents[eff.fluent]
@@ -89,7 +91,7 @@ class DeleteRelaxationHeuristic(Heuristic):
                 cond = (f, )
                 if (False, ) not in conditions:
                     self._operators.append(Operator(a, conditions, tuple(effects), 1))
-        self._extra_goals = tuple([fe[-1] for fe in self._extra_fluents.values()])
+        self._extra_goals: Tuple[Expression, ...] = tuple([fe[-1] for fe in self._extra_fluents.values()])
         self._goals = split_expression(goals)
         self._precondition_of = {}
         self._numeric_conds = set()
@@ -266,28 +268,58 @@ class HMax(DeleteRelaxationHeuristic):
     ):
         super().__init__(fluents, objects, events, goals, ignore_real_int=False)
 
-        self.assignments: Dict[str, Set[Union[bool, int, Fraction, str]]] = {}
-        self.assignments_changes: Dict[str, Set[Union[bool, int, Fraction, str]]] = {}
-        self.cache_can_be_true: Dict[int, bool] = {}
+        self._operator_conditions_fluents: List[Set[str]] = []
+        for operator in self._operators:
+            self._operator_conditions_fluents.append(set())
+            for cond in operator.conditions:
+                for expr_node in cond:
+                    if expr_node in self._all_fluents:
+                        self._operator_conditions_fluents[-1].add(expr_node)
 
-    # @cache
+        self._operator_effects_fluents: List[Set[str]] = []
+        for operator in self._operators:
+            self._operator_effects_fluents.append(set())
+            for fluent, eff in operator.effects:
+                if isinstance(eff, str):
+                    self._operator_effects_fluents[-1].add(eff)
+                elif isinstance(eff, tuple):
+                    self._operator_effects_fluents[-1].update(
+                        filter(
+                            lambda expression_node: isinstance(expression_node, str),
+                            eff,
+                        )
+                    )
+
+        self._ordered_fluents = list(self._fluents.keys())
+        self._cache_states = {}
+
     def _extract_fluents(
         self,
         exp: Expression,
-    ) -> Iterable:
-        # return list(filter(lambda expression_node: expression_node in self.assignments, exp))
-        return filter(lambda expression_node: expression_node in self.assignments, exp)
+        assignments: Dict[str, Set[Union[bool, int, Fraction, str]]],
+        cache_extract_fluents: Dict[int, Set[str]],
+    ) -> Set[str]:
+        if id(exp) not in cache_extract_fluents:
+            cache_extract_fluents[id(exp)] = set(
+                filter(lambda expression_node: expression_node in assignments, exp)
+            )
+        return cache_extract_fluents[id(exp)]
 
     def _possible_values(
         self,
-        exp,
-        assignments_changes: Set = None,
-        exp_fluents=None,
-    ):
+        exp: Union[Expression, bool, int, Fraction, str],
+        assignments: Dict[str, Set[Union[bool, int, Fraction, str]]],
+        assignments_changes: Set[str],
+        cache_extract_fluents: Dict[int, Set[str]],
+        exp_fluents: Set[str] = None,
+    ) -> Iterator[Union[bool, int, Fraction, str]]:
         if isinstance(exp, tuple):
+            # assert len(exp) > 1 or not (isinstance(exp, int) or isinstance(exp, bool) or isinstance(exp, Fraction))
             if exp_fluents is None:
-                exp_fluents = self._extract_fluents(exp)
-            values = map(lambda f: self.assignments[f], exp_fluents)
+                exp_fluents = self._extract_fluents(
+                    exp, assignments, cache_extract_fluents
+                )
+            values = map(lambda f: assignments[f], exp_fluents)
             for state_assignments in itertools.product(*values):
                 state_assignments = dict(zip(exp_fluents, state_assignments))
                 state = State(state_assignments, None, None, None, None, None)
@@ -298,55 +330,67 @@ class HMax(DeleteRelaxationHeuristic):
     def _exp_can_be_true(
         self,
         exp: Expression,
-        assignments_changes: Set,
+        assignments: Dict[str, Set[Union[bool, int, Fraction, str]]],
+        assignments_changes: Set[str],
+        cache_can_be_true: Dict[int, bool],
+        cache_extract_fluents: Dict[int, Set[str]],
     ) -> bool:
-
         exp_fluents = None
         id_exp = id(exp)
-        if id_exp in self.cache_can_be_true:
-            if self.cache_can_be_true[id_exp]:
+        if id_exp in cache_can_be_true:
+            if cache_can_be_true[id_exp]:
                 return True
 
-            exp_fluents = list(self._extract_fluents(exp))
-            if not any(map(lambda f: f in assignments_changes, exp_fluents)):
+            exp_fluents = self._extract_fluents(exp, assignments, cache_extract_fluents)
+            if exp_fluents.isdisjoint(assignments_changes):
                 return False
 
-            possible_values = self._possible_values(
-                exp, assignments_changes, exp_fluents=exp_fluents
-            )
         else:
-            exp_fluents = list(self._extract_fluents(exp))
-            possible_values = self._possible_values(
-                exp, assignments_changes=None, exp_fluents=exp_fluents
-            )
+            exp_fluents = self._extract_fluents(exp, assignments, cache_extract_fluents)
 
+        possible_values = self._possible_values(
+            exp, assignments, assignments_changes, cache_extract_fluents, exp_fluents
+        )
         for value in possible_values:
-            assert isinstance(value, bool)
             if value == True:
-                self.cache_can_be_true[id_exp] = True
+                cache_can_be_true[id_exp] = True
                 return True
 
-        self.cache_can_be_true[id_exp] = False
+        cache_can_be_true[id_exp] = False
         return False
 
     def _can_be_true(
         self,
         expressions: Tuple[Expression, ...],
-        assignments_changes: Set,
+        assignments: Dict[str, Set[Union[bool, int, Fraction, str]]],
+        assignments_changes: Set[str],
+        cache_can_be_true: Dict[int, bool],
+        cache_extract_fluents: Dict[int, Set[str]],
     ) -> bool:
-
         for exp in expressions:
-            if not self._exp_can_be_true(exp, assignments_changes):
+            if not self._exp_can_be_true(
+                exp,
+                assignments,
+                assignments_changes,
+                cache_can_be_true,
+                cache_extract_fluents,
+            ):
                 return False
         return True
 
     def eval(self, state: State, ss: SearchSpace) -> Optional[float]:
-        self.assignments = {}
-        self.cache_can_be_true = {}
+        state_assignments = tuple(state.assignments[f] for f in self._ordered_fluents)
+        if state_assignments in self._cache_states:
+            return self._cache_states[state_assignments]
 
+        assignments: Dict[str, Set[Union[bool, int, Fraction, str]]] = {}
+        cache_can_be_true: Dict[int, bool] = {}
+        cache_extract_fluents: Dict[int, Set[str]] = {}
+        applied_operators = [False] * len(self._operators)
+
+        # add state assignments to assignments
         for f, v in state.assignments.items():
-            assert f not in self.assignments
-            self.assignments[f] = {v}
+            assignments[f] = {v}
 
         # add extra fluents to assignments
         for action in self._events.keys():
@@ -357,45 +401,70 @@ class HMax(DeleteRelaxationHeuristic):
                 idx = j - 1
 
             for i, f in enumerate(self._extra_fluents[action]):
-                assert f[0] not in self.assignments
-                self.assignments[f[0]] = {i == idx}
+                assignments[f[0]] = {i == idx}
 
-        assignments_changes = set(self.assignments.keys())
-        assignments_changed = True
+        assignments_changes = set(assignments.keys())
         depth = 0
-
-        while assignments_changed:
-            if self._can_be_true(self._goals + self._extra_goals, assignments_changes):
+        while len(assignments_changes) > 0:
+            if self._can_be_true(
+                self._goals + self._extra_goals,
+                assignments,
+                assignments_changes,
+                cache_can_be_true,
+                cache_extract_fluents,
+            ):
                 # goal satisfied
-                # print("return", depth)
+                self._cache_states[state_assignments] = depth
                 return depth
 
             new_assignments: Dict[str, Set[Union[bool, int, Fraction, str]]] = (
                 defaultdict(set)
             )
             for i, operator in enumerate(self._operators):
-                if not self._can_be_true(
-                    operator.conditions, assignments_changes
+                if applied_operators[i]:
+                    # operator already applied
+                    if assignments_changes.isdisjoint(
+                        self._operator_effects_fluents[i]
+                    ):
+                        # no changes in the effect fluents
+                        continue
+
+                elif assignments_changes.isdisjoint(
+                    self._operator_conditions_fluents[i]
+                ):
+                    # operator never applied, but no changes in the condition fluents
+                    continue
+
+                elif not self._can_be_true(
+                    operator.conditions,
+                    assignments,
+                    assignments_changes,
+                    cache_can_be_true,
+                    cache_extract_fluents,
                 ):
                     # operator cannot be applied
                     continue
 
+                else:
+                    # first time applied
+                    applied_operators[i] = True
+
                 for effect in operator.effects:
                     fluent, value = effect
-                    possible_values = self._possible_values(value)
+                    possible_values = self._possible_values(
+                        value, assignments, assignments_changes, cache_extract_fluents
+                    )
                     new_assignments[fluent].update(possible_values)
 
             # update assignments
             assignments_changes = set()
-            assignments_changed = False
             for fluent, vv in new_assignments.items():
-                prev_len = len(self.assignments[fluent])
-                self.assignments[fluent].update(vv)
-                if len(self.assignments[fluent]) > prev_len:
+                prev_len = len(assignments[fluent])
+                assignments[fluent].update(vv)
+                if len(assignments[fluent]) > prev_len:
                     assignments_changes.add(fluent)
-                    assignments_changed = True
 
             depth += 1
 
-        # print("return", None)
+        self._cache_states[state_assignments] = None
         return None
