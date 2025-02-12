@@ -32,14 +32,13 @@ class CustomHeuristic(Heuristic):
     def eval(self, state: State, ss: SearchSpace) -> Optional[float]:
         return self.callable(state)
 
-
-def RLRank(state_encoder, model, ModelClass, other_params):
+def RLRank(state_encoder, model, ModelClass, other_params, sym_h):
     from tamerlite.rl_heuristics import RLRank
-    return RLRank(state_encoder, model, ModelClass, other_params)
+    return RLRank(state_encoder, model, ModelClass, other_params, sym_h)
 
-def RLHeuristic(state_encoder, model, ModelClass, other_params):
+def RLHeuristic(state_encoder, model, ModelClass, other_params, sym_h):
     from tamerlite.rl_heuristics import RLHeuristic
-    return RLHeuristic(state_encoder, model, ModelClass, other_params)
+    return RLHeuristic(state_encoder, model, ModelClass, other_params, sym_h)
 
 def HFF(fluents: Dict[str, str], objects: Dict[str, List[str]],
          events: Dict[str, List[Tuple[Timing, Event]]], goals: Expression, cache_states: bool):
@@ -174,7 +173,7 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
 
             if assignments_values in self._cache_states:
                 return self._cache_states[assignments_values]
-        
+
         costs = {}
         lp = []
 
@@ -246,7 +245,7 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
 
         if self._heuristic_kind != HeuristicKind.HFF:
             eh = self._cost(self._extra_goals, costs)
-            
+
             if self._heuristic_kind == HeuristicKind.HMAX:
                 res = max(h, eh)
             else:
@@ -293,7 +292,7 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
             c = costs.get(g, None)
             if c is None:
                 return None
-            
+
             if self._heuristic_kind == HeuristicKind.HMAX:
                 res = max(res, c)
             else:
@@ -333,7 +332,7 @@ class HMaxNumeric(_DeleteRelaxationHeuristicBase):
                             lambda expression_node: isinstance(expression_node, str),
                             eff,
                         )
-                    )        
+                    )
 
     def _extract_fluents(
         self,
@@ -444,7 +443,7 @@ class HMaxNumeric(_DeleteRelaxationHeuristicBase):
 
             for i, f in enumerate(self._extra_fluents[action]):
                 assignments[f[0]] = {i == idx}
-        
+
         cache_can_be_true: Dict[int, bool] = {}
         cache_extract_fluents: Dict[int, Set[str]] = {}
         applied_operators = [False] * len(self._operators)
