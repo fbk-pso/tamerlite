@@ -4,6 +4,7 @@ import time
 from typing import List, Tuple
 from tamerlite.core.search_space import SearchSpace, State
 from tamerlite.core.heuristics import Heuristic
+from tamerlite.rl_heuristics import RLRank
 
 
 @dataclass
@@ -69,8 +70,17 @@ def multiqueue_search(ss: SearchSpace, heuristics: List[Tuple[Heuristic, float]]
             if not ss.is_temporal:
                 open_set.add(succ_state)
             sc = StateContainer(succ_state, False)
+            computed_h = {}
             for i, (heuristic, weight) in enumerate(heuristics):
-                h = heuristic.eval(succ_state, ss) if weight > 0 else 0
+                if isinstance(heuristic, RLRank) and heuristic._residual:
+                    h_sym = computed_h.get(type(heuristic._sym_h), -1)
+                    if h_sym is None:
+                        h = None
+                    else:
+                        h = heuristic.eval(succ_state, ss, h_sym if h_sym != -1 else None) if weight > 0 else 0
+                else:
+                    h = heuristic.eval(succ_state, ss) if weight > 0 else 0
+                    computed_h[type(heuristic)] = h
                 if h is not None:
                     f = (1-weight)*succ_state.g + weight*h
                     item = PrioritizedItem(f, sc)

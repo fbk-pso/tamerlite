@@ -28,14 +28,14 @@ def HMaxNumeric(fluents, objects, events, goals, cache_states):
 def HMax(fluents, objects, events, goals, cache_states):
     return Heuristic.hmax(fluents, objects, events, goals, cache_states)
 
-def RLRank(state_encoder, model, ModelClass, other_params):
+def RLRank(state_encoder, model, ModelClass, other_params, sym_h):
     from tamerlite.rl_heuristics import RLRank
-    h = RLRank(state_encoder, model, ModelClass, other_params)
+    h = RLRank(state_encoder, model, ModelClass, other_params, sym_h)
     return Heuristic.hrl(state_encoder._general_state_encoder._cse, state_encoder._goals_vec, state_encoder._constants_vec, h.eval_state_vec)
 
-def RLHeuristic(state_encoder, model, ModelClass, other_params):
+def RLHeuristic(state_encoder, model, ModelClass, other_params, sym_h):
     from tamerlite.rl_heuristics import RLHeuristic
-    h = RLHeuristic(state_encoder, model, ModelClass, other_params)
+    h = RLHeuristic(state_encoder, model, ModelClass, other_params, sym_h)
     return Heuristic.hrl(state_encoder._general_state_encoder._cse, state_encoder._goals_vec, state_encoder._constants_vec, h.eval_state_vec)
 
 def CustomHeuristic(callable):
