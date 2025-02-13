@@ -317,20 +317,37 @@ class GNNStateEncoder:
             self._add_fluent_node(graph=G, fluent_expr=fe, value=v)
 
         # Encode actions (lambda)
-        for action in self._grounding_result.problem.actions:
-            x, _ = state.todo.get(action.name, (0, 0))
-            action, params = self._to_lifted(action.name)
+        for gaction_name, (x, _) in state.todo.items():
+            action, params = self._to_lifted(gaction_name)
             self._add_action_node(graph=G, action=action, params=params, step=x)
 
+        # Encode Path
+        previous = None
+        for (event, event_id) in state.path:
+            gaction_name = event.action
+            pos = event.pos
+            nid = self.node_mapping((event, event_id))
+
+            action, params = self._to_lifted(gaction_name)
+            act = self.action_embedding(action.name)
+            G.add_node(nid, kind=self.TN_EVENT_KIND, step=pos, action=act)
+            aid = self._add_action_node(graph=G, action=action, params=params)
+            G.add_edge(nid, aid, pos=pos)
+
+            if previous is not None:
+                G.add_edge(previous, nid)
+            previous = nid
+
+
         # Encode TN
-        for v, neighbor in state.temporal_network._constraints.items():
-            seen_dst = set()
-            while neighbor is not None:
-                u = neighbor.dst
-                if u not in seen_dst:
-                    seen_dst.add(u)
-                    self._add_tn_edge(G, v, u, float(neighbor.bound))
-                neighbor = neighbor.next
+        # for v, neighbor in state.temporal_network._constraints.items():
+        #     seen_dst = set()
+        #     while neighbor is not None:
+        #         u = neighbor.dst
+        #         if u not in seen_dst:
+        #             seen_dst.add(u)
+        #             self._add_tn_edge(G, v, u, float(neighbor.bound))
+        #         neighbor = neighbor.next
 
         # node_attrs = list(next(iter(G.nodes(data=True)))[-1].keys())
         # for i, (x, feat_dict) in enumerate(G.nodes(data=True)):
@@ -340,20 +357,20 @@ class GNNStateEncoder:
         #         print(x)
         #         raise ValueError('Not all nodes contain the same attributes')
 
-        nxG = G.to_networkx()
-        kind2color = {1 : 'red', 2 : 'blue', 3 : 'green', 4 : 'yellow'}
-        node_colors = [kind2color[nxG.nodes[n]['kind']] for n in range(len(nxG.nodes))]
+        # nxG = G.to_networkx()
+        # kind2color = {1 : 'red', 2 : 'blue', 3 : 'green', 4 : 'yellow'}
+        # node_colors = [kind2color[nxG.nodes[n]['kind']] for n in range(len(nxG.nodes))]
 
-        labels = {}
-        for n in nxG.nodes:
-            try:
-                labels[n] = str(self.node_mapping._debug[n])
-                print(f" {n} -> {nxG.nodes[n]['kind']} -> {labels[n]} -> {node_colors[n]}")
-            except:
-                labels[n] = str(n)
+        # labels = {}
+        # for n in nxG.nodes:
+        #     try:
+        #         labels[n] = str(self.node_mapping._debug[n])
+        #         print(f" {n} -> {nxG.nodes[n]['kind']} -> {labels[n]} -> {node_colors[n]}")
+        #     except:
+        #         labels[n] = str(n)
 
-        nx.draw_spring(nxG, labels=labels, with_labels=True, node_color=node_colors, node_size=10000)
-        # print(self.G.nodes(data=True))
+        # nx.draw_spring(nxG, labels=labels, with_labels=True, node_color=node_colors, node_size=10000)
+        # # print(self.G.nodes(data=True))
         # plt.show()
         # exit(0)
         return G
