@@ -22,6 +22,9 @@ def HFF(fluents, objects, events, goals):
 def HAdd(fluents, objects, events, goals):
     return Heuristic.hadd(fluents, objects, events, goals)
 
+def HMaxNumeric(fluents, objects, events, goals):
+    return Heuristic.hmax_numeric(fluents, objects, events, goals)
+
 def HMax(fluents, objects, events, goals):
     return Heuristic.hmax(fluents, objects, events, goals)
 

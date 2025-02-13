@@ -64,6 +64,9 @@ impl Ord for PrioritizedItem {
 #[pyfunction]
 #[pyo3(signature = (ss, heuristics, timeout=None))]
 pub fn multiqueue_search(ss: &mut SearchSpace, heuristics: Vec<(Heuristic, f64)>, timeout: Option<f32>) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
+    // FIXME: avoid clone
+    let mut heuristics = heuristics.clone();
+    
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
     let item = PrioritizedItem{heuristic: 0.0, state_container: Rc::new(RefCell::new(StateContainer{state: init, expanded: false})) };
@@ -123,11 +126,11 @@ pub fn multiqueue_search(ss: &mut SearchSpace, heuristics: Vec<(Heuristic, f64)>
                     open_set.insert(s.clone());
                 }
                 let sc = Rc::new(RefCell::new(StateContainer{state: s.clone(), expanded: false}));
-                for (i, (heuristic, weight)) in heuristics.iter().enumerate() {
+                for (i, (heuristic, weight)) in heuristics.iter_mut().enumerate() {
                     let h = heuristic.eval(&s, ss)?;
                     match h {
                         Some(v) => {
-                            let f = weight * v + (1.0 - weight) * s.g;
+                            let f = *weight * v + (1.0 - *weight) * s.g;
                             opens[i].push(PrioritizedItem{heuristic: f, state_container: sc.clone()});
                         },
                         None => continue,

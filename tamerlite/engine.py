@@ -13,7 +13,7 @@ from tamerlite.core import wastar_search, astar_search, gbfs_search
 from tamerlite.core import bfs_search, dfs_search, ehc_search
 from tamerlite.core import multiqueue_search
 from tamerlite.core import evaluate, make_fluent_node
-from tamerlite.core import HFF, HAdd, HMax, CustomHeuristic, RLRank, RLHeuristic
+from tamerlite.core import HFF, HAdd, HMax, HMaxNumeric, CustomHeuristic, RLRank, RLHeuristic
 from tamerlite.converter import Converter
 from tamerlite.encoder import Encoder, get_encoders
 
@@ -174,6 +174,9 @@ class TamerLite(
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "hmax":
             h = HMax(encoder.fluents, encoder.objects, encoder.events, encoder.goal)
+            w = 0.8 if params is None or params.weight is None else params.weight
+        elif h == "hmax_numeric":
+            h = HMaxNumeric(encoder.fluents, encoder.objects, encoder.events, encoder.goal)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "blind":
             h = CustomHeuristic(lambda x: 0.0)
