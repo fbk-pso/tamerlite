@@ -167,16 +167,16 @@ class TamerLite(
             h = RLRank(state_encoder, rl_params.model, rl_params.model_class, rl_params.other_params)
             w = 1 if params is None or params.weight is None else params.weight
         elif h == "hff":
-            h = HFF(encoder.fluents, encoder.objects, encoder.events, encoder.goal)
+            h = HFF(encoder.fluents, encoder.objects, encoder.events, encoder.goal, cache_states=True)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "hadd":
-            h = HAdd(encoder.fluents, encoder.objects, encoder.events, encoder.goal)
+            h = HAdd(encoder.fluents, encoder.objects, encoder.events, encoder.goal, cache_states=True)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "hmax":
-            h = HMax(encoder.fluents, encoder.objects, encoder.events, encoder.goal)
+            h = HMax(encoder.fluents, encoder.objects, encoder.events, encoder.goal, cache_states=True)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "hmax_numeric":
-            h = HMaxNumeric(encoder.fluents, encoder.objects, encoder.events, encoder.goal)
+            h = HMaxNumeric(encoder.fluents, encoder.objects, encoder.events, encoder.goal, cache_states=True)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "blind":
             h = CustomHeuristic(lambda x: 0.0)
