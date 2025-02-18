@@ -28,7 +28,6 @@ enum HeuristicKind {
 
 #[pyclass()]
 #[derive(Clone)]
-// TODO: convert into enum?
 pub struct Heuristic {
     hdr: Option<DeleteRelaxationHeuristic>,
     hmax: Option<HMaxNumeric>,
@@ -247,7 +246,6 @@ impl Hash for Operator {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-// TODO: rename
 struct OperatorHmax {
     action: String,
     conditions: Vec<Vec<ExpressionNode>>,
@@ -305,7 +303,6 @@ fn is_numeric_condition(cond: &Vec<ExpressionNode>) -> bool {
 pub struct DeleteRelaxationHeuristic {
     events: HashMap<String, usize>,
     goals: Vec<Expression>,
-    all_fluents: Vec<String>,
     extra_fluents: HashMap<String, Vec<Expression>>,
     extra_goals: Vec<Expression>,
     operators : Vec<Operator>,
@@ -313,6 +310,8 @@ pub struct DeleteRelaxationHeuristic {
     empty_pre_operators: HashSet<OperatorID>,
     numeric_conds: HashSet<Expression>,    
     heuristic_kind: HeuristicKind,
+    ordered_fluents: Vec<String>,
+    ordered_actions: Vec<String>,
     cache_states: Option<HashMap<Vec<ExpressionNode>, Option<f64>>>,
     expression_manager: Arc<Mutex<ExpressionManager>>,
 }
@@ -428,7 +427,8 @@ impl DeleteRelaxationHeuristic {
         for (f, _v) in &fluents {
             all_fluents.push(f.clone());
         }
-
+        let ordered_fluents: Vec<String> = fluents.iter().map(|(f, _)| f.clone()).collect();
+        let ordered_actions: Vec<String> = events.keys().map(|action| action.clone()).collect();
         let cache_states = if cache_states {
             Some(HashMap::new())
         } else {
@@ -438,7 +438,6 @@ impl DeleteRelaxationHeuristic {
         let res = DeleteRelaxationHeuristic {
             events: events_len,
             goals,
-            all_fluents,
             extra_fluents,
             extra_goals,
             operators,
@@ -446,6 +445,8 @@ impl DeleteRelaxationHeuristic {
             empty_pre_operators,
             numeric_conds,
             heuristic_kind,
+            ordered_fluents,
+            ordered_actions,
             cache_states,
             expression_manager: Arc::new(Mutex::new(expression_manager))
         };
@@ -454,33 +455,22 @@ impl DeleteRelaxationHeuristic {
 
     pub fn eval(&mut self, state: &State) -> PyResult<Option<f64>> {
         let mut expression_manager = self.expression_manager.lock().unwrap();
-        let mut assignments_values: Vec<ExpressionNode> = Vec::new();
+        let mut assignments_values: Vec<ExpressionNode> = if self.cache_states.is_some() {
+            Vec::with_capacity(self.ordered_fluents.len())
+        } else {
+            Vec::new()
+        };
         if self.cache_states.is_some() {
-            let mut assignments: HashMap<&String, HashSet<ExpressionNode>> = HashMap::new();
-            // add state assignments to assignments
-            for (f,v) in &state.assignments {
-                assignments.insert(f, HashSet::from([v.clone()]));
+            for f in &self.ordered_fluents {
+                assignments_values.push(state.assignments[f].clone());
             }
-            // add extra fluents to assignments
-            for action in self.events.keys() {
-                let r = state.todo.get(action);
-                let idx = match r {
-                    Some((j, _)) => j - 1,
-                    None => self.extra_fluents[action].len() - 1,
+            for action in &self.ordered_actions {
+                let r = match state.todo.get(action) {
+                    Some((j, _)) => {j.clone()},
+                    None => {0}
                 };
-                
-                for (i, f) in self.extra_fluents[action].iter().enumerate() {
-                    if let ExpressionNode::Fluent(f) = &expression_manager.force_get(f)[0] {
-                        assignments.insert(f, HashSet::from([ExpressionNode::Bool(i == idx)]));
-                    }
-                }
+                assignments_values.push(ExpressionNode::Int(r.into()));
             }
-
-            // TODO: use references to ExpressionNode
-            assignments_values = self.all_fluents
-                .iter()
-                .filter_map(|f| assignments.get(f)?.iter().next().cloned())
-                .collect();
             if let Some(res) = self.cache_states.as_ref().unwrap().get(&assignments_values) {
                 return Ok(res.clone());
             }
@@ -660,13 +650,14 @@ impl DeleteRelaxationHeuristic {
 
 #[derive(Clone, Debug)]
 pub struct HMaxNumeric {
-    events: HashMap<String, usize>,
     goals: Vec<Vec<ExpressionNode>>,
     extra_fluents: HashMap<String, Vec<Vec<ExpressionNode>>>,
     all_fluents: Vec<String>,
     operators: Vec<OperatorHmax>,
     operator_conditions_fluents: Vec<HashSet<String>>,
     operator_effects_fluents: Vec<HashSet<String>>,
+    ordered_fluents: Vec<String>,
+    ordered_actions: Vec<String>,
     cache_states: Option<HashMap<Vec<ExpressionNode>, Option<f64>>>,
 }
 
@@ -718,15 +709,9 @@ impl HMaxNumeric {
             }
             extra_fluents.insert(a.to_string(), a_extra_fluents);
         }
-        // TODO: remove sorting?
-        // operators.sort_by(|a, b| a.action.cmp(&b.action));
 
         let mut goals = split_expression(&goal.into_iter().map(|e| e.v).collect())?;
         goals.extend(extra_goals);
-        let events_len: HashMap<String, usize> = events
-            .iter()
-            .map(|(a, ev)| (a.to_string(), ev.len()))
-            .collect();
         
         let mut operator_conditions_fluents = Vec::with_capacity(operators.len());
         for operator in &operators {
@@ -757,6 +742,8 @@ impl HMaxNumeric {
         for (f, _v) in &fluents {
             all_fluents.push(f.clone());
         }
+        let ordered_fluents: Vec<String> = fluents.iter().map(|(f, _)| f.clone()).collect();
+        let ordered_actions: Vec<String> = events.keys().map(|action| action.clone()).collect();
         let cache_states = if cache_states {
             Some(HashMap::new())
         } else {
@@ -764,13 +751,14 @@ impl HMaxNumeric {
         };
 
         let res = HMaxNumeric {
-            events: events_len,
             goals,
             extra_fluents,
             all_fluents,
             operators,
             operator_conditions_fluents,
             operator_effects_fluents,
+            ordered_fluents,
+            ordered_actions,
             cache_states,
         };
         Ok(res)
@@ -885,13 +873,34 @@ impl HMaxNumeric {
     }
 
     fn eval(&mut self, state: &State) -> PyResult<Option<f64>> {
+        let mut assignments_values: Vec<ExpressionNode> = if self.cache_states.is_some() {
+            Vec::with_capacity(self.ordered_fluents.len())
+        } else {
+            Vec::new()
+        };
+        if self.cache_states.is_some() {
+            for f in &self.ordered_fluents {
+                assignments_values.push(state.assignments[f].clone());
+            }
+            for action in &self.ordered_actions {
+                let r = match state.todo.get(action) {
+                    Some((j, _)) => {j.clone()},
+                    None => {0}
+                };
+                assignments_values.push(ExpressionNode::Int(r.into()));
+            }
+            if let Some(res) = self.cache_states.as_ref().unwrap().get(&assignments_values) {
+                return Ok(res.clone());
+            }
+        }
+
         let mut assignments: HashMap<&String, HashSet<ExpressionNode>> = HashMap::new();
         // add state assignments to assignments
         for (f,v) in &state.assignments {
             assignments.insert(f, HashSet::from([v.clone()]));
         }
         // add extra fluents to assignments
-        for action in self.events.keys() {
+        for action in &self.ordered_actions {
             let r = state.todo.get(action);
             let idx = match r {
                 Some((j, _)) => j - 1,
@@ -902,18 +911,6 @@ impl HMaxNumeric {
                 if let ExpressionNode::Fluent(f) = &f[0] {
                     assignments.insert(f, HashSet::from([ExpressionNode::Bool(i == idx)]));
                 }
-            }
-        }
-
-        let mut assignments_values: Vec<ExpressionNode> = Vec::new();
-        if self.cache_states.is_some() {
-            // TODO: use references to ExpressionNode
-            assignments_values = self.all_fluents
-                .iter()
-                .filter_map(|f| assignments.get(f)?.iter().next().cloned())
-                .collect();
-            if let Some(res) = self.cache_states.as_ref().unwrap().get(&assignments_values) {
-                return Ok(res.clone());
             }
         }
 
