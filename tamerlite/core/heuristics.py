@@ -108,11 +108,9 @@ class _DeleteRelaxationHeuristicBase(Heuristic):
         self._extra_goals: Tuple[Expression, ...] = tuple([fe[-1] for fe in self._extra_fluents.values()])
         self._goals = split_expression(goals)
 
-        self._ordered_fluents = list(self._all_fluents)
+        self._ordered_fluents = list(self._fluents.keys())
+        self._ordered_actions = list(self._events.keys())
         self._cache_states = {} if cache_states else None
-        # TODO: remove
-        self._fn_eval_counter = 0
-        self._cache_state_hits = 0
 
     def _is_numeric_condition(self, exp: Expression) -> bool:
         if isinstance(exp[-1], bool): # boolean constant
@@ -165,31 +163,16 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
                 self._numeric_conds.add(c)
 
     def eval(self, state: State, ss: SearchSpace) -> Optional[float]:
-        self._fn_eval_counter += 1
-        # print(self._fn_eval_counter, self._cache_state_hits)
-
         if self._cache_states is not None:
-            # TODO: the eval initial state is different?
-            # TODO: remove this code duplicated
-            assignments: Dict[str, Set[Union[bool, int, Fraction, str]]] = {}
-            # add state assignments to assignments
-            for f, v in state.assignments.items():
-                assignments[f] = {v}
+            assignments_values = tuple(
+                state.assignments[f] for f in self._ordered_fluents
+            ) + tuple(
+                map(
+                    lambda action: state.todo.get(action, (None, None))[0], self._ordered_actions
+                )
+            )
 
-            # add extra fluents to assignments
-            for action in self._events.keys():
-                j, _ = state.todo.get(action, (None, None))
-                if j is None:
-                    idx = len(self._extra_fluents[action]) - 1
-                else:
-                    idx = j - 1
-
-                for i, f in enumerate(self._extra_fluents[action]):
-                    assignments[f[0]] = {i == idx}
-
-            assignments_values = tuple(list(assignments[f])[0] for f in self._ordered_fluents)
             if assignments_values in self._cache_states:
-                self._cache_state_hits += 1
                 return self._cache_states[assignments_values]
         
         costs = {}
@@ -433,9 +416,17 @@ class HMaxNumeric(_DeleteRelaxationHeuristicBase):
         return True
 
     def eval(self, state: State, ss: SearchSpace) -> Optional[float]:
-        self._fn_eval_counter += 1
-        if self._fn_eval_counter % 100 == 0:
-            print(self._fn_eval_counter, self._cache_state_hits)
+        if self._cache_states is not None:
+            assignments_values = tuple(
+                state.assignments[f] for f in self._ordered_fluents
+            ) + tuple(
+                map(
+                    lambda action: state.todo.get(action, (None, None))[0], self._ordered_actions
+                )
+            )
+
+            if assignments_values in self._cache_states:
+                return self._cache_states[assignments_values]
 
         assignments: Dict[str, Set[Union[bool, int, Fraction, str]]] = {}
 
@@ -444,7 +435,7 @@ class HMaxNumeric(_DeleteRelaxationHeuristicBase):
             assignments[f] = {v}
 
         # add extra fluents to assignments
-        for action in self._events.keys():
+        for action in self._ordered_actions:
             j, _ = state.todo.get(action, (None, None))
             if j is None:
                 idx = len(self._extra_fluents[action]) - 1
@@ -453,12 +444,6 @@ class HMaxNumeric(_DeleteRelaxationHeuristicBase):
 
             for i, f in enumerate(self._extra_fluents[action]):
                 assignments[f[0]] = {i == idx}
-
-        if self._cache_states is not None:
-            assignments_values = tuple(next(iter(assignments[f])) for f in self._ordered_fluents)
-            if assignments_values in self._cache_states:
-                self._cache_state_hits += 1
-                return self._cache_states[assignments_values]
         
         cache_can_be_true: Dict[int, bool] = {}
         cache_extract_fluents: Dict[int, Set[str]] = {}
