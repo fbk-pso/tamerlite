@@ -64,7 +64,6 @@ impl Ord for PrioritizedItem {
 #[pyfunction]
 #[pyo3(signature = (ss, heuristics, timeout=None))]
 pub fn multiqueue_search(ss: &mut SearchSpace, heuristics: Vec<(Heuristic, f64)>, timeout: Option<f32>) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
-    // FIXME: avoid clone
     let mut heuristics = heuristics.clone();
     
     let start = SystemTime::now();
