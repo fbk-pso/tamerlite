@@ -121,10 +121,12 @@ class TamerLite(
         unified_planning.engines.mixins.OneshotPlannerMixin,
     ):
 
-    def __init__(self, search: Optional[Union[SearchParams, MultiqueueParams]] = None):
+    def __init__(self, search: Optional[Union[SearchParams, MultiqueueParams]] = None, heuristic: Optional[str] = None, weight: Optional[str] = None, macros: Optional[List[str]] = None, macros_usage: Optional[str] = None):
         unified_planning.engines.Engine.__init__(self)
         up.engines.mixins.OneshotPlannerMixin.__init__(self)
         self._params = search
+        if self._params is None and (heuristic is not None or weight is not None or macros is not None or macros_usage is not None):
+            self._params = SearchParams(search=None, heuristic=heuristic, weight=weight, macros=macros, macros_usage=macros_usage)
 
     @property
     def name(self) -> str:
