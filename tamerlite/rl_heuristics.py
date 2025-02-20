@@ -30,16 +30,45 @@ class RLHeuristicBase(Heuristic):
         self._sym_h = sym_h
 
     def _eval(self, state, ss):
-        if ss.goal_reached(state):
-            return 0
-        state_vec = self._state_encoder.get_state_as_vector(state)
+        # if ss.goal_reached(state):
+        #     return 0
+
         if self._residual:
             sym_h = self._sym_h.eval(state, ss)
             if sym_h is None:
                 return None
         else:
             sym_h = -1
-        return self.eval_state_vec(state_vec, sym_h)
+
+        if self._use_gnn:
+            state_vec = self._state_encoder.get_state_as_graph(state)
+            return self.eval_state_graph(state_vec, sym_h)
+        else:
+            state_vec = self._state_encoder.get_state_as_vector(state)
+            return self.eval_state_vec(state_vec, sym_h)
+
+    def eval_state_graph(self, G, sym_h):
+        import torch_geometric as tg
+        state_graph = tg.data.Data(x = torch.tensor(G.nodes, dtype=torch.float),
+                                edge_index=torch.tensor(G.edges, dtype=torch.long),
+                                edge_attr=torch.tensor(G.edge_features, dtype=torch.float))
+
+        r = self._model(state_graph.x, state_graph.edge_index, torch.zeros(state_graph.x.size()[0], dtype=torch.int64)).detach()[0]
+        r = float(r[0])
+        if self._residual:
+            if self._reward_signal=="cnt":
+                r -= sym_h
+            else:
+                r += self._gamma**(sym_h-1)
+        if self._reward_signal=="bin":
+            if r == 0:
+                return float(self._deltah_bin)
+            elif r < 0:
+                return float((2 * self._deltah_bin) - min(self._deltah_bin, (math.log(min(1, -r), self._gamma))))
+            else:
+                return float(min(self._deltah_bin, (math.log(min(1, r), self._gamma)+1)))
+        else:
+            return max(0.000001,-r)
 
     def eval_state_vec(self, state_vec, sym_h):
         return self.eval_state_vecs([state_vec], [sym_h])[0]
@@ -111,4 +140,3 @@ class RLHeuristic(RLHeuristicBase):
         if len(states_vectors) == 0:
             return []
         return self._model.get_heuristic(torch.tensor(states_vectors, dtype=torch.float32), sym_hs)
-

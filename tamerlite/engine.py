@@ -36,6 +36,7 @@ from tamerlite.core import HFF, HAdd, HMax, HMaxNumeric, CustomHeuristic, RLRank
 from tamerlite.core import simplify, Effect, Event
 from tamerlite.converter import Converter
 from tamerlite.encoder import Encoder, get_encoders
+from tamerlite.gnn_encoder import GNNStateEncoder
 
 
 credits = up.engines.Credits('TamerLite',
@@ -258,7 +259,7 @@ class TamerLite(
                output_stream: Optional[IO[str]] = None) -> 'up.engines.results.PlanGenerationResult':
         assert isinstance(problem, up.model.Problem)
         try:
-            if self._params is not None and self._params.contains_rl():
+            if self._params is not None and self._params.contains_rl() and not self._params.rl_params.other_params.use_gnn:
                 encoder, state_encoder, map_back_action_instance = get_encoders(self._params.domain(), problem)
             else:
                 with problem.environment.factory.Compiler(compilation_kind="GROUNDING", problem_kind=problem.kind) as compiler:
@@ -267,6 +268,9 @@ class TamerLite(
                 new_problem = compilation_res.problem
                 encoder = Encoder(new_problem)
                 state_encoder = None
+
+                if self._params is not None and self._params.contains_rl() and self._params.rl_params.other_params.use_gnn:
+                    state_encoder = GNNStateEncoder(encoder.search_space, compilation_res, new_problem.initial_values, new_problem.goals)
 
             if isinstance(self._params, MultiqueueParams):
                 heuristics = []

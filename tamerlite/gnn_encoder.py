@@ -2,95 +2,11 @@ from fractions import Fraction
 from typing import List
 import networkx as nx
 import unified_planning as up
-import unified_planning.model
 import matplotlib.pyplot as plt
 
-from collections import namedtuple
-from unified_planning.model.fluent import get_all_fluent_exp
 from unified_planning.model.walkers import Dnf
-from unified_planning.model.types import domain_size, domain_item
-from tamerlite.core import CoreStateEncoder
+from tamerlite.core import get_fluent_value
 
-
-# class GNNStateEncoder:
-#     """
-#     This class provides the functionality to return a graph representation of a state to be used for GNNs
-#     """
-
-#     def __init__(self, environment, general_state_encoder, initial_values, goals):
-#         self._general_state_encoder = general_state_encoder
-#         objects = self._general_state_encoder._objects
-#         fluents = self._general_state_encoder._fluents
-
-#         # vectorization of the static fluents value
-#         self._constants_vec = []
-#         for fe in self._general_state_encoder._constants:
-#             v = initial_values[fe]
-#             print(fe.args)
-
-
-#             if v.is_object_exp():
-#                 v = objects[v.object().name]
-#             elif v.is_bool_constant():
-#                 v = 1.0 if v.constant_value() else 0.0
-#             else:
-#                 lb = fe.type.lower_bound
-#                 ub = fe.type.upper_bound
-#                 if lb is None or ub is None:
-#                     v = float(v.constant_value())
-#                 else:
-#                     v = float((v.constant_value() - lb) / (ub - lb))
-#             self._constants_vec.append(v)
-
-#         # vectorization of the goal
-#         w = Dnf(environment)
-#         self._goals = w.walk(environment.expression_manager.And(goals))[0]
-#         self._goals_vec = [-1 for _ in range(self.state_geometry.num_goals)]
-#         for g in self._goals:
-#             if g.is_fluent_exp():
-#                 i = fluents.index(g)
-#                 self._goals_vec[i] = 1.0
-#             elif g.is_not():
-#                 i = fluents.index(g.arg(0))
-#                 self._goals_vec[i] = 0.0
-#             elif g.is_equals() and g.arg(0).is_fluent_exp():
-#                 i = fluents.index(g.arg(0))
-#                 v = g.arg(1)
-#                 if v.is_object_exp():
-#                     v = objects[v.object().name]
-#                 else:
-#                     fe = g.arg(0)
-#                     lb = fe.type.lower_bound
-#                     ub = fe.type.upper_bound
-#                     if lb is None or ub is None:
-#                         v = float(v.constant_value())
-#                     else:
-#                         v = float((v.constant_value() - lb) / (ub - lb))
-#                 self._goals_vec[i] = v
-#             elif g.is_equals() and g.arg(1).is_fluent_exp():
-#                 i = fluents.index(g.arg(1))
-#                 v = g.arg(0)
-#                 if v.is_object_exp():
-#                     v = objects[v.object().name]
-#                 else:
-#                     fe = g.arg(1)
-#                     lb = fe.type.lower_bound
-#                     ub = fe.type.upper_bound
-#                     if lb is None or ub is None:
-#                         v = float(v.constant_value())
-#                     else:
-#                         v = float((v.constant_value() - lb) / (ub - lb))
-#                 self._goals_vec[i] = v
-#             else:
-#                 raise NotImplementedError
-
-#     @property
-#     def state_geometry(self):
-#         return self._general_state_encoder.state_geometry
-
-#     def get_state_as_graph(self, state):
-#         raise NotImplementedError
-#         return self._general_state_encoder.get_state_as_vector(state, self._constants_vec, self._goals_vec)
 
 class BasicEmbedding:
     def __init__(self, start=0) -> None:
@@ -157,6 +73,24 @@ class PTGraph:
             res.add_edge(invert[u], invert[v], **attrs)
         return res
 
+    def plot(self, node_mapping):
+        nxG = self.to_networkx()
+        kind2color = {1 : 'red', 2 : 'blue', 3 : 'green', 4 : 'yellow'}
+        node_colors = [kind2color[nxG.nodes[n]['kind']] for n in nxG.nodes]
+
+        labels = {}
+        for n in nxG.nodes:
+            try:
+                labels[n] = str(node_mapping._debug[n])
+                #print(f" {n} -> {nxG.nodes[n]['kind']} -> {labels[n]} -> {node_colors[n]}")
+            except:
+                labels[n] = str(n)
+
+        nx.draw_spring(nxG, labels=labels, with_labels=True, node_color=node_colors, node_size=10000)
+        # # print(self.G.nodes(data=True))
+        plt.show()
+        #exit(0)
+
 
 class GNNStateEncoder:
 
@@ -165,16 +99,14 @@ class GNNStateEncoder:
     ACTION_KIND = 3
     TN_EVENT_KIND = 4
 
-    def __init__(self, general_state_encoder, initial_values, goals):
-        self._events = general_state_encoder._events
-        self._grounding_result = general_state_encoder._grounding_result
-        self._search_space = general_state_encoder._search_space
-        self._fluents = general_state_encoder._fluents
+    def __init__(self, search_space, grounding_result, initial_values, goals):
+        self._grounding_result = grounding_result
+        self._initial_values = initial_values
 
-
-        problem = general_state_encoder._problem
+        problem = grounding_result.problem
         self._problem = problem
 
+        self.search_space = search_space
         environment = problem.environment
         self._environment = environment
 
@@ -192,7 +124,7 @@ class GNNStateEncoder:
         #     self._add_object_node(graph=self.G, object=o)
 
         # Then each static fluent is liked to the objects it uses as params
-        for fe in general_state_encoder._constants:
+        for fe in problem.get_static_fluents():
             v = initial_values[fe]
             self._add_fluent_node(graph=self.G, fluent_expr=fe, value=v)
 
@@ -210,7 +142,6 @@ class GNNStateEncoder:
                 self._add_fluent_node(graph=self.G, fluent_expr=g.arg(1), goal_value=g.arg(0))
             else:
                 raise NotImplementedError
-
 
     def _to_lifted(self, action_name):
         action, params = self._lifted_action_cache.get(action_name, (None, None))
@@ -302,8 +233,8 @@ class GNNStateEncoder:
         G = self.G.clone()
 
         # Encode fluents (mu)
-        for fe in self._fluents:
-            py_v = state.get_value(str(fe))
+        for fe in self._initial_values.keys():
+            py_v = get_fluent_value(str(fe), state)
             v = None
             if type(py_v) == bool:
                 v = self._environment.expression_manager.Bool(py_v)
@@ -323,10 +254,8 @@ class GNNStateEncoder:
 
         # Encode Path
         previous = None
-        for (event, event_id) in state.path:
-            gaction_name = event.action
-            pos = event.pos
-            nid = self.node_mapping((event, event_id))
+        for (gaction_name, pos, event_id) in state.path:
+            nid = self.node_mapping((gaction_name, pos, event_id))
 
             action, params = self._to_lifted(gaction_name)
             act = self.action_embedding(action.name)
@@ -338,40 +267,7 @@ class GNNStateEncoder:
                 G.add_edge(previous, nid)
             previous = nid
 
+        #G.plot(self.node_mapping)
 
-        # Encode TN
-        # for v, neighbor in state.temporal_network._constraints.items():
-        #     seen_dst = set()
-        #     while neighbor is not None:
-        #         u = neighbor.dst
-        #         if u not in seen_dst:
-        #             seen_dst.add(u)
-        #             self._add_tn_edge(G, v, u, float(neighbor.bound))
-        #         neighbor = neighbor.next
-
-        # node_attrs = list(next(iter(G.nodes(data=True)))[-1].keys())
-        # for i, (x, feat_dict) in enumerate(G.nodes(data=True)):
-        #     if set(feat_dict.keys()) != set(node_attrs):
-        #         print(node_attrs)
-        #         print(feat_dict)
-        #         print(x)
-        #         raise ValueError('Not all nodes contain the same attributes')
-
-        # nxG = G.to_networkx()
-        # kind2color = {1 : 'red', 2 : 'blue', 3 : 'green', 4 : 'yellow'}
-        # node_colors = [kind2color[nxG.nodes[n]['kind']] for n in range(len(nxG.nodes))]
-
-        # labels = {}
-        # for n in nxG.nodes:
-        #     try:
-        #         labels[n] = str(self.node_mapping._debug[n])
-        #         print(f" {n} -> {nxG.nodes[n]['kind']} -> {labels[n]} -> {node_colors[n]}")
-        #     except:
-        #         labels[n] = str(n)
-
-        # nx.draw_spring(nxG, labels=labels, with_labels=True, node_color=node_colors, node_size=10000)
-        # # print(self.G.nodes(data=True))
-        # plt.show()
-        # exit(0)
         return G
 
