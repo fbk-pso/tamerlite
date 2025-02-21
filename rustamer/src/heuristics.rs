@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 use std::{
     collections::HashMap,
     vec::Vec
@@ -14,8 +15,6 @@ use crate::state_encoder::CoreStateEncoder;
 use super::search_space::State;
 use super::expressions::*;
 use super::structures::*;
-
-use std::cell::RefCell;
 
 
 #[pyclass(frozen)]
@@ -212,7 +211,7 @@ pub struct HFF {
     empty_pre_operators: HashSet<OperatorID>,
     numeric_conds: HashSet<Expression>,
     return_hadd: bool,
-    expression_manager: RefCell<ExpressionManager>,
+    expression_manager: Arc<Mutex<ExpressionManager>>,
 }
 
 impl HFF {
@@ -326,7 +325,7 @@ impl HFF {
             empty_pre_operators,
             numeric_conds,
             return_hadd,
-            expression_manager: RefCell::new(expression_manager)
+            expression_manager: Arc::new(Mutex::new(expression_manager))
         };
         Ok(res)
     }
@@ -336,7 +335,7 @@ impl HFF {
         let mut lp : Vec<Expression> = Vec::new();
         let mut init_lp : Vec<Expression> = Vec::new();
 
-        let mut expression_manager = self.expression_manager.borrow_mut();
+        let mut expression_manager = self.expression_manager.lock().unwrap();
 
         for (f, v) in state.assignments.iter() {
             let k = match v {
