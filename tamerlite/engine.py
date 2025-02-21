@@ -291,7 +291,7 @@ class TamerLite(
                     macros = self._params.macros  #if use lifted_macros
                     perc = 100
 
-                    print(f"Useful macros: {len(macros)}\nPercentage of useful macros: {perc}%")
+                    print(f"Useful macros: {len(macros)}\nPercentage of useful macros: {perc}")
                     sys.stdout.flush()
 
                     #add_row_to_csv('experiments/test-survival-macros-kitting/survived_macros_analysis_kitting_2.csv', problem.name, len(macros), perc)
