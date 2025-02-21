@@ -1,6 +1,7 @@
 use num_rational::BigRational;
 use num::BigInt;
 use pyo3::{prelude::*, exceptions::PyValueError};
+use std::collections::HashMap;
 
 use crate::utils::integer_to_i32;
 
@@ -21,6 +22,49 @@ pub enum ExpressionNode {
     Times(Vec<usize>),
     Div(usize, usize),
 }
+
+#[derive(Clone,Copy,Debug,PartialEq,Eq,Hash)]
+pub struct Expression {
+    id: usize
+}
+
+#[derive(Clone, Debug)]
+pub struct ExpressionManager {
+    all_expressions: Vec<Vec<ExpressionNode>>,
+    expression2id: HashMap<Vec<ExpressionNode>, Expression>
+}
+
+impl ExpressionManager {
+    pub fn new() -> ExpressionManager {
+        ExpressionManager{all_expressions: vec![], expression2id: HashMap::new()}
+    }
+
+    pub fn get(&self, expr: &Expression) -> Option<&Vec<ExpressionNode>> {
+        if expr.id < self.all_expressions.len() {
+            Some(&self.all_expressions[expr.id])
+        }
+        else {
+            None
+        }
+    }
+
+    pub fn force_get(&self, expr: &Expression) -> &Vec<ExpressionNode> {
+        &self.all_expressions[expr.id]
+    }
+
+    pub fn put(&mut self, expr:&Vec<ExpressionNode>) -> Expression {
+        if let Some(x) = self.expression2id.get(expr) {
+            *x
+        }
+        else {
+            let newid = self.all_expressions.len();
+            self.all_expressions.push(expr.clone());
+            self.expression2id.insert(expr.clone(), Expression{id:newid});
+            Expression{id:newid}
+        }
+    }
+}
+
 
 pub fn get_rational_from_expression_node(exp: &ExpressionNode) -> PyResult<BigRational> {
     if let ExpressionNode::Int(v) = exp {
