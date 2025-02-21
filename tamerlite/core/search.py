@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from tamerlite.core.search_space import SearchSpace, SearchSpaceMacroAction, State
 from tamerlite.core.heuristics import Heuristic
 from typing import Union
-from tamerlite.core.utils import PrefixTree
+from tamerlite.utils import PrefixTree
 
 @dataclass
 class PrioritizedItem:

@@ -16,6 +16,7 @@ from tamerlite.core import evaluate, make_fluent_node
 from tamerlite.core import HFF, HAdd, CustomHeuristic, RLRank, RLHeuristic
 from tamerlite.converter import Converter
 from tamerlite.encoder import Encoder, get_encoders
+from tamerlite.utils import read_macros
 
 import sys
 import os
@@ -75,7 +76,7 @@ class SearchParams:
     heuristic: Optional[str] = None
     weight: Optional[str] = None
     rl_params: Optional[RLParams] = None
-    macros: Optional[List[str]] = None
+    macros: Optional[Union[str, List[str]]] = None
     macros_usage: Optional[str] = None
 
     def contains_rl(self) -> bool:
@@ -121,12 +122,12 @@ class TamerLite(
         unified_planning.engines.mixins.OneshotPlannerMixin,
     ):
 
-    def __init__(self, search: Optional[Union[SearchParams, MultiqueueParams]] = None, heuristic: Optional[str] = None, weight: Optional[str] = None, macros: Optional[List[str]] = None, macros_usage: Optional[str] = None):
+    def __init__(self, search: Optional[Union[SearchParams, MultiqueueParams]] = None, heuristic: Optional[str] = None, weight: Optional[str] = None, macros: Optional[str] = None, macros_usage: Optional[str] = None):
         unified_planning.engines.Engine.__init__(self)
         up.engines.mixins.OneshotPlannerMixin.__init__(self)
-        self._params = search
+        self._params = search      
         if self._params is None and (heuristic is not None or weight is not None or macros is not None or macros_usage is not None):
-            self._params = SearchParams(search=None, heuristic=heuristic, weight=weight, macros=macros, macros_usage=macros_usage)
+            self._params = SearchParams(search=None, heuristic=heuristic, weight=weight, macros=macros, macros_usage=macros_usage)  
 
     @property
     def name(self) -> str:
@@ -242,6 +243,15 @@ class TamerLite(
         try:
             if self._params is not None and self._params.contains_rl():
                 if self._params.contains_macros():
+                    extracted_macros = read_macros(self._params.macros, self._params.macros_usage, problem)
+                    self._params = SearchParams(
+                        search=self._params.search,
+                        heuristic=self._params.heuristic,
+                        weight=self._params.weight,
+                        rl_params=self._params.rl_params,
+                        macros=extracted_macros,
+                        macros_usage=self._params.macros_usage
+                    )
                     encoder, state_encoder, map_back_action_instance = get_encoders(self._params.domain(), problem, self._params.macros, self._params.macros_usage)
                 else:
                     encoder, state_encoder, map_back_action_instance = get_encoders(self._params.domain(), problem)
@@ -254,6 +264,15 @@ class TamerLite(
                 sys.stdout.flush()
 
                 if self._params is not None and self._params.contains_macros():
+                    extracted_macros = read_macros(self._params.macros, self._params.macros_usage, problem)
+                    self._params = SearchParams(
+                        search=self._params.search,
+                        heuristic=self._params.heuristic,
+                        weight=self._params.weight,
+                        rl_params=self._params.rl_params,
+                        macros=extracted_macros,
+                        macros_usage=self._params.macros_usage
+                    )
 
                     # actions = set()  # if use ground_macros
                     # for a in new_problem.actions:
@@ -268,7 +287,7 @@ class TamerLite(
                     #         new_macros.append(ma)
                     # macros = new_macros
                     # perc = round(len(macros)*100/len(self._params.macros),1)
-
+                    
                     macros = self._params.macros  #if use lifted_macros
                     perc = 100
 

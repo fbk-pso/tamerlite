@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import List, Tuple, Dict, Iterator, Optional, Union, Set
 
-from tamerlite.core.utils import PrefixTree
+from tamerlite.utils import PrefixTree
 
 
 @dataclass(eq=True, frozen=True)
