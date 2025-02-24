@@ -126,12 +126,12 @@ impl Heuristic {
         })
     }
 
-    pub fn eval(&mut self, state: &State, ss: &SearchSpace) -> PyResult<Option<f64>> {
+    pub fn eval(&self, state: &State, ss: &SearchSpace) -> PyResult<Option<f64>> {
         if self.hdr.is_some() {
-            let h = self.hdr.as_mut().unwrap();
+            let h = self.hdr.as_ref().unwrap();
             h.eval(state)
         } else if self.hmax.is_some() {
-            let h = self.hmax.as_mut().unwrap();
+            let h = self.hmax.as_ref().unwrap();
             h.eval(state)
         } else if self.hcustom.is_some() {
             let h = self.hcustom.as_ref().unwrap();
@@ -312,7 +312,7 @@ pub struct DeleteRelaxationHeuristic {
     heuristic_kind: HeuristicKind,
     ordered_fluents: Vec<String>,
     ordered_actions: Vec<String>,
-    cache_states: Option<HashMap<Vec<ExpressionNode>, Option<f64>>>,
+    cache_states: Arc<Mutex<Option<HashMap<Vec<ExpressionNode>, Option<f64>>>>>,
     expression_manager: Arc<Mutex<ExpressionManager>>,
 }
 
@@ -447,20 +447,21 @@ impl DeleteRelaxationHeuristic {
             heuristic_kind,
             ordered_fluents,
             ordered_actions,
-            cache_states,
+            cache_states: Arc::new(Mutex::new(cache_states)),
             expression_manager: Arc::new(Mutex::new(expression_manager))
         };
         Ok(res)
     }
 
-    pub fn eval(&mut self, state: &State) -> PyResult<Option<f64>> {
+    pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
+        let mut cache_states = self.cache_states.lock().unwrap();
         let mut expression_manager = self.expression_manager.lock().unwrap();
-        let mut assignments_values: Vec<ExpressionNode> = if self.cache_states.is_some() {
+        let mut assignments_values: Vec<ExpressionNode> = if cache_states.is_some() {
             Vec::with_capacity(self.ordered_fluents.len())
         } else {
             Vec::new()
         };
-        if self.cache_states.is_some() {
+        if cache_states.is_some() {
             for f in &self.ordered_fluents {
                 assignments_values.push(state.assignments[f].clone());
             }
@@ -471,7 +472,7 @@ impl DeleteRelaxationHeuristic {
                 };
                 assignments_values.push(ExpressionNode::Int(r.into()));
             }
-            if let Some(res) = self.cache_states.as_ref().unwrap().get(&assignments_values) {
+            if let Some(res) = cache_states.as_ref().unwrap().get(&assignments_values) {
                 return Ok(res.clone());
             }
         }
@@ -562,8 +563,8 @@ impl DeleteRelaxationHeuristic {
         let h = self.cost(&self.goals, &costs);
 
         if h.is_none() {
-            if self.cache_states.is_some() {
-                self.cache_states.as_mut().unwrap().insert(assignments_values, None);
+            if cache_states.is_some() {
+                cache_states.as_mut().unwrap().insert(assignments_values, None);
             }
             return Ok(None);
         }
@@ -577,14 +578,14 @@ impl DeleteRelaxationHeuristic {
                         h.unwrap() + v
                     };
 
-                    if self.cache_states.is_some() {
-                        self.cache_states.as_mut().unwrap().insert(assignments_values, Some(res));
+                    if cache_states.is_some() {
+                        cache_states.as_mut().unwrap().insert(assignments_values, Some(res));
                     }
                     return Ok(Some(res));
                 },
                 None => {
-                    if self.cache_states.is_some() {
-                        self.cache_states.as_mut().unwrap().insert(assignments_values, None);
+                    if cache_states.is_some() {
+                        cache_states.as_mut().unwrap().insert(assignments_values, None);
                     }
                     return Ok(None);
                 }
@@ -598,8 +599,8 @@ impl DeleteRelaxationHeuristic {
 
         if let Some(hv) = h {
             if hv == 0.0 {
-                if self.cache_states.is_some() {
-                    self.cache_states.as_mut().unwrap().insert(assignments_values, Some(res));
+                if cache_states.is_some() {
+                    cache_states.as_mut().unwrap().insert(assignments_values, Some(res));
                 }
                 return Ok(Some(res));
             }
@@ -623,8 +624,8 @@ impl DeleteRelaxationHeuristic {
             }
         }
 
-        if self.cache_states.is_some() {
-            self.cache_states.as_mut().unwrap().insert(assignments_values, Some(res));
+        if cache_states.is_some() {
+            cache_states.as_mut().unwrap().insert(assignments_values, Some(res));
         }
         Ok(Some(res))
     }
@@ -658,7 +659,7 @@ pub struct HMaxNumeric {
     operator_effects_fluents: Vec<HashSet<String>>,
     ordered_fluents: Vec<String>,
     ordered_actions: Vec<String>,
-    cache_states: Option<HashMap<Vec<ExpressionNode>, Option<f64>>>,
+    cache_states: Arc<Mutex<Option<HashMap<Vec<ExpressionNode>, Option<f64>>>>>,
 }
 
 impl HMaxNumeric {
@@ -759,7 +760,7 @@ impl HMaxNumeric {
             operator_effects_fluents,
             ordered_fluents,
             ordered_actions,
-            cache_states,
+            cache_states: Arc::new(Mutex::new(cache_states)),
         };
         Ok(res)
     }
@@ -872,13 +873,14 @@ impl HMaxNumeric {
         return true;
     }
 
-    fn eval(&mut self, state: &State) -> PyResult<Option<f64>> {
-        let mut assignments_values: Vec<ExpressionNode> = if self.cache_states.is_some() {
+    fn eval(&self, state: &State) -> PyResult<Option<f64>> {
+        let mut cache_states = self.cache_states.lock().unwrap();
+        let mut assignments_values: Vec<ExpressionNode> = if cache_states.is_some() {
             Vec::with_capacity(self.ordered_fluents.len())
         } else {
             Vec::new()
         };
-        if self.cache_states.is_some() {
+        if cache_states.is_some() {
             for f in &self.ordered_fluents {
                 assignments_values.push(state.assignments[f].clone());
             }
@@ -889,7 +891,7 @@ impl HMaxNumeric {
                 };
                 assignments_values.push(ExpressionNode::Int(r.into()));
             }
-            if let Some(res) = self.cache_states.as_ref().unwrap().get(&assignments_values) {
+            if let Some(res) = cache_states.as_ref().unwrap().get(&assignments_values) {
                 return Ok(res.clone());
             }
         }
@@ -926,8 +928,8 @@ impl HMaxNumeric {
                 &mut cache_can_be_true,
             ) {
                 // goal satisfied
-                if self.cache_states.is_some() {
-                    self.cache_states.as_mut().unwrap().insert(assignments_values, Some(depth as f64));
+                if cache_states.is_some() {
+                    cache_states.as_mut().unwrap().insert(assignments_values, Some(depth as f64));
                 }
                 return Ok(Some(depth as f64));
             }
@@ -984,8 +986,8 @@ impl HMaxNumeric {
             depth += 1;
         }
 
-        if self.cache_states.is_some() {
-            self.cache_states.as_mut().unwrap().insert(assignments_values, None);
+        if cache_states.is_some() {
+            cache_states.as_mut().unwrap().insert(assignments_values, None);
         }
         Ok(None)
     }
