@@ -1,5 +1,5 @@
 from unified_planning.model import DeltaSimpleTemporalNetwork
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import List, Tuple, Dict, Iterator, Optional, Union, Set
 
@@ -131,6 +131,7 @@ class State:
     active_conditions: MultiSet
     g: int
     path: List[Tuple[Event, int]]
+    heuristic_cache: Dict[str, float] = field(default_factory=dict)
 
     def __hash__(self) -> int:
         res = 0

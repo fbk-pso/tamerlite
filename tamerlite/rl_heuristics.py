@@ -1,10 +1,12 @@
 import math
 import torch
 import numpy as np
+from tamerlite.core.heuristics import Heuristic
 
 
-class RLRank:
-    def __init__(self, state_encoder, model, ModelClass, config, sym_h):
+class RLRank(Heuristic):
+    def __init__(self, state_encoder, model, ModelClass, config, sym_h, cache_enabled: bool = False):
+        super().__init__(cache_enabled)
         self._state_encoder = state_encoder
         self._model = ModelClass(state_encoder.state_geometry, config)
         self._model.load_state_dict(torch.load(model))
@@ -14,14 +16,17 @@ class RLRank:
         self._reward_signal = config.reward_signal
         self._gamma = config.gamma
 
-    def eval(self, state, ss, sym_h=None):
+    @property
+    def name(self):
+        return "rlrank"
+
+    def _eval(self, state, ss):
         if ss.goal_reached(state):
             return 0
         state_vec = self._state_encoder.get_state_as_vector(state)
         r = self.eval_state_vec(state_vec)
         if self._residual:
-            if sym_h is None:
-                sym_h = self._sym_h.eval(state, ss)
+            sym_h = self._sym_h.eval(state, ss)
             if sym_h is None:
                 return None
             else:
@@ -37,8 +42,9 @@ class RLRank:
         return float(r[0])
 
 
-class RLHeuristic:
-    def __init__(self, state_encoder, model, ModelClass, config, sym_h):
+class RLHeuristic(Heuristic):
+    def __init__(self, state_encoder, model, ModelClass, config, sym_h, cache_enabled: bool = False):
+        super().__init__(cache_enabled)
         self._state_encoder = state_encoder
         self._model = ModelClass(state_encoder.state_geometry, config)
         self._model.load_state_dict(torch.load(model))
@@ -49,7 +55,11 @@ class RLHeuristic:
         self._residual = config.residual
         self._sym_h = sym_h
 
-    def eval(self, state, ss):
+    @property
+    def name(self):
+        return "rlh"
+
+    def _eval(self, state, ss):
         if ss.goal_reached(state):
             return 0
         state_vec = self._state_encoder.get_state_as_vector(state)
