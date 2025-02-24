@@ -61,7 +61,7 @@ class RLParams:
 class SearchParams:
     search: Optional[str] = None
     heuristic: Optional[str] = None
-    enable_heuristic_cache: Optional[bool] = True
+    enable_heuristic_cache: Optional[bool] = None
     weight: Optional[str] = None
     rl_params: Optional[RLParams] = None
 
@@ -168,16 +168,20 @@ class TamerLite(
             h = RLRank(state_encoder, rl_params.model, rl_params.model_class, rl_params.other_params)
             w = 1 if params is None or params.weight is None else params.weight
         elif h == "hff":
-            h = HFF(encoder.fluents, encoder.objects, encoder.events, encoder.goal, cache_states=params.enable_heuristic_cache)
+            enable_heuristic_cache = True if params is None or params.enable_heuristic_cache is None else params.enable_heuristic_cache
+            h = HFF(encoder.fluents, encoder.objects, encoder.events, encoder.goal, cache_states=enable_heuristic_cache)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "hadd":
-            h = HAdd(encoder.fluents, encoder.objects, encoder.events, encoder.goal, cache_states=params.enable_heuristic_cache)
+            enable_heuristic_cache = True if params is None or params.enable_heuristic_cache is None else params.enable_heuristic_cache
+            h = HAdd(encoder.fluents, encoder.objects, encoder.events, encoder.goal, cache_states=enable_heuristic_cache)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "hmax":
-            h = HMax(encoder.fluents, encoder.objects, encoder.events, encoder.goal, cache_states=params.enable_heuristic_cache)
+            enable_heuristic_cache = True if params is None or params.enable_heuristic_cache is None else params.enable_heuristic_cache
+            h = HMax(encoder.fluents, encoder.objects, encoder.events, encoder.goal, cache_states=enable_heuristic_cache)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "hmax_numeric":
-            h = HMaxNumeric(encoder.fluents, encoder.objects, encoder.events, encoder.goal, cache_states=params.enable_heuristic_cache)
+            enable_heuristic_cache = True if params is None or params.enable_heuristic_cache is None else params.enable_heuristic_cache
+            h = HMaxNumeric(encoder.fluents, encoder.objects, encoder.events, encoder.goal, cache_states=enable_heuristic_cache)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "blind":
             h = CustomHeuristic(lambda x: 0.0)
