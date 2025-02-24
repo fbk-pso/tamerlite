@@ -67,6 +67,7 @@ class SearchParams:
     enable_heuristic_cache: Optional[bool] = None
     weight: Optional[str] = None
     rl_params: Optional[RLParams] = None
+    cache_heuristic: Optional[bool] = None
 
     def contains_rl(self) -> bool:
         return self.rl_params is not None
@@ -233,46 +234,50 @@ class TamerLite(
         else:
             h = "custom" if heuristic and params.heuristic is None else params.heuristic if params.heuristic else "hff"
             rl_params = params.rl_params
+        if params is None:
+            cache_h = False
+        else:
+            cache_h = False if params.cache_heuristic is None else params.cache_heuristic
 
         if h == "custom":
             def rewrite_h(search_state):
                 return heuristic(StateWrapper(encoder.problem, search_state))
-            h = CustomHeuristic(rewrite_h)
+            h = CustomHeuristic(rewrite_h, cache_h)
             w = 1 if params is None or params.weight is None else params.weight
         elif h == "rl_heuristic":
             assert rl_params is not None and rl_params.other_params is not None
             if rl_params.other_params.learning_heuristic == "hadd":
-                heuristic_for_residual = HAdd(big_encoder.fluents, big_encoder.objects, my_events, my_goal)
+                heuristic_for_residual = HAdd(big_encoder.fluents, big_encoder.objects, my_events, my_goal, cache_enabled=rl_params.other_params.cache_heuristic)
             elif rl_params.other_params.learning_heuristic == "hff":
-                heuristic_for_residual = HFF(big_encoder.fluents, big_encoder.objects, my_events, my_goal)
-            h = RLHeuristic(state_encoder, rl_params.model, rl_params.model_class, rl_params.other_params, heuristic_for_residual)
+                heuristic_for_residual = HFF(big_encoder.fluents, big_encoder.objects, my_events, my_goal, cache_enabled=rl_params.other_params.cache_heuristic)
+            h = RLHeuristic(state_encoder, rl_params.model, rl_params.model_class, rl_params.other_params, heuristic_for_residual, cache_h)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "rl_rank":
             assert rl_params is not None and rl_params.other_params is not None
             if rl_params.other_params.learning_heuristic == "hadd":
-                heuristic_for_residual = HAdd(big_encoder.fluents, big_encoder.objects, my_events, my_goal)
+                heuristic_for_residual = HAdd(big_encoder.fluents, big_encoder.objects, my_events, my_goal, cache_enabled=rl_params.other_params.cache_heuristic)
             elif rl_params.other_params.learning_heuristic == "hff":
-                heuristic_for_residual = HFF(big_encoder.fluents, big_encoder.objects, my_events, my_goal)
-            h = RLRank(state_encoder, rl_params.model, rl_params.model_class, rl_params.other_params, heuristic_for_residual)
+                heuristic_for_residual = HFF(big_encoder.fluents, big_encoder.objects, my_events, my_goal, cache_enabled=rl_params.other_params.cache_heuristic)
+            h = RLRank(state_encoder, rl_params.model, rl_params.model_class, rl_params.other_params, heuristic_for_residual, cache_h)
             w = 1 if params is None or params.weight is None else params.weight
         elif h == "hff":
             enable_heuristic_cache = True if params is None or params.enable_heuristic_cache is None else params.enable_heuristic_cache
-            h = HFF(encoder.fluents, encoder.objects, encoder.events, encoder.goal, cache_states=enable_heuristic_cache)
+            h = HFF(encoder.fluents, encoder.objects, encoder.events, encoder.goal, cache_states=enable_heuristic_cache, cache_enabled=cache_h)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "hadd":
             enable_heuristic_cache = True if params is None or params.enable_heuristic_cache is None else params.enable_heuristic_cache
-            h = HAdd(encoder.fluents, encoder.objects, encoder.events, encoder.goal, cache_states=enable_heuristic_cache)
+            h = HAdd(encoder.fluents, encoder.objects, encoder.events, encoder.goal, cache_states=enable_heuristic_cache, cache_enabled=cache_h)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "hmax":
             enable_heuristic_cache = True if params is None or params.enable_heuristic_cache is None else params.enable_heuristic_cache
-            h = HMax(encoder.fluents, encoder.objects, encoder.events, encoder.goal, cache_states=enable_heuristic_cache)
+            h = HMax(encoder.fluents, encoder.objects, encoder.events, encoder.goal, cache_states=enable_heuristic_cache, cache_enabled=cache_h)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "hmax_numeric":
             enable_heuristic_cache = True if params is None or params.enable_heuristic_cache is None else params.enable_heuristic_cache
-            h = HMaxNumeric(encoder.fluents, encoder.objects, encoder.events, encoder.goal, cache_states=enable_heuristic_cache)
+            h = HMaxNumeric(encoder.fluents, encoder.objects, encoder.events, encoder.goal, cache_states=enable_heuristic_cache, cache_enabled=cache_h)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "blind":
-            h = CustomHeuristic(lambda x: 0.0)
+            h = CustomHeuristic(lambda x: 0.0, cache_h)
             w = 0
         else:
             raise NotImplementedError

@@ -22,35 +22,58 @@ class HeuristicKind(Enum):
     HMAX = 3
 
 class Heuristic:
+    def __init__(self, cache_enabled: bool = False):
+        self.cache_enabled = cache_enabled
+
     def eval(self, state: State, ss: SearchSpace) -> Optional[float]:
+        if self.cache_enabled:
+            try:
+                h = state.heuristic_cache[self.name]
+            except KeyError:
+                h = self._eval(state, ss)
+                state.heuristic_cache[self.name] = h
+        else:
+            h = self._eval(state, ss)
+        return h
+
+    def _eval(self, state: State, ss: SearchSpace) -> Optional[float]:
+        raise NotImplementedError
+
+    @property
+    def name(self):
         raise NotImplementedError
 
 class CustomHeuristic(Heuristic):
-    def __init__(self, callable: Callable[[State], Optional[float]]):
+    def __init__(self, callable: Callable[[State], Optional[float]], cache_enabled: bool = False):
+        super().__init__(cache_enabled)
         self.callable = callable
 
-    def eval(self, state: State, ss: SearchSpace) -> Optional[float]:
+    def _eval(self, state: State, ss: SearchSpace) -> Optional[float]:
         return self.callable(state)
 
-def RLRank(state_encoder, model, ModelClass, other_params, sym_h):
-    from tamerlite.rl_heuristics import RLRank
-    return RLRank(state_encoder, model, ModelClass, other_params, sym_h)
+    @property
+    def name(self):
+        return "custom"
 
-def RLHeuristic(state_encoder, model, ModelClass, other_params, sym_h):
+def RLRank(state_encoder, model, ModelClass, other_params, sym_h, cache_enabled):
+    from tamerlite.rl_heuristics import RLRank
+    return RLRank(state_encoder, model, ModelClass, other_params, sym_h, cache_enabled)
+
+def RLHeuristic(state_encoder, model, ModelClass, other_params, sym_h, cache_enabled):
     from tamerlite.rl_heuristics import RLHeuristic
-    return RLHeuristic(state_encoder, model, ModelClass, other_params, sym_h)
+    return RLHeuristic(state_encoder, model, ModelClass, other_params, sym_h, cache_enabled)
 
 def HFF(fluents: Dict[str, str], objects: Dict[str, List[str]],
-         events: Dict[str, List[Tuple[Timing, Event]]], goals: Expression, cache_states: bool):
-    return DeleteRelaxationHeuristic(fluents, objects, events, goals, HeuristicKind.HFF, cache_states)
+         events: Dict[str, List[Tuple[Timing, Event]]], goals: Expression, cache_states: bool, cache_enabled: bool):
+    return DeleteRelaxationHeuristic(fluents, objects, events, goals, HeuristicKind.HFF, cache_states, cache_enabled)
 
 def HAdd(fluents: Dict[str, str], objects: Dict[str, List[str]],
-         events: Dict[str, List[Tuple[Timing, Event]]], goals: Expression, cache_states: bool):
-    return DeleteRelaxationHeuristic(fluents, objects, events, goals, HeuristicKind.HADD, cache_states)
+         events: Dict[str, List[Tuple[Timing, Event]]], goals: Expression, cache_states: bool, cache_enabled: bool):
+    return DeleteRelaxationHeuristic(fluents, objects, events, goals, HeuristicKind.HADD, cache_states, cache_enabled)
 
 def HMax(fluents: Dict[str, str], objects: Dict[str, List[str]],
-         events: Dict[str, List[Tuple[Timing, Event]]], goals: Expression, cache_states: bool):
-    return DeleteRelaxationHeuristic(fluents, objects, events, goals, HeuristicKind.HMAX, cache_states)
+         events: Dict[str, List[Tuple[Timing, Event]]], goals: Expression, cache_states: bool, cache_enabled: bool):
+    return DeleteRelaxationHeuristic(fluents, objects, events, goals, HeuristicKind.HMAX, cache_states, cache_enabled)
 
 
 class _DeleteRelaxationHeuristicBase(Heuristic):
@@ -61,8 +84,10 @@ class _DeleteRelaxationHeuristicBase(Heuristic):
         events: Dict[str, List[Tuple[Timing, Event]]],
         goals: Expression,
         cache_states: bool,
+        cache_enabled: bool,
         ignore_real_int: bool = False,
     ):
+        super().__init__(cache_enabled)
         self._fluents = fluents
         self._objects = objects
         self._events = events
@@ -110,6 +135,10 @@ class _DeleteRelaxationHeuristicBase(Heuristic):
         self._ordered_fluents = list(self._fluents.keys())
         self._ordered_actions = list(self._events.keys())
         self._cache_states = {} if cache_states else None
+
+    @property
+    def name(self):
+        return "hadd" if self._return_hadd else "hff"
 
     def _is_numeric_condition(self, exp: Expression) -> bool:
         if isinstance(exp[-1], bool): # boolean constant
@@ -161,7 +190,7 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
             if self._is_numeric_condition(c):
                 self._numeric_conds.add(c)
 
-    def eval(self, state: State, ss: SearchSpace) -> Optional[float]:
+    def _eval(self, state: State, ss: SearchSpace) -> Optional[float]:
         if self._cache_states is not None:
             assignments_values = tuple(
                 state.assignments[f] for f in self._ordered_fluents
@@ -308,9 +337,10 @@ class HMaxNumeric(_DeleteRelaxationHeuristicBase):
         objects: Dict[str, List[str]],
         events: Dict[str, List[Tuple[Timing, Event]]],
         goals: Expression,
-        cache_states: bool
+        cache_states: bool,
+        cache_enabled: bool
     ):
-        super().__init__(fluents, objects, events, goals, cache_states, ignore_real_int=False)
+        super().__init__(fluents, objects, events, goals, cache_states, cache_enabled, ignore_real_int=False)
 
         self._operator_conditions_fluents: List[Set[str]] = []
         for operator in self._operators:
@@ -414,7 +444,7 @@ class HMaxNumeric(_DeleteRelaxationHeuristicBase):
                 return False
         return True
 
-    def eval(self, state: State, ss: SearchSpace) -> Optional[float]:
+    def _eval(self, state: State, ss: SearchSpace) -> Optional[float]:
         if self._cache_states is not None:
             assignments_values = tuple(
                 state.assignments[f] for f in self._ordered_fluents
