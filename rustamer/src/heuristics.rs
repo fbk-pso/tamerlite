@@ -249,6 +249,7 @@ impl Hash for Operator {
 struct OperatorHmax {
     action: String,
     conditions: Vec<Vec<ExpressionNode>>,
+    condition_expressions: Vec<Expression>,
     effects: Vec<Effect>,
     cost: f64,
 }
@@ -652,6 +653,7 @@ impl DeleteRelaxationHeuristic {
 #[derive(Clone, Debug)]
 pub struct HMaxNumeric {
     goals: Vec<Vec<ExpressionNode>>,
+    goal_expressions: Vec<Expression>,
     extra_fluents: HashMap<String, Vec<Vec<ExpressionNode>>>,
     all_fluents: Vec<String>,
     operators: Vec<OperatorHmax>,
@@ -673,6 +675,8 @@ impl HMaxNumeric {
         let mut extra_fluents = HashMap::new();
         let mut all_fluents = Vec::new();
         let mut extra_goals = Vec::new();
+        let mut expression_manager = ExpressionManager::new();
+
         for (a, le) in events.iter() {
             let mut a_extra_fluents = Vec::new();
             let mut cond: Vec<ExpressionNode> = vec![ExpressionNode::Fluent(format!(
@@ -698,10 +702,15 @@ impl HMaxNumeric {
                 if e.conditions.len() > 0 && e.conditions != vec![ExpressionNode::Bool(true)] {
                     conditions.extend(split_expression(&e.conditions)?);
                 }
+                let condition_expressions: Vec<Expression> = conditions
+                    .iter()
+                    .map(|cond| expression_manager.put(cond))
+                    .collect();
                 if !conditions.contains(&vec![ExpressionNode::Bool(false)]) {
                     operators.push(OperatorHmax {
                         action: a.to_string(),
                         conditions,
+                        condition_expressions,
                         effects,
                         cost: 1.0,
                     });
@@ -713,7 +722,11 @@ impl HMaxNumeric {
 
         let mut goals = split_expression(&goal.into_iter().map(|e| e.v).collect())?;
         goals.extend(extra_goals);
-        
+        let goal_expressions: Vec<Expression> = goals
+            .iter()
+            .map(|cond| expression_manager.put(cond))
+            .collect();
+
         let mut operator_conditions_fluents = Vec::with_capacity(operators.len());
         for operator in &operators {
             let mut conditions_fluents = HashSet::new();
@@ -753,6 +766,7 @@ impl HMaxNumeric {
 
         let res = HMaxNumeric {
             goals,
+            goal_expressions,
             extra_fluents,
             all_fluents,
             operators,
@@ -797,7 +811,7 @@ impl HMaxNumeric {
 
         let mut possible_values = Vec::new();
         let mut tmp_state = State {
-            assignments: HashMap::new(),
+            assignments: HashMap::with_capacity(exp_fluents.len()),
             temporal_network: None,
             todo: HashMap::new(),
             active_conditions: HashMultiSet::new(),
@@ -822,16 +836,17 @@ impl HMaxNumeric {
         return possible_values;
     }
 
-    fn exp_can_be_true<'a>(
+    fn exp_can_be_true(
         &self,
-        exp: &'a Vec<ExpressionNode>,
+        exp: &Vec<ExpressionNode>,
+        exp_id: Expression,
         assignments: &HashMap<&String, HashSet<ExpressionNode>>,
         assignments_changes: &HashSet<&String>,
-        cache_can_be_true: &mut HashMap<&'a Vec<ExpressionNode>, bool>,
+        cache_can_be_true: &mut HashMap<Expression, bool>,
     ) -> bool {
         let mut exp_fluents= Vec::new();
-        if cache_can_be_true.contains_key(exp) {
-            if cache_can_be_true[exp] {
+        if cache_can_be_true.contains_key(&exp_id) {
+            if cache_can_be_true[&exp_id] {
                 return true;
             }
 
@@ -850,23 +865,24 @@ impl HMaxNumeric {
 
         for value in possible_values {
             if value == ExpressionNode::Bool(true) {
-                cache_can_be_true.insert(exp, true);
+                cache_can_be_true.insert(exp_id, true);
                 return true;
             }
         }
-        cache_can_be_true.insert(exp, false);
+        cache_can_be_true.insert(exp_id, false);
         return false;
     }
 
-    fn can_be_true<'a>(
+    fn can_be_true(
         &self,
-        expressions: &'a Vec<Vec<ExpressionNode>>,
+        expressions: &Vec<Vec<ExpressionNode>>,
+        expression_ids: &Vec<Expression>,
         assignments: &HashMap<&String, HashSet<ExpressionNode>>,
         assignments_changes: &HashSet<&String>,
-        cache_can_be_true: &mut HashMap<&'a Vec<ExpressionNode>, bool>,
+        cache_can_be_true: &mut HashMap<Expression, bool>,
     ) -> bool {
-        for exp in expressions {
-            if !self.exp_can_be_true(exp, assignments, assignments_changes, cache_can_be_true) {
+        for (i, exp) in expressions.iter().enumerate() {
+            if !self.exp_can_be_true(exp, expression_ids[i].clone(), assignments, assignments_changes, cache_can_be_true) {
                 return false;
             }
         }
@@ -916,13 +932,14 @@ impl HMaxNumeric {
             }
         }
 
-        let mut cache_can_be_true: HashMap<&Vec<ExpressionNode>, bool> = HashMap::new();
+        let mut cache_can_be_true: HashMap<Expression, bool> = HashMap::new();
         let mut applied_operators = vec![false; self.operators.len()];
         let mut assignments_changes: HashSet<&String> = self.all_fluents.iter().collect();
         let mut depth = 0;
         while assignments_changes.len() > 0 {
             if self.can_be_true(
                 &self.goals,
+                &self.goal_expressions,
                 &assignments,
                 &assignments_changes,
                 &mut cache_can_be_true,
@@ -948,6 +965,7 @@ impl HMaxNumeric {
                     continue;
                 } else if !self.can_be_true(
                     &operator.conditions,
+                    &operator.condition_expressions,
                     &assignments,
                     &assignments_changes,
                     &mut cache_can_be_true,
