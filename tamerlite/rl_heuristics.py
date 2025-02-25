@@ -30,7 +30,7 @@ class RLRank(Heuristic):
             if sym_h is None:
                 return None
             else:
-                if self._reward_signal=="new":
+                if self._reward_signal=="cnt":
                     r -= sym_h
                 else:
                     r += self._gamma**(sym_h-1)
@@ -68,12 +68,12 @@ class RLHeuristic(Heuristic):
             sym_h = self._sym_h.eval(state, ss)
             if sym_h is None:
                 return None
-            if self._reward_signal=="new":
+            if self._reward_signal=="cnt":
                 r -= sym_h
                 r = min(0,r)
             else:
                 r += self._gamma**(sym_h-1)
-        if self._reward_signal=="old":
+        if self._reward_signal=="bin":
             if r == 0:
                 return float(self._deltah_bin)
             elif r < 0:
