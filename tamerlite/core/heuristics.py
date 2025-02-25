@@ -27,9 +27,8 @@ class Heuristic:
 
     def eval(self, state: State, ss: SearchSpace) -> Optional[float]:
         if self.cache_enabled:
-            try:
-                h = state.heuristic_cache[self.name]
-            except KeyError:
+            h = state.heuristic_cache.get(self.name, -1)
+            if h==-1:
                 h = self._eval(state, ss)
                 state.heuristic_cache[self.name] = h
         else:
