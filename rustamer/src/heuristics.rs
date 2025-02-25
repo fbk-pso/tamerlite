@@ -328,7 +328,6 @@ impl DeleteRelaxationHeuristic {
     ) -> PyResult<Self> {
         let mut operators = Vec::new();
         let mut extra_fluents: HashMap<String, Vec<Expression>> = HashMap::new();
-        let mut all_fluents = Vec::new();
         let mut extra_goals = Vec::new();
         let mut expression_manager = ExpressionManager::new();
 
@@ -342,7 +341,6 @@ impl DeleteRelaxationHeuristic {
                 let f = format!("__f_{}_{}", a, i);
                 a_extra_fluents.push(expression_manager.put(&vec![ExpressionNode::Fluent(f.to_string())]));
                 effects.push(expression_manager.put(&vec![ExpressionNode::Fluent(f.to_string())]));
-                all_fluents.push(f.clone());
                 for eff in e.effects.iter() {
                     let t = fluents[&eff.fluent].to_string();
                     if t == "bool" {
@@ -425,9 +423,6 @@ impl DeleteRelaxationHeuristic {
             .map(|(a, ev)| (a.to_string(), ev.len()))
             .collect();
 
-        for (f, _v) in &fluents {
-            all_fluents.push(f.clone());
-        }
         let ordered_fluents: Vec<String> = fluents.iter().map(|(f, _)| f.clone()).collect();
         let ordered_actions: Vec<String> = events.keys().map(|action| action.clone()).collect();
         let cache_states = if cache_states {
