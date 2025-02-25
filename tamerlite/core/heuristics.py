@@ -198,9 +198,9 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
                     lambda action: state.todo.get(action, (None, None))[0], self._ordered_actions
                 )
             )
-
-            if assignments_values in self._cache_states:
-                return self._cache_states[assignments_values]
+            h_val = self._cache_states.get(assignments_values, -1)
+            if h_val != -1:
+                return h_val
 
         costs = {}
         lp = []
