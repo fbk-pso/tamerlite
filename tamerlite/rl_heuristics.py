@@ -24,22 +24,24 @@ class RLRank(Heuristic):
         if ss.goal_reached(state):
             return 0
         state_vec = self._state_encoder.get_state_as_vector(state)
-        r = self.eval_state_vec(state_vec)
         if self._residual:
             sym_h = self._sym_h.eval(state, ss)
-            if sym_h is None:
-                return None
-            else:
-                if self._reward_signal=="cnt":
-                    r -= sym_h
-                else:
-                    r += self._gamma**(sym_h-1)
-        return -r
+        else:
+            sym_h = -1
+        return self.eval_state_vec(state_vec, sym_h)
 
-    def eval_state_vec(self, state_vec):
+    def eval_state_vec(self, state_vec, sym_h):
         s = np.array([state_vec])
         r = self._model(torch.from_numpy(s).float()).detach()[0]
-        return float(r[0])
+        r = float(r[0])
+        if self._residual:
+            if sym_h is None:
+                return None
+            if self._reward_signal=="cnt":
+                r -= sym_h
+            else:
+                r += self._gamma**(sym_h-1)
+        return -r
 
 
 class RLHeuristic(Heuristic):
@@ -63,9 +65,17 @@ class RLHeuristic(Heuristic):
         if ss.goal_reached(state):
             return 0
         state_vec = self._state_encoder.get_state_as_vector(state)
-        r = self.eval_state_vec(state_vec)
         if self._residual:
             sym_h = self._sym_h.eval(state, ss)
+        else:
+            sym_h = -1
+        return self.eval_state_vec(state_vec, sym_h)
+    
+    def eval_state_vec(self, state_vec, sym_h):
+        s = np.array([state_vec])
+        r = self._model(torch.from_numpy(s).float()).detach()[0]
+        r = float(r[0])
+        if self._residual:
             if sym_h is None:
                 return None
             if self._reward_signal=="cnt":
@@ -82,8 +92,3 @@ class RLHeuristic(Heuristic):
                 return float(min(self._deltah_bin, (math.log(min(1, r), self._gamma)+1)))
         else:
             return -r
-
-    def eval_state_vec(self, state_vec):
-        s = np.array([state_vec])
-        r = self._model(torch.from_numpy(s).float()).detach()[0]
-        return float(r[0])   # min(0, -r)
