@@ -112,16 +112,18 @@ impl Heuristic {
     }
 
     #[staticmethod]
+    #[pyo3(signature = (ss, goals_vec, constants_vec, callable, h_sym=None))]
     pub fn hrl(
         ss: &CoreStateEncoder,
         goals_vec: Vec<f32>,
         constants_vec: Vec<f32>,
         callable: PyObject,
+        h_sym: Option<Heuristic>
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: None,
             hmax: None,
-            hrl: Some(HRL::new(ss, goals_vec, constants_vec, callable)?),
+            hrl: Some(HRL::new(ss, goals_vec, constants_vec, callable, h_sym)?),
             hcustom: None,
         })
     }
@@ -149,12 +151,14 @@ pub struct HRL {
     ss: CoreStateEncoder,
     goals_vec: Vec<f32>,
     constants_vec: Vec<f32>,
+    h_sym: Option<DeleteRelaxationHeuristic>,
     callable: PyObject,
 }
 
 impl HRL {
-    fn new(ss: &CoreStateEncoder, goals_vec: Vec<f32>, constants_vec: Vec<f32>, callable: PyObject) -> PyResult<Self> {
-        Ok(HRL { ss: ss.clone(), goals_vec, constants_vec, callable })
+    fn new(ss: &CoreStateEncoder, goals_vec: Vec<f32>, constants_vec: Vec<f32>, callable: PyObject, h_sym: Option<Heuristic>) -> PyResult<Self> {
+        let h = h_sym.unwrap();
+        Ok(HRL { ss: ss.clone(), goals_vec, constants_vec, h_sym: h.hdr, callable })
     }
 
     pub fn eval(&self, state: &State, ss: &SearchSpace) -> PyResult<Option<f64>> {
@@ -167,8 +171,12 @@ impl HRL {
         enc.extend(self.constants_vec.iter());
         enc.extend(self.goals_vec.iter());
         enc.extend(self.ss.get_tn_as_vector(state, ss)?);
+        let h_val = match &self.h_sym {
+            None => Some(-1.0),
+            Some(h) => h.eval(state)?
+        };
         Python::with_gil(|py| {
-            let args = PyTuple::new(py, &[enc.into_pyobject(py)?])?;
+            let args = PyTuple::new(py, &[enc.into_pyobject(py)?, h_val.into_pyobject(py)?])?;
             let r = self.callable.call(py, args, None)?;
             if r.is_none(py) {
                 Ok(None)
@@ -187,6 +195,7 @@ impl Clone for HRL {
                 ss: self.ss.clone(),
                 goals_vec: self.goals_vec.clone(),
                 constants_vec: self.constants_vec.clone(),
+                h_sym: self.h_sym.clone(),
                 callable: self.callable.clone_ref(py)
             }
         })
@@ -309,7 +318,7 @@ pub struct DeleteRelaxationHeuristic {
     operators : Vec<Operator>,
     precondition_of: HashMap<Expression, Vec<OperatorID>>,
     empty_pre_operators: HashSet<OperatorID>,
-    numeric_conds: HashSet<Expression>,    
+    numeric_conds: HashSet<Expression>,
     heuristic_kind: HeuristicKind,
     ordered_fluents: Vec<String>,
     ordered_actions: Vec<String>,
@@ -472,7 +481,7 @@ impl DeleteRelaxationHeuristic {
                 return Ok(res.clone());
             }
         }
-        
+
         let mut costs : HashMap<Expression, f64> = HashMap::new();
         let mut lp : Vec<Expression> = Vec::new();
         let mut init_lp : Vec<Expression> = Vec::new();
@@ -734,7 +743,7 @@ impl HMaxNumeric {
             }
             operator_conditions_fluents.push(conditions_fluents);
         }
-        
+
         let mut operator_effects_fluents = Vec::with_capacity(operators.len());
         for operator in &operators {
             let mut effects_fluents = HashSet::new();
@@ -795,7 +804,7 @@ impl HMaxNumeric {
         let exp_fluents = match exp_fluents {
             Some(fluents) => fluents,
             None => {
-                exp_fluents_extracted = self.extract_fluents(exp); 
+                exp_fluents_extracted = self.extract_fluents(exp);
                 &exp_fluents_extracted
             }
         };
@@ -919,7 +928,7 @@ impl HMaxNumeric {
                 Some((j, _)) => j - 1,
                 None => self.extra_fluents[action].len() - 1,
             };
-            
+
             for (i, f) in self.extra_fluents[action].iter().enumerate() {
                 if let ExpressionNode::Fluent(f) = &f[0] {
                     assignments.insert(f, HashSet::from([ExpressionNode::Bool(i == idx)]));
