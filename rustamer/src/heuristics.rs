@@ -157,8 +157,11 @@ pub struct HRL {
 
 impl HRL {
     fn new(ss: &CoreStateEncoder, goals_vec: Vec<f32>, constants_vec: Vec<f32>, callable: PyObject, h_sym: Option<Heuristic>) -> PyResult<Self> {
-        let h = h_sym.unwrap();
-        Ok(HRL { ss: ss.clone(), goals_vec, constants_vec, h_sym: h.hdr, callable })
+        let h = match h_sym {
+            Some(heuristic) => heuristic.hdr,
+            None => None,
+        };
+        Ok(HRL { ss: ss.clone(), goals_vec, constants_vec, h_sym: h, callable })
     }
 
     pub fn eval(&self, state: &State, ss: &SearchSpace) -> PyResult<Option<f64>> {
