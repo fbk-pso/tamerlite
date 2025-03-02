@@ -33,17 +33,19 @@ pub struct Heuristic {
     hmax: Option<HMaxNumeric>,
     hrl: Option<HRL>,
     hcustom: Option<CustomHeuristic>,
+    cache_enabled: bool,
 }
 
 #[pymethods]
 impl Heuristic {
     #[staticmethod]
-    pub fn custom(callable: PyObject) -> PyResult<Self> {
+    pub fn custom(callable: PyObject, cache_enabled: bool) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: None,
             hmax: None,
             hrl: None,
             hcustom: Some(CustomHeuristic::new(callable)?),
+            cache_enabled: cache_enabled,
         })
     }
 
@@ -54,12 +56,14 @@ impl Heuristic {
         events: HashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
         cache_states: bool,
+        cache_enabled: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: Some(DeleteRelaxationHeuristic::new(fluents, objects, events, goal, HeuristicKind::HFF, cache_states)?),
             hmax: None,
             hrl: None,
             hcustom: None,
+            cache_enabled: cache_enabled,
         })
     }
 
@@ -70,12 +74,14 @@ impl Heuristic {
         events: HashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
         cache_states: bool,
+        cache_enabled: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: Some(DeleteRelaxationHeuristic::new(fluents, objects, events, goal, HeuristicKind::HADD, cache_states)?),
             hmax: None,
             hrl: None,
             hcustom: None,
+            cache_enabled: cache_enabled,
         })
     }
 
@@ -86,12 +92,14 @@ impl Heuristic {
         events: HashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
         cache_states: bool,
+        cache_enabled: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: Some(DeleteRelaxationHeuristic::new(fluents, objects, events, goal, HeuristicKind::HMAX, cache_states)?),
             hmax: None,
             hrl: None,
             hcustom: None,
+            cache_enabled: cache_enabled,
         })
     }
 
@@ -102,47 +110,83 @@ impl Heuristic {
         events: HashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
         cache_states: bool,
+        cache_enabled: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: None,
             hmax: Some(HMaxNumeric::new(fluents, events, goal, cache_states)?),
             hrl: None,
             hcustom: None,
+            cache_enabled: cache_enabled,
         })
     }
 
     #[staticmethod]
-    #[pyo3(signature = (ss, goals_vec, constants_vec, callable, h_sym=None))]
+    #[pyo3(signature = (name, ss, goals_vec, constants_vec, callable, h_sym=None, cache_enabled=false))]
     pub fn hrl(
+        name: &str,
         ss: &CoreStateEncoder,
         goals_vec: Vec<f32>,
         constants_vec: Vec<f32>,
         callable: PyObject,
-        h_sym: Option<Heuristic>
+        h_sym: Option<Heuristic>,
+        cache_enabled: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: None,
             hmax: None,
-            hrl: Some(HRL::new(ss, goals_vec, constants_vec, callable, h_sym)?),
+            hrl: Some(HRL::new(ss, goals_vec, constants_vec, callable, h_sym, name)?),
             hcustom: None,
+            cache_enabled: cache_enabled,
         })
     }
 
-    pub fn eval(&self, state: &State, ss: &SearchSpace) -> PyResult<Option<f64>> {
+    pub fn eval(&self, state: &mut State, ss: &SearchSpace) -> PyResult<Option<f64>> {
+        if self.cache_enabled {
+            if let Some(h_value) = state.heuristic_cache.get(&self.name()) {
+                return Ok(*h_value);
+            }
+        }
+        let h_value = {
+            if self.hdr.is_some() {
+                let h = self.hdr.as_ref().unwrap();
+                h.eval(state)
+            } else if self.hmax.is_some() {
+                let h = self.hmax.as_ref().unwrap();
+                h.eval(state)
+            } else if self.hcustom.is_some() {
+                let h = self.hcustom.as_ref().unwrap();
+                h.eval(state)
+            } else if self.hrl.is_some() {
+                let h = self.hrl.as_ref().unwrap();
+                h.eval(state, ss)
+            } else {
+                Ok(Some(0.0))
+            }
+        };
+        if self.cache_enabled {
+            if let Ok(h_value) = h_value {
+                state.heuristic_cache.insert(self.name().to_string(), h_value);
+            }
+        }
+        return h_value;
+    }
+
+    pub fn name(&self) -> String {
         if self.hdr.is_some() {
             let h = self.hdr.as_ref().unwrap();
-            h.eval(state)
+            h.name()
         } else if self.hmax.is_some() {
             let h = self.hmax.as_ref().unwrap();
-            h.eval(state)
+            h.name()
         } else if self.hcustom.is_some() {
             let h = self.hcustom.as_ref().unwrap();
-            h.eval(state)
+            h.name()
         } else if self.hrl.is_some() {
             let h = self.hrl.as_ref().unwrap();
-            h.eval(state, ss)
+            h.name()
         } else {
-            Ok(Some(0.0))
+            String::from("")
         }
     }
 }
@@ -153,15 +197,16 @@ pub struct HRL {
     constants_vec: Vec<f32>,
     h_sym: Option<DeleteRelaxationHeuristic>,
     callable: PyObject,
+    name: String,
 }
 
 impl HRL {
-    fn new(ss: &CoreStateEncoder, goals_vec: Vec<f32>, constants_vec: Vec<f32>, callable: PyObject, h_sym: Option<Heuristic>) -> PyResult<Self> {
+    fn new(ss: &CoreStateEncoder, goals_vec: Vec<f32>, constants_vec: Vec<f32>, callable: PyObject, h_sym: Option<Heuristic>, name: &str) -> PyResult<Self> {
         let h = match h_sym {
             Some(heuristic) => heuristic.hdr,
             None => None,
         };
-        Ok(HRL { ss: ss.clone(), goals_vec, constants_vec, h_sym: h, callable })
+        Ok(HRL { ss: ss.clone(), goals_vec, constants_vec, h_sym: h, callable, name: String::from(name) })
     }
 
     pub fn eval(&self, state: &State, ss: &SearchSpace) -> PyResult<Option<f64>> {
@@ -189,6 +234,10 @@ impl HRL {
         })
     }
 
+    pub fn name(&self) -> String {
+        self.name.clone()
+    }
+
 }
 
 impl Clone for HRL {
@@ -199,7 +248,8 @@ impl Clone for HRL {
                 goals_vec: self.goals_vec.clone(),
                 constants_vec: self.constants_vec.clone(),
                 h_sym: self.h_sym.clone(),
-                callable: self.callable.clone_ref(py)
+                callable: self.callable.clone_ref(py),
+                name: self.name.clone()
             }
         })
     }
@@ -225,6 +275,10 @@ impl CustomHeuristic {
                 Ok(Some(r.extract(py)?))
             }
         })
+    }
+
+    pub fn name(&self) -> String {
+        String::from("custom")
     }
 }
 
@@ -654,6 +708,14 @@ impl DeleteRelaxationHeuristic {
         }
         Some(res)
     }
+
+    fn name(&self) -> String {
+        match self.heuristic_kind {
+            HeuristicKind::HFF => String::from("hff"),
+            HeuristicKind::HADD => String::from("hadd"),
+            HeuristicKind::HMAX => String::from("hmax"),
+        }
+    }
 }
 
 
@@ -824,6 +886,7 @@ impl HMaxNumeric {
             active_conditions: HashMultiSet::new(),
             g: 0.0,
             path: None,
+            heuristic_cache: HashMap::new(),
         };
         for state_values in values
             .iter()
@@ -1015,5 +1078,9 @@ impl HMaxNumeric {
             cache_states.as_mut().unwrap().insert(assignments_values, None);
         }
         Ok(None)
+    }
+
+    pub fn name(&self) -> String {
+        String::from("hmax")
     }
 }
