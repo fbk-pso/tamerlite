@@ -246,18 +246,24 @@ class TamerLite(
             w = 1 if params is None or params.weight is None else params.weight
         elif h == "rl_heuristic":
             assert rl_params is not None and rl_params.other_params is not None
-            if rl_params.other_params.learning_heuristic == "hadd":
-                heuristic_for_residual = HAdd(big_encoder.fluents, big_encoder.objects, my_events, my_goal, cache_enabled=rl_params.other_params.cache_heuristic)
-            elif rl_params.other_params.learning_heuristic == "hff":
-                heuristic_for_residual = HFF(big_encoder.fluents, big_encoder.objects, my_events, my_goal, cache_enabled=rl_params.other_params.cache_heuristic)
+            if rl_params.other_params.residual:
+                if rl_params.other_params.learning_heuristic == "hadd":
+                    heuristic_for_residual = HAdd(big_encoder.fluents, big_encoder.objects, my_events, my_goal, cache_enabled=rl_params.other_params.cache_heuristic)
+                elif rl_params.other_params.learning_heuristic == "hff":
+                    heuristic_for_residual = HFF(big_encoder.fluents, big_encoder.objects, my_events, my_goal, cache_enabled=rl_params.other_params.cache_heuristic)
+            else:
+                heuristic_for_residual = None
             h = RLHeuristic(state_encoder, rl_params.model, rl_params.model_class, rl_params.other_params, heuristic_for_residual, cache_h)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "rl_rank":
             assert rl_params is not None and rl_params.other_params is not None
-            if rl_params.other_params.learning_heuristic == "hadd":
-                heuristic_for_residual = HAdd(big_encoder.fluents, big_encoder.objects, my_events, my_goal, cache_enabled=rl_params.other_params.cache_heuristic)
-            elif rl_params.other_params.learning_heuristic == "hff":
-                heuristic_for_residual = HFF(big_encoder.fluents, big_encoder.objects, my_events, my_goal, cache_enabled=rl_params.other_params.cache_heuristic)
+            if rl_params.other_params.residual:
+                if rl_params.other_params.learning_heuristic == "hadd":
+                    heuristic_for_residual = HAdd(big_encoder.fluents, big_encoder.objects, my_events, my_goal, cache_enabled=rl_params.other_params.cache_heuristic)
+                elif rl_params.other_params.learning_heuristic == "hff":
+                    heuristic_for_residual = HFF(big_encoder.fluents, big_encoder.objects, my_events, my_goal, cache_enabled=rl_params.other_params.cache_heuristic)
+            else:
+                heuristic_for_residual = None
             h = RLRank(state_encoder, rl_params.model, rl_params.model_class, rl_params.other_params, heuristic_for_residual, cache_h)
             w = 1 if params is None or params.weight is None else params.weight
         elif h == "hff":

@@ -16,30 +16,30 @@ from rustamer import (
 )
 from rustamer import CoreStateEncoder, Heuristic
 
-def HFF(fluents, objects, events, goals, cache_states):
-    return Heuristic.hff(fluents, objects, events, goals, cache_states)
+def HFF(fluents, objects, events, goals, cache_states, cache_enabled):
+    return Heuristic.hff(fluents, objects, events, goals, cache_states, cache_enabled)
 
-def HAdd(fluents, objects, events, goals, cache_states):
-    return Heuristic.hadd(fluents, objects, events, goals, cache_states)
+def HAdd(fluents, objects, events, goals, cache_states, cache_enabled):
+    return Heuristic.hadd(fluents, objects, events, goals, cache_states, cache_enabled)
 
-def HMaxNumeric(fluents, objects, events, goals, cache_states):
-    return Heuristic.hmax_numeric(fluents, objects, events, goals, cache_states)
+def HMaxNumeric(fluents, objects, events, goals, cache_states, cache_enabled):
+    return Heuristic.hmax_numeric(fluents, objects, events, goals, cache_states, cache_enabled)
 
-def HMax(fluents, objects, events, goals, cache_states):
-    return Heuristic.hmax(fluents, objects, events, goals, cache_states)
+def HMax(fluents, objects, events, goals, cache_states, cache_enabled):
+    return Heuristic.hmax(fluents, objects, events, goals, cache_states, cache_enabled)
 
-def RLRank(state_encoder, model, ModelClass, other_params, sym_h):
+def RLRank(state_encoder, model, ModelClass, other_params, sym_h, cache_enabled):
     from tamerlite.rl_heuristics import RLRank
-    h = RLRank(state_encoder, model, ModelClass, other_params, sym_h)
-    return Heuristic.hrl(state_encoder._general_state_encoder._cse, state_encoder._goals_vec, state_encoder._constants_vec, h.eval_state_vec, sym_h)
+    h = RLRank(state_encoder, model, ModelClass, other_params, sym_h, cache_enabled)
+    return Heuristic.hrl(h.name, state_encoder._general_state_encoder._cse, state_encoder._goals_vec, state_encoder._constants_vec, h.eval_state_vec, sym_h, cache_enabled)
 
-def RLHeuristic(state_encoder, model, ModelClass, other_params, sym_h):
+def RLHeuristic(state_encoder, model, ModelClass, other_params, sym_h, cache_enabled):
     from tamerlite.rl_heuristics import RLHeuristic
-    h = RLHeuristic(state_encoder, model, ModelClass, other_params, sym_h)
-    return Heuristic.hrl(state_encoder._general_state_encoder._cse, state_encoder._goals_vec, state_encoder._constants_vec, h.eval_state_vec, sym_h)
+    h = RLHeuristic(state_encoder, model, ModelClass, other_params, sym_h, cache_enabled)
+    return Heuristic.hrl(h.name, state_encoder._general_state_encoder._cse, state_encoder._goals_vec, state_encoder._constants_vec, h.eval_state_vec, sym_h, cache_enabled)
 
-def CustomHeuristic(callable):
-    return Heuristic.custom(callable)
+def CustomHeuristic(callable, cache_enabled):
+    return Heuristic.custom(callable, cache_enabled)
 
 def get_fluents(exp):
     for e in exp:
