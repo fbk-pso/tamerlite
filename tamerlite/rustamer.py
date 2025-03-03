@@ -16,11 +16,17 @@ from rustamer import (
 )
 from rustamer import CoreStateEncoder, Heuristic
 
-def HFF(fluents, objects, events, goals):
-    return Heuristic.hff(fluents, objects, events, goals)
+def HFF(fluents, objects, events, goals, cache_states):
+    return Heuristic.hff(fluents, objects, events, goals, cache_states)
 
-def HAdd(fluents, objects, events, goals):
-    return Heuristic.hadd(fluents, objects, events, goals)
+def HAdd(fluents, objects, events, goals, cache_states):
+    return Heuristic.hadd(fluents, objects, events, goals, cache_states)
+
+def HMaxNumeric(fluents, objects, events, goals, cache_states):
+    return Heuristic.hmax_numeric(fluents, objects, events, goals, cache_states)
+
+def HMax(fluents, objects, events, goals, cache_states):
+    return Heuristic.hmax(fluents, objects, events, goals, cache_states)
 
 def RLRank(state_encoder, model, ModelClass, other_params):
     from tamerlite.rl_heuristics import RLRank

@@ -127,7 +127,7 @@ pub fn multiqueue_search(ss: &mut SearchSpace, heuristics: Vec<(Heuristic, f64)>
                     let h = heuristic.eval(&s, ss)?;
                     match h {
                         Some(v) => {
-                            let f = weight * v + (1.0 - weight) * s.g;
+                            let f = *weight * v + (1.0 - *weight) * s.g;
                             opens[i].push(PrioritizedItem{heuristic: f, state_container: sc.clone()});
                         },
                         None => continue,
