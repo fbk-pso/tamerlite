@@ -141,9 +141,10 @@ impl Heuristic {
         })
     }
 
-    pub fn eval(&self, state: &mut State, ss: &SearchSpace) -> PyResult<Option<f64>> {
+    pub fn eval(&self, state: &State, ss: &SearchSpace) -> PyResult<Option<f64>> {
         if self.cache_enabled {
-            if let Some(h_value) = state.heuristic_cache.get(&self.name()) {
+            let heuristic_cache = state.heuristic_cache.lock().unwrap();
+            if let Some(h_value) = heuristic_cache.get(&self.name()) {
                 return Ok(*h_value);
             }
         }
@@ -165,8 +166,9 @@ impl Heuristic {
             }
         };
         if self.cache_enabled {
+            let mut heuristic_cache = state.heuristic_cache.lock().unwrap();
             if let Ok(h_value) = h_value {
-                state.heuristic_cache.insert(self.name().to_string(), h_value);
+                heuristic_cache.insert(self.name().to_string(), h_value);
             }
         }
         return h_value;
@@ -195,18 +197,19 @@ pub struct HRL {
     ss: CoreStateEncoder,
     goals_vec: Vec<f32>,
     constants_vec: Vec<f32>,
-    h_sym: Option<DeleteRelaxationHeuristic>,
+    hdl: Option<DeleteRelaxationHeuristic>,
+    hmax: Option<HMaxNumeric>,
     callable: PyObject,
     name: String,
 }
 
 impl HRL {
     fn new(ss: &CoreStateEncoder, goals_vec: Vec<f32>, constants_vec: Vec<f32>, callable: PyObject, h_sym: Option<Heuristic>, name: &str) -> PyResult<Self> {
-        let h = match h_sym {
-            Some(heuristic) => heuristic.hdr,
-            None => None,
+        let h_sym = match h_sym {
+            Some(heuristic) => (heuristic.hdr, heuristic.hmax),
+            None => (None, None),
         };
-        Ok(HRL { ss: ss.clone(), goals_vec, constants_vec, h_sym: h, callable, name: String::from(name) })
+        Ok(HRL { ss: ss.clone(), goals_vec, constants_vec, hdl: h_sym.0, hmax: h_sym.1, callable, name: String::from(name) })
     }
 
     pub fn eval(&self, state: &State, ss: &SearchSpace) -> PyResult<Option<f64>> {
@@ -219,9 +222,12 @@ impl HRL {
         enc.extend(self.constants_vec.iter());
         enc.extend(self.goals_vec.iter());
         enc.extend(self.ss.get_tn_as_vector(state, ss)?);
-        let h_val = match &self.h_sym {
-            None => Some(-1.0),
-            Some(h) => h.eval(state)?
+        let h_val = match &self.hdl {
+            Some(h) => h.eval(state)?,
+            None => match &self.hmax {
+                Some(h) => h.eval(state)?,
+                None => Some(-1.0),
+            }
         };
         Python::with_gil(|py| {
             let args = PyTuple::new(py, &[enc.into_pyobject(py)?, h_val.into_pyobject(py)?])?;
@@ -247,7 +253,8 @@ impl Clone for HRL {
                 ss: self.ss.clone(),
                 goals_vec: self.goals_vec.clone(),
                 constants_vec: self.constants_vec.clone(),
-                h_sym: self.h_sym.clone(),
+                hdl: self.hdl.clone(),
+                hmax: self.hmax.clone(),
                 callable: self.callable.clone_ref(py),
                 name: self.name.clone()
             }
@@ -886,7 +893,7 @@ impl HMaxNumeric {
             active_conditions: HashMultiSet::new(),
             g: 0.0,
             path: None,
-            heuristic_cache: HashMap::new(),
+            heuristic_cache: Arc::new(Mutex::new(HashMap::new())),
         };
         for state_values in values
             .iter()

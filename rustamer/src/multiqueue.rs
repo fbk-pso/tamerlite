@@ -115,7 +115,7 @@ pub fn multiqueue_search(ss: &mut SearchSpace, heuristics: Vec<(Heuristic, f64)>
                 }
                 successor_states = ss.get_successor_states(&state)?;
             }
-            for mut s in successor_states {
+            for s in successor_states {
                 if open_set.contains(&s) || closed_set.contains(&s) {
                     continue;
                 }
@@ -124,7 +124,7 @@ pub fn multiqueue_search(ss: &mut SearchSpace, heuristics: Vec<(Heuristic, f64)>
                 }
                 let sc = Rc::new(RefCell::new(StateContainer{state: s.clone(), expanded: false}));
                 for (i, (heuristic, weight)) in heuristics.iter().enumerate() {
-                    let h = heuristic.eval(&mut s, ss)?;
+                    let h = heuristic.eval(&s, ss)?;
                     match h {
                         Some(v) => {
                             let f = *weight * v + (1.0 - *weight) * s.g;
