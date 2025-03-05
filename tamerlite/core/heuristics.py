@@ -164,8 +164,9 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
         goals: Expression,
         heuristic_kind: HeuristicKind,
         internal_caching: bool,
+        cache_value_in_state: bool,
     ):
-        super().__init__(fluents, objects, events, goals, internal_caching, ignore_real_int=True)
+        super().__init__(fluents, objects, events, goals, internal_caching, cache_value_in_state, ignore_real_int=True)
         self._heuristic_kind = heuristic_kind
 
         self._precondition_of = {}
