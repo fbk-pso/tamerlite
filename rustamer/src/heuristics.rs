@@ -33,19 +33,19 @@ pub struct Heuristic {
     hmax: Option<HMaxNumeric>,
     hrl: Option<HRL>,
     hcustom: Option<CustomHeuristic>,
-    cache_enabled: bool,
+    cache_value_in_state: bool,
 }
 
 #[pymethods]
 impl Heuristic {
     #[staticmethod]
-    pub fn custom(callable: PyObject, cache_enabled: bool) -> PyResult<Self> {
+    pub fn custom(callable: PyObject, cache_value_in_state: bool) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: None,
             hmax: None,
             hrl: None,
             hcustom: Some(CustomHeuristic::new(callable)?),
-            cache_enabled: cache_enabled,
+            cache_value_in_state: cache_value_in_state,
         })
     }
 
@@ -55,15 +55,15 @@ impl Heuristic {
         objects: HashMap<String, Vec<String>>,
         events: HashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
-        cache_states: bool,
-        cache_enabled: bool,
+        internal_caching: bool,
+        cache_value_in_state: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
-            hdr: Some(DeleteRelaxationHeuristic::new(fluents, objects, events, goal, HeuristicKind::HFF, cache_states)?),
+            hdr: Some(DeleteRelaxationHeuristic::new(fluents, objects, events, goal, HeuristicKind::HFF, internal_caching)?),
             hmax: None,
             hrl: None,
             hcustom: None,
-            cache_enabled: cache_enabled,
+            cache_value_in_state: cache_value_in_state,
         })
     }
 
@@ -73,15 +73,15 @@ impl Heuristic {
         objects: HashMap<String, Vec<String>>,
         events: HashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
-        cache_states: bool,
-        cache_enabled: bool,
+        internal_caching: bool,
+        cache_value_in_state: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
-            hdr: Some(DeleteRelaxationHeuristic::new(fluents, objects, events, goal, HeuristicKind::HADD, cache_states)?),
+            hdr: Some(DeleteRelaxationHeuristic::new(fluents, objects, events, goal, HeuristicKind::HADD, internal_caching)?),
             hmax: None,
             hrl: None,
             hcustom: None,
-            cache_enabled: cache_enabled,
+            cache_value_in_state: cache_value_in_state,
         })
     }
 
@@ -91,15 +91,15 @@ impl Heuristic {
         objects: HashMap<String, Vec<String>>,
         events: HashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
-        cache_states: bool,
-        cache_enabled: bool,
+        internal_caching: bool,
+        cache_value_in_state: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
-            hdr: Some(DeleteRelaxationHeuristic::new(fluents, objects, events, goal, HeuristicKind::HMAX, cache_states)?),
+            hdr: Some(DeleteRelaxationHeuristic::new(fluents, objects, events, goal, HeuristicKind::HMAX, internal_caching)?),
             hmax: None,
             hrl: None,
             hcustom: None,
-            cache_enabled: cache_enabled,
+            cache_value_in_state: cache_value_in_state,
         })
     }
 
@@ -109,20 +109,20 @@ impl Heuristic {
         _objects: HashMap<String, Vec<String>>,
         events: HashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
-        cache_states: bool,
-        cache_enabled: bool,
+        internal_caching: bool,
+        cache_value_in_state: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: None,
-            hmax: Some(HMaxNumeric::new(fluents, events, goal, cache_states)?),
+            hmax: Some(HMaxNumeric::new(fluents, events, goal, internal_caching)?),
             hrl: None,
             hcustom: None,
-            cache_enabled: cache_enabled,
+            cache_value_in_state: cache_value_in_state,
         })
     }
 
     #[staticmethod]
-    #[pyo3(signature = (name, ss, goals_vec, constants_vec, callable, h_sym=None, cache_enabled=false))]
+    #[pyo3(signature = (name, ss, goals_vec, constants_vec, callable, h_sym=None, cache_value_in_state=false))]
     pub fn hrl(
         name: &str,
         ss: &CoreStateEncoder,
@@ -130,19 +130,19 @@ impl Heuristic {
         constants_vec: Vec<f32>,
         callable: PyObject,
         h_sym: Option<Heuristic>,
-        cache_enabled: bool,
+        cache_value_in_state: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: None,
             hmax: None,
             hrl: Some(HRL::new(ss, goals_vec, constants_vec, callable, h_sym, name)?),
             hcustom: None,
-            cache_enabled: cache_enabled,
+            cache_value_in_state: cache_value_in_state,
         })
     }
 
     pub fn eval(&self, state: &State, ss: &SearchSpace) -> PyResult<Option<f64>> {
-        if self.cache_enabled {
+        if self.cache_value_in_state {
             let heuristic_cache = state.heuristic_cache.lock().unwrap();
             if let Some(h_value) = heuristic_cache.get(&self.name()) {
                 return Ok(*h_value);
@@ -165,7 +165,7 @@ impl Heuristic {
                 Ok(Some(0.0))
             }
         };
-        if self.cache_enabled {
+        if self.cache_value_in_state {
             let mut heuristic_cache = state.heuristic_cache.lock().unwrap();
             if let Ok(h_value) = h_value {
                 heuristic_cache.insert(self.name().to_string(), h_value);
@@ -386,7 +386,7 @@ pub struct DeleteRelaxationHeuristic {
     heuristic_kind: HeuristicKind,
     ordered_fluents: Vec<String>,
     ordered_actions: Vec<String>,
-    cache_states: Arc<Mutex<Option<HashMap<Vec<ExpressionNode>, Option<f64>>>>>,
+    internal_caching: Arc<Mutex<Option<HashMap<Vec<ExpressionNode>, Option<f64>>>>>,
     expression_manager: Arc<Mutex<ExpressionManager>>,
 }
 
@@ -397,7 +397,7 @@ impl DeleteRelaxationHeuristic {
         events: HashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
         heuristic_kind: HeuristicKind,
-        cache_states: bool,
+        internal_caching: bool,
     ) -> PyResult<Self> {
         let mut operators = Vec::new();
         let mut extra_fluents: HashMap<String, Vec<Expression>> = HashMap::new();
@@ -498,7 +498,7 @@ impl DeleteRelaxationHeuristic {
 
         let ordered_fluents: Vec<String> = fluents.iter().map(|(f, _)| f.clone()).collect();
         let ordered_actions: Vec<String> = events.keys().map(|action| action.clone()).collect();
-        let cache_states = if cache_states {
+        let internal_caching = if internal_caching {
             Some(HashMap::new())
         } else {
             None
@@ -516,21 +516,21 @@ impl DeleteRelaxationHeuristic {
             heuristic_kind,
             ordered_fluents,
             ordered_actions,
-            cache_states: Arc::new(Mutex::new(cache_states)),
+            internal_caching: Arc::new(Mutex::new(internal_caching)),
             expression_manager: Arc::new(Mutex::new(expression_manager))
         };
         Ok(res)
     }
 
     pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
-        let mut cache_states = self.cache_states.lock().unwrap();
+        let mut internal_caching = self.internal_caching.lock().unwrap();
         let mut expression_manager = self.expression_manager.lock().unwrap();
-        let mut assignments_values: Vec<ExpressionNode> = if cache_states.is_some() {
+        let mut assignments_values: Vec<ExpressionNode> = if internal_caching.is_some() {
             Vec::with_capacity(self.ordered_fluents.len())
         } else {
             Vec::new()
         };
-        if cache_states.is_some() {
+        if internal_caching.is_some() {
             for f in &self.ordered_fluents {
                 assignments_values.push(state.assignments[f].clone());
             }
@@ -541,7 +541,7 @@ impl DeleteRelaxationHeuristic {
                 };
                 assignments_values.push(ExpressionNode::Int(r.into()));
             }
-            if let Some(res) = cache_states.as_ref().unwrap().get(&assignments_values) {
+            if let Some(res) = internal_caching.as_ref().unwrap().get(&assignments_values) {
                 return Ok(res.clone());
             }
         }
@@ -632,8 +632,8 @@ impl DeleteRelaxationHeuristic {
         let h = self.cost(&self.goals, &costs);
 
         if h.is_none() {
-            if cache_states.is_some() {
-                cache_states.as_mut().unwrap().insert(assignments_values, None);
+            if internal_caching.is_some() {
+                internal_caching.as_mut().unwrap().insert(assignments_values, None);
             }
             return Ok(None);
         }
@@ -647,14 +647,14 @@ impl DeleteRelaxationHeuristic {
                         h.unwrap() + v
                     };
 
-                    if cache_states.is_some() {
-                        cache_states.as_mut().unwrap().insert(assignments_values, Some(res));
+                    if internal_caching.is_some() {
+                        internal_caching.as_mut().unwrap().insert(assignments_values, Some(res));
                     }
                     return Ok(Some(res));
                 },
                 None => {
-                    if cache_states.is_some() {
-                        cache_states.as_mut().unwrap().insert(assignments_values, None);
+                    if internal_caching.is_some() {
+                        internal_caching.as_mut().unwrap().insert(assignments_values, None);
                     }
                     return Ok(None);
                 }
@@ -668,8 +668,8 @@ impl DeleteRelaxationHeuristic {
 
         if let Some(hv) = h {
             if hv == 0.0 {
-                if cache_states.is_some() {
-                    cache_states.as_mut().unwrap().insert(assignments_values, Some(res));
+                if internal_caching.is_some() {
+                    internal_caching.as_mut().unwrap().insert(assignments_values, Some(res));
                 }
                 return Ok(Some(res));
             }
@@ -693,8 +693,8 @@ impl DeleteRelaxationHeuristic {
             }
         }
 
-        if cache_states.is_some() {
-            cache_states.as_mut().unwrap().insert(assignments_values, Some(res));
+        if internal_caching.is_some() {
+            internal_caching.as_mut().unwrap().insert(assignments_values, Some(res));
         }
         Ok(Some(res))
     }
@@ -737,7 +737,7 @@ pub struct HMaxNumeric {
     operator_effects_fluents: Vec<HashSet<String>>,
     ordered_fluents: Vec<String>,
     ordered_actions: Vec<String>,
-    cache_states: Arc<Mutex<Option<HashMap<Vec<ExpressionNode>, Option<f64>>>>>,
+    internal_caching: Arc<Mutex<Option<HashMap<Vec<ExpressionNode>, Option<f64>>>>>,
 }
 
 impl HMaxNumeric {
@@ -745,7 +745,7 @@ impl HMaxNumeric {
         fluents: HashMap<String, String>,
         events: HashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
-        cache_states: bool,
+        internal_caching: bool,
 ) -> PyResult<Self> {
         let mut operators = Vec::new();
         let mut extra_fluents = HashMap::new();
@@ -834,7 +834,7 @@ impl HMaxNumeric {
         }
         let ordered_fluents: Vec<String> = fluents.iter().map(|(f, _)| f.clone()).collect();
         let ordered_actions: Vec<String> = events.keys().map(|action| action.clone()).collect();
-        let cache_states = if cache_states {
+        let internal_caching = if internal_caching {
             Some(HashMap::new())
         } else {
             None
@@ -850,7 +850,7 @@ impl HMaxNumeric {
             operator_effects_fluents,
             ordered_fluents,
             ordered_actions,
-            cache_states: Arc::new(Mutex::new(cache_states)),
+            internal_caching: Arc::new(Mutex::new(internal_caching)),
         };
         Ok(res)
     }
@@ -967,13 +967,13 @@ impl HMaxNumeric {
     }
 
     fn eval(&self, state: &State) -> PyResult<Option<f64>> {
-        let mut cache_states = self.cache_states.lock().unwrap();
-        let mut assignments_values: Vec<ExpressionNode> = if cache_states.is_some() {
+        let mut internal_caching = self.internal_caching.lock().unwrap();
+        let mut assignments_values: Vec<ExpressionNode> = if internal_caching.is_some() {
             Vec::with_capacity(self.ordered_fluents.len())
         } else {
             Vec::new()
         };
-        if cache_states.is_some() {
+        if internal_caching.is_some() {
             for f in &self.ordered_fluents {
                 assignments_values.push(state.assignments[f].clone());
             }
@@ -984,7 +984,7 @@ impl HMaxNumeric {
                 };
                 assignments_values.push(ExpressionNode::Int(r.into()));
             }
-            if let Some(res) = cache_states.as_ref().unwrap().get(&assignments_values) {
+            if let Some(res) = internal_caching.as_ref().unwrap().get(&assignments_values) {
                 return Ok(res.clone());
             }
         }
@@ -1022,8 +1022,8 @@ impl HMaxNumeric {
                 &mut cache_can_be_true,
             ) {
                 // goal satisfied
-                if cache_states.is_some() {
-                    cache_states.as_mut().unwrap().insert(assignments_values, Some(depth as f64));
+                if internal_caching.is_some() {
+                    internal_caching.as_mut().unwrap().insert(assignments_values, Some(depth as f64));
                 }
                 return Ok(Some(depth as f64));
             }
@@ -1081,13 +1081,13 @@ impl HMaxNumeric {
             depth += 1;
         }
 
-        if cache_states.is_some() {
-            cache_states.as_mut().unwrap().insert(assignments_values, None);
+        if internal_caching.is_some() {
+            internal_caching.as_mut().unwrap().insert(assignments_values, None);
         }
         Ok(None)
     }
 
     pub fn name(&self) -> String {
-        String::from("hmax")
+        String::from("hmax_numeric")
     }
 }

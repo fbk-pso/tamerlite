@@ -22,11 +22,11 @@ class HeuristicKind(Enum):
     HMAX = 3
 
 class Heuristic:
-    def __init__(self, cache_enabled: bool = False):
-        self.cache_enabled = cache_enabled
+    def __init__(self, cache_value_in_state: bool = False):
+        self.cache_value_in_state = cache_value_in_state
 
     def eval(self, state: State, ss: SearchSpace) -> Optional[float]:
-        if self.cache_enabled:
+        if self.cache_value_in_state:
             h = state.heuristic_cache.get(self.name, -1)
             if h==-1:
                 h = self._eval(state, ss)
@@ -43,8 +43,8 @@ class Heuristic:
         raise NotImplementedError
 
 class CustomHeuristic(Heuristic):
-    def __init__(self, callable: Callable[[State], Optional[float]], cache_enabled: bool = False):
-        super().__init__(cache_enabled)
+    def __init__(self, callable: Callable[[State], Optional[float]], cache_value_in_state: bool = False):
+        super().__init__(cache_value_in_state)
         self.callable = callable
 
     def _eval(self, state: State, ss: SearchSpace) -> Optional[float]:
@@ -54,25 +54,25 @@ class CustomHeuristic(Heuristic):
     def name(self):
         return "custom"
 
-def RLRank(state_encoder, model, ModelClass, other_params, sym_h, cache_enabled):
+def RLRank(state_encoder, model, ModelClass, other_params, sym_h, cache_value_in_state):
     from tamerlite.rl_heuristics import RLRank
-    return RLRank(state_encoder, model, ModelClass, other_params, sym_h, cache_enabled)
+    return RLRank(state_encoder, model, ModelClass, other_params, sym_h, cache_value_in_state)
 
-def RLHeuristic(state_encoder, model, ModelClass, other_params, sym_h, cache_enabled):
+def RLHeuristic(state_encoder, model, ModelClass, other_params, sym_h, cache_value_in_state):
     from tamerlite.rl_heuristics import RLHeuristic
-    return RLHeuristic(state_encoder, model, ModelClass, other_params, sym_h, cache_enabled)
+    return RLHeuristic(state_encoder, model, ModelClass, other_params, sym_h, cache_value_in_state)
 
 def HFF(fluents: Dict[str, str], objects: Dict[str, List[str]],
-         events: Dict[str, List[Tuple[Timing, Event]]], goals: Expression, cache_states: bool, cache_enabled: bool):
-    return DeleteRelaxationHeuristic(fluents, objects, events, goals, HeuristicKind.HFF, cache_states, cache_enabled)
+         events: Dict[str, List[Tuple[Timing, Event]]], goals: Expression, internal_caching: bool, cache_value_in_state: bool):
+    return DeleteRelaxationHeuristic(fluents, objects, events, goals, HeuristicKind.HFF, internal_caching, cache_value_in_state)
 
 def HAdd(fluents: Dict[str, str], objects: Dict[str, List[str]],
-         events: Dict[str, List[Tuple[Timing, Event]]], goals: Expression, cache_states: bool, cache_enabled: bool):
-    return DeleteRelaxationHeuristic(fluents, objects, events, goals, HeuristicKind.HADD, cache_states, cache_enabled)
+         events: Dict[str, List[Tuple[Timing, Event]]], goals: Expression, internal_caching: bool, cache_value_in_state: bool):
+    return DeleteRelaxationHeuristic(fluents, objects, events, goals, HeuristicKind.HADD, internal_caching, cache_value_in_state)
 
 def HMax(fluents: Dict[str, str], objects: Dict[str, List[str]],
-         events: Dict[str, List[Tuple[Timing, Event]]], goals: Expression, cache_states: bool, cache_enabled: bool):
-    return DeleteRelaxationHeuristic(fluents, objects, events, goals, HeuristicKind.HMAX, cache_states, cache_enabled)
+         events: Dict[str, List[Tuple[Timing, Event]]], goals: Expression, internal_caching: bool, cache_value_in_state: bool):
+    return DeleteRelaxationHeuristic(fluents, objects, events, goals, HeuristicKind.HMAX, internal_caching, cache_value_in_state)
 
 
 class _DeleteRelaxationHeuristicBase(Heuristic):
@@ -82,11 +82,11 @@ class _DeleteRelaxationHeuristicBase(Heuristic):
         objects: Dict[str, List[str]],
         events: Dict[str, List[Tuple[Timing, Event]]],
         goals: Expression,
-        cache_states: bool,
-        cache_enabled: bool,
+        internal_caching: bool,
+        cache_value_in_state: bool,
         ignore_real_int: bool = False,
     ):
-        super().__init__(cache_enabled)
+        super().__init__(cache_value_in_state)
         self._fluents = fluents
         self._objects = objects
         self._events = events
@@ -133,11 +133,7 @@ class _DeleteRelaxationHeuristicBase(Heuristic):
 
         self._ordered_fluents = list(self._fluents.keys())
         self._ordered_actions = list(self._events.keys())
-        self._cache_states = {} if cache_states else None
-
-    @property
-    def name(self):
-        return "hadd" if self._return_hadd else "hff"
+        self._internal_caching = {} if internal_caching else None
 
     def _is_numeric_condition(self, exp: Expression) -> bool:
         if isinstance(exp[-1], bool): # boolean constant
@@ -167,9 +163,9 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
         events: Dict[str, List[Tuple[Timing, Event]]],
         goals: Expression,
         heuristic_kind: HeuristicKind,
-        cache_states: bool,
+        internal_caching: bool,
     ):
-        super().__init__(fluents, objects, events, goals, cache_states, ignore_real_int=True)
+        super().__init__(fluents, objects, events, goals, internal_caching, ignore_real_int=True)
         self._heuristic_kind = heuristic_kind
 
         self._precondition_of = {}
@@ -189,8 +185,17 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
             if self._is_numeric_condition(c):
                 self._numeric_conds.add(c)
 
+    @property
+    def name(self):
+        if self._heuristic_kind == HeuristicKind.HFF:
+            return "hff"
+        if self._heuristic_kind == HeuristicKind.HADD:
+            return "hadd"
+        if self._heuristic_kind == HeuristicKind.HMAX:
+            return "hmax"
+
     def _eval(self, state: State, ss: SearchSpace) -> Optional[float]:
-        if self._cache_states is not None:
+        if self._internal_caching is not None:
             assignments_values = tuple(
                 state.assignments[f] for f in self._ordered_fluents
             ) + tuple(
@@ -198,7 +203,7 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
                     lambda action: state.todo.get(action, (None, None))[0], self._ordered_actions
                 )
             )
-            h_val = self._cache_states.get(assignments_values, -1)
+            h_val = self._internal_caching.get(assignments_values, -1)
             if h_val != -1:
                 return h_val
 
@@ -267,8 +272,8 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
         h = self._cost(self._goals, costs)
 
         if h is None:
-            if self._cache_states is not None:
-                self._cache_states[assignments_values] = None
+            if self._internal_caching is not None:
+                self._internal_caching[assignments_values] = None
             return None
 
         if self._heuristic_kind != HeuristicKind.HFF:
@@ -279,8 +284,8 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
             else:
                 res = h + eh
 
-            if self._cache_states is not None:
-                self._cache_states[assignments_values] = res
+            if self._internal_caching is not None:
+                self._internal_caching[assignments_values] = res
             return res
 
         res = 0
@@ -288,8 +293,8 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
             res += len(self._events[a]) - j
 
         if h == 0:
-            if self._cache_states is not None:
-                self._cache_states[assignments_values] = res
+            if self._internal_caching is not None:
+                self._internal_caching[assignments_values] = res
             return res
 
         relaxed_plan = set()
@@ -308,8 +313,8 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
             if a not in state.todo:
                 res += len(self._events[a])
 
-        if self._cache_states is not None:
-            self._cache_states[assignments_values] = res
+        if self._internal_caching is not None:
+            self._internal_caching[assignments_values] = res
         return res
 
     def _cost(self, exp: Tuple[Expression], costs: Dict[Expression, float]) -> Optional[float]:
@@ -336,10 +341,10 @@ class HMaxNumeric(_DeleteRelaxationHeuristicBase):
         objects: Dict[str, List[str]],
         events: Dict[str, List[Tuple[Timing, Event]]],
         goals: Expression,
-        cache_states: bool,
-        cache_enabled: bool
+        internal_caching: bool,
+        cache_value_in_state: bool
     ):
-        super().__init__(fluents, objects, events, goals, cache_states, cache_enabled, ignore_real_int=False)
+        super().__init__(fluents, objects, events, goals, internal_caching, cache_value_in_state, ignore_real_int=False)
 
         self._operator_conditions_fluents: List[Set[str]] = []
         for operator in self._operators:
@@ -362,6 +367,10 @@ class HMaxNumeric(_DeleteRelaxationHeuristicBase):
                             eff,
                         )
                     )
+
+    @property
+    def name(self):
+        return "hmax_numeric"
 
     def _extract_fluents(
         self,
@@ -444,7 +453,7 @@ class HMaxNumeric(_DeleteRelaxationHeuristicBase):
         return True
 
     def _eval(self, state: State, ss: SearchSpace) -> Optional[float]:
-        if self._cache_states is not None:
+        if self._internal_caching is not None:
             assignments_values = tuple(
                 state.assignments[f] for f in self._ordered_fluents
             ) + tuple(
@@ -453,8 +462,8 @@ class HMaxNumeric(_DeleteRelaxationHeuristicBase):
                 )
             )
 
-            if assignments_values in self._cache_states:
-                return self._cache_states[assignments_values]
+            if assignments_values in self._internal_caching:
+                return self._internal_caching[assignments_values]
 
         assignments: Dict[str, Set[Union[bool, int, Fraction, str]]] = {}
 
@@ -488,8 +497,8 @@ class HMaxNumeric(_DeleteRelaxationHeuristicBase):
                 cache_extract_fluents,
             ):
                 # goal satisfied
-                if self._cache_states is not None:
-                    self._cache_states[assignments_values] = depth
+                if self._internal_caching is not None:
+                    self._internal_caching[assignments_values] = depth
                 return depth
 
             new_assignments: Dict[str, Set[Union[bool, int, Fraction, str]]] = (
@@ -541,6 +550,6 @@ class HMaxNumeric(_DeleteRelaxationHeuristicBase):
 
             depth += 1
 
-        if self._cache_states is not None:
-            self._cache_states[assignments_values] = None
+        if self._internal_caching is not None:
+            self._internal_caching[assignments_values] = None
         return None
