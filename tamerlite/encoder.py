@@ -169,6 +169,10 @@ class Encoder:
         return self._events
 
     @property
+    def applicable_actions(self) -> List[str]:
+        return self._applicable_actions
+
+    @property
     def goal(self) -> Expression:
         return self._goal
 
@@ -205,11 +209,13 @@ class Encoder:
         env = self._problem.environment
         em = env.expression_manager
         self._events = {}
+        self._applicable_actions = []
         for a in self._problem.actions:
             if isinstance(a, up.model.DurativeAction):
                 from_start = {}
                 from_end = {}
                 action_events = []
+                is_applicable = True
                 for i, lc in a.conditions.items():
                     l = i.lower
                     u = i.upper
@@ -223,6 +229,9 @@ class Encoder:
                         # upper: end conditions
                         action_events.append((u.delay, u, 1, lc))
                         action_events.append((u.delay, u, 3, [em.And(lc)]))
+                    is_applicable = is_applicable and not self._simplifier.simplify(em.And(lc)).is_false()
+                if is_applicable:
+                    self._applicable_actions.append(a.name)
 
                 for t, le in a.effects.items():
                     action_events.append((t.delay, t, 4, le))
@@ -264,6 +273,8 @@ class Encoder:
                 t = Timing(True, Fraction(0))
                 te = tuple([self._convert_effect(e) for e in a.effects])
                 self._events[a.name] = [(t, Event(a.name, 0, self._convert_expression(em.And(a.preconditions)), tuple(), tuple(), te))]
+                if not self._simplifier.simplify(em.And(a.preconditions)).is_false():
+                    self._applicable_actions.append(a.name)
 
     def _build_mutex(self):
         self._mutex = set()

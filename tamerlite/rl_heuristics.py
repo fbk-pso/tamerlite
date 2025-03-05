@@ -5,8 +5,8 @@ from tamerlite.core.heuristics import Heuristic
 
 
 class RLRank(Heuristic):
-    def __init__(self, state_encoder, model, ModelClass, config, sym_h, cache_enabled: bool = False):
-        super().__init__(cache_enabled)
+    def __init__(self, state_encoder, model, ModelClass, config, sym_h, cache_value_in_state: bool = False):
+        super().__init__(cache_value_in_state)
         self._state_encoder = state_encoder
         self._model = ModelClass(state_encoder.state_geometry, config)
         self._model.load_state_dict(torch.load(model))
@@ -45,8 +45,8 @@ class RLRank(Heuristic):
 
 
 class RLHeuristic(Heuristic):
-    def __init__(self, state_encoder, model, ModelClass, config, sym_h, cache_enabled: bool = False):
-        super().__init__(cache_enabled)
+    def __init__(self, state_encoder, model, ModelClass, config, sym_h, cache_value_in_state: bool = False):
+        super().__init__(cache_value_in_state)
         self._state_encoder = state_encoder
         self._model = ModelClass(state_encoder.state_geometry, config)
         self._model.load_state_dict(torch.load(model))
@@ -70,7 +70,7 @@ class RLHeuristic(Heuristic):
         else:
             sym_h = -1
         return self.eval_state_vec(state_vec, sym_h)
-    
+
     def eval_state_vec(self, state_vec, sym_h):
         s = np.array([state_vec])
         r = self._model(torch.from_numpy(s).float()).detach()[0]

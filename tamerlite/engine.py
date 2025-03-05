@@ -64,10 +64,10 @@ class RLParams:
 class SearchParams:
     search: Optional[str] = None
     heuristic: Optional[str] = None
-    enable_heuristic_cache: Optional[bool] = None
+    internal_heuristic_cache: Optional[bool] = None
     weight: Optional[str] = None
     rl_params: Optional[RLParams] = None
-    cache_heuristic: Optional[bool] = None
+    cache_heuristic_in_state: Optional[bool] = None
 
     def contains_rl(self) -> bool:
         return self.rl_params is not None
@@ -92,67 +92,6 @@ class MultiqueueParams:
                 assert d is None or d == q.rl_params.domain
                 d = q.rl_params.domain
         return d
-
-
-def get_applicable_actions(domain, initial_values, objects, map_back_ai, big_encoder):
-    all_objects = domain.all_objects
-    map_back_action_instance = map_back_ai
-    problem = domain.clone()
-
-    for f, v in initial_values.items():
-        problem.set_initial_value(f, v)
-
-    em = problem.environment.expression_manager
-    for ut in problem.user_types:
-        fname = f"_is_active_{ut.name}"
-        f = big_encoder.problem.fluent(fname)
-        problem.add_fluent(f, default_initial_value=False)
-        for obj in problem.all_objects:
-            if obj.type != ut:
-                continue
-            if obj in objects:
-                problem.set_initial_value(f(obj), em.TRUE())
-                initial_values[f(obj)] = em.TRUE()
-            else:
-                initial_values[f(obj)] = em.FALSE()
-
-    inactive_objects = [obj for obj in all_objects if obj not in objects]
-
-    # Compute the potentially applicable actions
-    actions = []
-    simplifier = Simplifier(problem.environment, problem)
-    for action in big_encoder.problem.actions:
-        ai = map_back_action_instance(action())
-        applicable = True
-        for obj in ai.actual_parameters:
-            if obj.is_object_exp() and obj.object() in inactive_objects:
-                applicable = False
-                break
-        if applicable:
-            if isinstance(action, up.model.InstantaneousAction):
-                conditions = action.preconditions
-            else:
-                conditions = action.conditions.values()
-            for lc in conditions:
-                nc = simplifier.simplify(em.And(lc))
-                if nc.is_false():
-                    applicable = False
-                    break
-        if applicable:
-            actions.append(action.name)
-
-    return actions
-
-def simplify_static_fluents(action, events, subs):
-    new_events = []
-    for i, (t, event) in enumerate(events):
-        new_c = simplify(event.conditions, subs)
-        new_e = []
-        for eff in event.effects:
-            new_e.append(Effect(eff.fluent, simplify(eff.value, subs)))
-        new_event = Event(action, i, new_c, tuple(), tuple(), tuple(new_e))
-        new_events.append((t, new_event))
-    return new_events
 
 
 class TamerLite(
@@ -214,73 +153,53 @@ class TamerLite(
     def satisfies(optimality_guarantee: up.engines.OptimalityGuarantee) -> bool:
         return optimality_guarantee == up.engines.OptimalityGuarantee.SATISFICING
 
-    def _get_heuristic(self, params, heuristic, encoder, state_encoder, domain, problem):
-        if params is not None and params.contains_rl():
-            big_encoder, _, map_back_ai = get_encoders(domain)
-            initial_values = problem.initial_values
-            full_initial_values = domain.initial_values
-            full_initial_values.update(initial_values)
-            objects = problem.all_objects
-            my_goal = big_encoder.goals(problem.goals)
-            my_actions = get_applicable_actions(domain, full_initial_values, objects, map_back_ai, big_encoder)
-            my_initial_state = big_encoder.initial_state(full_initial_values)
-            my_static_fluents = []
-            for sf in big_encoder.problem.get_static_fluents():
-                my_static_fluents.extend([str(f) for f in get_all_fluent_exp(big_encoder.problem, sf)])
-            subs = {k: v for k, v in my_initial_state.items() if k in my_static_fluents}
-            my_events = {a: simplify_static_fluents(a, e, subs) for a, e in big_encoder.events.items() if a in my_actions}
+    def _get_heuristic(self, params, heuristic, encoder, state_encoder):
         if params is None:
             h = "custom" if heuristic else "hff"
         else:
             h = "custom" if heuristic and params.heuristic is None else params.heuristic if params.heuristic else "hff"
             rl_params = params.rl_params
-        if params is None:
-            cache_h = False
-        else:
-            cache_h = False if params.cache_heuristic is None else params.cache_heuristic
+
+        cache_h = False if params is None or params.cache_heuristic_in_state is None else params.cache_heuristic_in_state
 
         if h == "custom":
             def rewrite_h(search_state):
                 return heuristic(StateWrapper(encoder.problem, search_state))
             h = CustomHeuristic(rewrite_h, cache_h)
             w = 1 if params is None or params.weight is None else params.weight
-        elif h == "rl_heuristic":
+        elif h in ["rl_heuristic", "rl_rank"]:
             assert rl_params is not None and rl_params.other_params is not None
             if rl_params.other_params.residual:
-                if rl_params.other_params.learning_heuristic == "hadd":
-                    heuristic_for_residual = HAdd(big_encoder.fluents, big_encoder.objects, my_events, my_goal, cache_enabled=rl_params.other_params.cache_heuristic)
-                elif rl_params.other_params.learning_heuristic == "hff":
-                    heuristic_for_residual = HFF(big_encoder.fluents, big_encoder.objects, my_events, my_goal, cache_enabled=rl_params.other_params.cache_heuristic)
+                internal_heuristic_cache = getattr(rl_params.other_params, "internal_heuristic_cache", True)
+                cache_heuristic_in_state = getattr(rl_params.other_params, "cache_heuristic_in_state", False)
+                hsym_params = SearchParams(heuristic=rl_params.other_params.learning_heuristic, internal_heuristic_cache=internal_heuristic_cache, cache_heuristic_in_state=cache_heuristic_in_state)
+                heuristic_for_residual, _ = self._get_heuristic(hsym_params, None, encoder, state_encoder)
             else:
                 heuristic_for_residual = None
-            h = RLHeuristic(state_encoder, rl_params.model, rl_params.model_class, rl_params.other_params, heuristic_for_residual, cache_h)
+            if h == "rl_heuristic":
+                h = RLHeuristic(state_encoder, rl_params.model, rl_params.model_class, rl_params.other_params, heuristic_for_residual, cache_h)
+            else:
+                h = RLRank(state_encoder, rl_params.model, rl_params.model_class, rl_params.other_params, heuristic_for_residual, cache_h)
             w = 0.8 if params is None or params.weight is None else params.weight
-        elif h == "rl_rank":
-            assert rl_params is not None and rl_params.other_params is not None
-            if rl_params.other_params.residual:
-                if rl_params.other_params.learning_heuristic == "hadd":
-                    heuristic_for_residual = HAdd(big_encoder.fluents, big_encoder.objects, my_events, my_goal, cache_enabled=rl_params.other_params.cache_heuristic)
-                elif rl_params.other_params.learning_heuristic == "hff":
-                    heuristic_for_residual = HFF(big_encoder.fluents, big_encoder.objects, my_events, my_goal, cache_enabled=rl_params.other_params.cache_heuristic)
-            else:
-                heuristic_for_residual = None
-            h = RLRank(state_encoder, rl_params.model, rl_params.model_class, rl_params.other_params, heuristic_for_residual, cache_h)
-            w = 1 if params is None or params.weight is None else params.weight
         elif h == "hff":
-            enable_heuristic_cache = True if params is None or params.enable_heuristic_cache is None else params.enable_heuristic_cache
-            h = HFF(encoder.fluents, encoder.objects, encoder.events, encoder.goal, cache_states=enable_heuristic_cache, cache_enabled=cache_h)
+            internal_heuristic_cache = True if params is None or params.internal_heuristic_cache is None else params.internal_heuristic_cache
+            events = {a: e for a, e in encoder.events.items() if a in encoder.applicable_actions}
+            h = HFF(encoder.fluents, encoder.objects, events, encoder.goal, internal_caching=internal_heuristic_cache, cache_value_in_state=cache_h)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "hadd":
-            enable_heuristic_cache = True if params is None or params.enable_heuristic_cache is None else params.enable_heuristic_cache
-            h = HAdd(encoder.fluents, encoder.objects, encoder.events, encoder.goal, cache_states=enable_heuristic_cache, cache_enabled=cache_h)
+            internal_heuristic_cache = True if params is None or params.internal_heuristic_cache is None else params.internal_heuristic_cache
+            events = {a: e for a, e in encoder.events.items() if a in encoder.applicable_actions}
+            h = HAdd(encoder.fluents, encoder.objects, events, encoder.goal, internal_caching=internal_heuristic_cache, cache_value_in_state=cache_h)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "hmax":
-            enable_heuristic_cache = True if params is None or params.enable_heuristic_cache is None else params.enable_heuristic_cache
-            h = HMax(encoder.fluents, encoder.objects, encoder.events, encoder.goal, cache_states=enable_heuristic_cache, cache_enabled=cache_h)
+            internal_heuristic_cache = True if params is None or params.internal_heuristic_cache is None else params.internal_heuristic_cache
+            events = {a: e for a, e in encoder.events.items() if a in encoder.applicable_actions}
+            h = HMax(encoder.fluents, encoder.objects, events, encoder.goal, internal_caching=internal_heuristic_cache, cache_value_in_state=cache_h)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "hmax_numeric":
-            enable_heuristic_cache = True if params is None or params.enable_heuristic_cache is None else params.enable_heuristic_cache
-            h = HMaxNumeric(encoder.fluents, encoder.objects, encoder.events, encoder.goal, cache_states=enable_heuristic_cache, cache_enabled=cache_h)
+            internal_heuristic_cache = True if params is None or params.internal_heuristic_cache is None else params.internal_heuristic_cache
+            events = {a: e for a, e in encoder.events.items() if a in encoder.applicable_actions}
+            h = HMaxNumeric(encoder.fluents, encoder.objects, events, encoder.goal, internal_caching=internal_heuristic_cache, cache_value_in_state=cache_h)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "blind":
             h = CustomHeuristic(lambda x: 0.0, cache_h)
@@ -290,13 +209,13 @@ class TamerLite(
 
         return h, w
 
-    def _get_search(self, params, heuristic, encoder, state_encoder, domain, problem):
+    def _get_search(self, params, heuristic, encoder, state_encoder):
         if params is None:
             s = "wastar"
         else:
             s = "wastar" if params.search is None else params.search
 
-        h, w = self._get_heuristic(params, heuristic, encoder, state_encoder, domain, problem)
+        h, w = self._get_heuristic(params, heuristic, encoder, state_encoder)
 
         if s == "wastar":
             search = partial(wastar_search, heuristic=h, weight=w)
@@ -332,11 +251,11 @@ class TamerLite(
             if isinstance(self._params, MultiqueueParams):
                 heuristics = []
                 for p in self._params.queues:
-                    h, w = self._get_heuristic(p, heuristic, encoder, state_encoder, self._params.domain(), problem)
+                    h, w = self._get_heuristic(p, heuristic, encoder, state_encoder)
                     heuristics.append((h, w))
                 plan = multiqueue_search(encoder.search_space, heuristics, timeout)
             else:
-                search = self._get_search(self._params, heuristic, encoder, state_encoder, self._params.domain() if self._params is not None else None, problem)
+                search = self._get_search(self._params, heuristic, encoder, state_encoder)
                 plan = search(encoder.search_space, timeout=timeout)
 
             if plan:
