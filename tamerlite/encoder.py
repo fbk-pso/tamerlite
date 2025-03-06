@@ -89,7 +89,7 @@ def get_encoders(domain, problem=None):
 class Encoder:
     """
     This class takes in input a Problem and builds its search space.
-    If full is True, the initial state and the goal are already initializa
+    If full is True, the initial and goal states are already initialized
     in the search space.
     """
 

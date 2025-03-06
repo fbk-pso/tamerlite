@@ -121,6 +121,7 @@ class TamerLite(
         supported_kind.set_time('DURATION_INEQUALITIES')
         supported_kind.set_expression_duration('STATIC_FLUENTS_IN_DURATIONS')
         supported_kind.set_expression_duration('FLUENTS_IN_DURATIONS')
+        supported_kind.set_expression_duration('INT_TYPE_DURATIONS')
         supported_kind.set_numbers('DISCRETE_NUMBERS')
         supported_kind.set_numbers('CONTINUOUS_NUMBERS')
         supported_kind.set_problem_type("SIMPLE_NUMERIC_PLANNING")
@@ -143,6 +144,7 @@ class TamerLite(
         supported_kind.set_conditions_kind('EQUALITIES')
         supported_kind.set_fluents_type('NUMERIC_FLUENTS')
         supported_kind.set_fluents_type('OBJECT_FLUENTS')
+        supported_kind.set_fluents_type('INT_FLUENTS')
         return supported_kind
 
     @staticmethod
