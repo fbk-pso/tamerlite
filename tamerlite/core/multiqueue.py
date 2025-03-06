@@ -37,7 +37,7 @@ def multiqueue_search(ss: SearchSpace, heuristics: List[Tuple[Heuristic, float]]
         heapq.heappush(open, item)
         opens.append(open)
     counter = 0
-    state_expanded = 0
+    states_expanded = 0
     while True:
         if timeout is not None and time.time() - st > timeout:
             raise TimeoutError
@@ -57,12 +57,11 @@ def multiqueue_search(ss: SearchSpace, heuristics: List[Tuple[Heuristic, float]]
         if not ss.is_temporal:
             closed_set.add(state)
             open_set.discard(state)
-        # print(state.path, item.heuristic)
         counter += 1
-        state_expanded += 1
+        states_expanded += 1
         if ss.goal_reached(state):
-            print("Expanded states:", state_expanded)
-            return state.extract_solution()
+            print("Expanded states:", states_expanded)
+            return state.extract_solution(), {"expanded_states": states_expanded, "goal_depth": state.g}
         for succ_state in ss.get_successor_states(state):
             if succ_state in closed_set or succ_state in open_set:
                 continue
@@ -75,4 +74,4 @@ def multiqueue_search(ss: SearchSpace, heuristics: List[Tuple[Heuristic, float]]
                     f = (1-weight)*succ_state.g + weight*h
                     item = PrioritizedItem(f, sc)
                     heapq.heappush(opens[i], item)
-    return None
+    return None, {"expanded_states": states_expanded}
