@@ -10,6 +10,7 @@ on:
     branches:
       - main
       - master
+      - py-rs-tests
     tags:
       - '*'
   pull_request:
@@ -35,9 +36,12 @@ jobs:
           python3 -m pip install -r unified-planning/requirements.txt
           python3 -m pip install unified-planning/
           echo -e "[engine tamerlite]\nmodule_name: tamerlite.engine\nclass_name: TamerLite" > .up.ini
-      - name: Run the tests
+      - name: Run UP tests
         run: |
           python3 unified-planning/up_test_cases/report.py tamerlite
+      - name: Run Tamerlite tests
+        run: |
+            python3 -m pytest
 
   linux:
     runs-on: ubuntu-latest
