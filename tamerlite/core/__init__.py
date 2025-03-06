@@ -17,8 +17,6 @@ if use_rustamer:
         use_rustamer = False
 
 if not use_rustamer:
-    print("use_rustamer", use_rustamer)
-
     from tamerlite.core.search import wastar_search, astar_search, gbfs_search
     from tamerlite.core.search import bfs_search, dfs_search, ehc_search
     from tamerlite.core.multiqueue import multiqueue_search
@@ -37,8 +35,6 @@ if not use_rustamer:
     )
     from tamerlite.core.state_encoder import CoreStateEncoder
 else:
-    print("use_rustamer", use_rustamer)
-    
     from tamerlite.rustamer import wastar_search, astar_search, gbfs_search
     from tamerlite.rustamer import bfs_search, dfs_search, ehc_search
     from tamerlite.rustamer import multiqueue_search

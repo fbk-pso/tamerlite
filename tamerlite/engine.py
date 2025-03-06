@@ -270,4 +270,4 @@ class TamerLite(
             return up.engines.PlanGenerationResult(status, plan, self.name, metrics)
         except TimeoutError:
             status = up.engines.PlanGenerationResultStatus.TIMEOUT
-            return up.engines.PlanGenerationResult(status, None, self.name, metrics)
+            return up.engines.PlanGenerationResult(status, None, self.name)
