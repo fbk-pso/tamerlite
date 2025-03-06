@@ -46,7 +46,7 @@ jobs:
           python3 unified-planning/up_test_cases/report.py tamerlite
       - name: Run Tamerlite tests
         run: |
-            python3 -m pytest
+            python3 -m pytest tests/
 
   linux:
     runs-on: ubuntu-latest
