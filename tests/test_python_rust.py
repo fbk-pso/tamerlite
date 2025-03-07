@@ -1,13 +1,18 @@
-import importlib
 from unified_planning.shortcuts import *
 from unified_planning.engines import PlanGenerationResult, PlanGenerationResultStatus
+
+import tamerlite
+from tamerlite.core.heuristics import Heuristic
+from tamerlite.core import HFF, HAdd, HMax, HMaxNumeric
+from tamerlite.core.search_space import SearchSpace
+from tamerlite.encoder import Encoder
+import tamerlite.engine
+
+import problems_generator
+import pytest
+import importlib
 import os
 import types
-import problems_generator
-import tamerlite
-import pytest
-
-import tamerlite.engine
 
 
 @pytest.fixture
@@ -117,3 +122,69 @@ def test_search_algorithms(problems):
                 assert (
                     res1.metrics["expanded_states"] == res2.metrics["expanded_states"]
                 )
+
+
+def test_heuristic_values(problems):
+    for problem in problems:
+        values = {}
+        for disable_rustamer in [True, False]:
+            reload_tamerlite(disable_rustamer)
+            from tamerlite.core import HFF, HAdd, HMax, HMaxNumeric
+
+            with problem.environment.factory.Compiler(
+                compilation_kind="GROUNDING", problem_kind=problem.kind
+            ) as compiler:
+                compilation_res = compiler.compile(problem)
+            new_problem = compilation_res.problem
+            encoder = Encoder(new_problem)
+            ss: SearchSpace = encoder.search_space
+            init_state = ss.initial_state()
+
+            def generate_states(state, num_states):
+                states = [state]
+                i = 0
+                while i < len(states) and len(states) < num_states:
+                    state = states[i]
+                    states += list(ss.get_successor_states(state))
+                    i += 1
+                return states
+
+            states = generate_states(init_state, num_states=2000)
+            for heuristic_class, heuristic_name in [
+                (HFF, "HFF"),
+                (HAdd, "HAdd"),
+                (HMax, "HMax"),
+                (HMaxNumeric, "HMaxNumeric"),
+            ]:
+                for cache_states in [True, False]:
+                    heuristic: Heuristic = heuristic_class(
+                        encoder.fluents,
+                        encoder.objects,
+                        encoder.events,
+                        encoder.goal,
+                        cache_states=cache_states,
+                    )
+
+                    if heuristic_name not in values:
+                        values[heuristic_name] = []
+                        for state in states:
+                            h_val = heuristic.eval(state, ss)
+                            if h_val is not None:
+                                h_val = int(h_val)
+                            values[heuristic_name].append(h_val)
+
+                    else:
+                        for i, state in enumerate(states):
+                            h_val = heuristic.eval(state, ss)
+                            if h_val is not None:
+                                h_val = int(h_val)
+                            assert h_val == values[heuristic_name][i]
+
+
+if __name__ == "__main__":
+    test_heuristic_values(
+        [
+            problems_generator.get_problem_logistics(1, 1, 4, 2),
+            problems_generator.get_problem_matchcellar(3),
+        ]
+    )
