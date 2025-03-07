@@ -48,12 +48,10 @@ class RLHeuristicBase(Heuristic):
             return self.eval_state_vec(state_vec, sym_h)
 
     def eval_state_graph(self, G, sym_h):
-        import torch_geometric as tg
-        state_graph = tg.data.Data(x = torch.tensor(G.nodes, dtype=torch.float),
-                                edge_index=torch.tensor(G.edges, dtype=torch.long),
-                                edge_attr=torch.tensor(G.edge_features, dtype=torch.float))
-
-        r = self._model(state_graph.x, state_graph.edge_index, torch.zeros(state_graph.x.size()[0], dtype=torch.int64)).detach()[0]
+        r = self._model(torch.tensor(G.nodes, dtype=torch.float),
+                        torch.tensor(G.edges, dtype=torch.long),
+                        torch.tensor(G.edge_features, dtype=torch.float),
+                        torch.zeros(len(G.nodes), dtype=torch.int64)).detach()[0]
         r = float(r[0])
         if self._residual:
             if self._reward_signal=="cnt":
