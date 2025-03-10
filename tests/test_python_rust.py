@@ -61,6 +61,17 @@ def generate_states(ss: SearchSpace, state, num_states: int):
     return states
 
 
+def check_metrics_equality(results: List[PlanGenerationResult]):
+    for i in range(len(results) - 1):
+        res1: PlanGenerationResult = results[i]
+        res2: PlanGenerationResult = results[i + 1]
+        assert len(res1.metrics) == len(res2.metrics)
+        assert int(res1.metrics["expanded_states"]) == int(
+            res2.metrics["expanded_states"]
+        )
+        assert int(res1.metrics["goal_depth"]) == int(res2.metrics["goal_depth"])
+
+
 def test_heuristics(problems):
     for problem in problems:
         for heuristic in ["hff", "hadd", "hmax", "hmax_numeric"]:
@@ -89,13 +100,7 @@ def test_heuristics(problems):
                         with PlanValidator(problem_kind=problem.kind) as v:
                             assert v.validate(problem, res.plan)
 
-            for i in range(len(results) - 1):
-                res1: PlanGenerationResult = results[i]
-                res2: PlanGenerationResult = results[i + 1]
-                assert len(res1.metrics) == len(res2.metrics)
-                assert (
-                    res1.metrics["expanded_states"] == res2.metrics["expanded_states"]
-                )
+            check_metrics_equality(results)
 
 
 def test_heuristic_values(problems):
@@ -176,13 +181,7 @@ def test_search_algorithms(problems):
                         with PlanValidator(problem_kind=problem.kind) as v:
                             assert v.validate(problem, res.plan)
 
-            for i in range(len(results) - 1):
-                res1: PlanGenerationResult = results[i]
-                res2: PlanGenerationResult = results[i + 1]
-                assert len(res1.metrics) == len(res2.metrics)
-                assert (
-                    res1.metrics["expanded_states"] == res2.metrics["expanded_states"]
-                )
+            check_metrics_equality(results)
 
 
 def test_multiqueue_search(problems):
@@ -205,11 +204,7 @@ def test_multiqueue_search(problems):
                 with PlanValidator(problem_kind=problem.kind) as v:
                     assert v.validate(problem, res.plan)
 
-        for i in range(len(results) - 1):
-            res1: PlanGenerationResult = results[i]
-            res2: PlanGenerationResult = results[i + 1]
-            assert len(res1.metrics) == len(res2.metrics)
-            assert res1.metrics["expanded_states"] == res2.metrics["expanded_states"]
+        check_metrics_equality(results)
 
 
 def test_search_space(problems):
