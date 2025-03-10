@@ -90,4 +90,17 @@ where Q: Clone
         result.reverse();
         result
     }
+
+    pub fn to_vec_copy(list: &Option<Arc<Self>>) -> Vec<Q> {
+        let mut result = vec![];
+        let mut current_node = list;
+
+        while let Some(node) = current_node {
+            result.push(node.payload.clone());
+            current_node = &node.previous;
+        }
+
+        result.reverse();
+        result
+    }
 }
