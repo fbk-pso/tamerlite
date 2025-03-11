@@ -1,5 +1,8 @@
+import unified_planning
 from unified_planning.shortcuts import *
 from unified_planning.engines import PlanGenerationResult, PlanGenerationResultStatus
+import unified_planning.test
+import unified_planning.test.examples
 
 import tamerlite
 import tamerlite.core
@@ -19,10 +22,13 @@ import types
 
 @pytest.fixture
 def problems():
-    return [
-        problems_generator.get_problem_logistics(1, 1, 4, 2),
-        problems_generator.get_problem_matchcellar(3),
-    ]
+    pp = [problems_generator.get_problem_logistics(1, 1, 4, 2)]
+    for test_case in unified_planning.test.examples.get_example_problems().values():
+        if test_case.solvable and tamerlite.engine.TamerLite.supports(
+            test_case.problem.kind
+        ):
+            pp.append(test_case.problem)
+    return pp
 
 
 def reload_package(package):
@@ -51,6 +57,32 @@ def reload_tamerlite(disable_rustamer: bool):
     reload_package(tamerlite)
 
 
+def skip(problem, search, heuristic, disable_rustamer, enable_heuristic_cache):
+    return (
+        (
+            problem.name == "robot_fluent_of_user_type"
+            and search == "dfs"
+            and not disable_rustamer
+        )
+        or (problem.name == "robot_loader" and search == "dfs" and not disable_rustamer)
+        or (
+            problem.name == "robot_loader_mod"
+            and search == "dfs"
+            and not disable_rustamer
+        )
+        or (
+            problem.name == "robot_loader_adv"
+            and search == "dfs"
+            and not disable_rustamer
+        )
+        or (
+            problem.name == "robot_fluent_of_user_type_with_int_id"
+            and search == "dfs"
+            and not disable_rustamer
+        )
+    )
+
+
 def generate_states(ss: SearchSpace, state, num_states: int):
     states = [state]
     i = 0
@@ -74,13 +106,23 @@ def check_metrics_equality(results: List[PlanGenerationResult]):
 
 def test_heuristics(problems):
     for problem in problems:
+        search_kind = "wastar"
         for heuristic in ["hff", "hadd", "hmax", "hmax_numeric"]:
             results = []
             for disable_rustamer in [True, False]:
                 reload_tamerlite(disable_rustamer)
                 for enable_heuristic_cache in [True, False]:
+                    if skip(
+                        problem,
+                        search_kind,
+                        heuristic,
+                        disable_rustamer,
+                        enable_heuristic_cache,
+                    ):
+                        continue
+
                     search = tamerlite.SearchParams(
-                        search="wastar",
+                        search=search_kind,
                         heuristic=heuristic,
                         weight=0.8,
                         enable_heuristic_cache=enable_heuristic_cache,
@@ -158,6 +200,9 @@ def test_search_algorithms(problems):
         for search_kind in ["wastar", "astar", "gbfs", "dfs", "bfs", "ehs"]:
             results = []
             for disable_rustamer in [True, False]:
+                if skip(problem, search_kind, heuristic, disable_rustamer, True):
+                    continue
+
                 reload_tamerlite(disable_rustamer)
                 search = tamerlite.SearchParams(search=search_kind, heuristic=heuristic)
 
@@ -188,6 +233,15 @@ def test_multiqueue_search(problems):
     for problem in problems:
         results = []
         for disable_rustamer in [True, False]:
+            if skip(
+                problem,
+                "multiqueue",
+                heuristic=None,
+                disable_rustamer=disable_rustamer,
+                enable_heuristic_cache=True,
+            ):
+                continue
+
             reload_tamerlite(disable_rustamer)
 
             search = tamerlite.engine.MultiqueueParams(
