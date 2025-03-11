@@ -3,6 +3,7 @@ from unified_planning.shortcuts import *
 from unified_planning.engines import PlanGenerationResult, PlanGenerationResultStatus
 import unified_planning.test
 import unified_planning.test.examples
+import up_test_cases.builtin
 
 import tamerlite
 import tamerlite.core
@@ -22,13 +23,19 @@ import types
 
 @pytest.fixture
 def problems():
-    pp = [problems_generator.get_problem_logistics(1, 1, 4, 2)]
-    for test_case in unified_planning.test.examples.get_example_problems().values():
+    test_problems = [problems_generator.get_problem_logistics(1, 1, 4, 2)]
+
+    up_example_problems = list(
+        unified_planning.test.examples.get_example_problems().values()
+    )
+    up_test_problems = list(up_test_cases.builtin.get_test_cases().values())
+    for test_case in up_example_problems + up_test_problems:
         if test_case.solvable and tamerlite.engine.TamerLite.supports(
             test_case.problem.kind
         ):
-            pp.append(test_case.problem)
-    return pp
+            test_problems.append(test_case.problem)
+
+    return test_problems
 
 
 def reload_package(package):
@@ -80,7 +87,24 @@ def skip(problem, search, heuristic, disable_rustamer, enable_heuristic_cache):
             and search == "dfs"
             and not disable_rustamer
         )
+        or (
+            problem.name == "depots_p01"
+            and search in ["dfs", "bfs"]
+            and not disable_rustamer
+        )
     )
+
+
+def max_generated_states(problem):
+    if problem.name in [
+        "nonlinear_increase_effects",
+        "constant_increase_effect",
+        "constant_decrease_effect",
+    ]:
+        return 2
+    if problem.name in ["constant_increase_effect_2", "constant_decrease_effect_2"]:
+        return 4
+    return 1000
 
 
 def generate_states(ss: SearchSpace, state, num_states: int):
@@ -161,7 +185,9 @@ def test_heuristic_values(problems):
             ss: SearchSpace = encoder.search_space
             init_state = ss.initial_state()
 
-            states = generate_states(ss, init_state, num_states=2000)
+            states = generate_states(
+                ss, init_state, num_states=max_generated_states(problem)
+            )
             for heuristic_class, heuristic_name in [
                 (HFF, "HFF"),
                 (HAdd, "HAdd"),
@@ -279,7 +305,9 @@ def test_search_space(problems):
 
             init_state = ss.initial_state()
             l = "python" if disable_rustamer else "rust"
-            states[l] = generate_states(ss, init_state, num_states=2000)
+            states[l] = generate_states(
+                ss, init_state, num_states=max_generated_states(problem)
+            )
 
         assert len(states["python"]) == len(states["rust"])
         for i in range(len(states["python"])):

@@ -45,6 +45,7 @@ jobs:
           python3 unified-planning/up_test_cases/report.py tamerlite
       - name: Run Tamerlite tests
         run: |
+            export PYTHONPATH="unified-planning/up_test_cases"
             python3 -m pytest tests/
 
   linux:
