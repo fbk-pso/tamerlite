@@ -66,32 +66,13 @@ def reload_tamerlite(disable_rustamer: bool):
 
 def skip(problem, search, heuristic, disable_rustamer, enable_heuristic_cache):
     return (
-        (
-            problem.name == "robot_fluent_of_user_type"
-            and search == "dfs"
-            and not disable_rustamer
-        )
-        or (problem.name == "robot_loader" and search == "dfs" and not disable_rustamer)
-        or (
-            problem.name == "robot_loader_mod"
-            and search == "dfs"
-            and not disable_rustamer
-        )
-        or (
-            problem.name == "robot_loader_adv"
-            and search == "dfs"
-            and not disable_rustamer
-        )
-        or (
-            problem.name == "robot_fluent_of_user_type_with_int_id"
-            and search == "dfs"
-            and not disable_rustamer
-        )
-        or (
-            problem.name == "depots_p01"
-            and search in ["dfs", "bfs"]
-            and not disable_rustamer
-        )
+        (problem.name == "robot_fluent_of_user_type" and search == "dfs")
+        or (problem.name == "robot_loader" and search == "dfs")
+        or (problem.name == "robot_loader_mod" and search == "dfs")
+        or (problem.name == "robot_loader_adv" and search == "dfs")
+        or (problem.name == "robot_fluent_of_user_type_with_int_id" and search == "dfs")
+        or (problem.name == "depots_p01" and search in ["dfs", "bfs"])
+        or (problem.name == "RoboLogistics" and search == "dfs")
     )
 
 
@@ -237,15 +218,15 @@ def test_search_algorithms(problems):
                 ) as planner:
                     planner: tamerlite.engine.TamerLite
                     res: PlanGenerationResult = planner.solve(
-                        problem, heuristic=heuristic, timeout=30
+                        problem, heuristic=heuristic, timeout=None
                     )
-                    assert res.status in (
-                        PlanGenerationResultStatus.SOLVED_SATISFICING,
-                        PlanGenerationResultStatus.TIMEOUT,
-                    ) or (
-                        search_kind == "ehs"
-                        and res.status
-                        == PlanGenerationResultStatus.UNSOLVABLE_INCOMPLETELY
+                    assert (
+                        res.status == PlanGenerationResultStatus.SOLVED_SATISFICING
+                        or (
+                            search_kind == "ehs"
+                            and res.status
+                            == PlanGenerationResultStatus.UNSOLVABLE_INCOMPLETELY
+                        )
                     )
                     if res.status == PlanGenerationResultStatus.SOLVED_SATISFICING:
                         results.append(res)
