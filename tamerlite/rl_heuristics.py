@@ -11,6 +11,7 @@ class RLRank(Heuristic):
         self._model = ModelClass(state_encoder.state_geometry, config)
         self._model.load_state_dict(torch.load(model))
         self._model.eval()
+        self._deltah_cnt = config.deltah_cnt
         self._residual = config.residual
         self._sym_h = sym_h
         self._reward_signal = config.reward_signal
@@ -38,10 +39,13 @@ class RLRank(Heuristic):
             if sym_h is None:
                 return None
             if self._reward_signal=="cnt":
-                r -= sym_h
+                r -= sym_h + 3*self._deltah_cnt
             else:
                 r += self._gamma**(sym_h-1)
-        return -r
+        if self._reward_signal=="cnt":
+            return -r
+        else:
+            return -r+2.0
 
 
 class RLHeuristic(Heuristic):
