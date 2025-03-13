@@ -42,10 +42,7 @@ class RLRank(Heuristic):
                 r -= sym_h + 3*self._deltah_cnt
             else:
                 r += self._gamma**(sym_h-1)
-        if self._reward_signal=="cnt":
-            return -r
-        else:
-            return -r+2.0
+        return -r+3.0
 
 
 class RLHeuristic(Heuristic):
@@ -84,7 +81,6 @@ class RLHeuristic(Heuristic):
                 return None
             if self._reward_signal=="cnt":
                 r -= sym_h
-                r = min(0,r)
             else:
                 r += self._gamma**(sym_h-1)
         if self._reward_signal=="bin":
@@ -95,4 +91,4 @@ class RLHeuristic(Heuristic):
             else:
                 return float(min(self._deltah_bin, (math.log(min(1, r), self._gamma)+1)))
         else:
-            return -r
+            return max(0.000001,-r)
