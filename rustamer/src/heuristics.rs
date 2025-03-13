@@ -229,6 +229,9 @@ impl HRL {
                 None => Some(-1.0),
             }
         };
+        if h_val.is_none() {
+            return Ok(None);
+        }
         Python::with_gil(|py| {
             let args = PyTuple::new(py, &[enc.into_pyobject(py)?, h_val.into_pyobject(py)?])?;
             let r = self.callable.call(py, args, None)?;
