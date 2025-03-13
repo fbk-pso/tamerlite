@@ -27,6 +27,8 @@ class RLRank(Heuristic):
         state_vec = self._state_encoder.get_state_as_vector(state)
         if self._residual:
             sym_h = self._sym_h.eval(state, ss)
+            if sym_h is None:
+                return None
         else:
             sym_h = -1
         return self.eval_state_vec(state_vec, sym_h)
@@ -36,8 +38,6 @@ class RLRank(Heuristic):
         r = self._model(torch.from_numpy(s).float()).detach()[0]
         r = float(r[0])
         if self._residual:
-            if sym_h is None:
-                return None
             if self._reward_signal=="cnt":
                 r -= sym_h + 3*self._deltah_cnt
             else:
@@ -68,6 +68,8 @@ class RLHeuristic(Heuristic):
         state_vec = self._state_encoder.get_state_as_vector(state)
         if self._residual:
             sym_h = self._sym_h.eval(state, ss)
+            if sym_h is None:
+                return None
         else:
             sym_h = -1
         return self.eval_state_vec(state_vec, sym_h)
@@ -77,8 +79,6 @@ class RLHeuristic(Heuristic):
         r = self._model(torch.from_numpy(s).float()).detach()[0]
         r = float(r[0])
         if self._residual:
-            if sym_h is None:
-                return None
             if self._reward_signal=="cnt":
                 r -= sym_h
             else:
