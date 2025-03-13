@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet}, sync::Arc, vec::Vec
+    collections::{HashMap, HashSet}, sync::{Arc, Mutex}, vec::Vec
 };
 use multiset::HashMultiSet;
 use std::hash::{Hash, Hasher};
@@ -19,7 +19,8 @@ pub struct State {
     pub todo: HashMap<String, (usize, usize)>,
     pub active_conditions: HashMultiSet<Vec<ExpressionNode>>,
     pub g: f64,
-    pub path: Option<Arc<PersistentList<(String, usize, usize)>>>
+    pub path: Option<Arc<PersistentList<(String, usize, usize)>>>,
+    pub heuristic_cache: Arc<Mutex<HashMap<String, Option<f64>>>>
 }
 
 #[pymethods]
@@ -250,6 +251,7 @@ impl SearchSpace {
             active_conditions: HashMultiSet::new(),
             g: 0.0,
             path: PersistentList::new(),
+            heuristic_cache: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
