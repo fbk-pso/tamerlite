@@ -178,9 +178,10 @@ class TamerLite(
                 heuristic_for_residual = None
             if h == "rl_heuristic":
                 h = RLHeuristic(state_encoder, rl_params.model, rl_params.model_class, rl_params.other_params, heuristic_for_residual, cache_h)
+                w = 0.8 if params is None or params.weight is None else params.weight
             else:
                 h = RLRank(state_encoder, rl_params.model, rl_params.model_class, rl_params.other_params, heuristic_for_residual, cache_h)
-            w = 0.8 if params is None or params.weight is None else params.weight
+                w = 1 if params is None or params.weight is None else params.weight
         elif h == "hff":
             internal_heuristic_cache = True if params is None or params.internal_heuristic_cache is None else params.internal_heuristic_cache
             events = {a: e for a, e in encoder.events.items() if a in encoder.applicable_actions}
