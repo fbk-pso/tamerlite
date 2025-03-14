@@ -64,7 +64,7 @@ def reload_tamerlite(disable_rustamer: bool):
     reload_package(tamerlite)
 
 
-def skip(problem, search, heuristic, disable_rustamer, enable_heuristic_cache):
+def skip(problem, search, heuristic, disable_rustamer, internal_heuristic_cache):
     return (
         (problem.name == "robot_fluent_of_user_type" and search == "dfs")
         or (problem.name == "robot_loader" and search == "dfs")
@@ -116,13 +116,13 @@ def test_heuristics(problems):
             results = []
             for disable_rustamer in [True, False]:
                 reload_tamerlite(disable_rustamer)
-                for enable_heuristic_cache in [True, False]:
+                for internal_heuristic_cache in [True, False]:
                     if skip(
                         problem,
                         search_kind,
                         heuristic,
                         disable_rustamer,
-                        enable_heuristic_cache,
+                        internal_heuristic_cache,
                     ):
                         continue
 
@@ -130,7 +130,7 @@ def test_heuristics(problems):
                         search=search_kind,
                         heuristic=heuristic,
                         weight=0.8,
-                        enable_heuristic_cache=enable_heuristic_cache,
+                        internal_heuristic_cache=internal_heuristic_cache,
                     )
 
                     with OneshotPlanner(
@@ -175,13 +175,14 @@ def test_heuristic_values(problems):
                 (HMax, "HMax"),
                 (HMaxNumeric, "HMaxNumeric"),
             ]:
-                for cache_states in [True, False]:
+                for internal_caching in [True, False]:
                     heuristic: Heuristic = heuristic_class(
                         encoder.fluents,
                         encoder.objects,
                         encoder.events,
                         encoder.goal,
-                        cache_states=cache_states,
+                        internal_caching=internal_caching,
+                        cache_value_in_state=False
                     )
 
                     if heuristic_name not in values:
@@ -245,7 +246,7 @@ def test_multiqueue_search(problems):
                 "multiqueue",
                 heuristic=None,
                 disable_rustamer=disable_rustamer,
-                enable_heuristic_cache=True,
+                internal_heuristic_cache=True,
             ):
                 continue
 
