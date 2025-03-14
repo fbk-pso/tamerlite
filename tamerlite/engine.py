@@ -121,6 +121,7 @@ class TamerLite(
         supported_kind.set_time('DURATION_INEQUALITIES')
         supported_kind.set_expression_duration('STATIC_FLUENTS_IN_DURATIONS')
         supported_kind.set_expression_duration('FLUENTS_IN_DURATIONS')
+        supported_kind.set_expression_duration('INT_TYPE_DURATIONS')
         supported_kind.set_numbers('DISCRETE_NUMBERS')
         supported_kind.set_numbers('CONTINUOUS_NUMBERS')
         supported_kind.set_problem_type("SIMPLE_NUMERIC_PLANNING")
@@ -143,6 +144,7 @@ class TamerLite(
         supported_kind.set_conditions_kind('EQUALITIES')
         supported_kind.set_fluents_type('NUMERIC_FLUENTS')
         supported_kind.set_fluents_type('OBJECT_FLUENTS')
+        supported_kind.set_fluents_type('INT_FLUENTS')
         return supported_kind
 
     @staticmethod
@@ -254,10 +256,10 @@ class TamerLite(
                 for p in self._params.queues:
                     h, w = self._get_heuristic(p, heuristic, encoder, state_encoder)
                     heuristics.append((h, w))
-                plan = multiqueue_search(encoder.search_space, heuristics, timeout)
+                plan, metrics = multiqueue_search(encoder.search_space, heuristics, timeout)
             else:
                 search = self._get_search(self._params, heuristic, encoder, state_encoder)
-                plan = search(encoder.search_space, timeout=timeout)
+                plan, metrics = search(encoder.search_space, timeout=timeout)
 
             if plan:
                 plan = encoder.build_plan(plan)
@@ -265,7 +267,7 @@ class TamerLite(
                 status = up.engines.PlanGenerationResultStatus.SOLVED_SATISFICING
             else:
                 status = up.engines.PlanGenerationResultStatus.UNSOLVABLE_INCOMPLETELY
-            return up.engines.PlanGenerationResult(status, plan, self.name)
+            return up.engines.PlanGenerationResult(status, plan, self.name, metrics)
         except TimeoutError:
             status = up.engines.PlanGenerationResultStatus.TIMEOUT
             return up.engines.PlanGenerationResult(status, None, self.name)

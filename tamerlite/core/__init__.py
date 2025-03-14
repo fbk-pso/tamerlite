@@ -1,10 +1,22 @@
-try:
-    import rustamer
-    has_rustamer = True
-except ImportError:
-    has_rustamer = False
+import os
+import sys
 
-if not has_rustamer:
+use_rustamer = True
+if 'DISABLE_RUSTAMER' in os.environ:
+    if os.environ['DISABLE_RUSTAMER'].lower() in ("1", "true", "yes"):
+        use_rustamer = False
+    elif os.environ['DISABLE_RUSTAMER'].lower() in ("0", "false", "no"):
+        use_rustamer = True
+    else:
+        sys.exit("The DISABLE_RUSTAMER environment variable has an invalid value.")
+
+if use_rustamer:
+    try:
+        import rustamer
+    except ImportError:
+        use_rustamer = False
+
+if not use_rustamer:
     from tamerlite.core.search import wastar_search, astar_search, gbfs_search
     from tamerlite.core.search import bfs_search, dfs_search, ehc_search
     from tamerlite.core.multiqueue import multiqueue_search

@@ -34,6 +34,11 @@ impl State {
     fn todo(&self) -> HashMap<String, (usize, usize)> {
         self.todo.clone()
     }
+
+    #[getter]
+    fn path(&self) -> Vec<(String, usize, usize)> {
+        PersistentList::to_vec_copy(&self.path)
+    }
 }
 
 impl State {
