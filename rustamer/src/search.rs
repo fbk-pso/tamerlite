@@ -3,6 +3,7 @@ use std::time::SystemTime;
 use std::{
     collections::BinaryHeap,
     collections::HashSet,
+    collections::HashMap,
     vec::Vec
 };
 
@@ -68,25 +69,27 @@ pub fn build_plan(ss: &mut SearchSpace, state: &State) -> PyResult<Option<Vec<(O
 
 #[pyfunction]
 #[pyo3(signature = (ss, heuristic, timeout=None))]
-pub fn astar_search(ss: &mut SearchSpace, heuristic: &Heuristic, timeout: Option<f32>) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
+pub fn astar_search(ss: &mut SearchSpace, heuristic: &Heuristic, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
     wastar_search(ss, heuristic, 0.5, timeout)
 }
 
 #[pyfunction]
 #[pyo3(signature = (ss, heuristic, timeout=None))]
-pub fn gbfs_search(ss: &mut SearchSpace, heuristic: &Heuristic, timeout: Option<f32>) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
+pub fn gbfs_search(ss: &mut SearchSpace, heuristic: &Heuristic, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
     wastar_search(ss, heuristic, 1.0, timeout)
 }
 
 #[pyfunction]
 #[pyo3(signature = (ss, heuristic, weight, timeout=None))]
-pub fn wastar_search(ss: &mut SearchSpace, heuristic: &Heuristic, weight: f64, timeout: Option<f32>) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
+pub fn wastar_search(ss: &mut SearchSpace, heuristic: &Heuristic, weight: f64, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
+    let mut metrics = HashMap::new();
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
     let init_h = match heuristic.eval(&init, ss)? {
         Some(v) => v,
         None => {
-            return Ok(None);
+            metrics.insert("expanded_states".to_string(), 0.to_string());
+            return Ok((None, metrics));
         }
     };
     let mut open = BinaryHeap::new();
@@ -108,8 +111,9 @@ pub fn wastar_search(ss: &mut SearchSpace, heuristic: &Heuristic, weight: f64, t
         // println!("{:?} {:?}", state.path.iter().map(|(ev, _)| &ev.action).collect::<Vec<&String>>(), current.heuristic);
         counter += 1;
         if ss.goal_reached(&state, None)? {
-            println!("Expanded states: {}", counter);
-            return build_plan(ss, &state);
+            metrics.insert("expanded_states".to_string(), counter.to_string());
+            metrics.insert("goal_depth".to_string(), state.g.to_string());
+            return build_plan(ss, &state).map(|plan| (plan, metrics));
         } else {
             for s in ss.get_successor_states(&state)? {
                 if open_set.contains(&s) || closed_set.contains(&s) {
@@ -129,22 +133,24 @@ pub fn wastar_search(ss: &mut SearchSpace, heuristic: &Heuristic, weight: f64, t
             }
         }
     }
-    Ok(None)
+    metrics.insert("expanded_states".to_string(), counter.to_string());
+    Ok((None, metrics))
 }
 
 #[pyfunction]
 #[pyo3(signature = (ss, timeout=None))]
-pub fn bfs_search(ss: &mut SearchSpace, timeout: Option<f32>) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
+pub fn bfs_search(ss: &mut SearchSpace, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
     basic_search(ss, true, timeout)
 }
 
 #[pyfunction]
 #[pyo3(signature = (ss, timeout=None))]
-pub fn dfs_search(ss: &mut SearchSpace, timeout: Option<f32>) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
+pub fn dfs_search(ss: &mut SearchSpace, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
     basic_search(ss, false, timeout)
 }
 
-fn basic_search(ss: &mut SearchSpace, bfs: bool, timeout: Option<f32>) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
+fn basic_search(ss: &mut SearchSpace, bfs: bool, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
+    let mut metrics = HashMap::new();
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
     let mut open = VecDeque::new();
@@ -165,26 +171,30 @@ fn basic_search(ss: &mut SearchSpace, bfs: bool, timeout: Option<f32>) -> PyResu
 
         counter += 1;
         if ss.goal_reached(&state, None)? {
-            println!("Expanded states: {}", counter);
-            return build_plan(ss, &state);
+            metrics.insert("expanded_states".to_string(), counter.to_string());
+            metrics.insert("goal_depth".to_string(), state.g.to_string());
+            return build_plan(ss, &state).map(|plan| (plan, metrics));
         } else {
             for s in ss.get_successor_states(&state)? {
                 open.push_back(s);
             }
         }
     }
-    Ok(None)
+    metrics.insert("expanded_states".to_string(), counter.to_string());
+    Ok((None, metrics))
 }
 
 #[pyfunction]
 #[pyo3(signature = (ss, heuristic, timeout=None))]
-pub fn ehc_search(ss: &mut SearchSpace, heuristic: &Heuristic, timeout: Option<f32>) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
+pub fn ehc_search(ss: &mut SearchSpace, heuristic: &Heuristic, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
+    let mut metrics = HashMap::new();
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
     let mut best_h = match heuristic.eval(&init, ss)? {
         Some(v) => v,
         None => {
-            return Ok(None);
+            metrics.insert("expanded_states".to_string(), 0.to_string());
+            return Ok((None, metrics));
         }
     };
     let mut open = VecDeque::new();
@@ -199,8 +209,9 @@ pub fn ehc_search(ss: &mut SearchSpace, heuristic: &Heuristic, timeout: Option<f
 
         counter += 1;
         if ss.goal_reached(&state, None)? {
-            println!("Expanded states: {}", counter);
-            return build_plan(ss, &state);
+            metrics.insert("expanded_states".to_string(), counter.to_string());
+            metrics.insert("goal_depth".to_string(), state.g.to_string());
+            return build_plan(ss, &state).map(|plan| (plan, metrics));
         } else {
             for s in ss.get_successor_states(&state)? {
                 let h = heuristic.eval(&s, ss)?;
@@ -217,5 +228,6 @@ pub fn ehc_search(ss: &mut SearchSpace, heuristic: &Heuristic, timeout: Option<f
             }
         }
     }
-    Ok(None)
+    metrics.insert("expanded_states".to_string(), counter.to_string());
+    Ok((None, metrics))
 }

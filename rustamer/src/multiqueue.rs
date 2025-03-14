@@ -4,6 +4,7 @@ use std::time::SystemTime;
 use std::{
     collections::BinaryHeap,
     collections::HashSet,
+    collections::HashMap,
     vec::Vec
 };
 
@@ -63,7 +64,8 @@ impl Ord for PrioritizedItem {
 
 #[pyfunction]
 #[pyo3(signature = (ss, heuristics, timeout=None))]
-pub fn multiqueue_search(ss: &mut SearchSpace, heuristics: Vec<(Heuristic, f64)>, timeout: Option<f32>) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
+pub fn multiqueue_search(ss: &mut SearchSpace, heuristics: Vec<(Heuristic, f64)>, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
+    let mut metrics = HashMap::new();
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
     let item = PrioritizedItem{heuristic: 0.0, state_container: Rc::new(RefCell::new(StateContainer{state: init, expanded: false})) };
@@ -110,8 +112,9 @@ pub fn multiqueue_search(ss: &mut SearchSpace, heuristics: Vec<(Heuristic, f64)>
                 states_expanded += 1;
                 counter += 1;
                 if ss.goal_reached(&state, None)? {
-                    println!("Expanded states: {}", states_expanded);
-                    return build_plan(ss, &state);
+                    metrics.insert("expanded_states".to_string(), states_expanded.to_string());
+                    metrics.insert("goal_depth".to_string(), state.g.to_string());
+                    return build_plan(ss, &state).map(|plan| (plan, metrics));
                 }
                 successor_states = ss.get_successor_states(&state)?;
             }
@@ -136,5 +139,6 @@ pub fn multiqueue_search(ss: &mut SearchSpace, heuristics: Vec<(Heuristic, f64)>
             }
         }
     }
-    Ok(None)
+    metrics.insert("expanded_states".to_string(), states_expanded.to_string());
+    Ok((None, metrics))
 }

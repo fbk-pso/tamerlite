@@ -39,11 +39,10 @@ def _basic_search(ss: SearchSpace, bfs: bool, timeout):
             state = open.pop()
         counter += 1
         if ss.goal_reached(state):
-            print("Expanded states:", counter)
-            return state.extract_solution()
+            return state.extract_solution(), {"expanded_states": counter, "goal_depth": state.g}
         for succ_state in ss.get_successor_states(state):
             open.append(succ_state)
-    return None
+    return None, {"expanded_states": str(counter)}
 
 def astar_search(ss: SearchSpace, heuristic: Heuristic, timeout=None):
     return wastar_search(ss, heuristic, 0.5, timeout)
@@ -59,7 +58,7 @@ def wastar_search(ss: SearchSpace, heuristic: Heuristic, weight: float = 0.5, ti
     init = ss.initial_state()
     init_h = heuristic.eval(init, ss)
     if init_h is None:
-        return None
+        return None, {"expanded_states": str(0)}
     heapq.heappush(open, PrioritizedItem(init_h, init))
     counter = 0
     while open:
@@ -70,11 +69,9 @@ def wastar_search(ss: SearchSpace, heuristic: Heuristic, weight: float = 0.5, ti
         if not ss.is_temporal:
             closed_set.add(state)
             open_set.discard(state)
-        # print([ev.action for (ev, _) in state.path], item.heuristic)
         counter += 1
         if ss.goal_reached(state):
-            print("Expanded states:", counter)
-            return state.extract_solution()
+            return state.extract_solution(), {"expanded_states": str(counter), "goal_depth": str(state.g)}
         for succ_state in ss.get_successor_states(state):
             if succ_state in closed_set or succ_state in open_set:
                 continue
@@ -84,7 +81,7 @@ def wastar_search(ss: SearchSpace, heuristic: Heuristic, weight: float = 0.5, ti
                 heapq.heappush(open, PrioritizedItem(f, succ_state))
                 if not ss.is_temporal:
                     open_set.add(succ_state)
-    return None
+    return None, {"expanded_states": str(counter)}
 
 def ehc_search(ss: SearchSpace, heuristic: Heuristic, timeout=None):
     st = time.time()
@@ -93,7 +90,7 @@ def ehc_search(ss: SearchSpace, heuristic: Heuristic, timeout=None):
     open.append(init)
     best_h = heuristic.eval(init, ss)
     if best_h is None:
-        return None
+        return None, {"expanded_states": str(0)}
     counter = 0
     while len(open) > 0:
         if timeout is not None and time.time() - st > timeout:
@@ -101,8 +98,7 @@ def ehc_search(ss: SearchSpace, heuristic: Heuristic, timeout=None):
         state = open.popleft()
         counter += 1
         if ss.goal_reached(state):
-            print("Expanded states:", counter)
-            return state.extract_solution()
+            return state.extract_solution(), {"expanded_states": str(counter), "goal_depth": str(state.g)}
         for succ_state in ss.get_successor_states(state):
             h = heuristic.eval(succ_state, ss)
             if h is not None:
@@ -110,4 +106,4 @@ def ehc_search(ss: SearchSpace, heuristic: Heuristic, timeout=None):
                     best_h = h
                     open.clear()
                 open.append(succ_state)
-    return None
+    return None, {"expanded_states": str(counter)}
