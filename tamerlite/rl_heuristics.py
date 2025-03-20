@@ -92,3 +92,65 @@ class RLHeuristic(Heuristic):
                 return float(min(self._deltah_bin, (math.log(min(1, r), self._gamma)+1)))
         else:
             return max(0.000001,-r)
+
+    def gen_eval(self, states_generator, ss):
+        cached_queue = []
+        states_queue = []
+        vectors_queue = []
+        sym_heuristics_queue = []
+        for i, state in enumerate(states_generator):
+            h = state.heuristic_cache.get(self.name, -1)
+            if h==-1:
+                if self._residual:
+                    sym_h = self._sym_h.eval(state, ss)
+                    if sym_h is None:
+                        cached_queue.append((i, state, None))
+                        continue
+                else:
+                    sym_h = -1
+
+                if ss.goal_reached(state):
+                    cached_queue.append((i, state, 0))
+                else:
+                    state_vec = self._state_encoder.get_state_as_vector(state)
+                    states_queue.append((i, state))
+                    vectors_queue.append(state_vec)
+                    sym_heuristics_queue.append(sym_h)
+            else:
+                cached_queue.append((i, state, h))
+
+        cached_queue_idx = 0
+        if len(states_queue) > 0:
+            rs = self._model(torch.tensor(vectors_queue, dtype=torch.float32)).detach()
+            for (i, s), r, sym_h in zip(states_queue, rs, sym_heuristics_queue, strict=True):
+                r = float(r[0])
+                if self._residual:
+                    if self._reward_signal=="cnt":
+                        r -= sym_h
+                    else:
+                        r += self._gamma**(sym_h-1)
+                res = None
+                if self._reward_signal=="bin":
+                    if r == 0:
+                        res = float(self._deltah_bin)
+                    elif r < 0:
+                        res = float((2 * self._deltah_bin) - min(self._deltah_bin, (math.log(min(1, -r), self._gamma))))
+                    else:
+                        res = float(min(self._deltah_bin, (math.log(min(1, r), self._gamma)+1)))
+                else:
+                    res = max(0.000001,-r)
+
+                #assert abs(res - self.eval(s, ss)) < 0.0001, f"{res} != {self.eval(s, ss)}"
+
+                # Yield cached states (if any) with index < i
+                while cached_queue_idx < len(cached_queue) and cached_queue[cached_queue_idx][0] < i:
+                    yield cached_queue[cached_queue_idx][1], cached_queue[cached_queue_idx][2]
+                    cached_queue_idx += 1
+
+                # Yield current state
+                yield s, res
+
+        # Yield remaining cached states (if any)
+        while cached_queue_idx < len(cached_queue):
+            yield cached_queue[cached_queue_idx][1], cached_queue[cached_queue_idx][2]
+            cached_queue_idx += 1
