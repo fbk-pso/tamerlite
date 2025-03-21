@@ -35,7 +35,7 @@ class Heuristic:
             h = self._eval(state, ss)
         return h
 
-    def gen_eval(self, states: Iterable[State], ss: SearchSpace) -> Iterable[Tuple[State, Optional[float]]]:
+    def eval_gen(self, states: Iterable[State], ss: SearchSpace) -> Iterable[Tuple[State, Optional[float]]]:
         '''
         This function is used to evaluate multiple states at once.
         '''
