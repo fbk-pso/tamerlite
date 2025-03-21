@@ -78,14 +78,14 @@ def multiqueue_search(ss: SearchSpace, heuristics: List[Tuple[Heuristic, float]]
         states_expanded += 1
         if ss.goal_reached(state):
             return state.extract_solution(), {"expanded_states": str(states_expanded), "goal_depth": str(state.g)}
-        for succ_state in ss.get_successor_states(state):
-            if succ_state in closed_set or succ_state in open_set:
-                continue
-            if not ss.is_temporal:
-                open_set.add(succ_state)
-            sc = StateContainer(succ_state, False)
-            for i, (heuristic, weight) in enumerate(heuristics):
-                h = heuristic.eval(succ_state, ss) if weight > 0 else 0
+
+        # Here, we create a temporary list of the successor states to reuse it among multiple heuristics
+        candidate_states = [s for s in ss.get_successor_states(state) if s not in closed_set and s not in open_set]
+        for i, (heuristic, weight) in enumerate(heuristics):
+            for succ_state, h in heuristic.eval_gen(candidate_states, ss):
+                if i == 0 and not ss.is_temporal:
+                    open_set.add(succ_state)
+                sc = StateContainer(succ_state, False)
                 if h is not None:
                     f = (1-weight)*succ_state.g + weight*h
                     item = PrioritizedItem(f, sc)
