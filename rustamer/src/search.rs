@@ -115,20 +115,23 @@ pub fn wastar_search(ss: &mut SearchSpace, heuristic: &Heuristic, weight: f64, t
             metrics.insert("goal_depth".to_string(), state.g.to_string());
             return build_plan(ss, &state).map(|plan| (plan, metrics));
         } else {
-            for s in ss.get_successor_states(&state)? {
-                if open_set.contains(&s) || closed_set.contains(&s) {
-                    continue;
-                }
-                let h = heuristic.eval(&s, ss)?;
-                match h {
-                    Some(v) => {
-                        let f = weight * v + (1.0 - weight) * s.g;
-                        if !ss.is_temporal {
-                            open_set.insert(s.clone());
-                        }
-                        open.push(PrioritizedItem{heuristic: f, state: s});
-                    },
-                    None => continue,
+            for rs in ss.get_successor_states_iter(&state) {
+                let os = rs?;
+                if let Some(s) = os {
+                    if open_set.contains(&s) || closed_set.contains(&s) {
+                        continue;
+                    }
+                    let h = heuristic.eval(&s, ss)?;
+                    match h {
+                        Some(v) => {
+                            let f = weight * v + (1.0 - weight) * s.g;
+                            if !ss.is_temporal {
+                                open_set.insert(s.clone());
+                            }
+                            open.push(PrioritizedItem{heuristic: f, state: s});
+                        },
+                        None => continue,
+                    }
                 }
             }
         }
