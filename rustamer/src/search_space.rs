@@ -285,7 +285,7 @@ impl SearchSpace {
         })
     }
 
-    pub fn get_successor_states(&mut self, state: &State) -> PyResult<Vec<State>> {
+    pub fn get_successor_states(&self, state: &State) -> PyResult<Vec<State>> {
         let mut res = Vec::new();
         let actions: Vec<String> = self.actions.iter().map(|a|a.to_string()).collect();
         for action in actions.iter() {
@@ -297,7 +297,7 @@ impl SearchSpace {
         Ok(res)
     }
 
-    pub fn get_successor_state(&mut self, state: &State, action: &str) -> PyResult<Option<State>> {
+    pub fn get_successor_state(&self, state: &State, action: &str) -> PyResult<Option<State>> {
         if let Some(events) = self.events.get(action) {
             if let Some((index, id)) = state.todo.get(action) {
                 if let Some((_, e)) = events.get(*index) {
@@ -380,9 +380,9 @@ impl SearchSpace {
 
 impl SearchSpace {
 
-    // pub fn get_successor_states_iter<'a>(&'a mut self, state: &'a State) -> impl Iterator<Item = PyResult<Option<State>>> + 'a {
-    //     return self.actions.iter().map(|action| self.get_successor_state(state, action));
-    // }
+    pub fn get_successor_states_iter<'a>(&'a self, state: &'a State) -> impl Iterator<Item = PyResult<Option<State>>> + 'a {
+        return self.actions.iter().map(|action| self.get_successor_state(state, action));
+    }
 
     pub fn build_plan(&mut self, all_path: Vec<String>) -> PyResult<Vec<(Option<BigRational>, String, Option<BigRational>)>> {
         let mut tn = DeltaSTN::new(mk_rational(0, 1));
