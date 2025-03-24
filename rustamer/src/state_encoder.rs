@@ -107,7 +107,8 @@ impl CoreStateEncoder {
             let tn = state.temporal_network.as_ref().unwrap();
             let mut last = -1.0;
             if state.path.is_some() {
-                last = search_space.tn_interpreter.get_event_timing(tn, &state.path.as_ref().unwrap().payload).unwrap();
+                let payload = &state.path.as_ref().unwrap().payload;
+                last = search_space.tn_interpreter.get_event_timing(tn, &payload.0, payload.1, payload.2).unwrap();
             }
 
             let mut m = HashMap::new();
@@ -133,7 +134,7 @@ impl CoreStateEncoder {
                     nsa = 0;
                     nea = 0;
                 }
-                if !tn.equals_with_tolerance(&search_space.tn_interpreter.get_action_timing(tn, &(ev.0.to_string(), !ev.1, ev.2)).unwrap(), t) {
+                if !tn.equals_with_tolerance(&search_space.tn_interpreter.get_action_timing(tn, &ev.0, !ev.1, ev.2).unwrap(), t) {
                     if ev.1 {
                         nsa += 1;
                     } else {

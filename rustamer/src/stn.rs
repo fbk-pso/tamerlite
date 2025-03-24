@@ -8,7 +8,7 @@ use regex::Regex;
 
 #[derive(Debug)]
 struct DeltaNeighbors<Q> {
-    dst: i32,
+    dst: u32,
     bound: Q,
     next: Option<Arc<DeltaNeighbors<Q>>>,
 }
@@ -19,7 +19,7 @@ where Q: Clone {
         None
     }
 
-    fn add(dst: &i32,
+    fn add(dst: &u32,
         bound: &Q,
         next: &Option<Arc<Self>>) -> Option<Arc<Self>> {
         Some(Arc::new(DeltaNeighbors { dst:*dst, bound:bound.clone(), next:next.clone() }))
@@ -28,8 +28,8 @@ where Q: Clone {
 
 #[derive(Debug)]
 pub struct DeltaSTN<Q> {
-    constraints: HashMap<i32, Option<Arc<DeltaNeighbors<Q>>>>,
-    pub distances: HashMap<i32, Q>,
+    constraints: HashMap<u32, Option<Arc<DeltaNeighbors<Q>>>>,
+    pub distances: HashMap<u32, Q>,
     is_sat: bool,
     pub tolerance: Q,
 }
@@ -57,7 +57,7 @@ Q: num_traits::Num + std::ops::Neg<Output=Q> + PartialOrd + Clone {
         }
     }
 
-    pub fn add(& mut self, x:&i32, y:&i32, b:&Q) {
+    pub fn add(& mut self, x:&u32, y:&u32, b:&Q) {
         if self.is_sat {
             if !self.distances.contains_key(x) {
                 self.distances.insert(*x, Q::zero());
@@ -79,11 +79,11 @@ Q: num_traits::Num + std::ops::Neg<Output=Q> + PartialOrd + Clone {
         self.is_sat
     }
 
-    pub fn get_model_value(&self, x:&i32) -> Option<Q> {
+    pub fn get_model_value(&self, x:&u32) -> Option<Q> {
         self.distances.get(x).map(|v| v.clone() * (- Q::one()))
     }
 
-    fn is_subsumed(&self, x:&i32, y:&i32, b:&Q) -> bool {
+    fn is_subsumed(&self, x:&u32, y:&u32, b:&Q) -> bool {
         let mut neighbors: &Option<Arc<DeltaNeighbors<Q>>> = self.constraints.get(x).unwrap();
         while neighbors.is_some() {
             let n: &Arc<DeltaNeighbors<Q>> = neighbors.as_ref().unwrap();
@@ -103,7 +103,7 @@ Q: num_traits::Num + std::ops::Neg<Output=Q> + PartialOrd + Clone {
         }
     }
 
-    fn inc_check(&mut self, x:&i32, y:&i32, b:&Q) -> bool {
+    fn inc_check(&mut self, x:&u32, y:&u32, b:&Q) -> bool {
         if self.distances[x].clone() + b.clone() < self.distances[y].clone() - self.tolerance.clone() {
             self.distances.insert(*y, self.distances[x].clone() + b.clone());
         }
@@ -111,9 +111,9 @@ Q: num_traits::Num + std::ops::Neg<Output=Q> + PartialOrd + Clone {
             return true;
         }
 
-        let mut q: VecDeque<&i32> = VecDeque::from([y]);
+        let mut q: VecDeque<&u32> = VecDeque::from([y]);
         while ! q.is_empty() {
-            let c: &i32 = q.pop_front().unwrap();
+            let c: &u32 = q.pop_front().unwrap();
             let mut neighbors: &Option<Arc<DeltaNeighbors<Q>>> = self.constraints.get(c).unwrap();
             while neighbors.is_some() {
                 let n: &Arc<DeltaNeighbors<Q>> = neighbors.as_ref().unwrap();
@@ -171,8 +171,8 @@ pub fn _tnsolve(fname: String) -> () {
 
         if let Some(add) = re_add.captures(line)
         {
-            let x = add[2].parse::<i32>().unwrap();
-            let y = add[3].parse::<i32>().unwrap();
+            let x = add[2].parse::<u32>().unwrap();
+            let y = add[3].parse::<u32>().unwrap();
             let b = add[4].parse::<f64>().unwrap();
             tn_map.get_mut(&add[1].to_owned()).unwrap().add(&x, &y, &b);
             continue;
