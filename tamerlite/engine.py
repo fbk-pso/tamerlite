@@ -154,22 +154,22 @@ class TamerLite(
         elif h == "hff":
             internal_heuristic_cache = True if params is None or params.internal_heuristic_cache is None else params.internal_heuristic_cache
             events = {a: e for a, e in encoder.events.items() if a in encoder.applicable_actions}
-            h = HFF(encoder.fluents, encoder.objects, events, encoder.goal, internal_caching=internal_heuristic_cache, cache_value_in_state=cache_h)
+            h = HFF(encoder.fluents, encoder.fluent_types, encoder.objects, events, encoder.goal, internal_caching=internal_heuristic_cache, cache_value_in_state=cache_h)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "hadd":
             internal_heuristic_cache = True if params is None or params.internal_heuristic_cache is None else params.internal_heuristic_cache
             events = {a: e for a, e in encoder.events.items() if a in encoder.applicable_actions}
-            h = HAdd(encoder.fluents, encoder.objects, events, encoder.goal, internal_caching=internal_heuristic_cache, cache_value_in_state=cache_h)
+            h = HAdd(encoder.fluents, encoder.fluent_types, encoder.objects, events, encoder.goal, internal_caching=internal_heuristic_cache, cache_value_in_state=cache_h)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "hmax":
             internal_heuristic_cache = True if params is None or params.internal_heuristic_cache is None else params.internal_heuristic_cache
             events = {a: e for a, e in encoder.events.items() if a in encoder.applicable_actions}
-            h = HMax(encoder.fluents, encoder.objects, events, encoder.goal, internal_caching=internal_heuristic_cache, cache_value_in_state=cache_h)
+            h = HMax(encoder.fluents, encoder.fluent_types, encoder.objects, events, encoder.goal, internal_caching=internal_heuristic_cache, cache_value_in_state=cache_h)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "hmax_numeric":
             internal_heuristic_cache = True if params is None or params.internal_heuristic_cache is None else params.internal_heuristic_cache
             events = {a: e for a, e in encoder.events.items() if a in encoder.applicable_actions}
-            h = HMaxNumeric(encoder.fluents, encoder.objects, events, encoder.goal, internal_caching=internal_heuristic_cache, cache_value_in_state=cache_h)
+            h = HMaxNumeric(encoder.fluents, encoder.fluent_types, encoder.objects, events, encoder.goal, internal_caching=internal_heuristic_cache, cache_value_in_state=cache_h)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "blind":
             h = CustomHeuristic(lambda x: 0.0, cache_h)
