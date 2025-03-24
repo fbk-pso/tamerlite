@@ -46,7 +46,7 @@ def make_rational_constant_node(numerator: int, denominator:int) -> ExpressionNo
 def make_object_node(name: str) -> ExpressionNode:
     return name
 
-def make_fluent_node(name: str) -> ExpressionNode:
+def make_fluent_node(name: str, _id: int) -> ExpressionNode:
     return name
 
 def shift_expression(exp: Expression, offset: int) -> Expression:
