@@ -23,11 +23,20 @@ class RLHeuristicBase(Heuristic):
                  cache_value_in_state: bool = False):
         super().__init__(cache_value_in_state)
         self._state_encoder = state_encoder
-        self._model = ModelClass(state_encoder.state_geometry, config)
-        self._model.load_state_dict(torch.load(model))
-        self._model.eval()
+        self._deltah_bin = config.deltah_bin
+        self._gamma = config.gamma
+        self._reward_signal = config.reward_signal
         self._residual = config.residual
         self._sym_h = sym_h
+        self._use_gnn = config.use_gnn
+
+        if self._use_gnn:
+            self._inference_device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        else:
+            self._inference_device = torch.device("cpu")
+        self._model = ModelClass(state_encoder.state_geometry, config).to(self._inference_device)
+        self._model.load_state_dict(torch.load(model))
+        self._model.eval()
 
     def _eval(self, state, ss):
         # if ss.goal_reached(state):
@@ -48,10 +57,10 @@ class RLHeuristicBase(Heuristic):
             return self.eval_state_vec(state_vec, sym_h)
 
     def eval_state_graph(self, G, sym_h):
-        r = self._model(torch.tensor(G.nodes, dtype=torch.float),
-                        torch.tensor(G.edges, dtype=torch.long),
-                        torch.tensor(G.edge_features, dtype=torch.float),
-                        torch.zeros(len(G.nodes), dtype=torch.int64)).detach()[0]
+        r = self._model(torch.tensor(G.nodes, dtype=torch.float, device=self._inference_device),
+                        torch.tensor(G.edges, dtype=torch.long, device=self._inference_device),
+                        torch.tensor(G.edge_features, dtype=torch.float, device=self._inference_device),
+                        torch.zeros(len(G.nodes), dtype=torch.int64, device=self._inference_device)).detach()[0]
         r = float(r[0])
         if self._residual:
             if self._reward_signal=="cnt":
