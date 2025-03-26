@@ -32,9 +32,10 @@ class RLHeuristicBase(Heuristic):
 
         if self._use_gnn:
             self._inference_device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+            self._model = ModelClass(100).to(self._inference_device)
         else:
             self._inference_device = torch.device("cpu")
-        self._model = ModelClass(state_encoder.state_geometry, config).to(self._inference_device)
+            self._model = ModelClass(state_encoder.state_geometry, config).to(self._inference_device)
         self._model.load_state_dict(torch.load(model))
         self._model.eval()
 

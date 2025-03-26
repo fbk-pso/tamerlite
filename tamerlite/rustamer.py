@@ -55,7 +55,7 @@ def RLHeuristic(state_encoder, model, ModelClass, other_params, sym_h, cache_val
     from tamerlite.rl_heuristics import RLHeuristic
     h = RLHeuristic(state_encoder, model, ModelClass, other_params, sym_h, cache_value_in_state)
     if other_params.use_gnn:
-        return Heuristic.custom(lambda state: h.eval(state, state_encoder.search_space))
+        return Heuristic.custom(lambda state: h.eval(state, state_encoder.search_space), cache_value_in_state)
     else:
         return Heuristic.hrl(h.name, state_encoder._general_state_encoder._cse, state_encoder._goals_vec, state_encoder._constants_vec, h.eval_state_vec, sym_h, cache_value_in_state)
 
