@@ -97,43 +97,42 @@ pub fn multiqueue_search(ss: &mut SearchSpace, heuristics: Vec<(Heuristic, f64)>
             continue;
         }
         if let Some(current) = open.pop() {
-            let successor_states;
-            {
-                let sc = & mut (*(current.state_container)).borrow_mut();
-                if sc.expanded {
-                    continue;
-                }
-                sc.set_expanded(true);
-                let state = &sc.state;
-                if !ss.is_temporal {
-                    closed_set.insert(state.clone());
-                    open_set.remove(state);
-                }
-                states_expanded += 1;
-                counter += 1;
-                if ss.goal_reached(&state, None)? {
-                    metrics.insert("expanded_states".to_string(), states_expanded.to_string());
-                    metrics.insert("goal_depth".to_string(), state.g.to_string());
-                    return build_plan(ss, &state).map(|plan| (plan, metrics));
-                }
-                successor_states = ss.get_successor_states(&state)?;
+            let sc = & mut (*(current.state_container)).borrow_mut();
+            if sc.expanded {
+                continue;
             }
-            for s in successor_states {
-                if open_set.contains(&s) || closed_set.contains(&s) {
-                    continue;
-                }
-                if !ss.is_temporal {
-                    open_set.insert(s.clone());
-                }
-                let sc = Rc::new(RefCell::new(StateContainer{state: s.clone(), expanded: false}));
-                for (i, (heuristic, weight)) in heuristics.iter().enumerate() {
-                    let h = heuristic.eval(&s, ss)?;
-                    match h {
-                        Some(v) => {
-                            let f = *weight * v + (1.0 - *weight) * s.g;
-                            opens[i].push(PrioritizedItem{heuristic: f, state_container: sc.clone()});
-                        },
-                        None => continue,
+            sc.set_expanded(true);
+            let state = &sc.state;
+            if !ss.is_temporal {
+                closed_set.insert(state.clone());
+                open_set.remove(state);
+            }
+            states_expanded += 1;
+            counter += 1;
+            if ss.goal_reached(&state, None)? {
+                metrics.insert("expanded_states".to_string(), states_expanded.to_string());
+                metrics.insert("goal_depth".to_string(), state.g.to_string());
+                return build_plan(ss, &state).map(|plan| (plan, metrics));
+            }
+
+            for rs in ss.get_successor_states_iter(&state) {
+                if let Some(s) = rs? {
+                    if open_set.contains(&s) || closed_set.contains(&s) {
+                        continue;
+                    }
+                    if !ss.is_temporal {
+                        open_set.insert(s.clone());
+                    }
+                    let sc = Rc::new(RefCell::new(StateContainer{state: s.clone(), expanded: false}));
+                    for (i, (heuristic, weight)) in heuristics.iter().enumerate() {
+                        let h = heuristic.eval(&s, ss)?;
+                        match h {
+                            Some(v) => {
+                                let f = *weight * v + (1.0 - *weight) * s.g;
+                                opens[i].push(PrioritizedItem{heuristic: f, state_container: sc.clone()});
+                            },
+                            None => continue,
+                        }
                     }
                 }
             }

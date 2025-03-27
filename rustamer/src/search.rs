@@ -116,8 +116,7 @@ pub fn wastar_search(ss: &mut SearchSpace, heuristic: &Heuristic, weight: f64, t
             return build_plan(ss, &state).map(|plan| (plan, metrics));
         } else {
             for rs in ss.get_successor_states_iter(&state) {
-                let os = rs?;
-                if let Some(s) = os {
+                if let Some(s) = rs? {
                     if open_set.contains(&s) || closed_set.contains(&s) {
                         continue;
                     }
@@ -178,8 +177,10 @@ fn basic_search(ss: &mut SearchSpace, bfs: bool, timeout: Option<f32>) -> PyResu
             metrics.insert("goal_depth".to_string(), state.g.to_string());
             return build_plan(ss, &state).map(|plan| (plan, metrics));
         } else {
-            for s in ss.get_successor_states(&state)? {
-                open.push_back(s);
+            for rs in ss.get_successor_states_iter(&state) {
+                if let Some(s) = rs? {
+                    open.push_back(s);
+                }
             }
         }
     }
@@ -216,17 +217,19 @@ pub fn ehc_search(ss: &mut SearchSpace, heuristic: &Heuristic, timeout: Option<f
             metrics.insert("goal_depth".to_string(), state.g.to_string());
             return build_plan(ss, &state).map(|plan| (plan, metrics));
         } else {
-            for s in ss.get_successor_states(&state)? {
-                let h = heuristic.eval(&s, ss)?;
-                match h {
-                    Some(v) => {
-                        if v < best_h {
-                            best_h = v;
-                            open.clear();
-                        }
-                        open.push_back(s);
-                    },
-                    None => continue,
+            for rs in ss.get_successor_states_iter(&state) {
+                if let Some(s) = rs? {
+                    let h = heuristic.eval(&s, ss)?;
+                    match h {
+                        Some(v) => {
+                            if v < best_h {
+                                best_h = v;
+                                open.clear();
+                            }
+                            open.push_back(s);
+                        },
+                        None => continue,
+                    }
                 }
             }
         }
