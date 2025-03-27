@@ -16,11 +16,11 @@ use super::utils::*;
 #[derive(Debug, Clone)]
 pub struct State {
     pub assignments: HashMap<String, ExpressionNode>,
-    pub temporal_network: Option<DeltaSTN<f32>>,
-    pub todo: HashMap<String, (usize, u16)>,
+    pub temporal_network: Option<DeltaSTN<u64, f32>>,
+    pub todo: HashMap<String, (usize, u32)>,
     pub active_conditions: HashMultiSet<Vec<ExpressionNode>>,
     pub g: f64,
-    pub path: Option<Arc<PersistentList<(String, usize, u16)>>>,
+    pub path: Option<Arc<PersistentList<(String, usize, u32)>>>,
     pub heuristic_cache: Arc<Mutex<HashMap<String, Option<f64>>>>
 }
 
@@ -32,12 +32,12 @@ impl State {
     }
 
     #[getter]
-    fn todo(&self) -> HashMap<String, (usize, u16)> {
+    fn todo(&self) -> HashMap<String, (usize, u32)> {
         self.todo.clone()
     }
 
     #[getter]
-    fn path(&self) -> Vec<(String, usize, u16)> {
+    fn path(&self) -> Vec<(String, usize, u32)> {
         PersistentList::to_vec_copy(&self.path)
     }
 }
@@ -70,10 +70,10 @@ impl Hash for State {
 
 #[derive(Debug)]
 pub struct TNInterpreter {
-    actions_ids: HashMap<(String, bool), u16>,
-    events_ids: HashMap<(String, usize), u16>,
-    actions_ids_map_back: HashMap<u16, (String, bool)>,
-    events_ids_map_back: HashMap<u16, (String, usize)>
+    actions_ids: HashMap<(String, bool), u32>,
+    events_ids: HashMap<(String, usize), u32>,
+    actions_ids_map_back: HashMap<u32, (String, bool)>,
+    events_ids_map_back: HashMap<u32, (String, usize)>
 }
 
 impl TNInterpreter {
@@ -106,6 +106,14 @@ impl TNInterpreter {
                         events_ids_map_back: events_ids_map_back }
     }
 
+    fn pack_u32(&self, a: u32, b: u32) -> u64 {
+        ((a as u64) << 32) | (b as u64)
+    }
+
+    fn unpack_u64(&self, x: u64) -> (u32, u32) {
+        ((x >> 32) as u32, (x & 0xFFFFFFFF) as u32)
+    }
+
     pub fn clear(&mut self) {
         self.actions_ids.clear();
         self.events_ids.clear();
@@ -113,42 +121,41 @@ impl TNInterpreter {
         self.events_ids_map_back.clear();
     }
 
-    pub fn get_action_id(&self, action: &str, is_start: bool, id: u16) -> u32 {
+    pub fn get_action_id(&self, action: &str, is_start: bool, id: u32) -> u64 {
         if let Some(aid) = self.actions_ids.get(&(action.to_string(), is_start)) {
             // Concatenate the action id and the instance id using the
-            // lower and higher parts of the u32 binary representation
-            return ((id as u32) << 16) | (*aid as u32);
+            // lower and higher parts of the u64 binary representation
+            return self.pack_u32(*aid, id);
         }
         panic!("Action not found in the TNInterpreter");
         //return 0;
     }
 
-    pub fn get_event_id(&self, action: &str, pos: usize, id: u16) -> u32 {
+    pub fn get_event_id(&self, action: &str, pos: usize, id: u32) -> u64 {
         if let Some(eid) = self.events_ids.get(&(action.to_string(), pos)) {
-            return ((id as u32) << 16) | (*eid as u32);
+            return self.pack_u32(*eid, id);
         }
         panic!("Event not found in the TNInterpreter");
         //return 0;
     }
 
-    pub fn get_action_timing<Q>(&self, tn: &DeltaSTN<Q>, action: &str, is_start: bool, id: u16) -> Option<Q>
+    pub fn get_action_timing<Q>(&self, tn: &DeltaSTN<u64, Q>, action: &str, is_start: bool, id: u32) -> Option<Q>
     where Q: num_traits::Num + std::ops::Neg<Output=Q> + PartialOrd + Clone {
         let id = self.get_action_id(action, is_start, id);
         tn.get_model_value(&id)
     }
 
-    pub fn get_event_timing<Q>(&self, tn: &DeltaSTN<Q>, action: &str, pos: usize, id: u16) -> Option<Q>
+    pub fn get_event_timing<Q>(&self, tn: &DeltaSTN<u64, Q>, action: &str, pos: usize, id: u32) -> Option<Q>
     where Q: num_traits::Num + std::ops::Neg<Output=Q> + PartialOrd + Clone {
         let id = self.get_event_id(action, pos, id);
         tn.get_model_value(&id)
     }
 
-    pub fn get_actions_timings<Q>(&self, tn: &DeltaSTN<Q>) -> Vec<((String, bool, u16), Q)>
+    pub fn get_actions_timings<Q>(&self, tn: &DeltaSTN<u64, Q>) -> Vec<((String, bool, u32), Q)>
     where Q: num_traits::Num + std::ops::Neg<Output=Q> + PartialOrd + Clone {
-        let mut res: Vec<((String, bool, u16), Q)> = Vec::new();
+        let mut res: Vec<((String, bool, u32), Q)> = Vec::new();
         for (id, v) in tn.distances.iter() {
-            let action_id = (*id & 0xFFFF) as u16;
-            let outer_id = (*id >> 16) as u16;
+            let (action_id, outer_id) = self.unpack_u64(*id);
             let a = self.actions_ids_map_back.get(&action_id);
             if let Some((action, is_start)) = a {
                 res.push(((action.clone(), *is_start, outer_id), v.clone() * (- Q::one())));
@@ -158,12 +165,11 @@ impl TNInterpreter {
         res
     }
 
-    pub fn get_events_timings<Q>(&self, tn: &DeltaSTN<Q>) -> Vec<((String, usize, u16), Q)>
+    pub fn get_events_timings<Q>(&self, tn: &DeltaSTN<u64, Q>) -> Vec<((String, usize, u32), Q)>
     where Q: num_traits::Num + std::ops::Neg<Output=Q> + PartialOrd + Clone {
         let mut res = Vec::new();
         for (id, v) in tn.distances.iter() {
-            let event_id = (*id & 0xFFFF) as u16;
-            let outer_id = (*id >> 16) as u16;
+            let (event_id, outer_id) = self.unpack_u64(*id);
             let a = self.events_ids_map_back.get(&event_id);
             if let Some((action, pos)) = a {
                 res.push(((action.clone(), pos.clone(), outer_id), v.clone() * (- Q::one())));
@@ -189,7 +195,7 @@ pub struct SearchSpace {
     epsilon: f32,
     epsilon_rational: BigRational,
     pub is_temporal: bool,
-    counter: RwLock<u16>,
+    counter: RwLock<u32>,
 }
 
 #[pymethods]
@@ -270,7 +276,7 @@ impl SearchSpace {
                 }
             }
         };
-        let tn: Option<DeltaSTN<f32>> = match self.is_temporal {
+        let tn: Option<DeltaSTN<u64, f32>> = match self.is_temporal {
             true => Some(DeltaSTN::new(self.epsilon/1000.0)),
             false => None,
         };
@@ -386,8 +392,8 @@ impl SearchSpace {
 
     pub fn build_plan(&mut self, all_path: Vec<String>) -> PyResult<Vec<(Option<BigRational>, String, Option<BigRational>)>> {
         let mut tn = DeltaSTN::new(mk_rational(0, 1));
-        let mut todo: HashMap<String, (usize, u16)> = HashMap::new();
-        let mut path: Vec<(Event, u16)> = Vec::new();
+        let mut todo: HashMap<String, (usize, u32)> = HashMap::new();
+        let mut path: Vec<(Event, u32)> = Vec::new();
         let mut counter = 0;
         let mut state = self.initial_state(None)?;
         for action in all_path.iter() {
@@ -500,8 +506,8 @@ impl SearchSpace {
         }
 
         let mut res = Vec::new();
-        let mut start_time: HashMap<(String, u16), BigRational> = HashMap::new();
-        let mut end_time: HashMap<(String, u16), BigRational> = HashMap::new();
+        let mut start_time: HashMap<(String, u32), BigRational> = HashMap::new();
+        let mut end_time: HashMap<(String, u32), BigRational> = HashMap::new();
         for (a, t) in self.tn_interpreter.get_actions_timings(&tn).iter() {
             if a.1 {
                 start_time.insert((a.0.to_string(), a.2), t.clone());
@@ -530,7 +536,7 @@ impl SearchSpace {
         Ok(sat)
     }
 
-    fn expand_event(&self, state: &State, new_state: &mut State, e: &Event, index: &usize, id: &u16) -> PyResult<bool> {
+    fn expand_event(&self, state: &State, new_state: &mut State, e: &Event, index: &usize, id: &u32) -> PyResult<bool> {
         new_state.path = PersistentList::append((e.action.to_string(), e.pos, *id), &new_state.path);
 
         // check conditions is done before calling this method
