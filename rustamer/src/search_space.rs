@@ -293,11 +293,9 @@ impl SearchSpace {
 
     pub fn get_successor_states(&self, state: &State) -> PyResult<Vec<State>> {
         let mut res = Vec::new();
-        let actions: Vec<String> = self.actions.iter().map(|a|a.to_string()).collect();
-        for action in actions.iter() {
-            match self.get_successor_state(state, action)? {
-                Some(s) => res.push(s),
-                None => continue,
+        for rs in self.get_successor_states_iter(state) {
+            if let Some(s) = rs? {
+                res.push(s);
             }
         }
         Ok(res)
