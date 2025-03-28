@@ -12,7 +12,7 @@ use super::structures::*;
 use super::utils::*;
 
 
-#[pyclass]
+#[pyclass(frozen)]
 #[derive(Debug)]
 pub struct State {
     pub assignments: HashMap<String, ExpressionNode>,
@@ -127,13 +127,6 @@ impl TNInterpreter {
         ((x >> 32) as u32, (x & 0xFFFFFFFF) as u32)
     }
 
-    pub fn clear(&mut self) {
-        self.actions_ids.clear();
-        self.events_ids.clear();
-        self.actions_ids_map_back.clear();
-        self.events_ids_map_back.clear();
-    }
-
     pub fn get_action_id(&self, action: &str, is_start: bool, id: u32) -> u64 {
         if let Some(aid) = self.actions_ids.get(&(action.to_string(), is_start)) {
             // Concatenate the action id and the instance id using the
@@ -194,7 +187,7 @@ impl TNInterpreter {
 
 }
 
-#[pyclass(name = "SearchSpace")]
+#[pyclass(name = "SearchSpace", frozen)]
 #[derive(Debug)]
 pub struct SearchSpace {
     actions_duration:
@@ -272,8 +265,8 @@ impl SearchSpace {
         Ok(res)
     }
 
-    pub fn reset(&mut self) {
-        self.tn_interpreter.clear();
+    pub fn reset(&self) {
+        // DO nothing :)
     }
 
     #[pyo3(signature = (initial_state=None))]
