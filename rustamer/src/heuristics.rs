@@ -896,7 +896,7 @@ impl HMaxNumeric {
             active_conditions: HashMultiSet::new(),
             g: 0.0,
             path: None,
-            heuristic_cache: Arc::new(Mutex::new(HashMap::new())),
+            heuristic_cache: Mutex::new(HashMap::new()),
         };
         for state_values in values
             .iter()
