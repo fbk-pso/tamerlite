@@ -197,19 +197,22 @@ pub struct HRL {
     ss: CoreStateEncoder,
     goals_vec: Vec<f32>,
     constants_vec: Vec<f32>,
-    hdl: Option<DeleteRelaxationHeuristic>,
-    hmax: Option<HMaxNumeric>,
+    h_sym: Arc<Option<Heuristic>>,
     callable: PyObject,
     name: String,
 }
 
 impl HRL {
     fn new(ss: &CoreStateEncoder, goals_vec: Vec<f32>, constants_vec: Vec<f32>, callable: PyObject, h_sym: Option<Heuristic>, name: &str) -> PyResult<Self> {
-        let h_sym = match h_sym {
-            Some(heuristic) => (heuristic.hdr, heuristic.hmax),
-            None => (None, None),
-        };
-        Ok(HRL { ss: ss.clone(), goals_vec, constants_vec, hdl: h_sym.0, hmax: h_sym.1, callable, name: String::from(name) })
+        Ok(HRL { ss: ss.clone(), goals_vec, constants_vec, h_sym: Arc::new(h_sym), callable, name: String::from(name) })
+    }
+
+    fn eval_hsym(&self, state: &State, ss: &SearchSpace) -> PyResult<Option<f64>> {
+        if let Some(h) = self.h_sym.as_ref() {
+            h.eval(state, ss)
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn eval(&self, state: &State, ss: &SearchSpace) -> PyResult<Option<f64>> {
@@ -222,13 +225,7 @@ impl HRL {
         enc.extend(self.constants_vec.iter());
         enc.extend(self.goals_vec.iter());
         enc.extend(self.ss.get_tn_as_vector(state, ss)?);
-        let h_val = match &self.hdl {
-            Some(h) => h.eval(state)?,
-            None => match &self.hmax {
-                Some(h) => h.eval(state)?,
-                None => Some(-1.0),
-            }
-        };
+        let h_val = self.eval_hsym(state, ss)?;
         if h_val.is_none() {
             return Ok(None);
         }
@@ -256,8 +253,7 @@ impl Clone for HRL {
                 ss: self.ss.clone(),
                 goals_vec: self.goals_vec.clone(),
                 constants_vec: self.constants_vec.clone(),
-                hdl: self.hdl.clone(),
-                hmax: self.hmax.clone(),
+                h_sym: self.h_sym.clone(),
                 callable: self.callable.clone_ref(py),
                 name: self.name.clone()
             }
