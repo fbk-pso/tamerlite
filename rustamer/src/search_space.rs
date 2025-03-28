@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet}, sync::{Arc, Mutex, RwLock}, vec::Vec
+    collections::{HashMap, HashSet}, sync::{Arc, Mutex}, vec::Vec
 };
 use multiset::HashMultiSet;
 use std::hash::{Hash, Hasher};
@@ -195,7 +195,7 @@ pub struct SearchSpace {
     epsilon: f32,
     epsilon_rational: BigRational,
     pub is_temporal: bool,
-    counter: RwLock<u32>,
+    counter: Mutex<u32>,
 }
 
 #[pymethods]
@@ -254,7 +254,7 @@ impl SearchSpace {
                 None => mk_rational(1, 100),
             },
             is_temporal: is_temporal,
-            counter: RwLock::new(0),
+            counter: Mutex::new(0),
         };
         Ok(res)
     }
@@ -388,7 +388,7 @@ impl SearchSpace {
         return self.actions.iter().map(|action| self.get_successor_state(state, action));
     }
 
-    pub fn build_plan(&mut self, all_path: Vec<String>) -> PyResult<Vec<(Option<BigRational>, String, Option<BigRational>)>> {
+    pub fn build_plan(&self, all_path: Vec<String>) -> PyResult<Vec<(Option<BigRational>, String, Option<BigRational>)>> {
         let mut tn = DeltaSTN::new(mk_rational(0, 1));
         let mut todo: HashMap<String, (usize, u32)> = HashMap::new();
         let mut path: Vec<(Event, u32)> = Vec::new();
@@ -609,7 +609,7 @@ impl SearchSpace {
     }
 
     fn open_action(&self, state: &State, new_state: &mut State, action: &str, events: &Vec<(Timing, Event)>) -> PyResult<bool> {
-        let mut counter = self.counter.write().unwrap();
+        let mut counter = self.counter.lock().unwrap();
         let mut id = counter.clone();
         if self.is_temporal { // Add temporal constraints between events of the action
             let tn = new_state.temporal_network.as_mut().unwrap();
