@@ -49,7 +49,7 @@ impl Ord for PrioritizedItem {
     }
 }
 
-pub fn build_plan(ss: &mut SearchSpace, state: &State) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
+pub fn build_plan(ss: &SearchSpace, state: &State) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
     let path = PersistentList::to_vec(&state.path).into_iter().map(|(a, _, _)| a.to_string()).collect();
     let plan = ss.build_plan(path)?;
     let mut res = Vec::new();
@@ -69,19 +69,19 @@ pub fn build_plan(ss: &mut SearchSpace, state: &State) -> PyResult<Option<Vec<(O
 
 #[pyfunction]
 #[pyo3(signature = (ss, heuristic, timeout=None))]
-pub fn astar_search(ss: &mut SearchSpace, heuristic: &Heuristic, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
+pub fn astar_search(ss: &SearchSpace, heuristic: &Heuristic, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
     wastar_search(ss, heuristic, 0.5, timeout)
 }
 
 #[pyfunction]
 #[pyo3(signature = (ss, heuristic, timeout=None))]
-pub fn gbfs_search(ss: &mut SearchSpace, heuristic: &Heuristic, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
+pub fn gbfs_search(ss: &SearchSpace, heuristic: &Heuristic, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
     wastar_search(ss, heuristic, 1.0, timeout)
 }
 
 #[pyfunction]
 #[pyo3(signature = (ss, heuristic, weight, timeout=None))]
-pub fn wastar_search(ss: &mut SearchSpace, heuristic: &Heuristic, weight: f64, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
+pub fn wastar_search(ss: &SearchSpace, heuristic: &Heuristic, weight: f64, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
     let mut metrics = HashMap::new();
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
@@ -140,17 +140,17 @@ pub fn wastar_search(ss: &mut SearchSpace, heuristic: &Heuristic, weight: f64, t
 
 #[pyfunction]
 #[pyo3(signature = (ss, timeout=None))]
-pub fn bfs_search(ss: &mut SearchSpace, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
+pub fn bfs_search(ss: &SearchSpace, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
     basic_search(ss, true, timeout)
 }
 
 #[pyfunction]
 #[pyo3(signature = (ss, timeout=None))]
-pub fn dfs_search(ss: &mut SearchSpace, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
+pub fn dfs_search(ss: &SearchSpace, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
     basic_search(ss, false, timeout)
 }
 
-fn basic_search(ss: &mut SearchSpace, bfs: bool, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
+fn basic_search(ss: &SearchSpace, bfs: bool, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
     let mut metrics = HashMap::new();
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
@@ -187,7 +187,7 @@ fn basic_search(ss: &mut SearchSpace, bfs: bool, timeout: Option<f32>) -> PyResu
 
 #[pyfunction]
 #[pyo3(signature = (ss, heuristic, timeout=None))]
-pub fn ehc_search(ss: &mut SearchSpace, heuristic: &Heuristic, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
+pub fn ehc_search(ss: &SearchSpace, heuristic: &Heuristic, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
     let mut metrics = HashMap::new();
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;

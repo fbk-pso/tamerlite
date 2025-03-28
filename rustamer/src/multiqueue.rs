@@ -16,7 +16,7 @@ use super::heuristics::*;
 use super::search::*;
 
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct StateContainer {
     state: State,
     expanded: bool,
@@ -64,7 +64,7 @@ impl Ord for PrioritizedItem {
 
 #[pyfunction]
 #[pyo3(signature = (ss, heuristics, timeout=None))]
-pub fn multiqueue_search(ss: &mut SearchSpace, heuristics: Vec<(Heuristic, f64)>, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
+pub fn multiqueue_search(ss: &SearchSpace, heuristics: Vec<(Heuristic, f64)>, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
     let mut metrics = HashMap::new();
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
