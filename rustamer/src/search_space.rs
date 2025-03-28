@@ -13,7 +13,7 @@ use super::utils::*;
 
 
 #[pyclass]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct State {
     pub assignments: HashMap<String, ExpressionNode>,
     pub temporal_network: Option<DeltaSTN<u64, f32>>,
@@ -21,7 +21,7 @@ pub struct State {
     pub active_conditions: HashMultiSet<Vec<ExpressionNode>>,
     pub g: f64,
     pub path: Option<Arc<PersistentList<(String, usize, u32)>>>,
-    pub heuristic_cache: Arc<Mutex<HashMap<String, Option<f64>>>>
+    pub heuristic_cache: Mutex<HashMap<String, Option<f64>>>
 }
 
 #[pymethods]
@@ -65,6 +65,19 @@ impl Hash for State {
         let mut pairs: Vec<_> = self.assignments.iter().collect();
         pairs.sort_by_key(|i| i.0);
         Hash::hash(&pairs, state);
+    }
+}
+
+impl Clone for State {
+    fn clone(&self) -> Self {
+        Self { assignments: self.assignments.clone(),
+               temporal_network: self.temporal_network.clone(),
+               todo: self.todo.clone(),
+               active_conditions: self.active_conditions.clone(),
+               g: self.g.clone(),
+               path: self.path.clone(),
+               heuristic_cache: Mutex::new(HashMap::new()) // Cloning erases the cache
+             }
     }
 }
 
@@ -287,7 +300,7 @@ impl SearchSpace {
             active_conditions: HashMultiSet::new(),
             g: 0.0,
             path: PersistentList::new(),
-            heuristic_cache: Arc::new(Mutex::new(HashMap::new())),
+            heuristic_cache: Mutex::new(HashMap::new()),
         })
     }
 
