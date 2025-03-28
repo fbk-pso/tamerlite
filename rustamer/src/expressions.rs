@@ -39,14 +39,14 @@ impl ExpressionManager {
         ExpressionManager{all_expressions: vec![], expression2id: HashMap::new()}
     }
 
-    pub fn get(&self, expr: &Expression) -> Option<&Vec<ExpressionNode>> {
-        if expr.id < self.all_expressions.len() {
-            Some(&self.all_expressions[expr.id])
-        }
-        else {
-            None
-        }
-    }
+    // pub fn get(&self, expr: &Expression) -> Option<&Vec<ExpressionNode>> {
+    //     if expr.id < self.all_expressions.len() {
+    //         Some(&self.all_expressions[expr.id])
+    //     }
+    //     else {
+    //         None
+    //     }
+    // }
 
     pub fn force_get(&self, expr: &Expression) -> &Vec<ExpressionNode> {
         &self.all_expressions[expr.id]

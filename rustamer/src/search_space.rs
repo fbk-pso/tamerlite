@@ -11,15 +11,16 @@ use super::expressions::*;
 use super::structures::*;
 use super::utils::*;
 
+
 #[pyclass]
 #[derive(Debug, Clone)]
 pub struct State {
     pub assignments: HashMap<String, ExpressionNode>,
-    pub temporal_network: Option<DeltaSTN<f32>>,
-    pub todo: HashMap<String, (usize, usize)>,
+    pub temporal_network: Option<DeltaSTN<u64, f32>>,
+    pub todo: HashMap<String, (usize, u32)>,
     pub active_conditions: HashMultiSet<Vec<ExpressionNode>>,
     pub g: f64,
-    pub path: Option<Arc<PersistentList<(String, usize, usize)>>>,
+    pub path: Option<Arc<PersistentList<(String, usize, u32)>>>,
     pub heuristic_cache: Arc<Mutex<HashMap<String, Option<f64>>>>
 }
 
@@ -31,12 +32,12 @@ impl State {
     }
 
     #[getter]
-    fn todo(&self) -> HashMap<String, (usize, usize)> {
+    fn todo(&self) -> HashMap<String, (usize, u32)> {
         self.todo.clone()
     }
 
     #[getter]
-    fn path(&self) -> Vec<(String, usize, usize)> {
+    fn path(&self) -> Vec<(String, usize, u32)> {
         PersistentList::to_vec_copy(&self.path)
     }
 }
@@ -69,16 +70,48 @@ impl Hash for State {
 
 #[derive(Debug)]
 pub struct TNInterpreter {
-    actions_ids: HashMap<(String, bool, usize), i32>,
-    events_ids: HashMap<(String, usize, usize), i32>,
-    actions_ids_map_back: HashMap<i32, (String, bool, usize)>,
-    events_ids_map_back: HashMap<i32, (String, usize, usize)>,
-    counter: i32,
+    actions_ids: HashMap<(String, bool), u32>,
+    events_ids: HashMap<(String, usize), u32>,
+    actions_ids_map_back: HashMap<u32, (String, bool)>,
+    events_ids_map_back: HashMap<u32, (String, usize)>
 }
 
 impl TNInterpreter {
-    fn new() -> Self {
-        TNInterpreter { actions_ids: HashMap::new(), events_ids: HashMap::new(), actions_ids_map_back: HashMap::new(), events_ids_map_back: HashMap::new(), counter: 0 }
+    fn new(actions: &Vec<String>, events: &HashMap<String, Vec<(Timing, Event)>>) -> Self {
+        let mut actions_ids = HashMap::new();
+        let mut actions_ids_map_back = HashMap::new();
+
+        let mut next_id = 1;
+        for a in actions{
+            for b in [true, false] {
+                actions_ids.insert((a.clone(), b), next_id);
+                actions_ids_map_back.insert(next_id, (a.clone(), b));
+                next_id += 1;
+            }
+        }
+
+        let mut events_ids = HashMap::new();
+        let mut events_ids_map_back = HashMap::new();
+
+        for (action, events) in events {
+            for (_t, e) in events {
+                events_ids.insert((action.clone(), e.pos), next_id);
+                events_ids_map_back.insert(next_id, (action.clone(), e.pos));
+                next_id += 1;
+            }
+        }
+
+        TNInterpreter { actions_ids: actions_ids, events_ids: events_ids,
+                        actions_ids_map_back: actions_ids_map_back,
+                        events_ids_map_back: events_ids_map_back }
+    }
+
+    fn pack_u32(&self, a: u32, b: u32) -> u64 {
+        ((a as u64) << 32) | (b as u64)
+    }
+
+    fn unpack_u64(&self, x: u64) -> (u32, u32) {
+        ((x >> 32) as u32, (x & 0xFFFFFFFF) as u32)
     }
 
     pub fn clear(&mut self) {
@@ -86,65 +119,60 @@ impl TNInterpreter {
         self.events_ids.clear();
         self.actions_ids_map_back.clear();
         self.events_ids_map_back.clear();
-        self.counter = 0;
     }
 
-    pub fn get_action_id(&mut self, action: (String, bool, usize)) -> i32 {
-        if let Some(id) = self.actions_ids.get(&action) {
-            *id
-        } else {
-            let id = self.counter;
-            self.actions_ids.insert(action.clone(), id);
-            self.actions_ids_map_back.insert(id, action);
-            self.counter += 1;
-            id
+    pub fn get_action_id(&self, action: &str, is_start: bool, id: u32) -> u64 {
+        if let Some(aid) = self.actions_ids.get(&(action.to_string(), is_start)) {
+            // Concatenate the action id and the instance id using the
+            // lower and higher parts of the u64 binary representation
+            return self.pack_u32(*aid, id);
         }
+        panic!("Action not found in the TNInterpreter");
+        //return 0;
     }
 
-    pub fn get_event_id(&mut self, event: (String, usize, usize)) -> i32 {
-        if let Some(id) = self.events_ids.get(&event) {
-            *id
-        } else {
-            let id = self.counter;
-            self.events_ids.insert(event.clone(), id);
-            self.events_ids_map_back.insert(id, event);
-            self.counter += 1;
-            id
+    pub fn get_event_id(&self, action: &str, pos: usize, id: u32) -> u64 {
+        if let Some(eid) = self.events_ids.get(&(action.to_string(), pos)) {
+            return self.pack_u32(*eid, id);
         }
+        panic!("Event not found in the TNInterpreter");
+        //return 0;
     }
 
-    pub fn get_action_timing<Q>(&self, tn: &DeltaSTN<Q>, action: &(String, bool, usize)) -> Option<Q>
+    pub fn get_action_timing<Q>(&self, tn: &DeltaSTN<u64, Q>, action: &str, is_start: bool, id: u32) -> Option<Q>
     where Q: num_traits::Num + std::ops::Neg<Output=Q> + PartialOrd + Clone {
-        let id = self.actions_ids.get(action)?;
-        tn.get_model_value(id)
+        let id = self.get_action_id(action, is_start, id);
+        tn.get_model_value(&id)
     }
 
-    pub fn get_event_timing<Q>(&self, tn: &DeltaSTN<Q>, event: &(String, usize, usize)) -> Option<Q>
+    pub fn get_event_timing<Q>(&self, tn: &DeltaSTN<u64, Q>, action: &str, pos: usize, id: u32) -> Option<Q>
     where Q: num_traits::Num + std::ops::Neg<Output=Q> + PartialOrd + Clone {
-        let id = self.events_ids.get(event)?;
-        tn.get_model_value(id)
+        let id = self.get_event_id(action, pos, id);
+        tn.get_model_value(&id)
     }
 
-    pub fn get_actions_timings<Q>(&self, tn: &DeltaSTN<Q>) -> Vec<(&(String, bool, usize), Q)>
+    pub fn get_actions_timings<Q>(&self, tn: &DeltaSTN<u64, Q>) -> Vec<((String, bool, u32), Q)>
     where Q: num_traits::Num + std::ops::Neg<Output=Q> + PartialOrd + Clone {
-        let mut res: Vec<(&(String, bool, usize), Q)> = Vec::new();
+        let mut res: Vec<((String, bool, u32), Q)> = Vec::new();
         for (id, v) in tn.distances.iter() {
-            let a = self.actions_ids_map_back.get(id);
-            if a.is_some() {
-                res.push((a.unwrap(), v.clone() * (- Q::one())));
+            let (action_id, outer_id) = self.unpack_u64(*id);
+            let a = self.actions_ids_map_back.get(&action_id);
+            if let Some((action, is_start)) = a {
+                res.push(((action.clone(), *is_start, outer_id), v.clone() * (- Q::one())));
             }
         }
         res.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         res
     }
 
-    pub fn get_events_timings<Q>(&self, tn: &DeltaSTN<Q>) -> Vec<(&(String, usize, usize), Q)>
+    pub fn get_events_timings<Q>(&self, tn: &DeltaSTN<u64, Q>) -> Vec<((String, usize, u32), Q)>
     where Q: num_traits::Num + std::ops::Neg<Output=Q> + PartialOrd + Clone {
         let mut res = Vec::new();
         for (id, v) in tn.distances.iter() {
-            let a = self.events_ids_map_back.get(id);
-            if a.is_some() {
-                res.push((a.unwrap(), v.clone() * (- Q::one())));
+            let (event_id, outer_id) = self.unpack_u64(*id);
+            let a = self.events_ids_map_back.get(&event_id);
+            if let Some((action, pos)) = a {
+                res.push(((action.clone(), pos.clone(), outer_id), v.clone() * (- Q::one())));
             }
         }
         res.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -167,7 +195,7 @@ pub struct SearchSpace {
     epsilon: f32,
     epsilon_rational: BigRational,
     pub is_temporal: bool,
-    counter: usize,
+    counter: Mutex<u32>,
 }
 
 #[pymethods]
@@ -206,6 +234,9 @@ impl SearchSpace {
                 (key, converted_value)
             })
             .collect();
+
+        let tn_interpreter = TNInterpreter::new(&actions, &events);
+
         let res = SearchSpace {
             actions_duration: converted_actions_duration,
             events: events,
@@ -213,7 +244,7 @@ impl SearchSpace {
             mutex: mutex,
             initial_state: initial_state.map(|inner_map| inner_map.into_iter().map(|(k, v)| (k, v.v)).collect()),
             goal: goal.map(|inner_vec| inner_vec.into_iter().map(|e| e.v).collect()),
-            tn_interpreter: TNInterpreter::new(),
+            tn_interpreter: tn_interpreter,
             epsilon: match &epsilon {
                 Some(x) => rational_to_f32(x),
                 None => 0.01,
@@ -223,7 +254,7 @@ impl SearchSpace {
                 None => mk_rational(1, 100),
             },
             is_temporal: is_temporal,
-            counter: 0,
+            counter: Mutex::new(0),
         };
         Ok(res)
     }
@@ -245,7 +276,7 @@ impl SearchSpace {
                 }
             }
         };
-        let tn: Option<DeltaSTN<f32>> = match self.is_temporal {
+        let tn: Option<DeltaSTN<u64, f32>> = match self.is_temporal {
             true => Some(DeltaSTN::new(self.epsilon/1000.0)),
             false => None,
         };
@@ -260,19 +291,15 @@ impl SearchSpace {
         })
     }
 
-    pub fn get_successor_states(&mut self, state: &State) -> PyResult<Vec<State>> {
+    pub fn get_successor_states(&self, state: &State) -> PyResult<Vec<State>> {
         let mut res = Vec::new();
-        let actions: Vec<String> = self.actions.iter().map(|a|a.to_string()).collect();
-        for action in actions.iter() {
-            match self.get_successor_state(state, action)? {
-                Some(s) => res.push(s),
-                None => continue,
-            }
+        for rs in self.get_successor_states_iter(state) {
+            res.push(rs?);
         }
         Ok(res)
     }
 
-    pub fn get_successor_state(&mut self, state: &State, action: &str) -> PyResult<Option<State>> {
+    pub fn get_successor_state(&self, state: &State, action: &str) -> PyResult<Option<State>> {
         if let Some(events) = self.events.get(action) {
             if let Some((index, id)) = state.todo.get(action) {
                 if let Some((_, e)) = events.get(*index) {
@@ -355,10 +382,14 @@ impl SearchSpace {
 
 impl SearchSpace {
 
-    pub fn build_plan(&mut self, all_path: Vec<String>) -> PyResult<Vec<(Option<BigRational>, String, Option<BigRational>)>> {
+    pub fn get_successor_states_iter<'a>(&'a self, state: &'a State) -> impl Iterator<Item = PyResult<State>> + 'a {
+        return self.actions.iter().map(|action| self.get_successor_state(state, action).transpose()).filter(|x| x.is_some()).map(|x| x.unwrap());
+    }
+
+    pub fn build_plan(&self, all_path: Vec<String>) -> PyResult<Vec<(Option<BigRational>, String, Option<BigRational>)>> {
         let mut tn = DeltaSTN::new(mk_rational(0, 1));
-        let mut todo: HashMap<String, (usize, usize)> = HashMap::new();
-        let mut path: Vec<(Event, usize)> = Vec::new();
+        let mut todo: HashMap<String, (usize, u32)> = HashMap::new();
+        let mut path: Vec<(Event, u32)> = Vec::new();
         let mut counter = 0;
         let mut state = self.initial_state(None)?;
         for action in all_path.iter() {
@@ -371,11 +402,11 @@ impl SearchSpace {
                         } else {
                             todo.insert(action.to_string(), (index + 1, id + 1));
                         }
-                        let ev = self.tn_interpreter.get_event_id((e.action.to_string(), e.pos, id));
+                        let ev = self.tn_interpreter.get_event_id(&e.action, e.pos, id);
                         for (e2, id2) in path.iter() {
                             let e_id = (e.action.to_string(), index);
                             let e2_id = (e2.action.to_string(), e2.pos);
-                            let ev2 = self.tn_interpreter.get_event_id((e2.action.to_string(), e2.pos, *id2));
+                            let ev2 = self.tn_interpreter.get_event_id(&e2.action, e2.pos, *id2);
                             if self.mutex.contains(&(e_id, e2_id)) {
                                 let b = -self.epsilon_rational.clone();
                                 tn.add(&ev2, &ev, &b);
@@ -388,7 +419,7 @@ impl SearchSpace {
                             for (j, (_, e2)) in self.events[a].iter().skip(i.0).enumerate() {
                                 let e_id = (e.action.to_string(), index);
                                 let e2_id = (a.to_string(), j + i.0);
-                                let ev2 = self.tn_interpreter.get_event_id((e2.action.to_string(), e2.pos, id2));
+                                let ev2 = self.tn_interpreter.get_event_id(&e2.action, e2.pos, id2);
                                 if self.mutex.contains(&(e_id, e2_id)) {
                                     let b = -self.epsilon_rational.clone();
                                     tn.add(&ev, &ev2, &b);
@@ -401,8 +432,8 @@ impl SearchSpace {
                         path.push((e.clone(), id));
                     }
                 } else {
-                    let start = self.tn_interpreter.get_action_id((action.to_string(), true, counter));
-                    let end = self.tn_interpreter.get_action_id((action.to_string(), false, counter));
+                    let start = self.tn_interpreter.get_action_id(action, true, counter);
+                    let end = self.tn_interpreter.get_action_id(action, false, counter);
                     counter += 1;
                     let duration = self.actions_duration[action].as_ref();
                     let mut lb = mk_rational(0, 1);
@@ -422,7 +453,7 @@ impl SearchSpace {
                     tn.add(&end, &start, &ub);
                     let id = counter;
                     for (t, e) in events.iter() {
-                        let ev = self.tn_interpreter.get_event_id((e.action.to_string(), e.pos, counter));
+                        let ev = self.tn_interpreter.get_event_id(&e.action, e.pos, counter);
                         let b1 = -t.delay.clone();
                         let b2 = t.delay.clone();
                         if t.is_from_start() {
@@ -435,11 +466,11 @@ impl SearchSpace {
                         counter += 1;
                     }
                     let e = events[0].1.clone();
-                    let ev = self.tn_interpreter.get_event_id((e.action.to_string(), e.pos, id));
+                    let ev = self.tn_interpreter.get_event_id(&e.action, e.pos, id);
                     for (e2, id2) in path.iter() {
                         let e_id = (e.action.to_string(), 0);
                         let e2_id = (e2.action.to_string(), e2.pos);
-                        let ev2 = self.tn_interpreter.get_event_id((e2.action.to_string(), e2.pos, *id2));
+                        let ev2 = self.tn_interpreter.get_event_id(&e2.action, e2.pos, *id2);
                         if self.mutex.contains(&(e_id, e2_id)) {
                             let b = -self.epsilon_rational.clone();
                             tn.add(&ev2, &ev, &b);
@@ -452,7 +483,7 @@ impl SearchSpace {
                         for (j, (_, e2)) in self.events[a].iter().skip(i.0).enumerate() {
                             let e_id = (e.action.to_string(), 0);
                             let e2_id = (a.to_string(), j + i.0);
-                            let ev2 = self.tn_interpreter.get_event_id((e2.action.to_string(), e2.pos, id2));
+                            let ev2 = self.tn_interpreter.get_event_id(&e2.action, e2.pos, id2);
                             if self.mutex.contains(&(e_id, e2_id)) {
                                 let b = -self.epsilon_rational.clone();
                                 tn.add(&ev, &ev2, &b);
@@ -471,8 +502,8 @@ impl SearchSpace {
         }
 
         let mut res = Vec::new();
-        let mut start_time: HashMap<(String, usize), BigRational> = HashMap::new();
-        let mut end_time: HashMap<(String, usize), BigRational> = HashMap::new();
+        let mut start_time: HashMap<(String, u32), BigRational> = HashMap::new();
+        let mut end_time: HashMap<(String, u32), BigRational> = HashMap::new();
         for (a, t) in self.tn_interpreter.get_actions_timings(&tn).iter() {
             if a.1 {
                 start_time.insert((a.0.to_string(), a.2), t.clone());
@@ -501,7 +532,7 @@ impl SearchSpace {
         Ok(sat)
     }
 
-    fn expand_event(&mut self, state: &State, new_state: &mut State, e: &Event, index: &usize, id: &usize) -> PyResult<bool> {
+    fn expand_event(&self, state: &State, new_state: &mut State, e: &Event, index: &usize, id: &u32) -> PyResult<bool> {
         new_state.path = PersistentList::append((e.action.to_string(), e.pos, *id), &new_state.path);
 
         // check conditions is done before calling this method
@@ -541,9 +572,9 @@ impl SearchSpace {
 
         if self.is_temporal { // Add temporal constraints between past or todo events and the current one
             let tn = new_state.temporal_network.as_mut().unwrap();
-            let ev = self.tn_interpreter.get_event_id((e.action.to_string(), e.pos, *id));
+            let ev = self.tn_interpreter.get_event_id(&e.action, e.pos, *id);
             for e2 in PersistentList::to_vec(&state.path) {
-                let ev2 = self.tn_interpreter.get_event_id(e2.clone());
+                let ev2 = self.tn_interpreter.get_event_id(&e2.0, e2.1, e2.2);
                 let e_id = (e.action.to_string(), *index);
                 let e2_id = (e2.0.to_string(), e2.1);
                 if self.mutex.contains(&(e_id, e2_id)) {
@@ -558,7 +589,7 @@ impl SearchSpace {
                 for (j, (_, e2)) in self.events[a].iter().skip(i.0).enumerate() {
                     let e_id = (e.action.to_string(), *index);
                     let e2_id = (a.to_string(), j + i.0);
-                    let ev2 = self.tn_interpreter.get_event_id((e2.action.to_string(), e2.pos, id2));
+                    let ev2 = self.tn_interpreter.get_event_id(&e2.action, e2.pos, id2);
                     if self.mutex.contains(&(e_id, e2_id)) {
                         let b: f32 = -self.epsilon;
                         tn.add(&ev, &ev2, &b);
@@ -575,13 +606,14 @@ impl SearchSpace {
         Ok(true)
     }
 
-    fn open_action(&mut self, state: &State, new_state: &mut State, action: &str, events: &Vec<(Timing, Event)>) -> PyResult<bool> {
-        let mut id = self.counter;
+    fn open_action(&self, state: &State, new_state: &mut State, action: &str, events: &Vec<(Timing, Event)>) -> PyResult<bool> {
+        let mut counter = self.counter.lock().unwrap();
+        let mut id = counter.clone();
         if self.is_temporal { // Add temporal constraints between events of the action
             let tn = new_state.temporal_network.as_mut().unwrap();
-            let start = self.tn_interpreter.get_action_id((action.to_string(), true, self.counter));
-            let end = self.tn_interpreter.get_action_id((action.to_string(), false, self.counter));
-            self.counter += 1;
+            let start = self.tn_interpreter.get_action_id(action, true, *counter);
+            let end = self.tn_interpreter.get_action_id(action, false, *counter);
+            *counter += 1;
             let duration = self.actions_duration[action].as_ref();
             let mut lb: f32 = 0.0;
             let mut ub: f32 = 0.0;
@@ -598,9 +630,9 @@ impl SearchSpace {
             }
             tn.add(&start, &end, &lb);
             tn.add(&end, &start, &ub);
-            id = self.counter;
+            id = *counter;
             for (t, e) in events.iter() {
-                let ev = self.tn_interpreter.get_event_id((e.action.to_string(), e.pos, self.counter));
+                let ev = self.tn_interpreter.get_event_id(&e.action, e.pos, *counter);
                 let b1 = -rational_to_f32(&t.delay);
                 let b2 = rational_to_f32(&t.delay);
                 if t.is_from_start() {
@@ -610,7 +642,7 @@ impl SearchSpace {
                     tn.add(&end, &ev, &b1);
                     tn.add(&ev, &end, &b2);
                 }
-                self.counter += 1;
+                *counter += 1;
             }
             if events.len() > 1 {
                 new_state.todo.insert(action.to_string(), (1, id+1));
