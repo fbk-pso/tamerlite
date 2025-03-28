@@ -116,23 +116,22 @@ pub fn multiqueue_search(ss: &mut SearchSpace, heuristics: Vec<(Heuristic, f64)>
             }
 
             for rs in ss.get_successor_states_iter(&state) {
-                if let Some(s) = rs? {
-                    if open_set.contains(&s) || closed_set.contains(&s) {
-                        continue;
-                    }
-                    if !ss.is_temporal {
-                        open_set.insert(s.clone());
-                    }
-                    let sc = Rc::new(RefCell::new(StateContainer{state: s.clone(), expanded: false}));
-                    for (i, (heuristic, weight)) in heuristics.iter().enumerate() {
-                        let h = heuristic.eval(&s, ss)?;
-                        match h {
-                            Some(v) => {
-                                let f = *weight * v + (1.0 - *weight) * s.g;
-                                opens[i].push(PrioritizedItem{heuristic: f, state_container: sc.clone()});
-                            },
-                            None => continue,
-                        }
+                let s = rs?;
+                if open_set.contains(&s) || closed_set.contains(&s) {
+                    continue;
+                }
+                if !ss.is_temporal {
+                    open_set.insert(s.clone());
+                }
+                let sc = Rc::new(RefCell::new(StateContainer{state: s.clone(), expanded: false}));
+                for (i, (heuristic, weight)) in heuristics.iter().enumerate() {
+                    let h = heuristic.eval(&s, ss)?;
+                    match h {
+                        Some(v) => {
+                            let f = *weight * v + (1.0 - *weight) * s.g;
+                            opens[i].push(PrioritizedItem{heuristic: f, state_container: sc.clone()});
+                        },
+                        None => continue,
                     }
                 }
             }

@@ -294,9 +294,7 @@ impl SearchSpace {
     pub fn get_successor_states(&self, state: &State) -> PyResult<Vec<State>> {
         let mut res = Vec::new();
         for rs in self.get_successor_states_iter(state) {
-            if let Some(s) = rs? {
-                res.push(s);
-            }
+            res.push(rs?);
         }
         Ok(res)
     }
@@ -384,8 +382,8 @@ impl SearchSpace {
 
 impl SearchSpace {
 
-    pub fn get_successor_states_iter<'a>(&'a self, state: &'a State) -> impl Iterator<Item = PyResult<Option<State>>> + 'a {
-        return self.actions.iter().map(|action| self.get_successor_state(state, action));
+    pub fn get_successor_states_iter<'a>(&'a self, state: &'a State) -> impl Iterator<Item = PyResult<State>> + 'a {
+        return self.actions.iter().map(|action| self.get_successor_state(state, action).transpose()).filter(|x| x.is_some()).map(|x| x.unwrap());
     }
 
     pub fn build_plan(&self, all_path: Vec<String>) -> PyResult<Vec<(Option<BigRational>, String, Option<BigRational>)>> {

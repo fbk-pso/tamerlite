@@ -116,21 +116,20 @@ pub fn wastar_search(ss: &mut SearchSpace, heuristic: &Heuristic, weight: f64, t
             return build_plan(ss, &state).map(|plan| (plan, metrics));
         } else {
             for rs in ss.get_successor_states_iter(&state) {
-                if let Some(s) = rs? {
-                    if open_set.contains(&s) || closed_set.contains(&s) {
-                        continue;
-                    }
-                    let h = heuristic.eval(&s, ss)?;
-                    match h {
-                        Some(v) => {
-                            let f = weight * v + (1.0 - weight) * s.g;
-                            if !ss.is_temporal {
-                                open_set.insert(s.clone());
-                            }
-                            open.push(PrioritizedItem{heuristic: f, state: s});
-                        },
-                        None => continue,
-                    }
+                let s = rs?;
+                if open_set.contains(&s) || closed_set.contains(&s) {
+                    continue;
+                }
+                let h = heuristic.eval(&s, ss)?;
+                match h {
+                    Some(v) => {
+                        let f = weight * v + (1.0 - weight) * s.g;
+                        if !ss.is_temporal {
+                            open_set.insert(s.clone());
+                        }
+                        open.push(PrioritizedItem{heuristic: f, state: s});
+                    },
+                    None => continue,
                 }
             }
         }
@@ -178,9 +177,7 @@ fn basic_search(ss: &mut SearchSpace, bfs: bool, timeout: Option<f32>) -> PyResu
             return build_plan(ss, &state).map(|plan| (plan, metrics));
         } else {
             for rs in ss.get_successor_states_iter(&state) {
-                if let Some(s) = rs? {
-                    open.push_back(s);
-                }
+                open.push_back(rs?);
             }
         }
     }
@@ -218,18 +215,17 @@ pub fn ehc_search(ss: &mut SearchSpace, heuristic: &Heuristic, timeout: Option<f
             return build_plan(ss, &state).map(|plan| (plan, metrics));
         } else {
             for rs in ss.get_successor_states_iter(&state) {
-                if let Some(s) = rs? {
-                    let h = heuristic.eval(&s, ss)?;
-                    match h {
-                        Some(v) => {
-                            if v < best_h {
-                                best_h = v;
-                                open.clear();
-                            }
-                            open.push_back(s);
-                        },
-                        None => continue,
-                    }
+                let s = rs?;
+                let h = heuristic.eval(&s, ss)?;
+                match h {
+                    Some(v) => {
+                        if v < best_h {
+                            best_h = v;
+                            open.clear();
+                        }
+                        open.push_back(s);
+                    },
+                    None => continue,
                 }
             }
         }
