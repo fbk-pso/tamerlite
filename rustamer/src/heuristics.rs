@@ -26,7 +26,7 @@ enum HeuristicKind {
     HMAX
 }
 
-#[pyclass()]
+#[pyclass(frozen)]
 #[derive(Clone)]
 pub struct Heuristic {
     hdr: Option<DeleteRelaxationHeuristic>,
