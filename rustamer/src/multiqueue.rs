@@ -87,8 +87,8 @@ pub fn multiqueue_search(ss: &SearchSpace, heuristics: Vec<(Heuristic, f64)>, ti
                 return Err(PyTimeoutError::new_err("Timeout"));
             }
         }
-        // TODO: if one of the queues is empty, then all the others are (logically) empty too
-        if opens.iter().map(|o| o.len()).sum::<usize>() == 0 {
+        // If one of the queues is empty, then all the others are (logically) empty too
+        if opens.iter().any(|o| o.is_empty()) {
             break;
         }
         let i = counter % opens.len();
