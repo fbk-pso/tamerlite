@@ -273,7 +273,7 @@ impl CustomHeuristic {
 
     pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
         Python::with_gil(|py| {
-            let args = PyTuple::new(py, &[state.clone().into_pyobject(py)?])?;
+            let args = PyTuple::new(py, &[state.full_clone().into_pyobject(py)?])?;
             let r = self.callable.call(py, args, None)?;
             if r.is_none(py) {
                 Ok(None)

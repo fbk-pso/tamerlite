@@ -46,6 +46,31 @@ impl State {
     pub fn get_value(&self, fluent: &String) -> &ExpressionNode {
         &self.assignments[fluent]
     }
+
+    /// Clones the current statw, except for the caches
+    /// This is useful to create children of this state
+    pub fn clone_for_child(&self) -> Self {
+        Self { assignments: self.assignments.clone(),
+                temporal_network: self.temporal_network.clone(),
+                todo: self.todo.clone(),
+                active_conditions: self.active_conditions.clone(),
+                g: self.g.clone(),
+                path: self.path.clone(),
+                heuristic_cache: Mutex::new(HashMap::new()) // Cloning erases the cache
+             }
+    }
+
+    /// Clones the current state, including the caches
+    pub fn full_clone(&self) -> Self {
+        Self { assignments: self.assignments.clone(),
+                temporal_network: self.temporal_network.clone(),
+                todo: self.todo.clone(),
+                active_conditions: self.active_conditions.clone(),
+                g: self.g.clone(),
+                path: self.path.clone(),
+                heuristic_cache: Mutex::new(self.heuristic_cache.lock().unwrap().clone())
+             }
+    }
 }
 
 impl PartialEq for State {
@@ -65,19 +90,6 @@ impl Hash for State {
         let mut pairs: Vec<_> = self.assignments.iter().collect();
         pairs.sort_by_key(|i| i.0);
         Hash::hash(&pairs, state);
-    }
-}
-
-impl Clone for State {
-    fn clone(&self) -> Self {
-        Self { assignments: self.assignments.clone(),
-               temporal_network: self.temporal_network.clone(),
-               todo: self.todo.clone(),
-               active_conditions: self.active_conditions.clone(),
-               g: self.g.clone(),
-               path: self.path.clone(),
-               heuristic_cache: Mutex::new(HashMap::new()) // Cloning erases the cache
-             }
     }
 }
 
@@ -312,7 +324,7 @@ impl SearchSpace {
                     // Check if the event is applicable before creating the new state
                     if !self.is_sat(&e.conditions, state)? { return Ok(None); }
 
-                    let mut new_state = state.clone();
+                    let mut new_state = state.clone_for_child();
                     new_state.g += 1.0;
 
                     if index + 1 >= events.len() {
@@ -328,7 +340,7 @@ impl SearchSpace {
                 // Check if action is applicable before creating the new state
                 if !self.is_sat(&events[0].1.conditions, state)? { return Ok(None); }
 
-                let mut new_state = state.clone();
+                let mut new_state = state.clone_for_child();
                 new_state.g += 1.0;
 
                 if self.open_action(state, &mut new_state, action, &events.clone())? {

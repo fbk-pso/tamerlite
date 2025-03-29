@@ -105,7 +105,7 @@ pub fn multiqueue_search(ss: &SearchSpace, heuristics: Vec<(Heuristic, f64)>, ti
             sc.set_expanded(true);
             let state = &sc.state;
             if !ss.is_temporal {
-                closed_set.insert(state.clone());
+                closed_set.insert(state.full_clone());
                 open_set.remove(state);
             }
             states_expanded += 1;
@@ -122,14 +122,15 @@ pub fn multiqueue_search(ss: &SearchSpace, heuristics: Vec<(Heuristic, f64)>, ti
                     continue;
                 }
                 if !ss.is_temporal {
-                    open_set.insert(s.clone());
+                    open_set.insert(s.full_clone());
                 }
-                let sc = Rc::new(RefCell::new(StateContainer{state: s.clone(), expanded: false}));
+                let s_g = s.g;
+                let sc = Rc::new(RefCell::new(StateContainer{state: s, expanded: false}));
                 for (i, (heuristic, weight)) in heuristics.iter().enumerate() {
-                    let h = heuristic.eval(&s, ss)?;
+                    let h = heuristic.eval(&sc.borrow().state, ss)?;
                     match h {
                         Some(v) => {
-                            let f = *weight * v + (1.0 - *weight) * s.g;
+                            let f = *weight * v + (1.0 - *weight) * s_g;
                             opens[i].push(PrioritizedItem{heuristic: f, state_container: sc.clone()});
                         },
                         None => continue,

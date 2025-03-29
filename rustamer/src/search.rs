@@ -105,7 +105,7 @@ pub fn wastar_search(ss: &SearchSpace, heuristic: &Heuristic, weight: f64, timeo
         }
         let state = current.state;
         if !ss.is_temporal {
-            closed_set.insert(state.clone());
+            closed_set.insert(state.full_clone());
             open_set.remove(&state);
         }
         // println!("{:?} {:?}", state.path.iter().map(|(ev, _)| &ev.action).collect::<Vec<&String>>(), current.heuristic);
@@ -125,7 +125,7 @@ pub fn wastar_search(ss: &SearchSpace, heuristic: &Heuristic, weight: f64, timeo
                     Some(v) => {
                         let f = weight * v + (1.0 - weight) * s.g;
                         if !ss.is_temporal {
-                            open_set.insert(s.clone());
+                            open_set.insert(s.full_clone());
                         }
                         open.push(PrioritizedItem{heuristic: f, state: s});
                     },
