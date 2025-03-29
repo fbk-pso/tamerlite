@@ -78,12 +78,16 @@ class SearchParams:
     rl_params: Optional[RLParams] = None
     macros: Optional[Union[str, List[str]]] = None
     macros_usage: Optional[str] = None
+    max_macros: Optional[str] = None
 
     def contains_rl(self) -> bool:
         return self.rl_params is not None
     
     def contains_macros(self) -> bool:
         return self.macros is not None
+    
+    def contains_max_macros(self) -> bool:
+        return self.max_macros is not None
 
     def domain(self):
         return self.rl_params.domain
@@ -101,6 +105,10 @@ class MultiqueueParams:
     @property
     def macros_usage(self):
         return self.queues[0].macros_usage
+    
+    @property
+    def max_macros(self):
+        return self.queues[0].max_macros
 
     def contains_rl(self) -> bool:
         return any([q.contains_rl() for q in self.queues])
@@ -122,12 +130,13 @@ class TamerLite(
         unified_planning.engines.mixins.OneshotPlannerMixin,
     ):
 
-    def __init__(self, search: Optional[Union[SearchParams, MultiqueueParams]] = None, heuristic: Optional[str] = None, weight: Optional[str] = None, macros: Optional[str] = None, macros_usage: Optional[str] = None):
+    def __init__(self, search: Optional[Union[SearchParams, MultiqueueParams]] = None, heuristic: Optional[str] = None, weight: Optional[str] = None, 
+                 macros: Optional[str] = None, macros_usage: Optional[str] = None, max_macros: Optional[str] = None):
         unified_planning.engines.Engine.__init__(self)
         up.engines.mixins.OneshotPlannerMixin.__init__(self)
         self._params = search      
-        if self._params is None and (heuristic is not None or weight is not None or macros is not None or macros_usage is not None):
-            self._params = SearchParams(search=None, heuristic=heuristic, weight=weight, macros=macros, macros_usage=macros_usage)  
+        if self._params is None and (heuristic is not None or weight is not None or macros is not None or macros_usage is not None or max_macros is not None):
+            self._params = SearchParams(search=None, heuristic=heuristic, weight=weight, macros=macros, macros_usage=macros_usage, max_macros=max_macros)  
 
     @property
     def name(self) -> str:
@@ -243,14 +252,15 @@ class TamerLite(
         try:
             if self._params is not None and self._params.contains_rl():
                 if self._params.contains_macros():
-                    extracted_macros = read_macros(self._params.macros, self._params.macros_usage, problem)
+                    extracted_macros = read_macros(self._params.macros, self._params.macros_usage, problem, self._params.max_macros)
                     self._params = SearchParams(
                         search=self._params.search,
                         heuristic=self._params.heuristic,
                         weight=self._params.weight,
                         rl_params=self._params.rl_params,
                         macros=extracted_macros,
-                        macros_usage=self._params.macros_usage
+                        macros_usage=self._params.macros_usage,
+                        max_macros=self._params.max_macros
                     )
                     encoder, state_encoder, map_back_action_instance = get_encoders(self._params.domain(), problem, self._params.macros, self._params.macros_usage)
                 else:
@@ -264,14 +274,15 @@ class TamerLite(
                 sys.stdout.flush()
 
                 if self._params is not None and self._params.contains_macros():
-                    extracted_macros = read_macros(self._params.macros, self._params.macros_usage, problem)
+                    extracted_macros = read_macros(self._params.macros, self._params.macros_usage, problem, self._params.max_macros)
                     self._params = SearchParams(
                         search=self._params.search,
                         heuristic=self._params.heuristic,
                         weight=self._params.weight,
                         rl_params=self._params.rl_params,
                         macros=extracted_macros,
-                        macros_usage=self._params.macros_usage
+                        macros_usage=self._params.macros_usage,
+                        max_macros=self._params.max_macros
                     )
 
                     # actions = set()  # if use ground_macros
