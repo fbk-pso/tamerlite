@@ -26,23 +26,12 @@ where Q: Clone, T:Copy {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DeltaSTN<T, Q> {
     constraints: HashMap<T, Option<Arc<DeltaNeighbors<T, Q>>>>,
     pub distances: HashMap<T, Q>,
     is_sat: bool,
     pub tolerance: Q,
-}
-
-impl<T, Q> Clone for DeltaSTN<T, Q> where Q: Clone, T: Clone {
-    fn clone(&self) -> Self {
-        DeltaSTN {
-            constraints: self.constraints.clone(),
-            distances: self.distances.clone(),
-            is_sat: self.is_sat,
-            tolerance: self.tolerance.clone(),
-        }
-    }
 }
 
 impl<T, Q> DeltaSTN<T, Q>
