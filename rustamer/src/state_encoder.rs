@@ -1,14 +1,11 @@
-use std::{
-    collections::HashMap,
-    vec::Vec
-};
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
+use std::{collections::HashMap, vec::Vec};
 
 use crate::utils::{integer_to_f32, rational_to_f32, usize_to_f32};
 use crate::{ExpressionNode, SearchSpace};
 
-use super::search_space::State;
+use super::search_state::State;
 use super::structures::*;
 
 #[pyclass]
@@ -55,11 +52,10 @@ impl CoreStateEncoder {
                 ExpressionNode::Bool(v) => {
                     if *v {
                         res.push(1.0);
-                    }
-                    else {
+                    } else {
                         res.push(0.0);
                     }
-                },
+                }
                 ExpressionNode::Int(v) => {
                     let f = integer_to_f32(v);
                     if lb.is_some() && ub.is_some() {
@@ -67,7 +63,7 @@ impl CoreStateEncoder {
                     } else {
                         res.push(f);
                     }
-                },
+                }
                 ExpressionNode::Rational(v) => {
                     let f = rational_to_f32(v);
                     if lb.is_some() && ub.is_some() {
@@ -75,13 +71,13 @@ impl CoreStateEncoder {
                     } else {
                         res.push(f);
                     }
-                },
+                }
                 ExpressionNode::Object(v) => {
                     res.push(self.objects[v]);
-                },
+                }
                 _ => {
                     return Err(PyException::new_err("State assignment is not a constant!"));
-                },
+                }
             }
         }
         Ok(res)
@@ -91,9 +87,7 @@ impl CoreStateEncoder {
         let mut res = vec![0.0; self.num_actions];
         for (a, i) in self.actions_pos.iter() {
             let v = match state.todo.get(a) {
-                Some((x, _)) => {
-                    self.events[a].len() - x
-                },
+                Some((x, _)) => self.events[a].len() - x,
                 None => 0,
             };
             res[*i] = usize_to_f32(v);
@@ -101,14 +95,21 @@ impl CoreStateEncoder {
         Ok(res)
     }
 
-    pub fn get_tn_as_vector(&self, state: &State, search_space: &SearchSpace) -> PyResult<Vec<f32>> {
+    pub fn get_tn_as_vector(
+        &self,
+        state: &State,
+        search_space: &SearchSpace,
+    ) -> PyResult<Vec<f32>> {
         let mut res = vec![0.0; self.tn_size];
         if state.temporal_network.is_some() {
             let tn = state.temporal_network.as_ref().unwrap();
             let mut last = -1.0;
             if state.path.is_some() {
                 let payload = &state.path.as_ref().unwrap().payload;
-                last = search_space.tn_interpreter.get_event_timing(tn, &payload.0, payload.1, payload.2).unwrap();
+                last = search_space
+                    .tn_interpreter
+                    .get_event_timing(tn, &payload.0, payload.1, payload.2)
+                    .unwrap();
             }
 
             let mut m = HashMap::new();
@@ -134,7 +135,13 @@ impl CoreStateEncoder {
                     nsa = 0;
                     nea = 0;
                 }
-                if !tn.equals_with_tolerance(&search_space.tn_interpreter.get_action_timing(tn, &ev.0, !ev.1, ev.2).unwrap(), t) {
+                if !tn.equals_with_tolerance(
+                    &search_space
+                        .tn_interpreter
+                        .get_action_timing(tn, &ev.0, !ev.1, ev.2)
+                        .unwrap(),
+                    t,
+                ) {
                     if ev.1 {
                         nsa += 1;
                     } else {
@@ -152,13 +159,12 @@ impl CoreStateEncoder {
                     let a = &e.0;
                     let p = self.tn_actions_pos[a];
                     let v = *t - t_safe + 1.0;
-                    if v > res[p+e.1] {
-                        res[p+e.1] = v;
+                    if v > res[p + e.1] {
+                        res[p + e.1] = v;
                     }
                 }
             }
         }
         Ok(res)
     }
-
 }

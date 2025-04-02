@@ -1,19 +1,14 @@
 use std::collections::VecDeque;
 use std::time::SystemTime;
-use std::{
-    collections::BinaryHeap,
-    collections::HashSet,
-    collections::HashMap,
-    vec::Vec
-};
+use std::{collections::BinaryHeap, collections::HashMap, collections::HashSet, vec::Vec};
 
 use pyo3::exceptions::PyTimeoutError;
 use pyo3::prelude::*;
 
-use super::search_space::*;
 use super::heuristics::*;
+use super::search_space::*;
+use super::search_state::*;
 use super::utils::*;
-
 
 #[derive(Debug)]
 struct PrioritizedItem {
@@ -49,18 +44,32 @@ impl Ord for PrioritizedItem {
     }
 }
 
-pub fn build_plan(ss: &mut SearchSpace, state: &State) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
-    let path = PersistentList::to_vec(&state.path).into_iter().map(|(a, _, _)| a.to_string()).collect();
+pub fn build_plan(
+    ss: &SearchSpace,
+    state: &State,
+) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
+    let path = PersistentList::to_vec(&state.path)
+        .into_iter()
+        .map(|(a, _, _)| a.to_string())
+        .collect();
     let plan = ss.build_plan(path)?;
     let mut res = Vec::new();
     for (s, a, d) in plan.iter() {
         let mut ss = None;
         let mut ds = None;
         if let Some(start) = s {
-            ss = Some(format!("{}/{}", start.numer().to_string(), start.denom().to_string()));
+            ss = Some(format!(
+                "{}/{}",
+                start.numer().to_string(),
+                start.denom().to_string()
+            ));
         }
         if let Some(duration) = d {
-            ds = Some(format!("{}/{}", duration.numer().to_string(), duration.denom().to_string()));
+            ds = Some(format!(
+                "{}/{}",
+                duration.numer().to_string(),
+                duration.denom().to_string()
+            ));
         }
         res.push((ss, a.to_string(), ds));
     }
@@ -69,19 +78,41 @@ pub fn build_plan(ss: &mut SearchSpace, state: &State) -> PyResult<Option<Vec<(O
 
 #[pyfunction]
 #[pyo3(signature = (ss, heuristic, timeout=None))]
-pub fn astar_search(ss: &mut SearchSpace, heuristic: &Heuristic, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
+pub fn astar_search(
+    ss: &SearchSpace,
+    heuristic: &Heuristic,
+    timeout: Option<f32>,
+) -> PyResult<(
+    Option<Vec<(Option<String>, String, Option<String>)>>,
+    HashMap<String, String>,
+)> {
     wastar_search(ss, heuristic, 0.5, timeout)
 }
 
 #[pyfunction]
 #[pyo3(signature = (ss, heuristic, timeout=None))]
-pub fn gbfs_search(ss: &mut SearchSpace, heuristic: &Heuristic, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
+pub fn gbfs_search(
+    ss: &SearchSpace,
+    heuristic: &Heuristic,
+    timeout: Option<f32>,
+) -> PyResult<(
+    Option<Vec<(Option<String>, String, Option<String>)>>,
+    HashMap<String, String>,
+)> {
     wastar_search(ss, heuristic, 1.0, timeout)
 }
 
 #[pyfunction]
 #[pyo3(signature = (ss, heuristic, weight, timeout=None))]
-pub fn wastar_search(ss: &mut SearchSpace, heuristic: &Heuristic, weight: f64, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
+pub fn wastar_search(
+    ss: &SearchSpace,
+    heuristic: &Heuristic,
+    weight: f64,
+    timeout: Option<f32>,
+) -> PyResult<(
+    Option<Vec<(Option<String>, String, Option<String>)>>,
+    HashMap<String, String>,
+)> {
     let mut metrics = HashMap::new();
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
@@ -95,7 +126,10 @@ pub fn wastar_search(ss: &mut SearchSpace, heuristic: &Heuristic, weight: f64, t
     let mut open = BinaryHeap::new();
     let mut open_set = HashSet::new();
     let mut closed_set = HashSet::new();
-    open.push(PrioritizedItem{heuristic: init_h, state: init});
+    open.push(PrioritizedItem {
+        heuristic: init_h,
+        state: init,
+    });
     let mut counter = 0;
     while let Some(current) = open.pop() {
         if let Some(t) = timeout {
@@ -105,7 +139,7 @@ pub fn wastar_search(ss: &mut SearchSpace, heuristic: &Heuristic, weight: f64, t
         }
         let state = current.state;
         if !ss.is_temporal {
-            closed_set.insert(state.clone());
+            closed_set.insert(state.full_clone());
             open_set.remove(&state);
         }
         // println!("{:?} {:?}", state.path.iter().map(|(ev, _)| &ev.action).collect::<Vec<&String>>(), current.heuristic);
@@ -125,10 +159,13 @@ pub fn wastar_search(ss: &mut SearchSpace, heuristic: &Heuristic, weight: f64, t
                     Some(v) => {
                         let f = weight * v + (1.0 - weight) * s.g;
                         if !ss.is_temporal {
-                            open_set.insert(s.clone());
+                            open_set.insert(s.full_clone());
                         }
-                        open.push(PrioritizedItem{heuristic: f, state: s});
-                    },
+                        open.push(PrioritizedItem {
+                            heuristic: f,
+                            state: s,
+                        });
+                    }
                     None => continue,
                 }
             }
@@ -140,17 +177,36 @@ pub fn wastar_search(ss: &mut SearchSpace, heuristic: &Heuristic, weight: f64, t
 
 #[pyfunction]
 #[pyo3(signature = (ss, timeout=None))]
-pub fn bfs_search(ss: &mut SearchSpace, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
+pub fn bfs_search(
+    ss: &SearchSpace,
+    timeout: Option<f32>,
+) -> PyResult<(
+    Option<Vec<(Option<String>, String, Option<String>)>>,
+    HashMap<String, String>,
+)> {
     basic_search(ss, true, timeout)
 }
 
 #[pyfunction]
 #[pyo3(signature = (ss, timeout=None))]
-pub fn dfs_search(ss: &mut SearchSpace, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
+pub fn dfs_search(
+    ss: &SearchSpace,
+    timeout: Option<f32>,
+) -> PyResult<(
+    Option<Vec<(Option<String>, String, Option<String>)>>,
+    HashMap<String, String>,
+)> {
     basic_search(ss, false, timeout)
 }
 
-fn basic_search(ss: &mut SearchSpace, bfs: bool, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
+fn basic_search(
+    ss: &SearchSpace,
+    bfs: bool,
+    timeout: Option<f32>,
+) -> PyResult<(
+    Option<Vec<(Option<String>, String, Option<String>)>>,
+    HashMap<String, String>,
+)> {
     let mut metrics = HashMap::new();
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
@@ -187,7 +243,14 @@ fn basic_search(ss: &mut SearchSpace, bfs: bool, timeout: Option<f32>) -> PyResu
 
 #[pyfunction]
 #[pyo3(signature = (ss, heuristic, timeout=None))]
-pub fn ehc_search(ss: &mut SearchSpace, heuristic: &Heuristic, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
+pub fn ehc_search(
+    ss: &SearchSpace,
+    heuristic: &Heuristic,
+    timeout: Option<f32>,
+) -> PyResult<(
+    Option<Vec<(Option<String>, String, Option<String>)>>,
+    HashMap<String, String>,
+)> {
     let mut metrics = HashMap::new();
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
@@ -224,7 +287,7 @@ pub fn ehc_search(ss: &mut SearchSpace, heuristic: &Heuristic, timeout: Option<f
                             open.clear();
                         }
                         open.push_back(s);
-                    },
+                    }
                     None => continue,
                 }
             }

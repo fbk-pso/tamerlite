@@ -1,8 +1,7 @@
 use num::{rational::BigRational, BigInt, ToPrimitive};
-use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
 use std::sync::Arc;
-
 
 pub fn is_fraction(obj: &pyo3::Bound<'_, PyAny>) -> PyResult<bool> {
     let py = obj.py();
@@ -23,7 +22,7 @@ pub fn get_big_rational(obj: &pyo3::Bound<'_, PyAny>) -> PyResult<BigRational> {
         ) {
             return Ok(mk_rational(numerator, denominator));
         }
-    }    
+    }
 
     Err(PyValueError::new_err("Unable to parse Rational number"))
 }
@@ -60,7 +59,6 @@ pub fn usize_to_f32(n: usize) -> f32 {
     n.to_f32().unwrap()
 }
 
-
 #[derive(Debug, Clone)]
 pub struct PersistentList<Q> {
     pub payload: Q,
@@ -68,14 +66,18 @@ pub struct PersistentList<Q> {
 }
 
 impl<Q> PersistentList<Q>
-where Q: Clone
+where
+    Q: Clone,
 {
     pub fn new() -> Option<Arc<Self>> {
         None
     }
 
     pub fn append(payload: Q, previous: &Option<Arc<Self>>) -> Option<Arc<Self>> {
-        Some(Arc::new(PersistentList { payload:payload, previous:previous.clone() }))
+        Some(Arc::new(PersistentList {
+            payload: payload,
+            previous: previous.clone(),
+        }))
     }
 
     pub fn to_vec(list: &Option<Arc<Self>>) -> Vec<&Q> {
