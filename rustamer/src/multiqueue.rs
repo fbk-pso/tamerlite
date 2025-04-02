@@ -12,6 +12,7 @@ use pyo3::exceptions::PyTimeoutError;
 use pyo3::prelude::*;
 
 use super::search_space::*;
+use super::search_state::*;
 use super::heuristics::*;
 use super::search::*;
 

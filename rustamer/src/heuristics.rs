@@ -14,8 +14,9 @@ use pyo3::types::PyTuple;
 use crate::{internal_evaluate, SearchSpace};
 use crate::state_encoder::CoreStateEncoder;
 
-use super::search_space::State;
+use super::search_state::State;
 use super::expressions::*;
+use super::expressions_utils::*;
 use super::structures::*;
 
 
