@@ -4,6 +4,7 @@ import time
 import ast
 from typing import Optional
 from scripts.utils import extract_lifted_macros_from_json, generate_ground_macros, select_best_lifted_macros
+from unified_planning.engines.compilers.grounder import GrounderHelper
 
 class TrieNode:
     def __init__(self):
@@ -65,7 +66,7 @@ def read_macros_from_csv(file_path):
 
     return macros_list
 
-def read_macros_from_json(file_path, problem, macros_usage, max_macros: Optional[str] = None):
+def read_macros_from_json(file_path, problem, macros_usage, max_macros: Optional[str] = None, grounder_helper : Optional[GrounderHelper] = None):
     macros_list = []
 
     with open(file_path, 'r') as file:
@@ -75,7 +76,7 @@ def read_macros_from_json(file_path, problem, macros_usage, max_macros: Optional
 
     if 'best' not in file_path:
         start_time = time.time()
-        best_lifted_macros = select_best_lifted_macros(best_lifted_macros, problem, macros_usage, max_macros)
+        best_lifted_macros = select_best_lifted_macros(best_lifted_macros, problem, macros_usage, max_macros, grounder_helper)
         print(f"Time_for_selection: {(time.time() - start_time)}")
     
     # best_lifted_macros = best_lifted_macros[:-1]
@@ -83,18 +84,18 @@ def read_macros_from_json(file_path, problem, macros_usage, max_macros: Optional
         print(f"{i})  {ma}")
 
     for lifted in best_lifted_macros:
-        for ground in generate_ground_macros(lifted, problem):
+        for ground in generate_ground_macros(lifted, problem, grounder=grounder_helper):
             assert len(ground) == len(lifted)
             macros_list.append(ast.literal_eval(str(ground)))
 
     return macros_list
 
 
-def read_macros(macros_path, macros_usage, problem, max_macros: Optional[str] = None):
+def read_macros(macros_path, macros_usage, problem, max_macros: Optional[str] = None, grounder_helper : Optional[GrounderHelper] = None):
     if '.csv' in macros_path:
         macros = read_macros_from_csv(macros_path)
     elif '.json' in macros_path:
-        macros = read_macros_from_json(macros_path, problem, macros_usage, max_macros)
+        macros = read_macros_from_json(macros_path, problem, macros_usage, max_macros, grounder_helper)
     else:
         raise ValueError("Unknown file format for the macros file.")
     return macros

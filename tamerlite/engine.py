@@ -6,6 +6,7 @@ import unified_planning.engines
 import unified_planning.engines.mixins
 from unified_planning.model import ProblemKind, FNode
 from unified_planning.model.state import State
+from unified_planning.engines.compilers.grounder import GrounderHelper
 from typing import IO, Any, Callable, List, Optional, Union
 from argparse import Namespace
 
@@ -274,7 +275,11 @@ class TamerLite(
                 sys.stdout.flush()
 
                 if self._params is not None and self._params.contains_macros():
-                    extracted_macros = read_macros(self._params.macros, self._params.macros_usage, problem, self._params.max_macros)
+                    grounder_helper = GrounderHelper(
+                        problem, compiler._grounding_actions_map, compiler._prune_actions
+                    )   
+                    #extracted_macros = read_macros(self._params.macros, self._params.macros_usage, problem, self._params.max_macros)
+                    extracted_macros = read_macros(self._params.macros, self._params.macros_usage, problem, self._params.max_macros, grounder_helper)
                     self._params = SearchParams(
                         search=self._params.search,
                         heuristic=self._params.heuristic,
