@@ -1,22 +1,17 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::SystemTime;
-use std::{
-    collections::BinaryHeap,
-    collections::HashSet,
-    collections::HashMap,
-    vec::Vec
-};
+use std::{collections::BinaryHeap, collections::HashMap, collections::HashSet, vec::Vec};
 
 use pyo3::exceptions::PyTimeoutError;
 use pyo3::prelude::*;
 
-use super::search_space::*;
 use super::heuristics::*;
 use super::search::*;
+use super::search_space::*;
+use super::search_state::*;
 
-
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct StateContainer {
     state: State,
     expanded: bool,
@@ -36,7 +31,9 @@ struct PrioritizedItem {
 
 impl PartialEq for PrioritizedItem {
     fn eq(&self, other: &Self) -> bool {
-        self.heuristic == other.heuristic && self.state_container.borrow().state.todo.len() == other.state_container.borrow().state.todo.len()
+        self.heuristic == other.heuristic
+            && self.state_container.borrow().state.todo.len()
+                == other.state_container.borrow().state.todo.len()
     }
 }
 
@@ -54,7 +51,9 @@ impl Ord for PrioritizedItem {
             std::cmp::Ordering::Greater
         } else if self.heuristic > other.heuristic {
             std::cmp::Ordering::Less
-        } else if self.state_container.borrow().state.todo.len() < other.state_container.borrow().state.todo.len() {
+        } else if self.state_container.borrow().state.todo.len()
+            < other.state_container.borrow().state.todo.len()
+        {
             std::cmp::Ordering::Greater
         } else {
             std::cmp::Ordering::Less
@@ -64,11 +63,24 @@ impl Ord for PrioritizedItem {
 
 #[pyfunction]
 #[pyo3(signature = (ss, heuristics, timeout=None))]
-pub fn multiqueue_search(ss: &mut SearchSpace, heuristics: Vec<(Heuristic, f64)>, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
+pub fn multiqueue_search(
+    ss: &SearchSpace,
+    heuristics: Vec<(Heuristic, f64)>,
+    timeout: Option<f32>,
+) -> PyResult<(
+    Option<Vec<(Option<String>, String, Option<String>)>>,
+    HashMap<String, String>,
+)> {
     let mut metrics = HashMap::new();
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
-    let item = PrioritizedItem{heuristic: 0.0, state_container: Rc::new(RefCell::new(StateContainer{state: init, expanded: false})) };
+    let item = PrioritizedItem {
+        heuristic: 0.0,
+        state_container: Rc::new(RefCell::new(StateContainer {
+            state: init,
+            expanded: false,
+        })),
+    };
 
     let mut opens = Vec::new();
     for _ in heuristics.iter() {
@@ -87,7 +99,8 @@ pub fn multiqueue_search(ss: &mut SearchSpace, heuristics: Vec<(Heuristic, f64)>
                 return Err(PyTimeoutError::new_err("Timeout"));
             }
         }
-        if opens.iter().map(|o| o.len()).sum::<usize>() == 0 {
+        // If one of the queues is empty, then all the others are (logically) empty too
+        if opens.iter().any(|o| o.is_empty()) {
             break;
         }
         let i = counter % opens.len();
@@ -97,14 +110,14 @@ pub fn multiqueue_search(ss: &mut SearchSpace, heuristics: Vec<(Heuristic, f64)>
             continue;
         }
         if let Some(current) = open.pop() {
-            let sc = & mut (*(current.state_container)).borrow_mut();
+            let sc = &mut (*(current.state_container)).borrow_mut();
             if sc.expanded {
                 continue;
             }
             sc.set_expanded(true);
             let state = &sc.state;
             if !ss.is_temporal {
-                closed_set.insert(state.clone());
+                closed_set.insert(state.full_clone());
                 open_set.remove(state);
             }
             states_expanded += 1;
@@ -121,16 +134,23 @@ pub fn multiqueue_search(ss: &mut SearchSpace, heuristics: Vec<(Heuristic, f64)>
                     continue;
                 }
                 if !ss.is_temporal {
-                    open_set.insert(s.clone());
+                    open_set.insert(s.full_clone());
                 }
-                let sc = Rc::new(RefCell::new(StateContainer{state: s.clone(), expanded: false}));
+                let s_g = s.g;
+                let sc = Rc::new(RefCell::new(StateContainer {
+                    state: s,
+                    expanded: false,
+                }));
                 for (i, (heuristic, weight)) in heuristics.iter().enumerate() {
-                    let h = heuristic.eval(&s, ss)?;
+                    let h = heuristic.eval(&sc.borrow().state, ss)?;
                     match h {
                         Some(v) => {
-                            let f = *weight * v + (1.0 - *weight) * s.g;
-                            opens[i].push(PrioritizedItem{heuristic: f, state_container: sc.clone()});
-                        },
+                            let f = *weight * v + (1.0 - *weight) * s_g;
+                            opens[i].push(PrioritizedItem {
+                                heuristic: f,
+                                state_container: sc.clone(),
+                            });
+                        }
                         None => continue,
                     }
                 }
