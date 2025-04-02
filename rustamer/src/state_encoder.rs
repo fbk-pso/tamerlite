@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 use crate::utils::{integer_to_f32, rational_to_f32, usize_to_f32};
 use crate::{ExpressionNode, SearchSpace};
 
-use super::search_space::State;
+use super::search_state::State;
 use super::structures::*;
 
 #[pyclass]
