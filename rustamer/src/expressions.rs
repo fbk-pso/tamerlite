@@ -1,6 +1,6 @@
-use num_rational::BigRational;
 use num::BigInt;
-use pyo3::{prelude::*, exceptions::PyValueError};
+use num_rational::BigRational;
+use pyo3::{exceptions::PyValueError, prelude::*};
 use std::collections::HashMap;
 
 use crate::utils::integer_to_i32;
@@ -23,20 +23,23 @@ pub enum ExpressionNode {
     Div(usize, usize),
 }
 
-#[derive(Clone,Copy,Debug,PartialEq,Eq,Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Expression {
-    id: usize
+    id: usize,
 }
 
 #[derive(Clone, Debug)]
 pub struct ExpressionManager {
     all_expressions: Vec<Vec<ExpressionNode>>,
-    expression2id: HashMap<Vec<ExpressionNode>, Expression>
+    expression2id: HashMap<Vec<ExpressionNode>, Expression>,
 }
 
 impl ExpressionManager {
     pub fn new() -> ExpressionManager {
-        ExpressionManager{all_expressions: vec![], expression2id: HashMap::new()}
+        ExpressionManager {
+            all_expressions: vec![],
+            expression2id: HashMap::new(),
+        }
     }
 
     // pub fn get(&self, expr: &Expression) -> Option<&Vec<ExpressionNode>> {
@@ -52,19 +55,18 @@ impl ExpressionManager {
         &self.all_expressions[expr.id]
     }
 
-    pub fn put(&mut self, expr:&Vec<ExpressionNode>) -> Expression {
+    pub fn put(&mut self, expr: &Vec<ExpressionNode>) -> Expression {
         if let Some(x) = self.expression2id.get(expr) {
             *x
-        }
-        else {
+        } else {
             let newid = self.all_expressions.len();
             self.all_expressions.push(expr.clone());
-            self.expression2id.insert(expr.clone(), Expression{id:newid});
-            Expression{id:newid}
+            self.expression2id
+                .insert(expr.clone(), Expression { id: newid });
+            Expression { id: newid }
         }
     }
 }
-
 
 pub fn get_rational_from_expression_node(exp: &ExpressionNode) -> PyResult<BigRational> {
     if let ExpressionNode::Int(v) = exp {
@@ -145,26 +147,30 @@ pub fn make_operator(kind: String, operands: Vec<usize>) -> PyResult<ExpressionN
         "-" => Ok(ExpressionNode::Minus(operands[0], operands[1])),
         "*" => Ok(ExpressionNode::Times(operands)),
         "/" => Ok(ExpressionNode::Div(operands[0], operands[1])),
-        &_ => Err(PyValueError::new_err("Unknown operator: ".to_owned() + kind.as_str()))
+        &_ => Err(PyValueError::new_err(
+            "Unknown operator: ".to_owned() + kind.as_str(),
+        )),
     }
 }
 
 #[pyfunction]
 pub fn make_operator_node(kind: String, operands: Vec<usize>) -> PyResult<PyExpressionNode> {
-    Ok(PyExpressionNode{v: make_operator(kind, operands)?})
+    Ok(PyExpressionNode {
+        v: make_operator(kind, operands)?,
+    })
 }
 
 #[pyfunction]
 pub fn make_bool_constant_node(v: bool) -> PyExpressionNode {
     PyExpressionNode {
-        v: ExpressionNode::Bool(v)
+        v: ExpressionNode::Bool(v),
     }
 }
 
 #[pyfunction]
 pub fn make_int_constant_node(v: i32) -> PyExpressionNode {
     PyExpressionNode {
-        v: ExpressionNode::Int(super::utils::mk_integer(v))
+        v: ExpressionNode::Int(super::utils::mk_integer(v)),
     }
 }
 
@@ -178,13 +184,13 @@ pub fn make_rational_constant_node(numerator: i32, denominator: i32) -> PyExpres
 #[pyfunction]
 pub fn make_object_node(name: String) -> PyExpressionNode {
     PyExpressionNode {
-        v: ExpressionNode::Object(name)
+        v: ExpressionNode::Object(name),
     }
 }
 
 #[pyfunction]
 pub fn make_fluent_node(name: String) -> PyExpressionNode {
     PyExpressionNode {
-        v: ExpressionNode::Fluent(name)
+        v: ExpressionNode::Fluent(name),
     }
 }

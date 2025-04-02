@@ -1,18 +1,19 @@
-use std::{
-    collections::{HashMap, HashSet}, sync::Mutex, vec::Vec
-};
 use multiset::HashMultiSet;
 use num_rational::BigRational;
 use pyo3::{exceptions::PyException, prelude::*};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Mutex,
+    vec::Vec,
+};
 
-use super::stn::DeltaSTN;
 use super::expressions::*;
 use super::expressions_utils::*;
-use super::structures::*;
-use super::utils::*;
 use super::search_state::*;
+use super::stn::DeltaSTN;
+use super::structures::*;
 use super::tn_interpreter::TNInterpreter;
-
+use super::utils::*;
 
 #[pyclass(name = "SearchSpace", frozen)]
 #[derive(Debug)]
@@ -44,24 +45,24 @@ impl SearchSpace {
         mutex: HashSet<((String, usize), (String, usize))>,
         initial_state: Option<HashMap<String, PyExpressionNode>>,
         goal: Option<Vec<PyExpressionNode>>,
-        #[pyo3(from_py_with = "get_option_big_rational")]
-        epsilon: Option<BigRational>,
+        #[pyo3(from_py_with = "get_option_big_rational")] epsilon: Option<BigRational>,
     ) -> PyResult<Self> {
         let is_temporal = actions_duration.values().any(|value| !value.is_none());
         let mut actions: Vec<String> = events.keys().cloned().collect();
         actions.sort();
-        let converted_actions_duration: HashMap<String, Option<(Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool)>> = actions_duration
+        let converted_actions_duration: HashMap<
+            String,
+            Option<(Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool)>,
+        > = actions_duration
             .into_iter()
             .map(|(key, value)| {
                 let converted_value = match value {
-                    Some((vec1, vec2, b1, b2)) => {
-                        Some((
-                            vec1.into_iter().map(|e| e.v).collect(),
-                            vec2.into_iter().map(|e| e.v).collect(),
-                            b1,
-                            b2,
-                        ))
-                    }
+                    Some((vec1, vec2, b1, b2)) => Some((
+                        vec1.into_iter().map(|e| e.v).collect(),
+                        vec2.into_iter().map(|e| e.v).collect(),
+                        b1,
+                        b2,
+                    )),
                     None => None,
                 };
                 (key, converted_value)
@@ -75,7 +76,8 @@ impl SearchSpace {
             events: events,
             actions: actions,
             mutex: mutex,
-            initial_state: initial_state.map(|inner_map| inner_map.into_iter().map(|(k, v)| (k, v.v)).collect()),
+            initial_state: initial_state
+                .map(|inner_map| inner_map.into_iter().map(|(k, v)| (k, v.v)).collect()),
             goal: goal.map(|inner_vec| inner_vec.into_iter().map(|e| e.v).collect()),
             tn_interpreter: tn_interpreter,
             epsilon: match &epsilon {
@@ -97,20 +99,23 @@ impl SearchSpace {
     }
 
     #[pyo3(signature = (initial_state=None))]
-    pub fn initial_state(&self, initial_state: Option<HashMap<String, PyExpressionNode>>) -> PyResult<State> {
+    pub fn initial_state(
+        &self,
+        initial_state: Option<HashMap<String, PyExpressionNode>>,
+    ) -> PyResult<State> {
         let init = match initial_state {
             Some(v) => v.into_iter().map(|(k, v)| (k, v.v)).collect(),
-            None => {
-                match &self.initial_state {
-                    Some(v) => v.clone(),
-                    None => {
-                        return Err(PyException::new_err("The initial state must be defined somewhere!"));
-                    },
+            None => match &self.initial_state {
+                Some(v) => v.clone(),
+                None => {
+                    return Err(PyException::new_err(
+                        "The initial state must be defined somewhere!",
+                    ));
                 }
-            }
+            },
         };
         let tn: Option<DeltaSTN<u64, f32>> = match self.is_temporal {
-            true => Some(DeltaSTN::new(self.epsilon/1000.0)),
+            true => Some(DeltaSTN::new(self.epsilon / 1000.0)),
             false => None,
         };
         Ok(State {
@@ -137,7 +142,9 @@ impl SearchSpace {
             if let Some((index, id)) = state.todo.get(action) {
                 if let Some((_, e)) = events.get(*index) {
                     // Check if the event is applicable before creating the new state
-                    if !self.is_sat(&e.conditions, state)? { return Ok(None); }
+                    if !self.is_sat(&e.conditions, state)? {
+                        return Ok(None);
+                    }
 
                     let mut new_state = state.clone_for_child();
                     new_state.g += 1.0;
@@ -145,7 +152,9 @@ impl SearchSpace {
                     if index + 1 >= events.len() {
                         new_state.todo.remove(action);
                     } else {
-                        new_state.todo.insert(action.to_string(), (index + 1, id + 1));
+                        new_state
+                            .todo
+                            .insert(action.to_string(), (index + 1, id + 1));
                     }
                     if self.expand_event(state, &mut new_state, &e.clone(), index, id)? {
                         return Ok(Some(new_state));
@@ -153,7 +162,9 @@ impl SearchSpace {
                 }
             } else {
                 // Check if action is applicable before creating the new state
-                if !self.is_sat(&events[0].1.conditions, state)? { return Ok(None); }
+                if !self.is_sat(&events[0].1.conditions, state)? {
+                    return Ok(None);
+                }
 
                 let mut new_state = state.clone_for_child();
                 new_state.g += 1.0;
@@ -167,59 +178,76 @@ impl SearchSpace {
     }
 
     #[pyo3(signature = (state, goal=None))]
-    pub fn goal_reached(&self, state: &State, goal: Option<Vec<PyExpressionNode>>) -> PyResult<bool> {
-        if ! state.todo.is_empty() {
+    pub fn goal_reached(
+        &self,
+        state: &State,
+        goal: Option<Vec<PyExpressionNode>>,
+    ) -> PyResult<bool> {
+        if !state.todo.is_empty() {
             return Ok(false);
         }
         let goal = goal.map(|g| g.into_iter().map(|e| e.v).collect());
         let g = match &goal {
             Some(v) => v,
-            None => {
-                match &self.goal {
-                    Some(v) => v,
-                    None => {
-                        return Err(PyException::new_err("The goal must be defined somewhere!"));
-                    },
+            None => match &self.goal {
+                Some(v) => v,
+                None => {
+                    return Err(PyException::new_err("The goal must be defined somewhere!"));
                 }
-            }
+            },
         };
         match internal_evaluate(&g, state)? {
             ExpressionNode::Bool(v) => Ok(v),
-            _ => return Err(PyException::new_err("The goal is not a boolean expression!")),
+            _ => {
+                return Err(PyException::new_err(
+                    "The goal is not a boolean expression!",
+                ))
+            }
         }
     }
 
     #[pyo3(signature = (state, goal=None))]
-    pub fn subgoals_sat(&self, state: &State, goal: Option<Vec<PyExpressionNode>>) -> PyResult<Vec<Vec<PyExpressionNode>>> {
+    pub fn subgoals_sat(
+        &self,
+        state: &State,
+        goal: Option<Vec<PyExpressionNode>>,
+    ) -> PyResult<Vec<Vec<PyExpressionNode>>> {
         let goals = match goal {
             Some(v) => split_expression(&v.into_iter().map(|e| e.v).collect())?,
-            None => {
-                match &self.goal {
-                    Some(v) => split_expression(&v)?,
-                    None => {
-                        return Err(PyException::new_err("The goal must be defined somewhere!"));
-                    },
+            None => match &self.goal {
+                Some(v) => split_expression(&v)?,
+                None => {
+                    return Err(PyException::new_err("The goal must be defined somewhere!"));
                 }
-            }
+            },
         };
         let mut res: HashSet<_> = HashSet::new();
         for g in goals {
             if internal_evaluate(&g, state)? == ExpressionNode::Bool(true) {
-                res.insert(g.into_iter().map(|v| PyExpressionNode {v}).collect() );
+                res.insert(g.into_iter().map(|v| PyExpressionNode { v }).collect());
             }
         }
         Ok(res.into_iter().collect())
     }
-
 }
 
 impl SearchSpace {
-
-    pub fn get_successor_states_iter<'a>(&'a self, state: &'a State) -> impl Iterator<Item = PyResult<State>> + 'a {
-        return self.actions.iter().map(|action| self.get_successor_state(state, action).transpose()).filter(|x| x.is_some()).map(|x| x.unwrap());
+    pub fn get_successor_states_iter<'a>(
+        &'a self,
+        state: &'a State,
+    ) -> impl Iterator<Item = PyResult<State>> + 'a {
+        return self
+            .actions
+            .iter()
+            .map(|action| self.get_successor_state(state, action).transpose())
+            .filter(|x| x.is_some())
+            .map(|x| x.unwrap());
     }
 
-    pub fn build_plan(&self, all_path: Vec<String>) -> PyResult<Vec<(Option<BigRational>, String, Option<BigRational>)>> {
+    pub fn build_plan(
+        &self,
+        all_path: Vec<String>,
+    ) -> PyResult<Vec<(Option<BigRational>, String, Option<BigRational>)>> {
         let mut tn = DeltaSTN::new(mk_rational(0, 1));
         let mut todo: HashMap<String, (usize, u32)> = HashMap::new();
         let mut path: Vec<(Event, u32)> = Vec::new();
@@ -328,7 +356,7 @@ impl SearchSpace {
                     }
                     path.push((e.clone(), id));
                     if events.len() > 1 {
-                        todo.insert(action.to_string(), (1, id+1));
+                        todo.insert(action.to_string(), (1, id + 1));
                     }
                 }
             }
@@ -360,13 +388,25 @@ impl SearchSpace {
     fn is_sat(&self, conditions: &Vec<ExpressionNode>, state: &State) -> PyResult<bool> {
         let sat = match internal_evaluate(conditions, state)? {
             ExpressionNode::Bool(v) => v,
-            _ => return Err(PyException::new_err("An action condition is not a boolean expression!")),
+            _ => {
+                return Err(PyException::new_err(
+                    "An action condition is not a boolean expression!",
+                ))
+            }
         };
         Ok(sat)
     }
 
-    fn expand_event(&self, state: &State, new_state: &mut State, e: &Event, index: &usize, id: &u32) -> PyResult<bool> {
-        new_state.path = PersistentList::append((e.action.to_string(), e.pos, *id), &new_state.path);
+    fn expand_event(
+        &self,
+        state: &State,
+        new_state: &mut State,
+        e: &Event,
+        index: &usize,
+        id: &u32,
+    ) -> PyResult<bool> {
+        new_state.path =
+            PersistentList::append((e.action.to_string(), e.pos, *id), &new_state.path);
 
         // check conditions is done before calling this method
 
@@ -379,9 +419,15 @@ impl SearchSpace {
         for c in new_state.active_conditions.iter() {
             let sat = match internal_evaluate(&c, state)? {
                 ExpressionNode::Bool(v) => v,
-                _ => return Err(PyException::new_err("An action condition is not a boolean expression!")),
+                _ => {
+                    return Err(PyException::new_err(
+                        "An action condition is not a boolean expression!",
+                    ))
+                }
             };
-            if !sat { return Ok(false); }
+            if !sat {
+                return Ok(false);
+            }
         }
 
         // insert start conditions
@@ -391,19 +437,29 @@ impl SearchSpace {
 
         // apply effects
         for eff in e.effects.iter() {
-            new_state.assignments.insert(eff.fluent.to_string(), internal_evaluate(&eff.value, state)?);
+            new_state.assignments.insert(
+                eff.fluent.to_string(),
+                internal_evaluate(&eff.value, state)?,
+            );
         }
 
         // check active conditions
         for c in new_state.active_conditions.iter() {
             let sat = match internal_evaluate(&c, new_state)? {
                 ExpressionNode::Bool(v) => v,
-                _ => return Err(PyException::new_err("An action condition is not a boolean expression!")),
+                _ => {
+                    return Err(PyException::new_err(
+                        "An action condition is not a boolean expression!",
+                    ))
+                }
             };
-            if !sat { return Ok(false); }
+            if !sat {
+                return Ok(false);
+            }
         }
 
-        if self.is_temporal { // Add temporal constraints between past or todo events and the current one
+        if self.is_temporal {
+            // Add temporal constraints between past or todo events and the current one
             let tn = new_state.temporal_network.as_mut().unwrap();
             let ev = self.tn_interpreter.get_event_id(&e.action, e.pos, *id);
             for e2 in PersistentList::to_vec(&state.path) {
@@ -432,17 +488,24 @@ impl SearchSpace {
                     id2 += 1;
                 }
             }
-            if ! tn.check() {
+            if !tn.check() {
                 return Ok(false);
             }
         }
         Ok(true)
     }
 
-    fn open_action(&self, state: &State, new_state: &mut State, action: &str, events: &Vec<(Timing, Event)>) -> PyResult<bool> {
+    fn open_action(
+        &self,
+        state: &State,
+        new_state: &mut State,
+        action: &str,
+        events: &Vec<(Timing, Event)>,
+    ) -> PyResult<bool> {
         let mut counter = self.counter.lock().unwrap();
         let mut id = counter.clone();
-        if self.is_temporal { // Add temporal constraints between events of the action
+        if self.is_temporal {
+            // Add temporal constraints between events of the action
             let tn = new_state.temporal_network.as_mut().unwrap();
             let start = self.tn_interpreter.get_action_id(action, true, *counter);
             let end = self.tn_interpreter.get_action_id(action, false, *counter);
@@ -452,8 +515,12 @@ impl SearchSpace {
             let mut ub: f32 = 0.0;
             if duration.is_some() {
                 let d = duration.unwrap();
-                lb = -rational_to_f32(&get_rational_from_expression_node(&internal_evaluate(&d.0, state)?)?);
-                ub = rational_to_f32(&get_rational_from_expression_node(&internal_evaluate(&d.1, state)?)?);
+                lb = -rational_to_f32(&get_rational_from_expression_node(&internal_evaluate(
+                    &d.0, state,
+                )?)?);
+                ub = rational_to_f32(&get_rational_from_expression_node(&internal_evaluate(
+                    &d.1, state,
+                )?)?);
                 if d.2 {
                     lb -= self.epsilon;
                 }
@@ -478,10 +545,9 @@ impl SearchSpace {
                 *counter += 1;
             }
             if events.len() > 1 {
-                new_state.todo.insert(action.to_string(), (1, id+1));
+                new_state.todo.insert(action.to_string(), (1, id + 1));
             }
         }
         self.expand_event(state, new_state, &events[0].1, &0, &id)
     }
-
 }
