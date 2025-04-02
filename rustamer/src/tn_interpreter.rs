@@ -1,14 +1,13 @@
-use std::{collections::HashMap, vec::Vec};
 use super::stn::DeltaSTN;
 use super::structures::*;
-
+use std::{collections::HashMap, vec::Vec};
 
 #[derive(Debug)]
 pub struct TNInterpreter {
     actions_ids: HashMap<(String, bool), u32>,
     events_ids: HashMap<(String, usize), u32>,
     actions_ids_map_back: HashMap<u32, (String, bool)>,
-    events_ids_map_back: HashMap<u32, (String, usize)>
+    events_ids_map_back: HashMap<u32, (String, usize)>,
 }
 
 impl TNInterpreter {
@@ -17,7 +16,7 @@ impl TNInterpreter {
         let mut actions_ids_map_back = HashMap::new();
 
         let mut next_id = 1;
-        for a in actions{
+        for a in actions {
             for b in [true, false] {
                 actions_ids.insert((a.clone(), b), next_id);
                 actions_ids_map_back.insert(next_id, (a.clone(), b));
@@ -36,9 +35,12 @@ impl TNInterpreter {
             }
         }
 
-        TNInterpreter { actions_ids: actions_ids, events_ids: events_ids,
-                        actions_ids_map_back: actions_ids_map_back,
-                        events_ids_map_back: events_ids_map_back }
+        TNInterpreter {
+            actions_ids: actions_ids,
+            events_ids: events_ids,
+            actions_ids_map_back: actions_ids_map_back,
+            events_ids_map_back: events_ids_map_back,
+        }
     }
 
     fn pack_u32(&self, a: u32, b: u32) -> u64 {
@@ -67,26 +69,47 @@ impl TNInterpreter {
         //return 0;
     }
 
-    pub fn get_action_timing<Q>(&self, tn: &DeltaSTN<u64, Q>, action: &str, is_start: bool, id: u32) -> Option<Q>
-    where Q: num_traits::Num + std::ops::Neg<Output=Q> + PartialOrd + Clone {
+    pub fn get_action_timing<Q>(
+        &self,
+        tn: &DeltaSTN<u64, Q>,
+        action: &str,
+        is_start: bool,
+        id: u32,
+    ) -> Option<Q>
+    where
+        Q: num_traits::Num + std::ops::Neg<Output = Q> + PartialOrd + Clone,
+    {
         let id = self.get_action_id(action, is_start, id);
         tn.get_model_value(&id)
     }
 
-    pub fn get_event_timing<Q>(&self, tn: &DeltaSTN<u64, Q>, action: &str, pos: usize, id: u32) -> Option<Q>
-    where Q: num_traits::Num + std::ops::Neg<Output=Q> + PartialOrd + Clone {
+    pub fn get_event_timing<Q>(
+        &self,
+        tn: &DeltaSTN<u64, Q>,
+        action: &str,
+        pos: usize,
+        id: u32,
+    ) -> Option<Q>
+    where
+        Q: num_traits::Num + std::ops::Neg<Output = Q> + PartialOrd + Clone,
+    {
         let id = self.get_event_id(action, pos, id);
         tn.get_model_value(&id)
     }
 
     pub fn get_actions_timings<Q>(&self, tn: &DeltaSTN<u64, Q>) -> Vec<((String, bool, u32), Q)>
-    where Q: num_traits::Num + std::ops::Neg<Output=Q> + PartialOrd + Clone {
+    where
+        Q: num_traits::Num + std::ops::Neg<Output = Q> + PartialOrd + Clone,
+    {
         let mut res: Vec<((String, bool, u32), Q)> = Vec::new();
         for (id, v) in tn.distances.iter() {
             let (action_id, outer_id) = self.unpack_u64(*id);
             let a = self.actions_ids_map_back.get(&action_id);
             if let Some((action, is_start)) = a {
-                res.push(((action.clone(), *is_start, outer_id), v.clone() * (- Q::one())));
+                res.push((
+                    (action.clone(), *is_start, outer_id),
+                    v.clone() * (-Q::one()),
+                ));
             }
         }
         res.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -94,17 +117,21 @@ impl TNInterpreter {
     }
 
     pub fn get_events_timings<Q>(&self, tn: &DeltaSTN<u64, Q>) -> Vec<((String, usize, u32), Q)>
-    where Q: num_traits::Num + std::ops::Neg<Output=Q> + PartialOrd + Clone {
+    where
+        Q: num_traits::Num + std::ops::Neg<Output = Q> + PartialOrd + Clone,
+    {
         let mut res = Vec::new();
         for (id, v) in tn.distances.iter() {
             let (event_id, outer_id) = self.unpack_u64(*id);
             let a = self.events_ids_map_back.get(&event_id);
             if let Some((action, pos)) = a {
-                res.push(((action.clone(), pos.clone(), outer_id), v.clone() * (- Q::one())));
+                res.push((
+                    (action.clone(), pos.clone(), outer_id),
+                    v.clone() * (-Q::one()),
+                ));
             }
         }
         res.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         res
     }
-
 }

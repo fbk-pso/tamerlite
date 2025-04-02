@@ -2,9 +2,8 @@ use num::rational::BigRational;
 
 use pyo3::prelude::*;
 
-use super::expressions::{PyExpressionNode, ExpressionNode};
+use super::expressions::{ExpressionNode, PyExpressionNode};
 use super::utils::get_big_rational;
-
 
 #[pyclass(frozen)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -17,7 +16,10 @@ pub struct Effect {
 impl Effect {
     #[new]
     fn new(fluent: String, value: Vec<PyExpressionNode>) -> Self {
-        Effect { fluent, value: value.into_iter().map(|e| e.v).collect() }
+        Effect {
+            fluent,
+            value: value.into_iter().map(|e| e.v).collect(),
+        }
     }
 
     #[getter]
@@ -27,7 +29,10 @@ impl Effect {
 
     #[getter]
     fn value(&self) -> Vec<PyExpressionNode> {
-        self.value.iter().map(|v| PyExpressionNode {v: v.clone()} ).collect()
+        self.value
+            .iter()
+            .map(|v| PyExpressionNode { v: v.clone() })
+            .collect()
     }
 
     fn __repr__(&self) -> String {
@@ -88,15 +93,24 @@ impl Event {
             action: action,
             pos: pos,
             conditions: conditions.into_iter().map(|e| e.v).collect(),
-            start_conditions: start_conditions.into_iter().map(|inner_vec| inner_vec.into_iter().map(|e| e.v).collect()).collect(),
-            end_conditions: end_conditions.into_iter().map(|inner_vec| inner_vec.into_iter().map(|e| e.v).collect()).collect(),
+            start_conditions: start_conditions
+                .into_iter()
+                .map(|inner_vec| inner_vec.into_iter().map(|e| e.v).collect())
+                .collect(),
+            end_conditions: end_conditions
+                .into_iter()
+                .map(|inner_vec| inner_vec.into_iter().map(|e| e.v).collect())
+                .collect(),
             effects: effects,
         }
     }
 
     #[getter]
     fn conditions(&self) -> Vec<PyExpressionNode> {
-        self.conditions.iter().map(|v| PyExpressionNode {v: v.clone()} ).collect()
+        self.conditions
+            .iter()
+            .map(|v| PyExpressionNode { v: v.clone() })
+            .collect()
     }
 
     #[getter]

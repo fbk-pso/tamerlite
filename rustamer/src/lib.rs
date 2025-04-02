@@ -1,28 +1,27 @@
-mod stn;
-mod utils;
 mod expressions;
 mod expressions_utils;
-mod structures;
+mod heuristics;
+mod multiqueue;
+mod search;
 mod search_space;
 mod search_state;
-mod search;
-mod multiqueue;
-mod heuristics;
 mod state_encoder;
+mod stn;
+mod structures;
 mod tn_interpreter;
+mod utils;
 
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
-use heuristics::*;
-use search::*;
-use multiqueue::*;
-use search_space::*;
 use expressions::*;
 use expressions_utils::*;
-use structures::*;
+use heuristics::*;
+use multiqueue::*;
+use search::*;
+use search_space::*;
 use state_encoder::CoreStateEncoder;
-
+use structures::*;
 
 /// A Python module implemented in Rust.
 #[pymodule]

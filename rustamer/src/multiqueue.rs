@@ -1,21 +1,15 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::SystemTime;
-use std::{
-    collections::BinaryHeap,
-    collections::HashSet,
-    collections::HashMap,
-    vec::Vec
-};
+use std::{collections::BinaryHeap, collections::HashMap, collections::HashSet, vec::Vec};
 
 use pyo3::exceptions::PyTimeoutError;
 use pyo3::prelude::*;
 
-use super::search_space::*;
-use super::search_state::*;
 use super::heuristics::*;
 use super::search::*;
-
+use super::search_space::*;
+use super::search_state::*;
 
 #[derive(Debug)]
 struct StateContainer {
@@ -37,7 +31,9 @@ struct PrioritizedItem {
 
 impl PartialEq for PrioritizedItem {
     fn eq(&self, other: &Self) -> bool {
-        self.heuristic == other.heuristic && self.state_container.borrow().state.todo.len() == other.state_container.borrow().state.todo.len()
+        self.heuristic == other.heuristic
+            && self.state_container.borrow().state.todo.len()
+                == other.state_container.borrow().state.todo.len()
     }
 }
 
@@ -55,7 +51,9 @@ impl Ord for PrioritizedItem {
             std::cmp::Ordering::Greater
         } else if self.heuristic > other.heuristic {
             std::cmp::Ordering::Less
-        } else if self.state_container.borrow().state.todo.len() < other.state_container.borrow().state.todo.len() {
+        } else if self.state_container.borrow().state.todo.len()
+            < other.state_container.borrow().state.todo.len()
+        {
             std::cmp::Ordering::Greater
         } else {
             std::cmp::Ordering::Less
@@ -65,11 +63,24 @@ impl Ord for PrioritizedItem {
 
 #[pyfunction]
 #[pyo3(signature = (ss, heuristics, timeout=None))]
-pub fn multiqueue_search(ss: &SearchSpace, heuristics: Vec<(Heuristic, f64)>, timeout: Option<f32>) -> PyResult<(Option<Vec<(Option<String>, String, Option<String>)>>, HashMap<String, String>)> {
+pub fn multiqueue_search(
+    ss: &SearchSpace,
+    heuristics: Vec<(Heuristic, f64)>,
+    timeout: Option<f32>,
+) -> PyResult<(
+    Option<Vec<(Option<String>, String, Option<String>)>>,
+    HashMap<String, String>,
+)> {
     let mut metrics = HashMap::new();
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
-    let item = PrioritizedItem{heuristic: 0.0, state_container: Rc::new(RefCell::new(StateContainer{state: init, expanded: false})) };
+    let item = PrioritizedItem {
+        heuristic: 0.0,
+        state_container: Rc::new(RefCell::new(StateContainer {
+            state: init,
+            expanded: false,
+        })),
+    };
 
     let mut opens = Vec::new();
     for _ in heuristics.iter() {
@@ -99,7 +110,7 @@ pub fn multiqueue_search(ss: &SearchSpace, heuristics: Vec<(Heuristic, f64)>, ti
             continue;
         }
         if let Some(current) = open.pop() {
-            let sc = & mut (*(current.state_container)).borrow_mut();
+            let sc = &mut (*(current.state_container)).borrow_mut();
             if sc.expanded {
                 continue;
             }
@@ -126,14 +137,20 @@ pub fn multiqueue_search(ss: &SearchSpace, heuristics: Vec<(Heuristic, f64)>, ti
                     open_set.insert(s.full_clone());
                 }
                 let s_g = s.g;
-                let sc = Rc::new(RefCell::new(StateContainer{state: s, expanded: false}));
+                let sc = Rc::new(RefCell::new(StateContainer {
+                    state: s,
+                    expanded: false,
+                }));
                 for (i, (heuristic, weight)) in heuristics.iter().enumerate() {
                     let h = heuristic.eval(&sc.borrow().state, ss)?;
                     match h {
                         Some(v) => {
                             let f = *weight * v + (1.0 - *weight) * s_g;
-                            opens[i].push(PrioritizedItem{heuristic: f, state_container: sc.clone()});
-                        },
+                            opens[i].push(PrioritizedItem {
+                                heuristic: f,
+                                state_container: sc.clone(),
+                            });
+                        }
                         None => continue,
                     }
                 }

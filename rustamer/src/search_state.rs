@@ -1,12 +1,14 @@
-use std::{
-    collections::HashMap, sync::{Arc, Mutex}, vec::Vec
-};
 use multiset::HashMultiSet;
-use std::hash::{Hash, Hasher};
 use pyo3::prelude::*;
+use std::hash::{Hash, Hasher};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    vec::Vec,
+};
 
-use super::stn::DeltaSTN;
 use super::expressions::*;
+use super::stn::DeltaSTN;
 use super::utils::*;
 
 #[pyclass(frozen)]
@@ -18,7 +20,7 @@ pub struct State {
     pub active_conditions: HashMultiSet<Vec<ExpressionNode>>,
     pub g: f64,
     pub path: Option<Arc<PersistentList<(String, usize, u32)>>>,
-    pub heuristic_cache: Mutex<HashMap<String, Option<f64>>>
+    pub heuristic_cache: Mutex<HashMap<String, Option<f64>>>,
 }
 
 #[pymethods]
@@ -47,26 +49,28 @@ impl State {
     /// Clones the current statw, except for the caches
     /// This is useful to create children of this state
     pub fn clone_for_child(&self) -> Self {
-        Self { assignments: self.assignments.clone(),
-                temporal_network: self.temporal_network.clone(),
-                todo: self.todo.clone(),
-                active_conditions: self.active_conditions.clone(),
-                g: self.g.clone(),
-                path: self.path.clone(),
-                heuristic_cache: Mutex::new(HashMap::new()) // Cloning erases the cache
-             }
+        Self {
+            assignments: self.assignments.clone(),
+            temporal_network: self.temporal_network.clone(),
+            todo: self.todo.clone(),
+            active_conditions: self.active_conditions.clone(),
+            g: self.g.clone(),
+            path: self.path.clone(),
+            heuristic_cache: Mutex::new(HashMap::new()), // Cloning erases the cache
+        }
     }
 
     /// Clones the current state, including the caches
     pub fn full_clone(&self) -> Self {
-        Self { assignments: self.assignments.clone(),
-                temporal_network: self.temporal_network.clone(),
-                todo: self.todo.clone(),
-                active_conditions: self.active_conditions.clone(),
-                g: self.g.clone(),
-                path: self.path.clone(),
-                heuristic_cache: Mutex::new(self.heuristic_cache.lock().unwrap().clone())
-             }
+        Self {
+            assignments: self.assignments.clone(),
+            temporal_network: self.temporal_network.clone(),
+            todo: self.todo.clone(),
+            active_conditions: self.active_conditions.clone(),
+            g: self.g.clone(),
+            path: self.path.clone(),
+            heuristic_cache: Mutex::new(self.heuristic_cache.lock().unwrap().clone()),
+        }
     }
 }
 
