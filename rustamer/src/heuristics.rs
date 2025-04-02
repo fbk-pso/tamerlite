@@ -211,7 +211,7 @@ impl HRL {
         if let Some(h) = self.h_sym.as_ref() {
             h.eval(state, ss)
         } else {
-            Ok(None)
+            Ok(Some(-1.0))
         }
     }
 
