@@ -29,9 +29,9 @@ use super::search_space::*;
 use super::search_state::*;
 
 #[derive(Debug)]
-struct StateContainer {
-    state: State,
-    expanded: bool,
+pub struct StateContainer {
+    pub state: State,
+    pub expanded: bool,
 }
 
 impl StateContainer {
@@ -106,8 +106,8 @@ pub fn multiqueue_search(
         opens.push(open);
     }
 
-    let mut open_set = HashSet::new();
-    let mut closed_set = HashSet::new();
+    let mut open_set: HashSet<State> = HashSet::new();
+    let mut closed_set: HashSet<State> = HashSet::new();
     let mut counter = 0;
     let mut states_expanded = 0;
     loop {
@@ -145,27 +145,25 @@ pub fn multiqueue_search(
                 return build_plan(ss, &state).map(|plan| (plan, metrics));
             }
 
+            let mut successors: Vec<Rc<RefCell<StateContainer>>> = Vec::new();
             for rs in ss.get_successor_states_iter(&state) {
                 let s = rs?;
-                if open_set.contains(&s) || closed_set.contains(&s) {
-                    continue;
-                }
-                if !ss.is_temporal {
-                    open_set.insert(s.full_clone());
-                }
-                let s_g = s.g;
-                let sc = Rc::new(RefCell::new(StateContainer {
+                let sc = StateContainer {
                     state: s,
                     expanded: false,
-                }));
-                for (i, (heuristic, weight)) in heuristics.iter().enumerate() {
-                    let h = heuristic.eval(&sc.borrow().state, ss)?;
+                };
+                successors.push(Rc::new(RefCell::new(sc)));
+            }
+            for (i, (heuristic, weight)) in heuristics.iter().enumerate() {
+                for (j, sh) in heuristic.eval_gen_container(&successors, ss)?.enumerate() {
+                    let (si, h) = sh?;
                     match h {
                         Some(v) => {
-                            let f = *weight * v + (1.0 - *weight) * s_g;
+                            let f = *weight * v + (1.0 - *weight) * successors[si].borrow().state.g;
+                            let sc = successors[j].clone();
                             opens[i].push(PrioritizedItem {
                                 heuristic: f,
-                                state_container: sc.clone(),
+                                state_container: sc,
                             });
                         }
                         None => continue,

@@ -16,7 +16,6 @@
 #
 
 import torch
-import numpy as np
 from tamerlite.core.heuristics import Heuristic
 
 class RLHeuristicBase(Heuristic):

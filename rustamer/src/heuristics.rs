@@ -17,14 +17,17 @@
 
 use itertools::Itertools;
 use multiset::HashMultiSet;
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::{collections::HashMap, vec::Vec};
 
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
+use crate::multiqueue::StateContainer;
 use crate::state_encoder::CoreStateEncoder;
 use crate::{internal_evaluate, SearchSpace};
 
@@ -235,6 +238,204 @@ impl Heuristic {
     }
 }
 
+enum StateMode {
+    Cached(Option<f64>),
+    Error(PyErr),
+    ToEval(usize),
+    Unknown,
+}
+
+impl Heuristic {
+    pub fn eval_gen<'a, I>(
+        &'a self,
+        states_iter: I,
+        ss: &'a SearchSpace,
+    ) -> PyResult<Box<dyn Iterator<Item = PyResult<(State, Option<f64>)>> + 'a>>
+    where
+        I: Iterator<Item = PyResult<State>> + 'a,
+    {
+        if self.hrl.is_some() {
+            let states = states_iter.collect_vec();
+            let mut states_mapping: Vec<StateMode> = Vec::new();
+            for _i in 0..states.len() {
+                states_mapping.push(StateMode::Unknown);
+            }
+            let mut vectors_to_eval: Vec<Vec<f32>> = Vec::new();
+            let mut sym_heuristics_to_eval: Vec<Option<f64>> = Vec::new();
+            for (i, state) in states.iter().enumerate() {
+                match state {
+                    Ok(state) => {
+                        if self.cache_value_in_state {
+                            let heuristic_cache = state.heuristic_cache.lock().unwrap();
+                            if let Some(h_value) = heuristic_cache.get(&self.name()) {
+                                states_mapping[i] = StateMode::Cached(*h_value);
+                                continue;
+                            }
+                        }
+
+                        match ss.goal_reached(state, None) {
+                            Ok(true) => {
+                                states_mapping[i] = StateMode::Cached(Some(0.0));
+                            }
+                            Ok(false) => {
+                                let rv = self.hrl.as_ref().unwrap().get_vector(state, ss);
+                                match rv {
+                                    Ok(v) => {
+                                        let h_value =
+                                            self.hrl.as_ref().unwrap().eval_hsym(state, ss);
+                                        match h_value {
+                                            Ok(x) => {
+                                                states_mapping[i] =
+                                                    StateMode::ToEval(vectors_to_eval.len());
+                                                vectors_to_eval.push(v);
+                                                sym_heuristics_to_eval.push(x);
+                                            }
+                                            Err(e) => {
+                                                states_mapping[i] = StateMode::Error(e);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        states_mapping[i] = StateMode::Error(e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                states_mapping[i] = StateMode::Error(e);
+                            }
+                        }
+                    }
+                    Err(_e) => {
+                        // pass
+                    }
+                }
+            }
+            let ress = self
+                .hrl
+                .as_ref()
+                .unwrap()
+                .eval_vector(vectors_to_eval, sym_heuristics_to_eval);
+            match ress {
+                Ok(vc) => Ok(Box::new(
+                    states
+                        .into_iter()
+                        .zip_eq(states_mapping.into_iter())
+                        .map(move |(rs, case)| match rs {
+                            Ok(state) => match case {
+                                StateMode::Cached(x) => Ok((state, x)),
+                                StateMode::Error(x) => Err(x),
+                                StateMode::ToEval(idx) => Ok((state, Some(vc[idx]))),
+                                StateMode::Unknown => {
+                                    panic!("This should never happen");
+                                }
+                            },
+                            Err(e) => Err(e),
+                        }),
+                )),
+                Err(e) => Err(e),
+            }
+        } else {
+            return Ok(Box::new(states_iter.map(|state| match state {
+                Ok(state) => {
+                    let h_value = self.eval(&state, ss);
+                    match h_value {
+                        Ok(x) => Ok((state, x)),
+                        Err(e) => Err(e),
+                    }
+                }
+                Err(e) => Err(e),
+            })));
+        }
+    }
+
+    pub fn eval_gen_container<'a>(
+        &'a self,
+        states: &'a Vec<Rc<RefCell<StateContainer>>>,
+        ss: &'a SearchSpace,
+    ) -> PyResult<Box<dyn Iterator<Item = PyResult<(usize, Option<f64>)>> + 'a>> {
+        if self.hrl.is_some() {
+            let mut states_mapping: Vec<StateMode> = Vec::new();
+            for _i in 0..states.len() {
+                states_mapping.push(StateMode::Unknown);
+            }
+            let mut vectors_to_eval: Vec<Vec<f32>> = Vec::new();
+            let mut sym_heuristics_to_eval: Vec<Option<f64>> = Vec::new();
+            for (i, cstate) in states.iter().enumerate() {
+                let state = &(cstate.borrow().state);
+                if self.cache_value_in_state {
+                    let heuristic_cache = state.heuristic_cache.lock().unwrap();
+                    if let Some(h_value) = heuristic_cache.get(&self.name()) {
+                        states_mapping[i] = StateMode::Cached(*h_value);
+                        continue;
+                    }
+                }
+
+                match ss.goal_reached(state, None) {
+                    Ok(true) => {
+                        states_mapping[i] = StateMode::Cached(Some(0.0));
+                    }
+                    Ok(false) => {
+                        let rv = self.hrl.as_ref().unwrap().get_vector(state, ss);
+                        match rv {
+                            Ok(v) => {
+                                let h_value =
+                                    self.hrl.as_ref().unwrap().eval_hsym(state, ss);
+                                match h_value {
+                                    Ok(x) => {
+                                        states_mapping[i] =
+                                            StateMode::ToEval(vectors_to_eval.len());
+                                        vectors_to_eval.push(v);
+                                        sym_heuristics_to_eval.push(x);
+                                    }
+                                    Err(e) => {
+                                        states_mapping[i] = StateMode::Error(e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                states_mapping[i] = StateMode::Error(e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        states_mapping[i] = StateMode::Error(e);
+                    }
+                }
+            }
+            let ress = self
+                .hrl
+                .as_ref()
+                .unwrap()
+                .eval_vector(vectors_to_eval, sym_heuristics_to_eval);
+            match ress {
+                Ok(vc) => {
+                    let mut final_res = Vec::new();
+                    for (i, case) in states_mapping.into_iter().enumerate() {
+                        match case {
+                            StateMode::Cached(x) => final_res.push(Ok((i, x))),
+                            StateMode::Error(x) => final_res.push(Err(x)),
+                            StateMode::ToEval(idx) => final_res.push(Ok((i, Some(vc[idx])))),
+                            StateMode::Unknown => {
+                                panic!("This should never happen");
+                            }
+                        }
+                    }
+                    Ok(Box::new(final_res.into_iter()))
+                },
+                Err(e) => Err(e),
+            }
+        } else {
+            return Ok(Box::new(states.iter().enumerate().map(|(i, state)| {
+                let h_value = self.eval(&state.borrow().state, ss);
+                match h_value {
+                    Ok(x) => Ok((i, x)),
+                    Err(e) => Err(e),
+                }
+            })));
+        }
+    }
+}
+
 pub struct HRL {
     ss: CoreStateEncoder,
     goals_vec: Vec<f32>,
@@ -275,24 +476,54 @@ impl HRL {
         if ss.goal_reached(&state, None)? {
             return Ok(Some(0.0));
         }
+        let enc = self.get_vector(state, ss)?;
+        let h_val = self.eval_hsym(state, ss)?;
+        if h_val.is_none() {
+            return Ok(None);
+        }
+        let vec_res = self.eval_vector(vec![enc], vec![h_val]);
+        match vec_res {
+            Ok(v) => {
+                if v.len() == 1 {
+                    return Ok(Some(v[0]));
+                } else {
+                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                        "Expected 1 value, got {}",
+                        v.len()
+                    )));
+                }
+            }
+            Err(e) => {
+                return Err(e);
+            }
+        }
+    }
+
+    fn get_vector(&self, state: &State, ss: &SearchSpace) -> Result<Vec<f32>, PyErr> {
         let mut enc: Vec<f32> = Vec::new();
         enc.extend(self.ss.get_fluents_as_vector(state)?);
         enc.extend(self.ss.get_running_actions_as_vector(state)?);
         enc.extend(self.constants_vec.iter());
         enc.extend(self.goals_vec.iter());
         enc.extend(self.ss.get_tn_as_vector(state, ss)?);
-        let h_val = self.eval_hsym(state, ss)?;
-        if h_val.is_none() {
-            return Ok(None);
-        }
+        Ok(enc)
+    }
+
+    pub fn eval_vector(
+        &self,
+        vectors_to_eval: Vec<Vec<f32>>,
+        sym_heuristics_to_eval: Vec<Option<f64>>,
+    ) -> PyResult<Vec<f64>> {
         Python::with_gil(|py| {
-            let args = PyTuple::new(py, &[enc.into_pyobject(py)?, h_val.into_pyobject(py)?])?;
+            let args = PyTuple::new(
+                py,
+                &[
+                    vectors_to_eval.into_pyobject(py)?,
+                    sym_heuristics_to_eval.into_pyobject(py)?,
+                ],
+            )?;
             let r = self.callable.call(py, args, None)?;
-            if r.is_none(py) {
-                Ok(None)
-            } else {
-                Ok(Some(r.extract(py)?))
-            }
+            Ok(r.extract(py)?)
         })
     }
 
