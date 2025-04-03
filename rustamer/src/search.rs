@@ -16,6 +16,7 @@
 //
 
 use std::collections::VecDeque;
+use std::sync::Mutex;
 use std::time::SystemTime;
 use std::{collections::BinaryHeap, collections::HashMap, collections::HashSet, vec::Vec};
 
@@ -141,7 +142,7 @@ pub fn wastar_search(
         }
     };
     let mut open = BinaryHeap::new();
-    let mut open_set = HashSet::new();
+    let open_set = Mutex::new(HashSet::new());
     let mut closed_set = HashSet::new();
     open.push(PrioritizedItem {
         heuristic: init_h,
@@ -157,7 +158,7 @@ pub fn wastar_search(
         let state = current.state;
         if !ss.is_temporal {
             closed_set.insert(state.full_clone());
-            open_set.remove(&state);
+            open_set.lock().unwrap().remove(&state);
         }
         // println!("{:?} {:?}", state.path.iter().map(|(ev, _)| &ev.action).collect::<Vec<&String>>(), current.heuristic);
         counter += 1;
@@ -166,17 +167,23 @@ pub fn wastar_search(
             metrics.insert("goal_depth".to_string(), state.g.to_string());
             return build_plan(ss, &state).map(|plan| (plan, metrics));
         } else {
-            for rs in ss.get_successor_states_iter(&state) {
-                let s = rs?;
-                if open_set.contains(&s) || closed_set.contains(&s) {
-                    continue;
-                }
-                let h = heuristic.eval(&s, ss)?;
+            let successors_iter =
+                ss.get_successor_states_iter(&state)
+                    .filter(|sx: &Result<State, PyErr>| match sx {
+                        Ok(s) => {
+                            ss.is_temporal
+                                || (!closed_set.contains(s)
+                                    && !open_set.lock().unwrap().contains(s))
+                        }
+                        Err(_) => return true,
+                    });
+            for rs in heuristic.eval_gen(successors_iter, ss)? {
+                let (s, h) = rs?;
                 match h {
                     Some(v) => {
                         let f = weight * v + (1.0 - weight) * s.g;
                         if !ss.is_temporal {
-                            open_set.insert(s.full_clone());
+                            open_set.lock().unwrap().insert(s.full_clone());
                         }
                         open.push(PrioritizedItem {
                             heuristic: f,
@@ -294,9 +301,8 @@ pub fn ehc_search(
             metrics.insert("goal_depth".to_string(), state.g.to_string());
             return build_plan(ss, &state).map(|plan| (plan, metrics));
         } else {
-            for rs in ss.get_successor_states_iter(&state) {
-                let s = rs?;
-                let h = heuristic.eval(&s, ss)?;
+            for rs in heuristic.eval_gen(ss.get_successor_states_iter(&state), ss)? {
+                let (s, h) = rs?;
                 match h {
                     Some(v) => {
                         if v < best_h {

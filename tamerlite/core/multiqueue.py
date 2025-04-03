@@ -81,13 +81,13 @@ def multiqueue_search(ss: SearchSpace, heuristics: List[Tuple[Heuristic, float]]
 
         # Here, we create a temporary list of the successor states to reuse it among multiple heuristics
         candidate_states = [s for s in ss.get_successor_states(state) if s not in closed_set and s not in open_set]
+        candidate_containers = [StateContainer(s, False) for s in candidate_states]
         for i, (heuristic, weight) in enumerate(heuristics):
-            for succ_state, h in heuristic.eval_gen(candidate_states, ss):
+            for j, (succ_state, h) in enumerate(heuristic.eval_gen(candidate_states, ss)):
                 if i == 0 and not ss.is_temporal:
                     open_set.add(succ_state)
-                sc = StateContainer(succ_state, False)
                 if h is not None:
                     f = (1-weight)*succ_state.g + weight*h
-                    item = PrioritizedItem(f, sc)
+                    item = PrioritizedItem(f, candidate_containers[j])
                     heapq.heappush(opens[i], item)
     return None, {"expanded_states": str(states_expanded)}
