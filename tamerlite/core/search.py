@@ -101,12 +101,12 @@ def wastar_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heu
             h = heuristic.eval(succ_state, ss) if weight > 0 else 0
             if h is not None:
                 f = (1-weight)*succ_state.g + weight*h
-                lista = [ev.action for (ev, _) in succ_state.path]
-                evento = lista[-1]
+                # lista = [ev.action for (ev, _) in succ_state.path]
+                # evento = lista[-1]
                 # to_print.append((evento, h, succ_state.g, f)) 
                 heapq.heappush(open, PrioritizedItem(f, succ_state))
                 if not ss.is_temporal:
-                    open_set.add(succ_state)   
+                    open_set.add(succ_state)
         # to_print = sorted(to_print, key=lambda x: x[1])   
         # for t in to_print:
         #      print(t) 

@@ -580,7 +580,7 @@ class SearchSpaceMacroAction:
                             for i, ns in enumerate(new_states[1:]):
                                 assert ns is not None
                                 if not self._cache_equal_path or search_trie.insert(path + tuple(a for a in ma[:i+2])):
-                                    ns.selection = ma
+                                    ns.selection = ma[:i+2]
                                     ns.father = state
                                     #ns.g = g_value + 1
                                     yield ns
@@ -596,7 +596,7 @@ class SearchSpaceMacroAction:
                                 new_state = new_states[-2]
                                 len_ma = len(new_states[:-1])
                             if not self._cache_equal_path or search_trie.insert(path + tuple(a for a in ma[:len_ma])):
-                                new_state.selection = ma
+                                new_state.selection = ma[:len_ma]
                                 new_state.father = state
                                 #new_state.g = g_value + 1
                                 yield new_state
@@ -610,7 +610,7 @@ class SearchSpaceMacroAction:
                             for i, ns in enumerate(new_states[1:]):
                                 assert ns is not None
                                 if not self._cache_equal_path or search_trie.insert(path + tuple(a for a in ma[:i+2])):
-                                    ns.selection = ma
+                                    ns.selection = ma[:i+2]
                                     ns.father = state
                                     #ns.g = g_value + 1
                                     yield ns
