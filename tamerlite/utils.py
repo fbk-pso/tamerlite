@@ -66,7 +66,7 @@ def read_macros_from_csv(file_path):
 
     return macros_list
 
-def read_macros_from_json(file_path, problem, macros_usage, max_macros: Optional[str] = None, grounder_helper : Optional[GrounderHelper] = None):
+def read_macros_from_json(file_path, problem, macros_usage, plan_length: Optional[str] = None, max_macros: Optional[str] = None, grounder_helper : Optional[GrounderHelper] = None):
     macros_list = []
 
     with open(file_path, 'r') as file:
@@ -76,7 +76,7 @@ def read_macros_from_json(file_path, problem, macros_usage, max_macros: Optional
 
     if 'best' not in file_path:
         start_time = time.time()
-        best_lifted_macros = select_best_lifted_macros(best_lifted_macros, problem, macros_usage, max_macros, grounder_helper)
+        best_lifted_macros = select_best_lifted_macros(best_lifted_macros, problem, macros_usage, plan_length, max_macros, grounder_helper)
         print(f"Time_for_selection: {(time.time() - start_time)}")
     
     # best_lifted_macros = best_lifted_macros[:-1]
@@ -91,11 +91,11 @@ def read_macros_from_json(file_path, problem, macros_usage, max_macros: Optional
     return macros_list
 
 
-def read_macros(macros_path, macros_usage, problem, max_macros: Optional[str] = None, grounder_helper : Optional[GrounderHelper] = None):
+def read_macros(macros_path, macros_usage, problem, plan_length: Optional[str] = None, max_macros: Optional[str] = None, grounder_helper : Optional[GrounderHelper] = None):
     if '.csv' in macros_path:
         macros = read_macros_from_csv(macros_path)
     elif '.json' in macros_path:
-        macros = read_macros_from_json(macros_path, problem, macros_usage, max_macros, grounder_helper)
+        macros = read_macros_from_json(macros_path, problem, macros_usage, plan_length=plan_length, max_macros=max_macros, grounder_helper=grounder_helper)
     else:
         raise ValueError("Unknown file format for the macros file.")
     return macros

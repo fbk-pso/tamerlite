@@ -79,6 +79,7 @@ class SearchParams:
     rl_params: Optional[RLParams] = None
     macros: Optional[Union[str, List[str]]] = None
     macros_usage: Optional[str] = None
+    plan_length: Optional[str] = None
     max_macros: Optional[str] = None
 
     def contains_rl(self) -> bool:
@@ -108,6 +109,10 @@ class MultiqueueParams:
         return self.queues[0].macros_usage
     
     @property
+    def plan_length(self):
+        return self.queues[0].plan_length
+    
+    @property
     def max_macros(self):
         return self.queues[0].max_macros
 
@@ -132,12 +137,12 @@ class TamerLite(
     ):
 
     def __init__(self, search: Optional[Union[SearchParams, MultiqueueParams]] = None, heuristic: Optional[str] = None, weight: Optional[str] = None, 
-                 macros: Optional[str] = None, macros_usage: Optional[str] = None, max_macros: Optional[str] = None):
+                 macros: Optional[str] = None, macros_usage: Optional[str] = None, max_macros: Optional[str] = None, plan_length: Optional[str] = None):
         unified_planning.engines.Engine.__init__(self)
         up.engines.mixins.OneshotPlannerMixin.__init__(self)
-        self._params = search      
-        if self._params is None and (heuristic is not None or weight is not None or macros is not None or macros_usage is not None or max_macros is not None):
-            self._params = SearchParams(search=None, heuristic=heuristic, weight=weight, macros=macros, macros_usage=macros_usage, max_macros=max_macros)  
+        self._params = search
+        if self._params is None and (heuristic is not None or weight is not None or macros is not None or macros_usage is not None or plan_length is not None and max_macros is not None):
+            self._params = SearchParams(search=None, heuristic=heuristic, weight=weight, macros=macros, macros_usage=macros_usage, plan_length=plan_length, max_macros=max_macros)  
 
     @property
     def name(self) -> str:
@@ -253,7 +258,7 @@ class TamerLite(
         try:
             if self._params is not None and self._params.contains_rl():
                 if self._params.contains_macros():
-                    extracted_macros = read_macros(self._params.macros, self._params.macros_usage, problem, self._params.max_macros)
+                    extracted_macros = read_macros(self._params.macros, self._params.macros_usage, problem, self._params.plan_length, self._params.max_macros)
                     self._params = SearchParams(
                         search=self._params.search,
                         heuristic=self._params.heuristic,
@@ -261,6 +266,7 @@ class TamerLite(
                         rl_params=self._params.rl_params,
                         macros=extracted_macros,
                         macros_usage=self._params.macros_usage,
+                        plan_length=self._params.plan_length,
                         max_macros=self._params.max_macros
                     )
                     encoder, state_encoder, map_back_action_instance = get_encoders(self._params.domain(), problem, self._params.macros, self._params.macros_usage)
@@ -279,7 +285,7 @@ class TamerLite(
                         problem, compiler._grounding_actions_map, compiler._prune_actions
                     )   
                     #extracted_macros = read_macros(self._params.macros, self._params.macros_usage, problem, self._params.max_macros)
-                    extracted_macros = read_macros(self._params.macros, self._params.macros_usage, problem, self._params.max_macros, grounder_helper)
+                    extracted_macros = read_macros(self._params.macros, self._params.macros_usage, problem, self._params.plan_length, self._params.max_macros, grounder_helper)
                     self._params = SearchParams(
                         search=self._params.search,
                         heuristic=self._params.heuristic,
@@ -287,6 +293,7 @@ class TamerLite(
                         rl_params=self._params.rl_params,
                         macros=extracted_macros,
                         macros_usage=self._params.macros_usage,
+                        plan_length=self._params.plan_length,
                         max_macros=self._params.max_macros
                     )
 
