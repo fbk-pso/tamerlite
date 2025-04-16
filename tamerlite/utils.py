@@ -85,7 +85,8 @@ def read_macros_from_json(file_path, problem, macros_usage, plan_length: Optiona
 
     for lifted in best_lifted_macros:
         for ground in generate_ground_macros(lifted, problem, macros_usage, grounder=grounder_helper):
-            assert len(ground) == len(lifted)
+            if 'PA' not in macros_usage:
+                 assert len(ground) == len(lifted)
             macros_list.append(ast.literal_eval(str(ground)))
 
     return macros_list
