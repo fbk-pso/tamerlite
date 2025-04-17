@@ -259,6 +259,7 @@ class TamerLite(
             if self._params is not None and self._params.contains_rl():
                 if self._params.contains_macros():
                     extracted_macros = read_macros(self._params.macros, self._params.macros_usage, problem, self._params.plan_length, self._params.max_macros)
+                    extracted_macros = list(set(extracted_macros))
                     extracted_macros.sort()
                     self._params = SearchParams(
                         search=self._params.search,
@@ -287,6 +288,7 @@ class TamerLite(
                     )   
                     #extracted_macros = read_macros(self._params.macros, self._params.macros_usage, problem, self._params.max_macros)
                     extracted_macros = read_macros(self._params.macros, self._params.macros_usage, problem, self._params.plan_length, self._params.max_macros, grounder_helper)
+                    extracted_macros = list(set(extracted_macros))
                     extracted_macros.sort()
                     self._params = SearchParams(
                         search=self._params.search,
