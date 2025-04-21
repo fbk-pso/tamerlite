@@ -32,7 +32,6 @@ class RLRank(Heuristic):
         self._residual = config.residual
         self._sym_h = sym_h
         self._reward_signal = config.reward_signal
-        self._gamma = config.gamma
 
     @property
     def name(self):
@@ -52,13 +51,10 @@ class RLRank(Heuristic):
 
     def eval_state_vec(self, state_vec, sym_h):
         s = np.array([state_vec])
-        r = self._model(torch.from_numpy(s).float()).detach()[0]
+        r = self._model(torch.from_numpy(s).float(), [sym_h]).detach()[0]
         r = float(r[0])
-        if self._residual:
-            if self._reward_signal=="cnt":
-                r -= sym_h + 3*self._deltah_cnt
-            else:
-                r += self._gamma**(sym_h-1)
+        if self._residual and self._reward_signal=="cnt":
+            r -= 3*self._deltah_cnt
         return -r+3.0
 
 
@@ -93,13 +89,8 @@ class RLHeuristic(Heuristic):
 
     def eval_state_vec(self, state_vec, sym_h):
         s = np.array([state_vec])
-        r = self._model(torch.from_numpy(s).float()).detach()[0]
+        r = self._model(torch.from_numpy(s).float(), [sym_h]).detach()[0]
         r = float(r[0])
-        if self._residual:
-            if self._reward_signal=="cnt":
-                r -= sym_h
-            else:
-                r += self._gamma**(sym_h-1)
         if self._reward_signal=="bin":
             if r == 0:
                 return float(self._deltah_bin)
