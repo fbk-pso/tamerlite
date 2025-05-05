@@ -59,13 +59,66 @@ problem = ...
 
 # Solve with TamerLite
 with OneshotPlanner(name="tamerlite") as planner:
-    result = planner.solve(problem)
-    print(result.plan)
+   result = planner.solve(problem)
+   print(result.plan)
 ```
 
 ## Parameters
 
-TODO
+TamerLite supports configurable search strategies via structured parameter classes.
+The main options are `SearchParams` for defining a single search configuration, and `MultiqueueParams` for combining multiple strategies.
+
+### `SearchParams`
+
+Defines parameters for a single search strategy.
+
+| Field                      | Type              | Description                                                                 |
+|----------------------------|-------------------|-----------------------------------------------------------------------------|
+| `search`                   | `Optional[str]`   | The search algorithm to use. Supported values: `"astar"`, `"wastar"`, `"gbfs"`, `"bfs"`, `"dfs"`, `"ehs"`. |
+| `heuristic`                | `Optional[str]`   | The heuristic function to use. Supported values: `"hff"`, `"hadd"`, `"hmax"`, `"hmax_numeric"`, `"blind"`, `"custom"`. |
+| `weight`                   | `Optional[str]`   | A numeric value between 0 and 1 (as string), used by weighted search variants like `wastar`. |
+| `internal_heuristic_cache` | `Optional[bool]`  | Enables internal caching within the heuristic if set to `True`.             |
+| `rl_params`                | `Optional[Any]`   | Reserved for RL-related heuristics.                      |
+| `cache_heuristic_in_state` | `Optional[bool]`  | If `True`, stores heuristic values in the state to avoid recomputation in certain RL-related heuristics.     |
+
+---
+
+### `MultiqueueParams`
+
+Defines a multi-queue search strategy composed of multiple `SearchParams`.
+
+| Field     | Type                    | Description                                           |
+|-----------|-------------------------|-------------------------------------------------------|
+| `queues`  | `List[SearchParams]`    | A list of independent search configurations. The `search` field is ignored in this case. |
+
+---
+
+### Example
+
+```python
+params = SearchParams(
+   search="wastar",
+   heuristic="hadd",
+   weight="0.8"
+)
+
+with OneshotPlanner(name="tamerlite", params={"search": params}) as planner:
+   result = planner.solve(problem)
+   print(result.plan)
+```
+
+Or using multiple queues:
+
+```python
+multi_params = MultiqueueParams(queues=[
+   SearchParams(heuristic="hadd", weight="0.8"),
+   SearchParams(heuristic="hmax_numeric", weight="0.5")
+])
+
+with OneshotPlanner(name="tamerlite", params={"search": multi_params}) as planner:
+   result = planner.solve(problem)
+   print(result.plan)
+```
 
 ## References
 
