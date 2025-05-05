@@ -10,7 +10,7 @@ setup(name='tamerlite',
       url='tamer.fbk.eu',
       packages=find_packages(),
       install_requires=['rustamer~=0.1.0'],
-      python_requires='>=3.7',
+      python_requires='>=3.10',
       license='Free For Educational Use',
       classifiers=[
           'License :: Free For Educational Use'
