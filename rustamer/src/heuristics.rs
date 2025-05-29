@@ -238,6 +238,8 @@ impl Heuristic {
     }
 }
 
+// Auxiliary enum used to transform iterators of states into vectors amenable for
+// vectorized evaluation
 enum StateMode {
     Cached(Option<f64>),
     Error(PyErr),
@@ -245,6 +247,7 @@ enum StateMode {
     Unknown,
 }
 
+// Function to create a vector of StateMode of length l pre-initialized with Unknown
 fn mk_unknown_state_mode_vec(l: usize) -> Vec<StateMode> {
     let mut states_mapping: Vec<StateMode> = Vec::new();
     for _i in 0..l {
@@ -254,6 +257,10 @@ fn mk_unknown_state_mode_vec(l: usize) -> Vec<StateMode> {
 }
 
 impl Heuristic {
+
+    /// Evaluates the heuristic for a given state, returning an iterator over the results.
+    /// This method is used in non-multiqueue search algorithms
+    /// If the heuristic is an HRL, it collects states to evaluate in batches.
     pub fn eval_gen<'a, I>(
         &'a self,
         states_iter: I,
@@ -276,13 +283,15 @@ impl Heuristic {
                         &mut sym_heuristics_to_eval,
                     );
                 }
+                // No need to consider the Err case, it is handled in the final
+                // iterator which re-consider the `states` vector
             }
-            let ress = self
+            let computed_heuristics = self
                 .hrl
                 .as_ref()
                 .unwrap()
                 .eval_vector(vectors_to_eval, sym_heuristics_to_eval);
-            match ress {
+            match computed_heuristics {
                 Ok(vc) => Ok(Box::new(
                     states
                         .into_iter()
@@ -315,6 +324,9 @@ impl Heuristic {
         }
     }
 
+    /// Evaluates the heuristic for a given state, returning an iterator over the results.
+    /// This method is used in multiqueue search algorithms
+    /// If the heuristic is an HRL, it collects states to evaluate in batches.
     pub fn eval_gen_container<'a>(
         &'a self,
         states: &'a Vec<Rc<RefCell<StateContainer>>>,
@@ -333,12 +345,12 @@ impl Heuristic {
                     &mut sym_heuristics_to_eval,
                 );
             }
-            let ress = self
+            let computed_heuristics = self
                 .hrl
                 .as_ref()
                 .unwrap()
                 .eval_vector(vectors_to_eval, sym_heuristics_to_eval);
-            match ress {
+            match computed_heuristics {
                 Ok(vc) => {
                     let mut final_res = Vec::new();
                     for (i, case) in states_mapping.into_iter().enumerate() {
@@ -366,6 +378,9 @@ impl Heuristic {
         }
     }
 
+    /// Creates a StateMode for the given state, possibly extending the
+    /// vectors_to_eval and sym_heuristics_to_eval in case an evaluation of the
+    /// state is needed
     fn mk_state_mode(
         &self,
         ss: &SearchSpace,
@@ -463,21 +478,14 @@ impl HRL {
                 return Ok(None);
             }
         };
-        let vec_res = self.eval_vector(vec![enc], vec![h_val]);
-        match vec_res {
-            Ok(v) => {
-                if v.len() == 1 {
-                    return Ok(Some(v[0]));
-                } else {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                        "Expected 1 value, got {}",
-                        v.len()
-                    )));
-                }
-            }
-            Err(e) => {
-                return Err(e);
-            }
+        let vec_res = self.eval_vector(vec![enc], vec![h_val])?;
+        if vec_res.len() == 1 {
+            return Ok(Some(vec_res[0]));
+        } else {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Expected 1 value, got {}",
+                vec_res.len()
+            )));
         }
     }
 
