@@ -245,6 +245,15 @@ enum StateMode {
     Unknown,
 }
 
+fn mk_unknown_state_mode_vec(l: usize) -> Vec<StateMode> {
+    let mut states_mapping: Vec<StateMode> = Vec::new();
+    for _i in 0..l {
+        states_mapping.push(StateMode::Unknown);
+    }
+    states_mapping
+}
+
+
 impl Heuristic {
     pub fn eval_gen<'a, I>(
         &'a self,
@@ -256,58 +265,17 @@ impl Heuristic {
     {
         if self.hrl.is_some() {
             let states = states_iter.collect_vec();
-            let mut states_mapping: Vec<StateMode> = Vec::new();
-            for _i in 0..states.len() {
-                states_mapping.push(StateMode::Unknown);
-            }
+            let mut states_mapping = mk_unknown_state_mode_vec(states.len());
             let mut vectors_to_eval: Vec<Vec<f32>> = Vec::new();
             let mut sym_heuristics_to_eval: Vec<Option<f64>> = Vec::new();
-            for (i, state) in states.iter().enumerate() {
-                match state {
-                    Ok(state) => {
-                        if self.cache_value_in_state {
-                            let heuristic_cache = state.heuristic_cache.lock().unwrap();
-                            if let Some(h_value) = heuristic_cache.get(&self.name()) {
-                                states_mapping[i] = StateMode::Cached(*h_value);
-                                continue;
-                            }
-                        }
-
-                        match ss.goal_reached(state, None) {
-                            Ok(true) => {
-                                states_mapping[i] = StateMode::Cached(Some(0.0));
-                            }
-                            Ok(false) => {
-                                let rv = self.hrl.as_ref().unwrap().get_vector(state, ss);
-                                match rv {
-                                    Ok(v) => {
-                                        let h_value =
-                                            self.hrl.as_ref().unwrap().eval_hsym(state, ss);
-                                        match h_value {
-                                            Ok(x) => {
-                                                states_mapping[i] =
-                                                    StateMode::ToEval(vectors_to_eval.len());
-                                                vectors_to_eval.push(v);
-                                                sym_heuristics_to_eval.push(x);
-                                            }
-                                            Err(e) => {
-                                                states_mapping[i] = StateMode::Error(e);
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        states_mapping[i] = StateMode::Error(e);
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                states_mapping[i] = StateMode::Error(e);
-                            }
-                        }
-                    }
-                    Err(_e) => {
-                        // pass
-                    }
+            for (i, rstate) in states.iter().enumerate() {
+                if let Ok(state) = rstate {
+                    states_mapping[i] = self.mk_state_mode(
+                        ss,
+                        state,
+                        &mut vectors_to_eval,
+                        &mut sym_heuristics_to_eval,
+                    );
                 }
             }
             let ress = self
@@ -354,53 +322,17 @@ impl Heuristic {
         ss: &'a SearchSpace,
     ) -> PyResult<Box<dyn Iterator<Item = PyResult<(usize, Option<f64>)>> + 'a>> {
         if self.hrl.is_some() {
-            let mut states_mapping: Vec<StateMode> = Vec::new();
-            for _i in 0..states.len() {
-                states_mapping.push(StateMode::Unknown);
-            }
+            let mut states_mapping = mk_unknown_state_mode_vec(states.len());
             let mut vectors_to_eval: Vec<Vec<f32>> = Vec::new();
             let mut sym_heuristics_to_eval: Vec<Option<f64>> = Vec::new();
             for (i, cstate) in states.iter().enumerate() {
                 let state = &(cstate.borrow().state);
-                if self.cache_value_in_state {
-                    let heuristic_cache = state.heuristic_cache.lock().unwrap();
-                    if let Some(h_value) = heuristic_cache.get(&self.name()) {
-                        states_mapping[i] = StateMode::Cached(*h_value);
-                        continue;
-                    }
-                }
-
-                match ss.goal_reached(state, None) {
-                    Ok(true) => {
-                        states_mapping[i] = StateMode::Cached(Some(0.0));
-                    }
-                    Ok(false) => {
-                        let rv = self.hrl.as_ref().unwrap().get_vector(state, ss);
-                        match rv {
-                            Ok(v) => {
-                                let h_value =
-                                    self.hrl.as_ref().unwrap().eval_hsym(state, ss);
-                                match h_value {
-                                    Ok(x) => {
-                                        states_mapping[i] =
-                                            StateMode::ToEval(vectors_to_eval.len());
-                                        vectors_to_eval.push(v);
-                                        sym_heuristics_to_eval.push(x);
-                                    }
-                                    Err(e) => {
-                                        states_mapping[i] = StateMode::Error(e);
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                states_mapping[i] = StateMode::Error(e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        states_mapping[i] = StateMode::Error(e);
-                    }
-                }
+                states_mapping[i] = self.mk_state_mode(
+                    ss,
+                    state,
+                    &mut vectors_to_eval,
+                    &mut sym_heuristics_to_eval,
+                );
             }
             let ress = self
                 .hrl
@@ -421,7 +353,7 @@ impl Heuristic {
                         }
                     }
                     Ok(Box::new(final_res.into_iter()))
-                },
+                }
                 Err(e) => Err(e),
             }
         } else {
@@ -434,6 +366,53 @@ impl Heuristic {
             })));
         }
     }
+
+    fn mk_state_mode(
+        &self,
+        ss: &SearchSpace,
+        state: &State,
+        vectors_to_eval: &mut Vec<Vec<f32>>,
+        sym_heuristics_to_eval: &mut Vec<Option<f64>>,
+    ) -> StateMode {
+        if self.cache_value_in_state {
+            let heuristic_cache = state.heuristic_cache.lock().unwrap();
+            if let Some(h_value) = heuristic_cache.get(&self.name()) {
+                return StateMode::Cached(*h_value);
+            }
+        }
+
+        match ss.goal_reached(state, None) {
+            Ok(true) => {
+                return StateMode::Cached(Some(0.0));
+            }
+            Ok(false) => {
+                let rv = self.hrl.as_ref().unwrap().get_vector(state, ss);
+                match rv {
+                    Ok(v) => {
+                        let h_value = self.hrl.as_ref().unwrap().eval_hsym(state, ss);
+                        match h_value {
+                            Ok(x) => {
+                                vectors_to_eval.push(v);
+                                sym_heuristics_to_eval.push(x);
+                                return StateMode::ToEval(vectors_to_eval.len() - 1);
+                            }
+                            Err(e) => {
+                                return StateMode::Error(e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        return StateMode::Error(e);
+                    }
+                }
+            }
+            Err(e) => {
+                return StateMode::Error(e);
+            }
+        }
+    }
+
+
 }
 
 pub struct HRL {
