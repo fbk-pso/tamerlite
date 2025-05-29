@@ -253,7 +253,6 @@ fn mk_unknown_state_mode_vec(l: usize) -> Vec<StateMode> {
     states_mapping
 }
 
-
 impl Heuristic {
     pub fn eval_gen<'a, I>(
         &'a self,
@@ -267,7 +266,7 @@ impl Heuristic {
             let states = states_iter.collect_vec();
             let mut states_mapping = mk_unknown_state_mode_vec(states.len());
             let mut vectors_to_eval: Vec<Vec<f32>> = Vec::new();
-            let mut sym_heuristics_to_eval: Vec<Option<f64>> = Vec::new();
+            let mut sym_heuristics_to_eval: Vec<f64> = Vec::new();
             for (i, rstate) in states.iter().enumerate() {
                 if let Ok(state) = rstate {
                     states_mapping[i] = self.mk_state_mode(
@@ -324,7 +323,7 @@ impl Heuristic {
         if self.hrl.is_some() {
             let mut states_mapping = mk_unknown_state_mode_vec(states.len());
             let mut vectors_to_eval: Vec<Vec<f32>> = Vec::new();
-            let mut sym_heuristics_to_eval: Vec<Option<f64>> = Vec::new();
+            let mut sym_heuristics_to_eval: Vec<f64> = Vec::new();
             for (i, cstate) in states.iter().enumerate() {
                 let state = &(cstate.borrow().state);
                 states_mapping[i] = self.mk_state_mode(
@@ -372,7 +371,7 @@ impl Heuristic {
         ss: &SearchSpace,
         state: &State,
         vectors_to_eval: &mut Vec<Vec<f32>>,
-        sym_heuristics_to_eval: &mut Vec<Option<f64>>,
+        sym_heuristics_to_eval: &mut Vec<f64>,
     ) -> StateMode {
         if self.cache_value_in_state {
             let heuristic_cache = state.heuristic_cache.lock().unwrap();
@@ -386,19 +385,23 @@ impl Heuristic {
                 return StateMode::Cached(Some(0.0));
             }
             Ok(false) => {
-                let rv = self.hrl.as_ref().unwrap().get_vector(state, ss);
-                match rv {
-                    Ok(v) => {
-                        let h_value = self.hrl.as_ref().unwrap().eval_hsym(state, ss);
-                        match h_value {
-                            Ok(x) => {
-                                vectors_to_eval.push(v);
-                                sym_heuristics_to_eval.push(x);
-                                return StateMode::ToEval(vectors_to_eval.len() - 1);
+                let h_value = self.hrl.as_ref().unwrap().eval_hsym(state, ss);
+                match h_value {
+                    Ok(x) => {
+                        if let Some(hval) = x {
+                            let rv = self.hrl.as_ref().unwrap().get_vector(state, ss);
+                            match rv {
+                                Ok(v) => {
+                                    vectors_to_eval.push(v);
+                                    sym_heuristics_to_eval.push(hval);
+                                    return StateMode::ToEval(vectors_to_eval.len() - 1);
+                                }
+                                Err(e) => {
+                                    return StateMode::Error(e);
+                                }
                             }
-                            Err(e) => {
-                                return StateMode::Error(e);
-                            }
+                        } else {
+                            return StateMode::Cached(None);
                         }
                     }
                     Err(e) => {
@@ -411,8 +414,6 @@ impl Heuristic {
             }
         }
     }
-
-
 }
 
 pub struct HRL {
@@ -456,10 +457,12 @@ impl HRL {
             return Ok(Some(0.0));
         }
         let enc = self.get_vector(state, ss)?;
-        let h_val = self.eval_hsym(state, ss)?;
-        if h_val.is_none() {
-            return Ok(None);
-        }
+        let h_val = match self.eval_hsym(state, ss)? {
+            Some(v) => v,
+            None => {
+                return Ok(None);
+            }
+        };
         let vec_res = self.eval_vector(vec![enc], vec![h_val]);
         match vec_res {
             Ok(v) => {
@@ -491,7 +494,7 @@ impl HRL {
     pub fn eval_vector(
         &self,
         vectors_to_eval: Vec<Vec<f32>>,
-        sym_heuristics_to_eval: Vec<Option<f64>>,
+        sym_heuristics_to_eval: Vec<f64>,
     ) -> PyResult<Vec<f64>> {
         Python::with_gil(|py| {
             let args = PyTuple::new(
