@@ -144,6 +144,9 @@ pub fn wastar_search(
     let mut open = BinaryHeap::new();
     let open_set = Mutex::new(HashSet::new());
     let mut closed_set = HashSet::new();
+    if !ss.is_temporal {
+        open_set.lock().unwrap().insert(init.full_clone());
+    }
     open.push(PrioritizedItem {
         heuristic: init_h,
         state: init,
@@ -157,8 +160,10 @@ pub fn wastar_search(
         }
         let state = current.state;
         if !ss.is_temporal {
-            closed_set.insert(state.full_clone());
-            open_set.lock().unwrap().remove(&state);
+            let opened = open_set.lock().unwrap().take(&state);
+            if let Some(s) = opened {
+                closed_set.insert(s);
+            }
         }
         // println!("{:?} {:?}", state.path.iter().map(|(ev, _)| &ev.action).collect::<Vec<&String>>(), current.heuristic);
         counter += 1;
