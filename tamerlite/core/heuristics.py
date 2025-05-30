@@ -17,7 +17,7 @@
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, List, Dict, Tuple, Union, Optional, Set, Iterator
+from typing import Callable, Iterable, List, Dict, Tuple, Union, Optional, Set, Iterator
 from fractions import Fraction
 from collections import defaultdict
 import itertools
@@ -51,6 +51,13 @@ class Heuristic:
         else:
             h = self._eval(state, ss)
         return h
+
+    def eval_gen(self, states: Iterable[State], ss: SearchSpace) -> Iterable[Tuple[State, Optional[float]]]:
+        '''
+        This function is used to evaluate multiple states at once.
+        '''
+        for state in states:
+            yield state, self.eval(state, ss)
 
     def _eval(self, state: State, ss: SearchSpace) -> Optional[float]:
         raise NotImplementedError

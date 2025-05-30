@@ -58,13 +58,10 @@ def multiqueue_search(ss: SearchSpace, heuristics: List[Tuple[Heuristic, float]]
     while True:
         if timeout is not None and time.time() - st > timeout:
             raise TimeoutError
-        if sum([len(o) for o in opens]) == 0:
+        if any(len(o) == 0 for o in opens):
             break
         i = counter % len(opens)
         open = opens[i]
-        if len(open) == 0:
-            counter += 1
-            continue
         item = heapq.heappop(open)
         sc = item.state_container
         if sc.expanded:
@@ -78,16 +75,20 @@ def multiqueue_search(ss: SearchSpace, heuristics: List[Tuple[Heuristic, float]]
         states_expanded += 1
         if ss.goal_reached(state):
             return state.extract_solution(), {"expanded_states": str(states_expanded), "goal_depth": str(state.g)}
-        for succ_state in ss.get_successor_states(state):
-            if succ_state in closed_set or succ_state in open_set:
-                continue
+
+        # Here, we create a temporary list of the successor states to reuse it among multiple heuristics
+        candidate_states = []
+        for s in ss.get_successor_states(state):
             if not ss.is_temporal:
-                open_set.add(succ_state)
-            sc = StateContainer(succ_state, False)
-            for i, (heuristic, weight) in enumerate(heuristics):
-                h = heuristic.eval(succ_state, ss) if weight > 0 else 0
+                if s in closed_set or s in open_set:
+                    continue
+                open_set.add(s)
+            candidate_states.append(s)
+        candidate_containers = [StateContainer(s, False) for s in candidate_states]
+        for i, (heuristic, weight) in enumerate(heuristics):
+            for j, (succ_state, h) in enumerate(heuristic.eval_gen(candidate_states, ss)):
                 if h is not None:
                     f = (1-weight)*succ_state.g + weight*h
-                    item = PrioritizedItem(f, sc)
+                    item = PrioritizedItem(f, candidate_containers[j])
                     heapq.heappush(opens[i], item)
     return None, {"expanded_states": str(states_expanded)}
