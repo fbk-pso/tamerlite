@@ -89,10 +89,9 @@ def wastar_search(ss: SearchSpace, heuristic: Heuristic, weight: float = 0.5, ti
         counter += 1
         if ss.goal_reached(state):
             return state.extract_solution(), {"expanded_states": str(counter), "goal_depth": str(state.g)}
-        for succ_state in ss.get_successor_states(state):
-            if succ_state in closed_set or succ_state in open_set:
-                continue
-            h = heuristic.eval(succ_state, ss) if weight > 0 else 0
+
+        candidate_states = (s for s in ss.get_successor_states(state) if s not in closed_set and s not in open_set)
+        for succ_state, h in heuristic.eval_gen(candidate_states, ss):
             if h is not None:
                 f = (1-weight)*succ_state.g + weight*h
                 heapq.heappush(open, PrioritizedItem(f, succ_state))
@@ -116,8 +115,7 @@ def ehc_search(ss: SearchSpace, heuristic: Heuristic, timeout=None):
         counter += 1
         if ss.goal_reached(state):
             return state.extract_solution(), {"expanded_states": str(counter), "goal_depth": str(state.g)}
-        for succ_state in ss.get_successor_states(state):
-            h = heuristic.eval(succ_state, ss)
+        for succ_state, h in heuristic.eval_gen(ss.get_successor_states(state), ss):
             if h is not None:
                 if h < best_h:
                     best_h = h

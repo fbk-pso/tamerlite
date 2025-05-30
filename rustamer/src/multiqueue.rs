@@ -29,9 +29,9 @@ use super::search_space::*;
 use super::search_state::*;
 
 #[derive(Debug)]
-struct StateContainer {
-    state: State,
-    expanded: bool,
+pub struct StateContainer {
+    pub state: State,
+    pub expanded: bool,
 }
 
 impl StateContainer {
@@ -91,6 +91,13 @@ pub fn multiqueue_search(
     let mut metrics = HashMap::new();
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
+
+    let mut open_set: HashSet<State> = HashSet::new();
+    let mut closed_set: HashSet<State> = HashSet::new();
+    if !ss.is_temporal {
+        open_set.insert(init.full_clone());
+    }
+
     let item = PrioritizedItem {
         heuristic: 0.0,
         state_container: Rc::new(RefCell::new(StateContainer {
@@ -106,8 +113,6 @@ pub fn multiqueue_search(
         opens.push(open);
     }
 
-    let mut open_set = HashSet::new();
-    let mut closed_set = HashSet::new();
     let mut counter = 0;
     let mut states_expanded = 0;
     loop {
@@ -122,10 +127,6 @@ pub fn multiqueue_search(
         }
         let i = counter % opens.len();
         let open = &mut opens[i];
-        if open.len() == 0 {
-            counter += 1;
-            continue;
-        }
         if let Some(current) = open.pop() {
             let sc = &mut (*(current.state_container)).borrow_mut();
             if sc.expanded {
@@ -134,8 +135,10 @@ pub fn multiqueue_search(
             sc.set_expanded(true);
             let state = &sc.state;
             if !ss.is_temporal {
-                closed_set.insert(state.full_clone());
-                open_set.remove(state);
+                let opened = open_set.take(state);
+                if let Some(s) = opened {
+                    closed_set.insert(s);
+                }
             }
             states_expanded += 1;
             counter += 1;
@@ -145,27 +148,31 @@ pub fn multiqueue_search(
                 return build_plan(ss, &state).map(|plan| (plan, metrics));
             }
 
+            let mut candidate_containers: Vec<Rc<RefCell<StateContainer>>> = Vec::new();
             for rs in ss.get_successor_states_iter(&state) {
                 let s = rs?;
-                if open_set.contains(&s) || closed_set.contains(&s) {
-                    continue;
-                }
-                if !ss.is_temporal {
-                    open_set.insert(s.full_clone());
-                }
-                let s_g = s.g;
-                let sc = Rc::new(RefCell::new(StateContainer {
+                let sc = StateContainer {
                     state: s,
                     expanded: false,
-                }));
-                for (i, (heuristic, weight)) in heuristics.iter().enumerate() {
-                    let h = heuristic.eval(&sc.borrow().state, ss)?;
+                };
+                if !ss.is_temporal {
+                    if closed_set.contains(&sc.state) || open_set.contains(&sc.state) {
+                        continue;
+                    }
+                    open_set.insert(sc.state.full_clone());
+                }
+                candidate_containers.push(Rc::new(RefCell::new(sc)));
+            }
+            for (i, (heuristic, weight)) in heuristics.iter().enumerate() {
+                for (j, sh) in heuristic.eval_gen_container(&candidate_containers, ss)?.enumerate() {
+                    let (si, h) = sh?;
                     match h {
                         Some(v) => {
-                            let f = *weight * v + (1.0 - *weight) * s_g;
+                            let f = *weight * v + (1.0 - *weight) * candidate_containers[si].borrow().state.g;
+                            let sc = candidate_containers[j].clone();
                             opens[i].push(PrioritizedItem {
                                 heuristic: f,
-                                state_container: sc.clone(),
+                                state_container: sc,
                             });
                         }
                         None => continue,
