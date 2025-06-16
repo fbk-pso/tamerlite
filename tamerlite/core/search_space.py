@@ -147,7 +147,7 @@ class State:
     todo: Dict[str, Tuple[int, int]]
     active_conditions: MultiSet
     g: int
-    path: List[Tuple[Event, int]]
+    path: List[Tuple[str, int, int]]
     heuristic_cache: Dict[str, float] = field(default_factory=dict)
 
     def __hash__(self) -> int:
@@ -176,7 +176,7 @@ class State:
             start_time = {}
             end_time = {}
             for e, t in self.temporal_network.distances.items():
-                if len(e) == 3:
+                if len(e) == 3 and isinstance(e[1], bool):
                     if e[1]:
                         start_time[(e[0], e[2])] = -t
                     else:
@@ -191,8 +191,12 @@ class State:
         else:
             l = []
             for e in self.path:
-                l.append((None, e[0].action, None))
+                l.append((None, e[0], None))
             return l
+
+
+def get_fluent_value(fluent: str, state: State) -> Union[bool, int, Fraction, str]:
+    return state.assignments[fluent]
 
 
 def evaluate(exp: Expression, state: State) -> Union[bool, int, Fraction, str]:
@@ -425,7 +429,7 @@ class SearchSpace:
         return res
 
     def _expand_event(self, state, new_state, e, index, id):
-        new_state.path.append((e, id))
+        new_state.path.append((e.action, e.pos, id))
         # check conditions
         if not evaluate(e.conditions, state):
             return None
@@ -452,20 +456,21 @@ class SearchSpace:
             # update TN
             e_id = (e.action, index)
             if len(state.path) > 0:
-                for e2, id2 in state.path:
-                    e2_id = (e2.action, e2.pos)
+                for e2_action, e2_pos, id2 in state.path:
+                    e2_id = (e2_action, e2_pos)
                     if (e_id, e2_id) in self._mutex:
-                        new_state.temporal_network.add((e2, id2), (e, id), -self._epsilon)
+                        new_state.temporal_network.add((e2_action, e2_pos, id2), (e.action, e.pos, id), -self._epsilon)
                     else:
-                        new_state.temporal_network.add((e2, id2), (e, id), 0)
+                        new_state.temporal_network.add((e2_action, e2_pos, id2), (e.action, e.pos, id), 0)
             for a, i in new_state.todo.items():
                 id2 = i[1]
-                for j, (_, e2) in enumerate(self._events[a][i[0]:]):
+                for j in range(len(self._events[a][i[0]:])):
                     e2_id = (a, i[0]+j)
+                    e2 = (a, i[0]+j, id2)
                     if (e_id, e2_id) in self._mutex:
-                        new_state.temporal_network.add((e, id), (e2, id2), -self._epsilon)
+                        new_state.temporal_network.add((e.action, e.pos, id), e2, -self._epsilon)
                     else:
-                        new_state.temporal_network.add((e, id), (e2, id2), 0)
+                        new_state.temporal_network.add((e.action, e.pos, id), e2, 0)
                     id2 += 1
             # check TN
             if not new_state.temporal_network.check_stn():
@@ -490,7 +495,7 @@ class SearchSpace:
             new_state.temporal_network.insert_interval(start, end, left_bound=l, right_bound=u)
             id = self._counter
             for t, e in events:
-                ev = (e, self._counter)
+                ev = (e.action, e.pos, self._counter)
                 if t.is_from_start():
                     new_state.temporal_network.insert_interval(start, ev, left_bound=t.delay, right_bound=t.delay)
                 else:
