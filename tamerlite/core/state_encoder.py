@@ -78,10 +78,11 @@ class CoreStateEncoder:
         for e, t in state.temporal_network.distances.items():
             if -t > last:
                 continue
-            if len(e) == 2:
-                v = m.get(e[0], None)
+            if not isinstance(e[1], bool):
+                ev = (e[0], e[1])
+                v = m.get(ev, None)
                 if v is None or -t > v:
-                    m[e[0]] = -t
+                    m[ev] = -t
             else:
                 oe = (e[0], not e[1], e[2])
                 if state.temporal_network.distances[oe] == t:
@@ -114,7 +115,7 @@ class CoreStateEncoder:
             le = self._events[a]
             p = self._tn_actions_pos[a]
             for i, (_, e) in enumerate(le):
-                v = m.get(e, None)
+                v = m.get((e.action, e.pos), None)
                 if v is None or v-t_safe <= 0:
                     continue
                 tn[p+i] = float(v-t_safe+1)

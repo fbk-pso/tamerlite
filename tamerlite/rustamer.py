@@ -16,6 +16,7 @@
 #
 
 from fractions import Fraction
+from typing import List, Union
 from rustamer import wastar_search, astar_search, gbfs_search
 from rustamer import ehc_search, bfs_search, dfs_search
 from rustamer import multiqueue_search
@@ -64,6 +65,20 @@ def get_fluents(exp):
         if f is not None:
             yield f
 
+def get_fluent_value(fluent: str, state) -> Union[bool, int, Fraction, str]:
+    exp = state.get_py_value(fluent)
+    if exp.bool_constant is not None:
+        return exp.bool_constant
+    elif exp.object is not None:
+        return exp.object
+    elif exp.int_constant is not None:
+        return exp.int_constant
+    elif exp.real_constant is not None:
+        n, d = exp.real_constant
+        return Fraction(n, d)
+    else:
+        raise NotImplementedError("Unreachable code")
+
 def evaluate(exp, state):
     r = rustevaluate(exp, state)
     if r.bool_constant is not None:
@@ -78,5 +93,4 @@ def evaluate(exp, state):
     else:
         raise NotImplementedError("Unreachable code")
 
-from typing import List
 Expression = List[ExpressionNode]

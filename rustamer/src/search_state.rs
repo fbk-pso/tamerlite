@@ -16,7 +16,7 @@
 //
 
 use multiset::HashMultiSet;
-use pyo3::prelude::*;
+use pyo3::{exceptions::PyException, prelude::*};
 use std::hash::{Hash, Hasher};
 use std::{
     collections::HashMap,
@@ -55,6 +55,11 @@ impl State {
     #[getter]
     fn path(&self) -> Vec<(String, usize, u32)> {
         PersistentList::to_vec_copy(&self.path)
+    }
+
+    fn get_py_value(&self, fluent: &str) -> PyResult<PyExpressionNode> {
+        let value = self.assignments.get(fluent).ok_or_else(|| PyException::new_err("Fluent not found!"))?;
+        Ok(PyExpressionNode {v: value.clone()})
     }
 }
 
