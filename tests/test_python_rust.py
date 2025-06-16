@@ -314,7 +314,7 @@ def test_search_space(problems):
             state2 = states["rust"][i]
 
             assert len(state1.path) == len(state2.path)
-            actions1 = list(map(lambda e: e[0].action, state1.path))
+            actions1 = list(map(lambda e: e[0], state1.path))
             actions2 = list(map(lambda e: e[0], state2.path))
             assert actions1 == actions2
 
