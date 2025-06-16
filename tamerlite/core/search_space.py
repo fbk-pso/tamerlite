@@ -529,7 +529,7 @@ class SearchSpaceMacroAction:
         return self._ss.initial_state(initial_state)
 
     def get_successor_state(self, state: State, action: str) -> Optional[State]:
-        if action in list(self._ss._events.keys()):
+        if action in self._ss._events:
             return self._ss.get_successor_state(state, action)
         else:
             return None
