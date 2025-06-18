@@ -36,6 +36,7 @@ jobs:
           git clone https://github.com/aiplan4eu/unified-planning.git
           python3 -m pip install -r unified-planning/requirements.txt
           python3 -m pip install unified-planning/
+          python3 -m pip install matplotlib
           echo -e "[engine tamerlite]\nmodule_name: tamerlite.engine\nclass_name: TamerLite" > .up.ini
       - name: Install pytest
         run: |
