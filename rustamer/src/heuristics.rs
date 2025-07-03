@@ -257,7 +257,6 @@ fn mk_unknown_state_mode_vec(l: usize) -> Vec<StateMode> {
 }
 
 impl Heuristic {
-
     /// Evaluates the heuristic for a given state, returning an iterator over the results.
     /// This method is used in non-multiqueue search algorithms
     /// If the heuristic is an HRL, it collects states to evaluate in batches.
@@ -504,17 +503,21 @@ impl HRL {
         vectors_to_eval: Vec<Vec<f32>>,
         sym_heuristics_to_eval: Vec<f64>,
     ) -> PyResult<Vec<f64>> {
-        Python::with_gil(|py| {
-            let args = PyTuple::new(
-                py,
-                &[
-                    vectors_to_eval.into_pyobject(py)?,
-                    sym_heuristics_to_eval.into_pyobject(py)?,
-                ],
-            )?;
-            let r = self.callable.call(py, args, None)?;
-            Ok(r.extract(py)?)
-        })
+        if vectors_to_eval.is_empty() {
+            Ok(vec![])
+        } else {
+            Python::with_gil(|py| {
+                let args = PyTuple::new(
+                    py,
+                    &[
+                        vectors_to_eval.into_pyobject(py)?,
+                        sym_heuristics_to_eval.into_pyobject(py)?,
+                    ],
+                )?;
+                let r = self.callable.call(py, args, None)?;
+                Ok(r.extract(py)?)
+            })
+        }
     }
 
     pub fn name(&self) -> String {
