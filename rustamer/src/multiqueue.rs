@@ -128,48 +128,53 @@ pub fn multiqueue_search(
         let i = counter % opens.len();
         let open = &mut opens[i];
         if let Some(current) = open.pop() {
-            let sc = &mut (*(current.state_container)).borrow_mut();
-            if sc.expanded {
-                continue;
-            }
-            sc.set_expanded(true);
-            let state = &sc.state;
-            if !ss.is_temporal {
-                let opened = open_set.take(state);
-                if let Some(s) = opened {
-                    closed_set.insert(s);
-                }
-            }
-            states_expanded += 1;
-            counter += 1;
-            if ss.goal_reached(&state, None)? {
-                metrics.insert("expanded_states".to_string(), states_expanded.to_string());
-                metrics.insert("goal_depth".to_string(), state.g.to_string());
-                return build_plan(ss, &state).map(|plan| (plan, metrics));
-            }
-
             let mut candidate_containers: Vec<Rc<RefCell<StateContainer>>> = Vec::new();
-            for rs in ss.get_successor_states_iter(&state) {
-                let s = rs?;
-                let sc = StateContainer {
-                    state: s,
-                    expanded: false,
-                };
-                if !ss.is_temporal {
-                    if closed_set.contains(&sc.state) || open_set.contains(&sc.state) {
-                        continue;
-                    }
-                    open_set.insert(sc.state.full_clone());
+            {
+                let sc = &mut (*(current.state_container)).borrow_mut();
+                if sc.expanded {
+                    continue;
                 }
-                candidate_containers.push(Rc::new(RefCell::new(sc)));
+                sc.set_expanded(true);
+                let state = &sc.state;
+                if !ss.is_temporal {
+                    let opened = open_set.take(state);
+                    if let Some(s) = opened {
+                        closed_set.insert(s);
+                    }
+                }
+                states_expanded += 1;
+                counter += 1;
+                if ss.goal_reached(&state, None)? {
+                    metrics.insert("expanded_states".to_string(), states_expanded.to_string());
+                    metrics.insert("goal_depth".to_string(), state.g.to_string());
+                    return build_plan(ss, &state).map(|plan| (plan, metrics));
+                }
+
+                for rs in ss.get_successor_states_iter(&state) {
+                    let s = rs?;
+                    let sc = StateContainer {
+                        state: s,
+                        expanded: false,
+                    };
+                    if !ss.is_temporal {
+                        if closed_set.contains(&sc.state) || open_set.contains(&sc.state) {
+                            continue;
+                        }
+                        open_set.insert(sc.state.full_clone());
+                    }
+                    candidate_containers.push(Rc::new(RefCell::new(sc)));
+                }
             }
             for (i, (heuristic, weight)) in heuristics.iter().enumerate() {
-                for (j, sh) in heuristic.eval_gen_container(&candidate_containers, ss)?.enumerate() {
+                for sh in heuristic
+                    .eval_gen_container(&candidate_containers, ss)?
+                {
                     let (si, h) = sh?;
                     match h {
                         Some(v) => {
-                            let f = *weight * v + (1.0 - *weight) * candidate_containers[si].borrow().state.g;
-                            let sc = candidate_containers[j].clone();
+                            let f = *weight * v
+                                + (1.0 - *weight) * candidate_containers[si].borrow().state.g;
+                            let sc = candidate_containers[si].clone();
                             opens[i].push(PrioritizedItem {
                                 heuristic: f,
                                 state_container: sc,
