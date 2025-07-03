@@ -97,6 +97,8 @@ class RLRank(RLHeuristicBase):
         return "rlrank"
 
     def eval_state_vecs(self, states_vectors, sym_hs):
+        if len(states_vectors) == 0:
+            return []
         return self._model.get_rank(torch.tensor(states_vectors, dtype=torch.float32), sym_hs)
 
 
@@ -106,5 +108,7 @@ class RLHeuristic(RLHeuristicBase):
         return "rlh"
 
     def eval_state_vecs(self, states_vectors, sym_hs):
+        if len(states_vectors) == 0:
+            return []
         return self._model.get_heuristic(torch.tensor(states_vectors, dtype=torch.float32), sym_hs)
 
