@@ -15,6 +15,7 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 
+import math
 import torch
 from tamerlite.core.heuristics import Heuristic
 
@@ -36,7 +37,7 @@ class RLHeuristicBase(Heuristic):
         else:
             self._inference_device = torch.device("cpu")
             self._model = ModelClass(state_encoder.state_geometry, config).to(self._inference_device)
-        self._model.load_state_dict(torch.load(model))
+        self._model.load_state_dict(torch.load(model, map_location=self._inference_device))
         self._model.eval()
 
     def _eval(self, state, ss):
