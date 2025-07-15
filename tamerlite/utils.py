@@ -5,6 +5,7 @@ import ast
 from typing import Optional
 from scripts.utils import extract_lifted_macros_from_json, generate_ground_macros, select_best_lifted_macros
 from unified_planning.engines.compilers.grounder import GrounderHelper
+from macro_event.macro_event import MacroEventFactory, extract_macro_from_json
 
 class TrieNode:
     def __init__(self):
@@ -70,9 +71,14 @@ def read_macros_from_json(file_path, problem, macros_usage, plan_length: Optiona
     macros_list = []
 
     with open(file_path, 'r') as file:
-        database_read = json.load(file)
+        database = json.load(file)
 
-    best_lifted_macros = extract_lifted_macros_from_json(database_read, problem)
+    # best_lifted_macros = extract_lifted_macros_from_json(database, problem)
+    factory = MacroEventFactory()
+    for macro in database:
+        actions, variables, objects, equivalence_variables_index, stats, precondition, is_ground = extract_macro_from_json(macro)
+        _ = factory.create_macro_event(actions, variables, objects, equivalence_variables_index, stats, precondition, is_ground)
+    best_lifted_macros = factory.macro_events
 
     if 'best' not in file_path:
         start_time = time.time()
@@ -81,13 +87,15 @@ def read_macros_from_json(file_path, problem, macros_usage, plan_length: Optiona
     
     # best_lifted_macros = best_lifted_macros[:-1]
     for i, ma in enumerate(best_lifted_macros):
-        print(f"{i})  {ma}")
+        print(f"{i})  {ma}; {ma.precondition}")
 
     for lifted in best_lifted_macros:
-        for ground in generate_ground_macros(lifted, problem, macros_usage, grounder=grounder_helper):
+        # for ground in generate_ground_macros(lifted, problem, macros_usage, grounder=grounder_helper):
+        for ground_macro, ground_precondition in lifted.generate_ground_macros(problem, macros_usage, grounder=grounder_helper):
             if 'PA' not in macros_usage:
-                 assert len(ground) == len(lifted)
-            macros_list.append(ast.literal_eval(str(ground)))
+                assert len(ground_macro) == len(lifted)
+            #macros_list.append(ast.literal_eval(str(ground)))
+            macros_list.append((ground_macro, ground_precondition))
 
     return macros_list
 

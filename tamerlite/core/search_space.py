@@ -508,7 +508,7 @@ class SearchSpaceMacroAction:
 
     CACHE_MISS = -1
 
-    def __init__(self, ss : SearchSpace, macros: Optional[List[str]], macros_usage: Optional[str]):
+    def __init__(self, ss : SearchSpace, macros: Optional[Union[str, List[Tuple[Tuple[str,...], Optional[Expression]]]]], macros_usage: Optional[str]):
         self._ss = ss
         self._macros = macros
         self._macros_usage = macros_usage
@@ -549,74 +549,75 @@ class SearchSpaceMacroAction:
                 yield new_state
         if self._macros:
             g_value = state.g
-            for ma in self._macros:
-                new_states = []
-                s = state
-                macro_so_far = []
-                for i, a in enumerate(ma):
-                    macro_so_far.append(a)
-                    key = tuple(macro_so_far)
-                    new_state = macro_cache.get(key, self.CACHE_MISS)
-                    if new_state == self.CACHE_MISS:
-                        new_state = self.get_successor_state(s, a)
-                        macro_cache[key] = new_state
-                    s = new_state
-                    new_states.append(new_state)
-                    if not new_state: # applicablity
-                        break
-                if self._fa: #fully applicable
-                    if self._minus: #without
-                        if new_state:
-                            new_state.selection = ma
-                            new_state.father = state
-                            if not self._cache_equal_path or search_trie.insert(path + tuple(ma)):
-                                #new_state.g = g_value + 1
-                                yield new_state
-                            else:
-                                search_trie.counter_skip += 1
-                                # new_state.is_skipped = True
-                    else: #with
-                        if new_state:
-                            for i, ns in enumerate(new_states[1:]):
-                                assert ns is not None
-                                if not self._cache_equal_path or search_trie.insert(path + tuple(a for a in ma[:i+2])):
-                                    ns.selection = ma[:i+2]
-                                    ns.father = state
-                                    #ns.g = g_value + 1
-                                    yield ns
-                                else:
-                                    search_trie.counter_skip += 1
-                                    # ns.is_skipped = True
-                else: #partial applicable
-                    if self._minus: #without
-                        if len(new_states) > 1:
-                            len_ma = len(ma)
-                            if not new_state:
-                                assert new_states[-2] is not None
-                                new_state = new_states[-2]
-                                len_ma = len(new_states[:-1])
-                            if not self._cache_equal_path or search_trie.insert(path + tuple(a for a in ma[:len_ma])):
-                                new_state.selection = ma[:len_ma]
+            for ma, precondition in self._macros:
+                if precondition is None or evaluate(precondition, state): # check macro precondition 
+                    new_states = []
+                    s = state
+                    macro_so_far = []
+                    for i, a in enumerate(ma):
+                        macro_so_far.append(a)
+                        key = tuple(macro_so_far)
+                        new_state = macro_cache.get(key, self.CACHE_MISS)
+                        if new_state == self.CACHE_MISS:
+                            new_state = self.get_successor_state(s, a)
+                            macro_cache[key] = new_state
+                        s = new_state
+                        new_states.append(new_state)
+                        if not new_state: # applicablity
+                            break
+                    if self._fa: #fully applicable
+                        if self._minus: #without
+                            if new_state:
+                                new_state.selection = ma
                                 new_state.father = state
-                                #new_state.g = g_value + 1
-                                yield new_state
-                            else:
-                                search_trie.counter_skip += 1
-                                # new_state.is_skipped = True
-                    else:
-                        if len(new_states) > 1: #with
-                            if not new_state: 
-                                new_states = new_states[:-1]
-                            for i, ns in enumerate(new_states[1:]):
-                                assert ns is not None
-                                if not self._cache_equal_path or search_trie.insert(path + tuple(a for a in ma[:i+2])):
-                                    ns.selection = ma[:i+2]
-                                    ns.father = state
-                                    #ns.g = g_value + 1
-                                    yield ns
+                                if not self._cache_equal_path or search_trie.insert(path + tuple(ma)):
+                                    #new_state.g = g_value + 1
+                                    yield new_state
                                 else:
                                     search_trie.counter_skip += 1
-                                    # ns.is_skipped = True
+                                    # new_state.is_skipped = True
+                        else: #with
+                            if new_state:
+                                for i, ns in enumerate(new_states[1:]):
+                                    assert ns is not None
+                                    if not self._cache_equal_path or search_trie.insert(path + tuple(a for a in ma[:i+2])):
+                                        ns.selection = ma[:i+2]
+                                        ns.father = state
+                                        #ns.g = g_value + 1
+                                        yield ns
+                                    else:
+                                        search_trie.counter_skip += 1
+                                        # ns.is_skipped = True
+                    else: #partial applicable
+                        if self._minus: #without
+                            if len(new_states) > 1:
+                                len_ma = len(ma)
+                                if not new_state:
+                                    assert new_states[-2] is not None
+                                    new_state = new_states[-2]
+                                    len_ma = len(new_states[:-1])
+                                if not self._cache_equal_path or search_trie.insert(path + tuple(a for a in ma[:len_ma])):
+                                    new_state.selection = ma[:len_ma]
+                                    new_state.father = state
+                                    #new_state.g = g_value + 1
+                                    yield new_state
+                                else:
+                                    search_trie.counter_skip += 1
+                                    # new_state.is_skipped = True
+                        else:
+                            if len(new_states) > 1: #with
+                                if not new_state: 
+                                    new_states = new_states[:-1]
+                                for i, ns in enumerate(new_states[1:]):
+                                    assert ns is not None
+                                    if not self._cache_equal_path or search_trie.insert(path + tuple(a for a in ma[:i+2])):
+                                        ns.selection = ma[:i+2]
+                                        ns.father = state
+                                        #ns.g = g_value + 1
+                                        yield ns
+                                    else:
+                                        search_trie.counter_skip += 1
+                                        # ns.is_skipped = True
 
     def goal_reached(self, state: State, goal: Optional[Fraction] = None) -> bool:
         return self._ss.goal_reached(state, goal)

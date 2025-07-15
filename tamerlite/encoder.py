@@ -1,5 +1,4 @@
 import unified_planning as up
-import unified_planning.model
 from unified_planning.model.fluent import get_all_fluent_exp
 from unified_planning.plans import TimeTriggeredPlan, SequentialPlan, Plan
 from unified_planning.engines.compilers import Grounder
@@ -93,7 +92,7 @@ class Encoder:
     in the search space.
     """
 
-    def __init__(self, problem: "up.model.Problem", full: bool = True, macros: Optional[List[str]] = None, macros_usage: Optional[str] = None):
+    def __init__(self, problem: "up.model.Problem", full: bool = True, macros: Optional[Union[str, List[Tuple[Tuple[str,...], Optional[Expression]]]]] = None, macros_usage: Optional[str] = None):
         self._problem = problem
         if full:
             self._simplifier = up.model.walkers.Simplifier(problem.environment, problem)

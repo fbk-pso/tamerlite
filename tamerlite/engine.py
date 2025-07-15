@@ -7,10 +7,10 @@ import unified_planning.engines.mixins
 from unified_planning.model import ProblemKind, FNode
 from unified_planning.model.state import State
 from unified_planning.engines.compilers.grounder import GrounderHelper
-from typing import IO, Any, Callable, List, Optional, Union
+from typing import IO, Any, Callable, List, Optional, Union, Tuple
 from argparse import Namespace
 
-from tamerlite.core import wastar_search, astar_search, gbfs_search
+from tamerlite.core import Expression, wastar_search, astar_search, gbfs_search
 from tamerlite.core import bfs_search, dfs_search, ehc_search
 from tamerlite.core import multiqueue_search
 from tamerlite.core import evaluate, make_fluent_node
@@ -77,7 +77,7 @@ class SearchParams:
     heuristic: Optional[str] = None
     weight: Optional[str] = None
     rl_params: Optional[RLParams] = None
-    macros: Optional[Union[str, List[str]]] = None
+    macros: Optional[Union[str, List[Tuple[Tuple[str,...], Optional[Expression]]]]] = None
     macros_usage: Optional[str] = None
     plan_length: Optional[str] = None
     max_macros: Optional[str] = None
