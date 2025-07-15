@@ -6,6 +6,7 @@ from typing import Optional
 from scripts.utils import extract_lifted_macros_from_json, generate_ground_macros, select_best_lifted_macros
 from unified_planning.engines.compilers.grounder import GrounderHelper
 from macro_event.macro_event import MacroEventFactory, extract_macro_from_json
+from tamerlite.converter import Converter
 
 class TrieNode:
     def __init__(self):
@@ -91,11 +92,16 @@ def read_macros_from_json(file_path, problem, macros_usage, plan_length: Optiona
 
     for lifted in best_lifted_macros:
         # for ground in generate_ground_macros(lifted, problem, macros_usage, grounder=grounder_helper):
-        for ground_macro, ground_precondition in lifted.generate_ground_macros(problem, macros_usage, grounder=grounder_helper):
+        for ground_macro, ground_precondition in lifted.generate_ground_macros(problem, macros_usage, grounder=grounder_helper): #ground_precondition is a FNode
             if 'PA' not in macros_usage:
                 assert len(ground_macro) == len(lifted)
             #macros_list.append(ast.literal_eval(str(ground)))
-            macros_list.append((ground_macro, ground_precondition))
+            if ground_precondition is not None:
+                converter = Converter()
+                converted_precondition = converter.convert(ground_precondition)
+            else:
+                converted_precondition = None
+            macros_list.append((ground_macro, converted_precondition))
 
     return macros_list
 
