@@ -550,7 +550,7 @@ class SearchSpaceMacroAction:
         if self._macros:
             g_value = state.g
             for ma, precondition in self._macros:
-                if precondition is None or evaluate(precondition, state): # check macro precondition 
+                if evaluate(precondition, state): # check macro precondition, possibly True (case without precondition)
                     new_states = []
                     s = state
                     macro_so_far = []

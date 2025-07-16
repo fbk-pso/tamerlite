@@ -96,11 +96,8 @@ def read_macros_from_json(file_path, problem, macros_usage, plan_length: Optiona
             if 'PA' not in macros_usage:
                 assert len(ground_macro) == len(lifted)
             #macros_list.append(ast.literal_eval(str(ground)))
-            if ground_precondition is not None:
-                converter = Converter()
-                converted_precondition = converter.convert(ground_precondition)
-            else:
-                converted_precondition = None
+            converter = Converter()
+            converted_precondition = converter.convert(ground_precondition)
             macros_list.append((ground_macro, converted_precondition))
 
     return macros_list
