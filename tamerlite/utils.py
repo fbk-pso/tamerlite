@@ -5,8 +5,8 @@ import ast
 from typing import Optional
 from scripts.utils import extract_lifted_macros_from_json, generate_ground_macros, select_best_lifted_macros
 from unified_planning.engines.compilers.grounder import GrounderHelper
-from macro_event.macro_event import MacroEventFactory, extract_macro_from_json
-from tamerlite.converter import Converter
+from macro_event.macro_event import MacroEventFactory
+from macro_event.utils import extract_macro_from_json
 
 class TrieNode:
     def __init__(self):
@@ -96,8 +96,7 @@ def read_macros_from_json(file_path, problem, macros_usage, plan_length: Optiona
             if 'PA' not in macros_usage:
                 assert len(ground_macro) == len(lifted)
             #macros_list.append(ast.literal_eval(str(ground)))
-            converter = Converter()
-            converted_precondition = converter.convert(ground_precondition)
+            converted_precondition = convert_formula_to_expression(ground_precondition)
             macros_list.append((ground_macro, converted_precondition))
 
     return macros_list
@@ -111,3 +110,10 @@ def read_macros(macros_path, macros_usage, problem, plan_length: Optional[str] =
     else:
         raise ValueError("Unknown file format for the macros file.")
     return macros
+
+
+def convert_formula_to_expression(ground_precondition):
+    from tamerlite.converter import Converter
+
+    converter = Converter()
+    return converter.convert(ground_precondition)

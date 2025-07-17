@@ -396,7 +396,7 @@ class SearchSpace:
             new_state = self._open_action(state, new_state, action, events)
         return new_state
 
-    def get_successor_states(self, state: State, search_trie : Optional[PrefixTree]) -> Iterator[State]:
+    def get_successor_states(self, state: State) -> Iterator[State]:
         for action in self._actions:
             new_state = self.get_successor_state(state, action)
             if new_state:
