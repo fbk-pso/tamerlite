@@ -77,8 +77,8 @@ def read_macros_from_json(file_path, problem, macros_usage, plan_length: Optiona
     # best_lifted_macros = extract_lifted_macros_from_json(database, problem)
     factory = MacroEventFactory()
     for macro in database:
-        actions, variables, objects, equivalence_variables_index, stats, precondition, is_ground = extract_macro_from_json(macro)
-        _ = factory.create_macro_event(actions, variables, objects, equivalence_variables_index, stats, precondition, is_ground)
+        actions, variables, stats, precondition = extract_macro_from_json(macro)
+        _ = factory.create_macro_event(actions, variables, stats, precondition)
     best_lifted_macros = factory.macro_events
 
     if 'best' not in file_path:
