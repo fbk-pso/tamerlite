@@ -32,7 +32,9 @@ class Encoder:
     in the search space.
     """
 
-    def __init__(self, problem: "up.model.Problem", full: bool = True, encode_fluents=False):
+    def __init__(
+        self, problem: "up.model.Problem", encode_fluents: bool, full: bool = True
+    ):
         self._problem = problem
         if full:
             self._simplifier = up.model.walkers.Simplifier(problem.environment, problem)
@@ -53,7 +55,7 @@ class Encoder:
             else:
                 raise NotImplementedError
             self._fluent_types[self._convert_fluent(f)] = t
-        self._fluents: List[str] = list(self._fluent_types.keys())
+        self._fluents: List[str] = sorted(self._fluent_types.keys())
         self._fluent_ids = dict((f,i) for i, f in enumerate(self._fluents))
 
         self._converter = Converter(problem, self._fluent_ids)
@@ -90,7 +92,7 @@ class Encoder:
         for f, v in initial_values.items():
             initial_state_values[self._convert_fluent(f)] = self._convert_expression(v)[0]
         if not self._encode_fluents:
-            return initial_values
+            return initial_state_values
 
         initial_state = []
         for f in self._fluents:

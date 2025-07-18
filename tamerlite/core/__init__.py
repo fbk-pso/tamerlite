@@ -38,9 +38,9 @@ if use_rustamer:
 
 if not use_rustamer:
     warnings.warn(
-        "TamerLite is using the Python implementation (Rust implementation disabled or not available)."
+        "Tamerlite is using the Python core implementation instead of the Rust one. "
+        "For better performance, ensure rustamer is installed and not disabled."
     )
-
     from tamerlite.core.search import wastar_search, astar_search, gbfs_search
     from tamerlite.core.search import bfs_search, dfs_search, ehc_search
     from tamerlite.core.multiqueue import multiqueue_search
@@ -101,26 +101,80 @@ else:
     )
     Heuristic = rustamer_lib.Heuristic
 
-    def HFF(fluents, objects, events, goals, internal_caching, cache_value_in_state):
+    def HFF(
+        fluents,
+        fluent_types,
+        objects,
+        events,
+        goals,
+        internal_caching,
+        cache_value_in_state,
+    ):
         return Heuristic.hff(
-            fluents, objects, events, goals, internal_caching, cache_value_in_state
+            fluents,
+            fluent_types,
+            objects,
+            events,
+            goals,
+            internal_caching,
+            cache_value_in_state,
         )
 
-    def HAdd(fluents, objects, events, goals, internal_caching, cache_value_in_state):
+    def HAdd(
+        fluents,
+        fluent_types,
+        objects,
+        events,
+        goals,
+        internal_caching,
+        cache_value_in_state,
+    ):
         return Heuristic.hadd(
-            fluents, objects, events, goals, internal_caching, cache_value_in_state
+            fluents,
+            fluent_types,
+            objects,
+            events,
+            goals,
+            internal_caching,
+            cache_value_in_state,
         )
 
     def HMaxNumeric(
-        fluents, objects, events, goals, internal_caching, cache_value_in_state
+        fluents,
+        fluent_types,
+        objects,
+        events,
+        goals,
+        internal_caching,
+        cache_value_in_state,
     ):
         return Heuristic.hmax_numeric(
-            fluents, objects, events, goals, internal_caching, cache_value_in_state
+            fluents,
+            fluent_types,
+            objects,
+            events,
+            goals,
+            internal_caching,
+            cache_value_in_state,
         )
 
-    def HMax(fluents, objects, events, goals, internal_caching, cache_value_in_state):
+    def HMax(
+        fluents,
+        fluent_types,
+        objects,
+        events,
+        goals,
+        internal_caching,
+        cache_value_in_state,
+    ):
         return Heuristic.hmax(
-            fluents, objects, events, goals, internal_caching, cache_value_in_state
+            fluents,
+            fluent_types,
+            objects,
+            events,
+            goals,
+            internal_caching,
+            cache_value_in_state,
         )
 
     def CustomHeuristic(callable, cache_value_in_state):

@@ -179,7 +179,7 @@ def test_heuristic_values(problems):
             ) as compiler:
                 compilation_res = compiler.compile(problem)
             new_problem = compilation_res.problem
-            encoder = Encoder(new_problem)
+            encoder = Encoder(new_problem, encode_fluents=not disable_rustamer)
             ss: SearchSpace = encoder.search_space
             init_state = ss.initial_state()
 
@@ -195,11 +195,12 @@ def test_heuristic_values(problems):
                 for internal_caching in [True, False]:
                     heuristic: Heuristic = heuristic_class(
                         encoder.fluents,
+                        encoder.fluent_types,
                         encoder.objects,
                         encoder.events,
                         encoder.goal,
                         internal_caching=internal_caching,
-                        cache_value_in_state=False
+                        cache_value_in_state=False,
                     )
 
                     if heuristic_name not in values:
@@ -299,7 +300,7 @@ def test_search_space(problems):
             ) as compiler:
                 compilation_res = compiler.compile(problem)
             new_problem = compilation_res.problem
-            encoder = Encoder(new_problem)
+            encoder = Encoder(new_problem, encode_fluents=not disable_rustamer)
             ss: tamerlite.core.SearchSpace = encoder.search_space
 
             init_state = ss.initial_state()
