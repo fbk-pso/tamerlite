@@ -78,17 +78,17 @@ class CustomHeuristic(Heuristic):
     def name(self):
         return "custom"
 
-def HFF(fluents: Dict[str, str], objects: Dict[str, List[str]],
+def HFF(fluents: List[str], fluent_types: Dict[str, str], objects: Dict[str, List[str]],
          events: Dict[str, List[Tuple[Timing, Event]]], goals: Expression, internal_caching: bool, cache_value_in_state: bool):
-    return DeleteRelaxationHeuristic(fluents, objects, events, goals, HeuristicKind.HFF, internal_caching, cache_value_in_state)
+    return DeleteRelaxationHeuristic(fluent_types, objects, events, goals, HeuristicKind.HFF, internal_caching, cache_value_in_state)
 
-def HAdd(fluents: Dict[str, str], objects: Dict[str, List[str]],
+def HAdd(fluents: List[str], fluent_types: Dict[str, str], objects: Dict[str, List[str]],
          events: Dict[str, List[Tuple[Timing, Event]]], goals: Expression, internal_caching: bool, cache_value_in_state: bool):
-    return DeleteRelaxationHeuristic(fluents, objects, events, goals, HeuristicKind.HADD, internal_caching, cache_value_in_state)
+    return DeleteRelaxationHeuristic(fluent_types, objects, events, goals, HeuristicKind.HADD, internal_caching, cache_value_in_state)
 
-def HMax(fluents: Dict[str, str], objects: Dict[str, List[str]],
+def HMax(fluents: List[str], fluent_types: Dict[str, str], objects: Dict[str, List[str]],
          events: Dict[str, List[Tuple[Timing, Event]]], goals: Expression, internal_caching: bool, cache_value_in_state: bool):
-    return DeleteRelaxationHeuristic(fluents, objects, events, goals, HeuristicKind.HMAX, internal_caching, cache_value_in_state)
+    return DeleteRelaxationHeuristic(fluent_types, objects, events, goals, HeuristicKind.HMAX, internal_caching, cache_value_in_state)
 
 
 class _DeleteRelaxationHeuristicBase(Heuristic):
@@ -354,14 +354,15 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
 class HMaxNumeric(_DeleteRelaxationHeuristicBase):
     def __init__(
         self,
-        fluents: Dict[str, str],
+        fluents: List[str], 
+        fluent_types: Dict[str, str],
         objects: Dict[str, List[str]],
         events: Dict[str, List[Tuple[Timing, Event]]],
         goals: Expression,
         internal_caching: bool,
         cache_value_in_state: bool
     ):
-        super().__init__(fluents, objects, events, goals, internal_caching, cache_value_in_state, ignore_real_int=False)
+        super().__init__(fluent_types, objects, events, goals, internal_caching, cache_value_in_state, ignore_real_int=False)
 
         self._operator_conditions_fluents: List[Set[str]] = []
         for operator in self._operators:
