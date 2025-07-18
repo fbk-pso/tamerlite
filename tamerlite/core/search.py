@@ -81,8 +81,9 @@ def wastar_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heu
             if isinstance(ss, SearchSpaceMacroAction):
                 # print(f"Skipped states due to states with equal path: {counter_skip}")
                 print(f"Skipped states due to states with equal path: {search_trie.counter_skip}")
+                print(f"Precondition impact: {ss._precondition_impact}")
                 # search_trie.print_structure()
-                return state.extract_solution(), {"Expanded states": str(counter)}, state.extract_used_macro()
+                return state.extract_solution(), {"Expanded states": str(counter)}, state.extract_used_macro(), ss._precondition_impact
             else:
                 return state.extract_solution(), {"Expanded states": str(counter)}, [] 
         # to_print = []

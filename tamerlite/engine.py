@@ -336,7 +336,7 @@ class TamerLite(
                 plan, metrics = multiqueue_search(encoder.search_space, heuristics, timeout)
             else:
                 search = self._get_search(self._params, heuristic, encoder, state_encoder)
-                plan, metrics, macro_used = search(encoder.search_space, timeout=timeout)
+                plan, metrics, macro_used, precondition_impact = search(encoder.search_space, timeout=timeout)
                 ma_sel = {}
                 for ma in macro_used:
                     #print(f"{ma}:  {self._params.macros.index(ma)}")

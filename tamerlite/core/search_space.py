@@ -516,6 +516,7 @@ class SearchSpaceMacroAction:
         self._fa = "FA" in self._macros_usage
         self._minus = "-" in self._macros_usage
         self._cache_equal_path = True
+        self._precondition_impact = 0
 
     @property
     def is_temporal(self) -> bool:
@@ -550,7 +551,9 @@ class SearchSpaceMacroAction:
         if self._macros:
             g_value = state.g
             for ma, precondition in self._macros:
+                precondition_used = False
                 if evaluate(precondition, state): # check macro precondition, possibly True (case without precondition)
+                    precondition_used = True
                     new_states = []
                     s = state
                     macro_so_far = []
@@ -618,6 +621,8 @@ class SearchSpaceMacroAction:
                                     else:
                                         search_trie.counter_skip += 1
                                         # ns.is_skipped = True
+                if precondition_used:
+                    self._precondition_impact += 1
 
     def goal_reached(self, state: State, goal: Optional[Fraction] = None) -> bool:
         return self._ss.goal_reached(state, goal)
