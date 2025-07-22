@@ -19,7 +19,7 @@ from fractions import Fraction
 from typing import List, Union
 from rustamer import wastar_search, astar_search, gbfs_search
 from rustamer import ehc_search, bfs_search, dfs_search
-from rustamer import multiqueue_search
+from rustamer import multiqueue_search, entropy_dual_queue_search
 from rustamer import SearchSpace, evaluate as rustevaluate
 from rustamer import Timing, Effect, Event, ExpressionNode
 from rustamer import (

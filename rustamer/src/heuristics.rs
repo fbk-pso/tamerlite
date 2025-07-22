@@ -299,7 +299,13 @@ impl Heuristic {
                             Ok(state) => match case {
                                 StateMode::Cached(x) => Ok((state, x)),
                                 StateMode::Error(x) => Err(x),
-                                StateMode::ToEval(idx) => Ok((state, Some(vc[idx]))),
+                                StateMode::ToEval(idx) => {
+                                    state.heuristic_cache
+                                         .lock()
+                                         .unwrap()
+                                         .insert(self.name().to_string(), Some(vc[idx]));
+                                    Ok((state, Some(vc[idx])))
+                                },
                                 StateMode::Unknown => {
                                     panic!("This should never happen");
                                 }
@@ -356,7 +362,16 @@ impl Heuristic {
                         match case {
                             StateMode::Cached(x) => final_res.push(Ok((i, x))),
                             StateMode::Error(x) => final_res.push(Err(x)),
-                            StateMode::ToEval(idx) => final_res.push(Ok((i, Some(vc[idx])))),
+                            StateMode::ToEval(idx) => {
+                                states[i]
+                                    .borrow_mut()
+                                    .state
+                                    .heuristic_cache
+                                    .lock()
+                                    .unwrap()
+                                    .insert(self.name().to_string(), Some(vc[idx]));
+                                final_res.push(Ok((i, Some(vc[idx]))))
+                            },
                             StateMode::Unknown => {
                                 panic!("This should never happen");
                             }

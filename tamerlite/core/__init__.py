@@ -17,6 +17,7 @@
 
 import os
 import sys
+from warnings import warn
 
 use_rustamer = True
 if 'DISABLE_RUSTAMER' in os.environ:
@@ -34,9 +35,10 @@ if use_rustamer:
         use_rustamer = False
 
 if not use_rustamer:
+    warn("Using the pure Python implementation of TamerLite.")
     from tamerlite.core.search import wastar_search, astar_search, gbfs_search
     from tamerlite.core.search import bfs_search, dfs_search, ehc_search
-    from tamerlite.core.multiqueue import multiqueue_search
+    from tamerlite.core.multiqueue import multiqueue_search, entropy_dual_queue_search
     from tamerlite.core.search_space import SearchSpace, get_fluent_value
     from tamerlite.core.heuristics import HFF, HAdd, HMax, HMaxNumeric, CustomHeuristic, RLRank, RLHeuristic
     from tamerlite.core.search_space import Timing, Effect, Event
@@ -54,7 +56,7 @@ if not use_rustamer:
 else:
     from tamerlite.rustamer import wastar_search, astar_search, gbfs_search
     from tamerlite.rustamer import bfs_search, dfs_search, ehc_search
-    from tamerlite.rustamer import multiqueue_search
+    from tamerlite.rustamer import multiqueue_search, entropy_dual_queue_search
     from tamerlite.rustamer import SearchSpace, get_fluent_value
     from tamerlite.rustamer import HFF, HAdd, HMax, HMaxNumeric, CustomHeuristic, RLRank, RLHeuristic
     from tamerlite.rustamer import Timing, Effect, Event

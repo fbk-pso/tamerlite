@@ -60,6 +60,7 @@ fn rustamer(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(shift_expression, &m)?)?;
     m.add_function(wrap_pyfunction!(wastar_search, &m)?)?;
     m.add_function(wrap_pyfunction!(multiqueue_search, &m)?)?;
+    m.add_function(wrap_pyfunction!(entropy_dual_queue_search, &m)?)?;
     m.add_function(wrap_pyfunction!(astar_search, &m)?)?;
     m.add_function(wrap_pyfunction!(gbfs_search, &m)?)?;
     m.add_function(wrap_pyfunction!(ehc_search, &m)?)?;

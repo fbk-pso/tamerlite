@@ -78,11 +78,140 @@ impl Ord for PrioritizedItem {
     }
 }
 
+trait MQSwitchPolicy {
+    fn switching_policy(&self, i: usize) -> usize;
+    fn notify_push(&mut self, i: usize, item: &PrioritizedItem);
+    fn notify_pop(&mut self, i: usize, item: &PrioritizedItem);
+}
+
+struct EntropyDualQueueSwitchPolicy {
+    threshold: f64,
+    exp_sum: f64,
+    exp_logit_sum: f64,
+    n: usize,
+}
+
+impl EntropyDualQueueSwitchPolicy {
+    pub fn new(threshold: f64) -> Self {
+        Self {
+            threshold,
+            exp_sum: 0.0,
+            exp_logit_sum: 0.0,
+            n: 0,
+        }
+    }
+
+    fn _compute_normalized_entropy(&self) -> f64 {
+        if self.n <= 1 {
+            return 0.0;
+        }
+        let entropy = self.exp_sum.ln() - self.exp_logit_sum / self.exp_sum;
+        return entropy / (self.n as f64).ln();
+    }
+}
+
+impl MQSwitchPolicy for EntropyDualQueueSwitchPolicy {
+    fn switching_policy(&self, _i: usize) -> usize {
+        let nentropy = self._compute_normalized_entropy();
+        // print!("Normalized Entropy: {:.4}\n", nentropy);
+        if nentropy > self.threshold {
+            0 // Use the A* queue
+        } else {
+            1 // Use the rank queue
+        }
+    }
+
+    fn notify_push(&mut self, i: usize, item: &PrioritizedItem) {
+        if i == 1 {
+            self.n += 1;
+            let logit = -item.heuristic;
+            self.exp_sum += logit.exp();
+            self.exp_logit_sum += logit.exp() * logit;
+        }
+    }
+
+    fn notify_pop(&mut self, i: usize, item: &PrioritizedItem) {
+        if !(item.state_container.borrow().expanded) {
+            self.n -= 1;
+            let logit = if i == 1 {
+                -item.heuristic
+            } else {
+                -(item
+                    .state_container
+                    .borrow()
+                    .state
+                    .heuristic_cache
+                    .lock()
+                    .unwrap()
+                    .get("rlrank")
+                    .unwrap()
+                    .unwrap())
+            };
+            self.exp_sum -= logit.exp();
+            self.exp_logit_sum -= logit.exp() * logit;
+        }
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (ss, astar_h, rank_policy, threshold, timeout=None))]
+pub fn entropy_dual_queue_search(
+    ss: &SearchSpace,
+    astar_h: (Heuristic, f64),
+    rank_policy: Heuristic,
+    threshold: f64,
+    timeout: Option<f32>,
+) -> PyResult<(
+    Option<Vec<(Option<String>, String, Option<String>)>>,
+    HashMap<String, String>,
+)> {
+    let mut switch_policy = EntropyDualQueueSwitchPolicy::new(threshold);
+    _multiqueue_search(
+        ss,
+        vec![astar_h, (rank_policy, 1.0)],
+        &mut switch_policy,
+        timeout,
+    )
+}
+
+struct RoundRobinSwitchPolicy {
+    num_queues: usize,
+}
+
+impl MQSwitchPolicy for RoundRobinSwitchPolicy {
+    fn switching_policy(&self, i: usize) -> usize {
+        i % self.num_queues
+    }
+
+    fn notify_push(&mut self, _i: usize, _item: &PrioritizedItem) {}
+
+    fn notify_pop(&mut self, _i: usize, _item: &PrioritizedItem) {}
+}
+
+impl RoundRobinSwitchPolicy {
+    pub fn new(num_queues: usize) -> Self {
+        Self { num_queues }
+    }
+}
+
 #[pyfunction]
 #[pyo3(signature = (ss, heuristics, timeout=None))]
 pub fn multiqueue_search(
     ss: &SearchSpace,
     heuristics: Vec<(Heuristic, f64)>,
+    timeout: Option<f32>,
+) -> PyResult<(
+    Option<Vec<(Option<String>, String, Option<String>)>>,
+    HashMap<String, String>,
+)> {
+    let mut switch_policy = RoundRobinSwitchPolicy::new(heuristics.len());
+    _multiqueue_search(ss, heuristics, &mut switch_policy, timeout)
+}
+
+fn _multiqueue_search<T: MQSwitchPolicy>(
+    ss: &SearchSpace,
+    heuristics: Vec<(Heuristic, f64)>,
+    switch_policy: &mut T,
     timeout: Option<f32>,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
@@ -107,9 +236,10 @@ pub fn multiqueue_search(
     };
 
     let mut opens = Vec::new();
-    for _ in heuristics.iter() {
+    for (i, _) in heuristics.iter().enumerate() {
         let mut open = BinaryHeap::new();
         open.push(item.clone());
+        switch_policy.notify_push(i, &item);
         opens.push(open);
     }
 
@@ -125,9 +255,10 @@ pub fn multiqueue_search(
         if opens.iter().any(|o| o.is_empty()) {
             break;
         }
-        let i = counter % opens.len();
+        let i = switch_policy.switching_policy(counter);
         let open = &mut opens[i];
         if let Some(current) = open.pop() {
+            switch_policy.notify_pop(i, &current);
             let mut candidate_containers: Vec<Rc<RefCell<StateContainer>>> = Vec::new();
             {
                 let sc = &mut (*(current.state_container)).borrow_mut();
@@ -166,19 +297,19 @@ pub fn multiqueue_search(
                 }
             }
             for (i, (heuristic, weight)) in heuristics.iter().enumerate() {
-                for sh in heuristic
-                    .eval_gen_container(&candidate_containers, ss)?
-                {
+                for sh in heuristic.eval_gen_container(&candidate_containers, ss)? {
                     let (si, h) = sh?;
                     match h {
                         Some(v) => {
                             let f = *weight * v
                                 + (1.0 - *weight) * candidate_containers[si].borrow().state.g;
                             let sc = candidate_containers[si].clone();
-                            opens[i].push(PrioritizedItem {
+                            let item = PrioritizedItem {
                                 heuristic: f,
                                 state_container: sc,
-                            });
+                            };
+                            switch_policy.notify_push(i, &item);
+                            opens[i].push(item);
                         }
                         None => continue,
                     }

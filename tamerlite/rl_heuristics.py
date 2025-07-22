@@ -82,6 +82,9 @@ class RLHeuristicBase(Heuristic):
                     yield cached[cached_idx][1], cached[cached_idx][2]
                     cached_idx += 1
 
+                # Cache the heuristic value in the state
+                if self.cache_value_in_state:
+                    s.heuristic_cache[self.name] = res
                 # Yield current state
                 yield s, res
 
