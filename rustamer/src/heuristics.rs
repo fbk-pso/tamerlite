@@ -366,13 +366,15 @@ impl Heuristic {
                             StateMode::Cached(x) => final_res.push(Ok((i, x))),
                             StateMode::Error(x) => final_res.push(Err(x)),
                             StateMode::ToEval(idx) => {
-                                states[i]
-                                    .borrow_mut()
-                                    .state
-                                    .heuristic_cache
-                                    .lock()
-                                    .unwrap()
-                                    .insert(self.name().to_string(), Some(vc[idx]));
+                                if self.cache_value_in_state {
+                                    states[i]
+                                        .borrow()
+                                        .state
+                                        .heuristic_cache
+                                        .lock()
+                                        .unwrap()
+                                        .insert(self.name().to_string(), Some(vc[idx]));
+                                }
                                 final_res.push(Ok((i, Some(vc[idx]))))
                             }
                             StateMode::Unknown => {
