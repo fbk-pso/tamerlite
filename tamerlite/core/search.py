@@ -85,9 +85,13 @@ def wastar_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heu
                 # search_trie.print_structure()
                 return state.extract_solution(), {"Expanded states": str(counter)}, state.extract_used_macro(), ss._precondition_impact
             else:
-                return state.extract_solution(), {"Expanded states": str(counter)}, [] 
+                return state.extract_solution(), {"Expanded states": str(counter)}, [], 0
         # to_print = []
-        for succ_state in ss.get_successor_states(state, search_trie):
+        if isinstance(ss, SearchSpaceMacroAction):
+            args = (state, search_trie)
+        else:
+            args = (state,)
+        for succ_state in ss.get_successor_states(*args):
             if succ_state in closed_set or succ_state in open_set:
                 continue
             # if cache_equal_path:
@@ -114,7 +118,7 @@ def wastar_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heu
     if isinstance(ss, SearchSpaceMacroAction):
         # print(f"Skipped states due to states with equal path: {counter_skip}")   
         print(f"Skipped states due to states with equal path: {search_trie.counter_skip}")
-    return None, None, None
+    return None, None, None, None
 
 def ehc_search(ss: Union[SearchSpace, SearchSpaceMacroAction], heuristic: Heuristic, timeout=None):
     st = time.time()
