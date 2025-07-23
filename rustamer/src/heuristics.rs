@@ -300,12 +300,15 @@ impl Heuristic {
                                 StateMode::Cached(x) => Ok((state, x)),
                                 StateMode::Error(x) => Err(x),
                                 StateMode::ToEval(idx) => {
-                                    state.heuristic_cache
-                                         .lock()
-                                         .unwrap()
-                                         .insert(self.name().to_string(), Some(vc[idx]));
+                                    if self.cache_value_in_state {
+                                        state
+                                            .heuristic_cache
+                                            .lock()
+                                            .unwrap()
+                                            .insert(self.name().to_string(), Some(vc[idx]));
+                                    }
                                     Ok((state, Some(vc[idx])))
-                                },
+                                }
                                 StateMode::Unknown => {
                                     panic!("This should never happen");
                                 }
@@ -371,7 +374,7 @@ impl Heuristic {
                                     .unwrap()
                                     .insert(self.name().to_string(), Some(vc[idx]));
                                 final_res.push(Ok((i, Some(vc[idx]))))
-                            },
+                            }
                             StateMode::Unknown => {
                                 panic!("This should never happen");
                             }
@@ -411,6 +414,13 @@ impl Heuristic {
 
         match ss.goal_reached(state, None) {
             Ok(true) => {
+                if self.cache_value_in_state {
+                    state
+                        .heuristic_cache
+                        .lock()
+                        .unwrap()
+                        .insert(self.name().to_string(), Some(0.0));
+                }
                 return StateMode::Cached(Some(0.0));
             }
             Ok(false) => {
@@ -430,6 +440,13 @@ impl Heuristic {
                                 }
                             }
                         } else {
+                            if self.cache_value_in_state {
+                                state
+                                    .heuristic_cache
+                                    .lock()
+                                    .unwrap()
+                                    .insert(self.name().to_string(), None);
+                            }
                             return StateMode::Cached(None);
                         }
                     }
