@@ -144,8 +144,8 @@ impl MQSwitchPolicy for EntropyDualQueueSwitchPolicy {
                     .lock()
                     .unwrap()
                     .get("rlrank")
-                    .unwrap()
-                    .unwrap())
+                    .unwrap() // Here we assume that a queue with a heuristic "rlrank" is always present
+                    .unwrap()) // This is surely not None, because the element was pushed to the queue
             };
             self.exp_sum -= logit.exp();
             self.exp_logit_sum -= logit.exp() * logit;
