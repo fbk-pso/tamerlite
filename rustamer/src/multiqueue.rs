@@ -79,7 +79,7 @@ impl Ord for PrioritizedItem {
 }
 
 trait MQSwitchPolicy {
-    fn switching_policy(&self, i: usize) -> usize;
+    fn switching_policy(&mut self, i: usize) -> usize;
     fn notify_push(&mut self, i: usize, item: &PrioritizedItem);
     fn notify_pop(&mut self, i: usize, item: &PrioritizedItem);
 }
@@ -89,15 +89,19 @@ struct EntropyDualQueueSwitchPolicy {
     exp_sum: f64,
     exp_logit_sum: f64,
     n: usize,
+    max_successive_steps: Option<usize>,
+    successive_steps: usize,
 }
 
 impl EntropyDualQueueSwitchPolicy {
-    pub fn new(threshold: f64) -> Self {
+    pub fn new(threshold: f64, max_successive_steps: Option<usize>) -> Self {
         Self {
             threshold,
             exp_sum: 0.0,
             exp_logit_sum: 0.0,
             n: 0,
+            max_successive_steps: max_successive_steps,
+            successive_steps: 0,
         }
     }
 
@@ -111,12 +115,14 @@ impl EntropyDualQueueSwitchPolicy {
 }
 
 impl MQSwitchPolicy for EntropyDualQueueSwitchPolicy {
-    fn switching_policy(&self, _i: usize) -> usize {
+    fn switching_policy(&mut self, _i: usize) -> usize {
         let nentropy = self._compute_normalized_entropy();
         // print!("Normalized Entropy: {:.4}\n", nentropy);
-        if nentropy > self.threshold {
+        if self.max_successive_steps.is_some_and(|mss| self.successive_steps >= mss) || nentropy > self.threshold {
+            self.successive_steps = 0;
             0 // Use the A* queue
         } else {
+            self.successive_steps += 1;
             1 // Use the rank queue
         }
     }
@@ -133,7 +139,7 @@ impl MQSwitchPolicy for EntropyDualQueueSwitchPolicy {
     fn notify_pop(&mut self, i: usize, item: &PrioritizedItem) {
         if !(item.state_container.borrow().expanded) {
             self.n -= 1;
-            let logit = if i == 1 {
+            let logit = if i == 1 || self.n == 0 {
                 -item.heuristic
             } else {
                 -(item
@@ -154,18 +160,19 @@ impl MQSwitchPolicy for EntropyDualQueueSwitchPolicy {
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, astar_h, rank_policy, threshold, timeout=None))]
+#[pyo3(signature = (ss, astar_h, rank_policy, threshold, max_successive_steps, timeout=None))]
 pub fn entropy_dual_queue_search(
     ss: &SearchSpace,
     astar_h: (Heuristic, f64),
     rank_policy: Heuristic,
     threshold: f64,
+    max_successive_steps: Option<usize>,
     timeout: Option<f32>,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
 )> {
-    let mut switch_policy = EntropyDualQueueSwitchPolicy::new(threshold);
+    let mut switch_policy = EntropyDualQueueSwitchPolicy::new(threshold, max_successive_steps);
     _multiqueue_search(
         ss,
         vec![astar_h, (rank_policy, 1.0)],
@@ -179,7 +186,7 @@ struct RoundRobinSwitchPolicy {
 }
 
 impl MQSwitchPolicy for RoundRobinSwitchPolicy {
-    fn switching_policy(&self, i: usize) -> usize {
+    fn switching_policy(&mut self, i: usize) -> usize {
         i % self.num_queues
     }
 

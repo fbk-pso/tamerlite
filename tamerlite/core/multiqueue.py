@@ -20,7 +20,7 @@ import heapq
 from dataclasses import dataclass
 import math
 import time
-from typing import Callable, List, Tuple, Type
+from typing import Callable, List, Optional, Tuple, Type
 from tamerlite.core.search_space import SearchSpace, State
 from tamerlite.core.heuristics import Heuristic
 
@@ -82,18 +82,23 @@ class RoundRobinSwitchPolicy(MQSwitchPolicy):
 
 
 class EntropySwitchPolicy(MQSwitchPolicy):
-    def __init__(self, threshold: float):
+    def __init__(self, threshold: float, max_successive_steps: Optional[int]):
         self.threshold = threshold
+        self.max_successive_steps = max_successive_steps
         self.exp_sum = 0.0 # sum of exp(logit)
         self.exp_logit_sum = 0.0 # sum of exp(logit) * logit
         self.n = 0
+        self._successive_steps = 0
 
     def switching_policy(self, i: int):
         nentropy = self._compute_normalized_entropy()
         # print(f"Normalized Entropy: {nentropy:.4f}")
-        if nentropy > self.threshold:
+        if (self.max_successive_steps is not None and self._successive_steps >= self.max_successive_steps) or nentropy > self.threshold:
+            self._successive_steps = 0
             return 0 # Use the astar queue
-        return 1 # Use the rank queue
+        else:
+            self._successive_steps += 1
+            return 1 # Use the rank queue
 
     def _compute_normalized_entropy(self) -> float:
         if self.n <= 1:
@@ -111,7 +116,7 @@ class EntropySwitchPolicy(MQSwitchPolicy):
     def notify_pop(self, i: int, item: PrioritizedItem):
         if not item.state_container.expanded: # Only consider the first time I pop this state
             self.n -= 1
-            if i == 1:
+            if i == 1 or self.n == 0:
                 logit = -item.heuristic
             else:
                 logit = -item.state_container.state.heuristic_cache["rlrank"]
@@ -123,12 +128,13 @@ def entropy_dual_queue_search(
     astar_h: Tuple[Heuristic, float],
     rank_policy: Heuristic,
     threshold: float,
+    max_successive_steps: Optional[int],
     timeout: float = None,
 ):
     return _multiqueue_search(
         ss=ss,
         heuristics=[astar_h, (rank_policy, 1)],
-        switch_policy=EntropySwitchPolicy(threshold),
+        switch_policy=EntropySwitchPolicy(threshold=threshold, max_successive_steps=max_successive_steps),
         timeout=timeout,
     )
 

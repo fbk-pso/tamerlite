@@ -415,6 +415,7 @@ class TamerLite(
                     (astar_h, w),
                     rank_policy,
                     threshold=self._params.threshold,
+                    max_successive_steps=5,
                     timeout=timeout,
                 )
             else:
