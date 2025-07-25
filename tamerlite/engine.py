@@ -124,6 +124,7 @@ class MultiqueueParams:
 @dataclass(frozen=True)
 class EntropyDualQueueParams:
     threshold: float
+    max_successive_steps: int
     astar_queue: SearchParams
     rl_params: RLParams
 
@@ -415,7 +416,7 @@ class TamerLite(
                     (astar_h, w),
                     rank_policy,
                     threshold=self._params.threshold,
-                    max_successive_steps=5,
+                    max_successive_steps=self._params.max_successive_steps,
                     timeout=timeout,
                 )
             else:
