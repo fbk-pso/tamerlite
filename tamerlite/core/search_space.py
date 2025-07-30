@@ -284,7 +284,7 @@ def simplify(exp: Expression, assignments: Dict[str, Union[bool, int, Fraction, 
                 else:
                     to_remove.extend(true_to_remove)
                     res.append(e)
-            if e.kind == "or":
+            elif e.kind == "or":
                 v = False
                 unresolved = False
                 false_to_remove = []
