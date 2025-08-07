@@ -95,6 +95,7 @@ class SearchParams:
     weight: Optional[str] = None
     rl_params: Optional[RLParams] = None
     cache_heuristic_in_state: Optional[bool] = None
+    early_termination: Optional[bool] = None
 
     def contains_rl(self) -> bool:
         return self.rl_params is not None
@@ -108,6 +109,7 @@ class SearchParams:
 @dataclass(frozen=True)
 class MultiqueueParams:
     queues: List[SearchParams]
+    early_termination: bool     # the parameter early_termination inside queues is ignored
 
     def contains_rl(self) -> bool:
         return any([q.contains_rl() for q in self.queues])
@@ -127,6 +129,7 @@ class EntropyDualQueueParams:
     max_successive_steps: int
     astar_queue: SearchParams
     rl_params: RLParams
+    early_termination: bool
 
     def contains_rl(self) -> bool:
         return True
@@ -399,7 +402,7 @@ class TamerLite(
                     h, w = self._get_heuristic(p, heuristic, encoder, state_encoder)
                     heuristics.append((h, w))
                 plan, metrics = multiqueue_search(
-                    encoder.search_space, heuristics, timeout
+                    encoder.search_space, heuristics, timeout, self._params.early_termination
                 )
             elif isinstance(self._params, EntropyDualQueueParams):
                 assert(self._params.rl_params.other_params.last_activation!="none")
@@ -419,12 +422,13 @@ class TamerLite(
                     threshold=self._params.threshold,
                     max_successive_steps=self._params.max_successive_steps,
                     timeout=timeout,
+                    early_termination=self._params.early_termination,
                 )
             else:
                 search = self._get_search(
                     self._params, heuristic, encoder, state_encoder
                 )
-                plan, metrics = search(encoder.search_space, timeout=timeout)
+                plan, metrics = search(encoder.search_space, timeout=timeout, early_termination=self._params.early_termination)
 
             if plan:
                 plan = encoder.build_plan(plan)

@@ -61,13 +61,13 @@ def _basic_search(ss: SearchSpace, bfs: bool, timeout):
             open.append(succ_state)
     return None, {"expanded_states": str(counter)}
 
-def astar_search(ss: SearchSpace, heuristic: Heuristic, timeout=None):
-    return wastar_search(ss, heuristic, 0.5, timeout)
+def astar_search(ss: SearchSpace, heuristic: Heuristic, timeout=None, early_termination: bool = False):
+    return wastar_search(ss, heuristic, 0.5, timeout, early_termination)
 
-def gbfs_search(ss: SearchSpace, heuristic: Heuristic, timeout=None):
-    return wastar_search(ss, heuristic, 1, timeout)
+def gbfs_search(ss: SearchSpace, heuristic: Heuristic, timeout=None, early_termination: bool = False):
+    return wastar_search(ss, heuristic, 1, timeout, early_termination)
 
-def wastar_search(ss: SearchSpace, heuristic: Heuristic, weight: float = 0.5, timeout=None):
+def wastar_search(ss: SearchSpace, heuristic: Heuristic, weight: float = 0.5, timeout=None, early_termination: bool = False):
     st = time.time()
     open = []
     closed_set = set()
@@ -92,6 +92,8 @@ def wastar_search(ss: SearchSpace, heuristic: Heuristic, weight: float = 0.5, ti
 
         candidate_states = (s for s in ss.get_successor_states(state) if s not in closed_set and s not in open_set)
         for succ_state, h in heuristic.eval_gen(candidate_states, ss):
+            if early_termination and ss.goal_reached(succ_state):
+                return succ_state.extract_solution(), {"expanded_states": str(counter), "goal_depth": str(succ_state.g)}
             if h is not None:
                 f = (1-weight)*succ_state.g + weight*h
                 heapq.heappush(open, PrioritizedItem(f, succ_state))

@@ -30,8 +30,6 @@ class RLHeuristicBase(Heuristic):
         self._sym_h = sym_h
 
     def _eval(self, state, ss):
-        if ss.goal_reached(state):
-            return 0
         state_vec = self._state_encoder.get_state_as_vector(state)
         if self._residual:
             sym_h = self._sym_h.eval(state, ss)
@@ -65,15 +63,10 @@ class RLHeuristicBase(Heuristic):
                 else:
                     sym_h = -1
 
-                if ss.goal_reached(state):
-                    if self.cache_value_in_state:
-                        state.heuristic_cache[self.name] = 0
-                    cached.append((i, state, 0))
-                else:
-                    state_vec = self._state_encoder.get_state_as_vector(state)
-                    states_to_eval.append((i, state))
-                    vectors_to_eval.append(state_vec)
-                    sym_heuristics_to_eval.append(sym_h)
+                state_vec = self._state_encoder.get_state_as_vector(state)
+                states_to_eval.append((i, state))
+                vectors_to_eval.append(state_vec)
+                sym_heuristics_to_eval.append(sym_h)
             else:
                 cached.append((i, state, h))
 

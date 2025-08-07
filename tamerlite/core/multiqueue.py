@@ -130,22 +130,25 @@ def entropy_dual_queue_search(
     threshold: float,
     max_successive_steps: Optional[int],
     timeout: float = None,
+    early_termination: bool = False,
 ):
     return _multiqueue_search(
         ss=ss,
         heuristics=[astar_h, (rank_policy, 1)],
         switch_policy=EntropySwitchPolicy(threshold=threshold, max_successive_steps=max_successive_steps),
         timeout=timeout,
+        early_termination=early_termination,
     )
 
 def multiqueue_search(
-    ss: SearchSpace, heuristics: List[Tuple[Heuristic, float]], timeout: float = None
+    ss: SearchSpace, heuristics: List[Tuple[Heuristic, float]], timeout: float = None, early_termination: bool = False
 ):
     return _multiqueue_search(
         ss=ss,
         heuristics=heuristics,
         switch_policy=RoundRobinSwitchPolicy(len(heuristics)),
         timeout=timeout,
+        early_termination=early_termination,
     )
 
 def _multiqueue_search(
@@ -153,6 +156,7 @@ def _multiqueue_search(
     heuristics: List[Tuple[Heuristic, float]],
     switch_policy: MQSwitchPolicy,
     timeout: float = None,
+    early_termination: bool = False,
 ):
     st = time.time()
     opens = []
@@ -195,6 +199,11 @@ def _multiqueue_search(
         # Here, we create a temporary list of the successor states to reuse it among multiple heuristics
         candidate_states = []
         for s in ss.get_successor_states(state):
+            if early_termination and ss.goal_reached(s):
+                return s.extract_solution(), {
+                    "expanded_states": str(states_expanded),
+                    "goal_depth": str(s.g),
+                }
             if not ss.is_temporal:
                 if s in closed_set or s in open_set:
                     continue
