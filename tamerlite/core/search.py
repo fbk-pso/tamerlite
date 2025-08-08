@@ -35,13 +35,13 @@ class PrioritizedItem:
             return False
         return len(self.state.todo) < len(other.state.todo)
 
-def bfs_search(ss: SearchSpace, timeout=None):
-    return _basic_search(ss, True, timeout)
+def bfs_search(ss: SearchSpace, timeout=None, early_termination: bool = False):
+    return _basic_search(ss, True, timeout, early_termination)
 
-def dfs_search(ss: SearchSpace, timeout=None):
-    return _basic_search(ss, False, timeout)
+def dfs_search(ss: SearchSpace, timeout=None, early_termination: bool = False):
+    return _basic_search(ss, False, timeout, early_termination)
 
-def _basic_search(ss: SearchSpace, bfs: bool, timeout):
+def _basic_search(ss: SearchSpace, bfs: bool, timeout, early_termination: bool = False):
     st = time.time()
     init = ss.initial_state()
     open = deque()
@@ -58,6 +58,8 @@ def _basic_search(ss: SearchSpace, bfs: bool, timeout):
         if ss.goal_reached(state):
             return state.extract_solution(), {"expanded_states": counter, "goal_depth": state.g}
         for succ_state in ss.get_successor_states(state):
+            if ss.goal_reached(succ_state):
+                return succ_state.extract_solution(), {"expanded_states": counter, "goal_depth": succ_state.g}
             open.append(succ_state)
     return None, {"expanded_states": str(counter)}
 
@@ -101,7 +103,7 @@ def wastar_search(ss: SearchSpace, heuristic: Heuristic, weight: float = 0.5, ti
                     open_set.add(succ_state)
     return None, {"expanded_states": str(counter)}
 
-def ehc_search(ss: SearchSpace, heuristic: Heuristic, timeout=None):
+def ehc_search(ss: SearchSpace, heuristic: Heuristic, timeout=None, early_termination: bool = False):
     st = time.time()
     init = ss.initial_state()
     open = deque()
@@ -118,6 +120,8 @@ def ehc_search(ss: SearchSpace, heuristic: Heuristic, timeout=None):
         if ss.goal_reached(state):
             return state.extract_solution(), {"expanded_states": str(counter), "goal_depth": str(state.g)}
         for succ_state, h in heuristic.eval_gen(ss.get_successor_states(state), ss):
+            if ss.goal_reached(succ_state):
+                return succ_state.extract_solution(), {"expanded_states": str(counter), "goal_depth": str(succ_state.g)}
             if h is not None:
                 if h < best_h:
                     best_h = h

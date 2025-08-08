@@ -213,33 +213,36 @@ pub fn wastar_search(
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, timeout=None))]
+#[pyo3(signature = (ss, timeout=None, early_termination=false))]
 pub fn bfs_search(
     ss: &SearchSpace,
     timeout: Option<f32>,
+    early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
 )> {
-    basic_search(ss, true, timeout)
+    basic_search(ss, true, timeout, early_termination)
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, timeout=None))]
+#[pyo3(signature = (ss, timeout=None, early_termination=false))]
 pub fn dfs_search(
     ss: &SearchSpace,
     timeout: Option<f32>,
+    early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
 )> {
-    basic_search(ss, false, timeout)
+    basic_search(ss, false, timeout, early_termination)
 }
 
 fn basic_search(
     ss: &SearchSpace,
     bfs: bool,
     timeout: Option<f32>,
+    early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
@@ -270,7 +273,13 @@ fn basic_search(
             return build_plan(ss, &state).map(|plan| (plan, metrics));
         } else {
             for rs in ss.get_successor_states_iter(&state) {
-                open.push_back(rs?);
+                let s = rs?;
+                if early_termination && ss.goal_reached(&s, None)? {
+                    metrics.insert("expanded_states".to_string(), counter.to_string());
+                    metrics.insert("goal_depth".to_string(), s.g.to_string());
+                    return build_plan(ss, &s).map(|plan| (plan, metrics));
+                }
+                open.push_back(s);
             }
         }
     }
@@ -279,11 +288,12 @@ fn basic_search(
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, heuristic, timeout=None))]
+#[pyo3(signature = (ss, heuristic, timeout=None, early_termination=false))]
 pub fn ehc_search(
     ss: &SearchSpace,
     heuristic: &Heuristic,
     timeout: Option<f32>,
+    early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
@@ -316,6 +326,11 @@ pub fn ehc_search(
         } else {
             for rs in heuristic.eval_gen(ss.get_successor_states_iter(&state), ss)? {
                 let (s, h) = rs?;
+                if early_termination && ss.goal_reached(&s, None)? {
+                    metrics.insert("expanded_states".to_string(), counter.to_string());
+                    metrics.insert("goal_depth".to_string(), s.g.to_string());
+                    return build_plan(ss, &s).map(|plan| (plan, metrics));
+                }
                 match h {
                     Some(v) => {
                         if v < best_h {
