@@ -414,47 +414,30 @@ impl Heuristic {
             }
         }
 
-        match ss.goal_reached(state, None) {
-            Ok(true) => {
-                if self.cache_value_in_state {
-                    state
-                        .heuristic_cache
-                        .lock()
-                        .unwrap()
-                        .insert(self.name().to_string(), Some(0.0));
-                }
-                return StateMode::Cached(Some(0.0));
-            }
-            Ok(false) => {
-                let h_value = self.hrl.as_ref().unwrap().eval_hsym(state, ss);
-                match h_value {
-                    Ok(x) => {
-                        if let Some(hval) = x {
-                            let rv = self.hrl.as_ref().unwrap().get_vector(state, ss);
-                            match rv {
-                                Ok(v) => {
-                                    vectors_to_eval.push(v);
-                                    sym_heuristics_to_eval.push(hval);
-                                    return StateMode::ToEval(vectors_to_eval.len() - 1);
-                                }
-                                Err(e) => {
-                                    return StateMode::Error(e);
-                                }
-                            }
-                        } else {
-                            if self.cache_value_in_state {
-                                state
-                                    .heuristic_cache
-                                    .lock()
-                                    .unwrap()
-                                    .insert(self.name().to_string(), None);
-                            }
-                            return StateMode::Cached(None);
+        let h_value = self.hrl.as_ref().unwrap().eval_hsym(state, ss);
+        match h_value {
+            Ok(x) => {
+                if let Some(hval) = x {
+                    let rv = self.hrl.as_ref().unwrap().get_vector(state, ss);
+                    match rv {
+                        Ok(v) => {
+                            vectors_to_eval.push(v);
+                            sym_heuristics_to_eval.push(hval);
+                            return StateMode::ToEval(vectors_to_eval.len() - 1);
+                        }
+                        Err(e) => {
+                            return StateMode::Error(e);
                         }
                     }
-                    Err(e) => {
-                        return StateMode::Error(e);
+                } else {
+                    if self.cache_value_in_state {
+                        state
+                            .heuristic_cache
+                            .lock()
+                            .unwrap()
+                            .insert(self.name().to_string(), None);
                     }
+                    return StateMode::Cached(None);
                 }
             }
             Err(e) => {
@@ -501,9 +484,6 @@ impl HRL {
     }
 
     pub fn eval(&self, state: &State, ss: &SearchSpace) -> PyResult<Option<f64>> {
-        if ss.goal_reached(&state, None)? {
-            return Ok(Some(0.0));
-        }
         let enc = self.get_vector(state, ss)?;
         let h_val = match self.eval_hsym(state, ss)? {
             Some(v) => v,

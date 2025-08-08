@@ -160,7 +160,7 @@ impl MQSwitchPolicy for EntropyDualQueueSwitchPolicy {
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, astar_h, rank_policy, threshold, max_successive_steps, timeout=None))]
+#[pyo3(signature = (ss, astar_h, rank_policy, threshold, max_successive_steps, timeout=None, early_termination=false))]
 pub fn entropy_dual_queue_search(
     ss: &SearchSpace,
     astar_h: (Heuristic, f64),
@@ -168,6 +168,7 @@ pub fn entropy_dual_queue_search(
     threshold: f64,
     max_successive_steps: Option<usize>,
     timeout: Option<f32>,
+    early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
@@ -178,6 +179,7 @@ pub fn entropy_dual_queue_search(
         vec![astar_h, (rank_policy, 1.0)],
         &mut switch_policy,
         timeout,
+        early_termination,
     )
 }
 
@@ -202,17 +204,18 @@ impl RoundRobinSwitchPolicy {
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, heuristics, timeout=None))]
+#[pyo3(signature = (ss, heuristics, timeout=None, early_termination=false))]
 pub fn multiqueue_search(
     ss: &SearchSpace,
     heuristics: Vec<(Heuristic, f64)>,
     timeout: Option<f32>,
+    early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
 )> {
     let mut switch_policy = RoundRobinSwitchPolicy::new(heuristics.len());
-    _multiqueue_search(ss, heuristics, &mut switch_policy, timeout)
+    _multiqueue_search(ss, heuristics, &mut switch_policy, timeout, early_termination)
 }
 
 fn _multiqueue_search<T: MQSwitchPolicy>(
@@ -220,6 +223,7 @@ fn _multiqueue_search<T: MQSwitchPolicy>(
     heuristics: Vec<(Heuristic, f64)>,
     switch_policy: &mut T,
     timeout: Option<f32>,
+    early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
@@ -290,6 +294,11 @@ fn _multiqueue_search<T: MQSwitchPolicy>(
 
                 for rs in ss.get_successor_states_iter(&state) {
                     let s = rs?;
+                    if early_termination && ss.goal_reached(&s, None)? {
+                        metrics.insert("expanded_states".to_string(), states_expanded.to_string());
+                        metrics.insert("goal_depth".to_string(), s.g.to_string());
+                        return build_plan(ss, &s).map(|plan| (plan, metrics));
+                    }
                     let sc = StateContainer {
                         state: s,
                         expanded: false,

@@ -95,38 +95,41 @@ pub fn build_plan(
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, heuristic, timeout=None))]
+#[pyo3(signature = (ss, heuristic, timeout=None, early_termination=false))]
 pub fn astar_search(
     ss: &SearchSpace,
     heuristic: &Heuristic,
     timeout: Option<f32>,
+    early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
 )> {
-    wastar_search(ss, heuristic, 0.5, timeout)
+    wastar_search(ss, heuristic, 0.5, timeout, early_termination)
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, heuristic, timeout=None))]
+#[pyo3(signature = (ss, heuristic, timeout=None, early_termination=false))]
 pub fn gbfs_search(
     ss: &SearchSpace,
     heuristic: &Heuristic,
     timeout: Option<f32>,
+    early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
 )> {
-    wastar_search(ss, heuristic, 1.0, timeout)
+    wastar_search(ss, heuristic, 1.0, timeout, early_termination)
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, heuristic, weight, timeout=None))]
+#[pyo3(signature = (ss, heuristic, weight, timeout=None, early_termination=false))]
 pub fn wastar_search(
     ss: &SearchSpace,
     heuristic: &Heuristic,
     weight: f64,
     timeout: Option<f32>,
+    early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
@@ -184,6 +187,11 @@ pub fn wastar_search(
                     });
             for rs in heuristic.eval_gen(successors_iter, ss)? {
                 let (s, h) = rs?;
+                if early_termination && ss.goal_reached(&s, None)? {
+                    metrics.insert("expanded_states".to_string(), counter.to_string());
+                    metrics.insert("goal_depth".to_string(), s.g.to_string());
+                    return build_plan(ss, &s).map(|plan| (plan, metrics));
+                }
                 match h {
                     Some(v) => {
                         let f = weight * v + (1.0 - weight) * s.g;
