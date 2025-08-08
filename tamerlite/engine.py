@@ -109,7 +109,7 @@ class SearchParams:
 @dataclass(frozen=True)
 class MultiqueueParams:
     queues: List[SearchParams]
-    early_termination: bool     # the parameter early_termination inside queues is ignored
+    early_termination: Optional[bool] = None     # the parameter early_termination inside queues is ignored
 
     def contains_rl(self) -> bool:
         return any([q.contains_rl() for q in self.queues])
