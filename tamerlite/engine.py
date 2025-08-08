@@ -405,7 +405,6 @@ class TamerLite(
                     encoder.search_space, heuristics, timeout, self._params.early_termination
                 )
             elif isinstance(self._params, EntropyDualQueueParams):
-                assert(self._params.rl_params.other_params.last_activation!="none")
                 astar_h, w = self._get_heuristic(
                     self._params.astar_queue, heuristic, encoder, state_encoder
                 )
