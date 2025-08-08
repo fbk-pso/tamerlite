@@ -396,13 +396,18 @@ class TamerLite(
                 encoder = Encoder(new_problem)
                 state_encoder = None
 
+            if self._params is None or self._params.early_termination is None:
+                early_termination = False
+            else:
+                early_termination = self._params.early_termination
+
             if isinstance(self._params, MultiqueueParams):
                 heuristics = []
                 for p in self._params.queues:
                     h, w = self._get_heuristic(p, heuristic, encoder, state_encoder)
                     heuristics.append((h, w))
                 plan, metrics = multiqueue_search(
-                    encoder.search_space, heuristics, timeout, self._params.early_termination
+                    encoder.search_space, heuristics, timeout, early_termination
                 )
             elif isinstance(self._params, EntropyDualQueueParams):
                 astar_h, w = self._get_heuristic(
@@ -421,13 +426,13 @@ class TamerLite(
                     threshold=self._params.threshold,
                     max_successive_steps=self._params.max_successive_steps,
                     timeout=timeout,
-                    early_termination=self._params.early_termination,
+                    early_termination=early_termination,
                 )
             else:
                 search = self._get_search(
                     self._params, heuristic, encoder, state_encoder
                 )
-                plan, metrics = search(encoder.search_space, timeout=timeout, early_termination=self._params.early_termination)
+                plan, metrics = search(encoder.search_space, timeout=timeout, early_termination=early_termination)
 
             if plan:
                 plan = encoder.build_plan(plan)
