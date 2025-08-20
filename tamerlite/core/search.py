@@ -58,7 +58,7 @@ def _basic_search(ss: SearchSpace, bfs: bool, timeout, early_termination: bool =
         if ss.goal_reached(state):
             return state.extract_solution(), {"expanded_states": counter, "goal_depth": state.g}
         for succ_state in ss.get_successor_states(state):
-            if ss.goal_reached(succ_state):
+            if early_termination and ss.goal_reached(succ_state):
                 return succ_state.extract_solution(), {"expanded_states": counter, "goal_depth": succ_state.g}
             open.append(succ_state)
     return None, {"expanded_states": str(counter)}
@@ -120,7 +120,7 @@ def ehc_search(ss: SearchSpace, heuristic: Heuristic, timeout=None, early_termin
         if ss.goal_reached(state):
             return state.extract_solution(), {"expanded_states": str(counter), "goal_depth": str(state.g)}
         for succ_state, h in heuristic.eval_gen(ss.get_successor_states(state), ss):
-            if ss.goal_reached(succ_state):
+            if early_termination and ss.goal_reached(succ_state):
                 return succ_state.extract_solution(), {"expanded_states": str(counter), "goal_depth": str(succ_state.g)}
             if h is not None:
                 if h < best_h:
