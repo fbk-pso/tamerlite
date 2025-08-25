@@ -38,7 +38,7 @@ if not use_rustamer:
     from tamerlite.core.search import bfs_search, dfs_search, ehc_search
     from tamerlite.core.multiqueue import multiqueue_search
     from tamerlite.core.search_space import SearchSpace, get_fluent_value
-    from tamerlite.core.heuristics import HFF, HAdd, HMax, HMaxNumeric, CustomHeuristic, RLRank, RLHeuristic
+    from tamerlite.core.heuristics import HFF, HAdd, HMax, HMaxNumeric, CustomHeuristic
     from tamerlite.core.search_space import Timing, Effect, Event
     from tamerlite.core.search_space import Expression, evaluate, get_fluents, simplify
     from tamerlite.core.search_space import (
@@ -50,13 +50,12 @@ if not use_rustamer:
         make_rational_constant_node,
         shift_expression,
     )
-    from tamerlite.core.state_encoder import CoreStateEncoder
 else:
     from tamerlite.rustamer import wastar_search, astar_search, gbfs_search
     from tamerlite.rustamer import bfs_search, dfs_search, ehc_search
     from tamerlite.rustamer import multiqueue_search
     from tamerlite.rustamer import SearchSpace, get_fluent_value
-    from tamerlite.rustamer import HFF, HAdd, HMax, HMaxNumeric, CustomHeuristic, RLRank, RLHeuristic
+    from tamerlite.rustamer import HFF, HAdd, HMax, HMaxNumeric, CustomHeuristic
     from tamerlite.rustamer import Timing, Effect, Event
     from tamerlite.rustamer import Expression, evaluate, get_fluents, simplify
     from tamerlite.rustamer import (
@@ -68,4 +67,3 @@ else:
         make_rational_constant_node,
         shift_expression,
     )
-    from tamerlite.rustamer import CoreStateEncoder
