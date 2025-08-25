@@ -28,7 +28,6 @@ use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
 use crate::multiqueue::StateContainer;
-use crate::state_encoder::CoreStateEncoder;
 use crate::{internal_evaluate, SearchSpace};
 
 use super::expressions::*;
@@ -48,7 +47,6 @@ enum HeuristicKind {
 pub struct Heuristic {
     hdr: Option<DeleteRelaxationHeuristic>,
     hmax: Option<HMaxNumeric>,
-    hrl: Option<HRL>,
     hcustom: Option<CustomHeuristic>,
     cache_value_in_state: bool,
 }
@@ -60,7 +58,6 @@ impl Heuristic {
         Ok(Heuristic {
             hdr: None,
             hmax: None,
-            hrl: None,
             hcustom: Some(CustomHeuristic::new(callable)?),
             cache_value_in_state: cache_value_in_state,
         })
@@ -85,7 +82,6 @@ impl Heuristic {
                 internal_caching,
             )?),
             hmax: None,
-            hrl: None,
             hcustom: None,
             cache_value_in_state: cache_value_in_state,
         })
@@ -110,7 +106,6 @@ impl Heuristic {
                 internal_caching,
             )?),
             hmax: None,
-            hrl: None,
             hcustom: None,
             cache_value_in_state: cache_value_in_state,
         })
@@ -135,7 +130,6 @@ impl Heuristic {
                 internal_caching,
             )?),
             hmax: None,
-            hrl: None,
             hcustom: None,
             cache_value_in_state: cache_value_in_state,
         })
@@ -153,34 +147,6 @@ impl Heuristic {
         Ok(Heuristic {
             hdr: None,
             hmax: Some(HMaxNumeric::new(fluents, events, goal, internal_caching)?),
-            hrl: None,
-            hcustom: None,
-            cache_value_in_state: cache_value_in_state,
-        })
-    }
-
-    #[staticmethod]
-    #[pyo3(signature = (name, ss, goals_vec, constants_vec, callable, h_sym=None, cache_value_in_state=false))]
-    pub fn hrl(
-        name: &str,
-        ss: &CoreStateEncoder,
-        goals_vec: Vec<f32>,
-        constants_vec: Vec<f32>,
-        callable: PyObject,
-        h_sym: Option<Heuristic>,
-        cache_value_in_state: bool,
-    ) -> PyResult<Self> {
-        Ok(Heuristic {
-            hdr: None,
-            hmax: None,
-            hrl: Some(HRL::new(
-                ss,
-                goals_vec,
-                constants_vec,
-                callable,
-                h_sym,
-                name,
-            )?),
             hcustom: None,
             cache_value_in_state: cache_value_in_state,
         })
@@ -203,9 +169,6 @@ impl Heuristic {
             } else if self.hcustom.is_some() {
                 let h = self.hcustom.as_ref().unwrap();
                 h.eval(state)
-            } else if self.hrl.is_some() {
-                let h = self.hrl.as_ref().unwrap();
-                h.eval(state, ss)
             } else {
                 Ok(Some(0.0))
             }
@@ -229,37 +192,15 @@ impl Heuristic {
         } else if self.hcustom.is_some() {
             let h = self.hcustom.as_ref().unwrap();
             h.name()
-        } else if self.hrl.is_some() {
-            let h = self.hrl.as_ref().unwrap();
-            h.name()
         } else {
             String::from("")
         }
     }
 }
 
-// Auxiliary enum used to transform iterators of states into vectors amenable for
-// vectorized evaluation
-enum StateMode {
-    Cached(Option<f64>),
-    Error(PyErr),
-    ToEval(usize),
-    Unknown,
-}
-
-// Function to create a vector of StateMode of length l pre-initialized with Unknown
-fn mk_unknown_state_mode_vec(l: usize) -> Vec<StateMode> {
-    let mut states_mapping: Vec<StateMode> = Vec::new();
-    for _i in 0..l {
-        states_mapping.push(StateMode::Unknown);
-    }
-    states_mapping
-}
-
 impl Heuristic {
     /// Evaluates the heuristic for a given state, returning an iterator over the results.
     /// This method is used in non-multiqueue search algorithms
-    /// If the heuristic is an HRL, it collects states to evaluate in batches.
     pub fn eval_gen<'a, I>(
         &'a self,
         states_iter: I,
@@ -268,275 +209,35 @@ impl Heuristic {
     where
         I: Iterator<Item = PyResult<State>> + 'a,
     {
-        if self.hrl.is_some() {
-            let states = states_iter.collect_vec();
-            let mut states_mapping = mk_unknown_state_mode_vec(states.len());
-            let mut vectors_to_eval: Vec<Vec<f32>> = Vec::new();
-            let mut sym_heuristics_to_eval: Vec<f64> = Vec::new();
-            for (i, rstate) in states.iter().enumerate() {
-                if let Ok(state) = rstate {
-                    states_mapping[i] = self.mk_state_mode(
-                        ss,
-                        state,
-                        &mut vectors_to_eval,
-                        &mut sym_heuristics_to_eval,
-                    );
+        return Ok(Box::new(states_iter.map(|state| match state {
+            Ok(state) => {
+                let h_value = self.eval(&state, ss);
+                match h_value {
+                    Ok(x) => Ok((state, x)),
+                    Err(e) => Err(e),
                 }
-                // No need to consider the Err case, it is handled in the final
-                // iterator which re-consider the `states` vector
             }
-            let computed_heuristics = self
-                .hrl
-                .as_ref()
-                .unwrap()
-                .eval_vector(vectors_to_eval, sym_heuristics_to_eval);
-            match computed_heuristics {
-                Ok(vc) => Ok(Box::new(
-                    states
-                        .into_iter()
-                        .zip_eq(states_mapping.into_iter())
-                        .map(move |(rs, case)| match rs {
-                            Ok(state) => match case {
-                                StateMode::Cached(x) => Ok((state, x)),
-                                StateMode::Error(x) => Err(x),
-                                StateMode::ToEval(idx) => Ok((state, Some(vc[idx]))),
-                                StateMode::Unknown => {
-                                    panic!("This should never happen");
-                                }
-                            },
-                            Err(e) => Err(e),
-                        }),
-                )),
-                Err(e) => Err(e),
-            }
-        } else {
-            return Ok(Box::new(states_iter.map(|state| match state {
-                Ok(state) => {
-                    let h_value = self.eval(&state, ss);
-                    match h_value {
-                        Ok(x) => Ok((state, x)),
-                        Err(e) => Err(e),
-                    }
-                }
-                Err(e) => Err(e),
-            })));
-        }
+            Err(e) => Err(e),
+        })));
     }
 
     /// Evaluates the heuristic for a given state, returning an iterator over the results.
     /// This method is used in multiqueue search algorithms
-    /// If the heuristic is an HRL, it collects states to evaluate in batches.
     pub fn eval_gen_container<'a>(
         &'a self,
         states: &'a Vec<Rc<RefCell<StateContainer>>>,
         ss: &'a SearchSpace,
     ) -> PyResult<Box<dyn Iterator<Item = PyResult<(usize, Option<f64>)>> + 'a>> {
-        if self.hrl.is_some() {
-            let mut states_mapping = mk_unknown_state_mode_vec(states.len());
-            let mut vectors_to_eval: Vec<Vec<f32>> = Vec::new();
-            let mut sym_heuristics_to_eval: Vec<f64> = Vec::new();
-            for (i, cstate) in states.iter().enumerate() {
-                let state = &(cstate.borrow().state);
-                states_mapping[i] = self.mk_state_mode(
-                    ss,
-                    state,
-                    &mut vectors_to_eval,
-                    &mut sym_heuristics_to_eval,
-                );
-            }
-            let computed_heuristics = self
-                .hrl
-                .as_ref()
-                .unwrap()
-                .eval_vector(vectors_to_eval, sym_heuristics_to_eval);
-            match computed_heuristics {
-                Ok(vc) => {
-                    let mut final_res = Vec::new();
-                    for (i, case) in states_mapping.into_iter().enumerate() {
-                        match case {
-                            StateMode::Cached(x) => final_res.push(Ok((i, x))),
-                            StateMode::Error(x) => final_res.push(Err(x)),
-                            StateMode::ToEval(idx) => final_res.push(Ok((i, Some(vc[idx])))),
-                            StateMode::Unknown => {
-                                panic!("This should never happen");
-                            }
-                        }
-                    }
-                    Ok(Box::new(final_res.into_iter()))
-                }
+        return Ok(Box::new(states.iter().enumerate().map(|(i, state)| {
+            let h_value = self.eval(&state.borrow().state, ss);
+            match h_value {
+                Ok(x) => Ok((i, x)),
                 Err(e) => Err(e),
             }
-        } else {
-            return Ok(Box::new(states.iter().enumerate().map(|(i, state)| {
-                let h_value = self.eval(&state.borrow().state, ss);
-                match h_value {
-                    Ok(x) => Ok((i, x)),
-                    Err(e) => Err(e),
-                }
-            })));
-        }
-    }
-
-    /// Creates a StateMode for the given state, possibly extending the
-    /// vectors_to_eval and sym_heuristics_to_eval in case an evaluation of the
-    /// state is needed
-    fn mk_state_mode(
-        &self,
-        ss: &SearchSpace,
-        state: &State,
-        vectors_to_eval: &mut Vec<Vec<f32>>,
-        sym_heuristics_to_eval: &mut Vec<f64>,
-    ) -> StateMode {
-        if self.cache_value_in_state {
-            let heuristic_cache = state.heuristic_cache.lock().unwrap();
-            if let Some(h_value) = heuristic_cache.get(&self.name()) {
-                return StateMode::Cached(*h_value);
-            }
-        }
-
-        match ss.goal_reached(state, None) {
-            Ok(true) => {
-                return StateMode::Cached(Some(0.0));
-            }
-            Ok(false) => {
-                let h_value = self.hrl.as_ref().unwrap().eval_hsym(state, ss);
-                match h_value {
-                    Ok(x) => {
-                        if let Some(hval) = x {
-                            let rv = self.hrl.as_ref().unwrap().get_vector(state, ss);
-                            match rv {
-                                Ok(v) => {
-                                    vectors_to_eval.push(v);
-                                    sym_heuristics_to_eval.push(hval);
-                                    return StateMode::ToEval(vectors_to_eval.len() - 1);
-                                }
-                                Err(e) => {
-                                    return StateMode::Error(e);
-                                }
-                            }
-                        } else {
-                            return StateMode::Cached(None);
-                        }
-                    }
-                    Err(e) => {
-                        return StateMode::Error(e);
-                    }
-                }
-            }
-            Err(e) => {
-                return StateMode::Error(e);
-            }
-        }
+        })));
     }
 }
 
-pub struct HRL {
-    ss: CoreStateEncoder,
-    goals_vec: Vec<f32>,
-    constants_vec: Vec<f32>,
-    h_sym: Arc<Option<Heuristic>>,
-    callable: PyObject,
-    name: String,
-}
-
-impl HRL {
-    fn new(
-        ss: &CoreStateEncoder,
-        goals_vec: Vec<f32>,
-        constants_vec: Vec<f32>,
-        callable: PyObject,
-        h_sym: Option<Heuristic>,
-        name: &str,
-    ) -> PyResult<Self> {
-        Ok(HRL {
-            ss: ss.clone(),
-            goals_vec,
-            constants_vec,
-            h_sym: Arc::new(h_sym),
-            callable,
-            name: String::from(name),
-        })
-    }
-
-    fn eval_hsym(&self, state: &State, ss: &SearchSpace) -> PyResult<Option<f64>> {
-        if let Some(h) = self.h_sym.as_ref() {
-            h.eval(state, ss)
-        } else {
-            Ok(Some(-1.0))
-        }
-    }
-
-    pub fn eval(&self, state: &State, ss: &SearchSpace) -> PyResult<Option<f64>> {
-        if ss.goal_reached(&state, None)? {
-            return Ok(Some(0.0));
-        }
-        let enc = self.get_vector(state, ss)?;
-        let h_val = match self.eval_hsym(state, ss)? {
-            Some(v) => v,
-            None => {
-                return Ok(None);
-            }
-        };
-        let vec_res = self.eval_vector(vec![enc], vec![h_val])?;
-        if vec_res.len() == 1 {
-            return Ok(Some(vec_res[0]));
-        } else {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "Expected 1 value, got {}",
-                vec_res.len()
-            )));
-        }
-    }
-
-    fn get_vector(&self, state: &State, ss: &SearchSpace) -> Result<Vec<f32>, PyErr> {
-        let mut enc: Vec<f32> = Vec::new();
-        enc.extend(self.ss.get_fluents_as_vector(state)?);
-        enc.extend(self.ss.get_running_actions_as_vector(state)?);
-        enc.extend(self.constants_vec.iter());
-        enc.extend(self.goals_vec.iter());
-        enc.extend(self.ss.get_tn_as_vector(state, ss)?);
-        Ok(enc)
-    }
-
-    pub fn eval_vector(
-        &self,
-        vectors_to_eval: Vec<Vec<f32>>,
-        sym_heuristics_to_eval: Vec<f64>,
-    ) -> PyResult<Vec<f64>> {
-        if vectors_to_eval.is_empty() {
-            Ok(vec![])
-        } else {
-            Python::with_gil(|py| {
-                let args = PyTuple::new(
-                    py,
-                    &[
-                        vectors_to_eval.into_pyobject(py)?,
-                        sym_heuristics_to_eval.into_pyobject(py)?,
-                    ],
-                )?;
-                let r = self.callable.call(py, args, None)?;
-                Ok(r.extract(py)?)
-            })
-        }
-    }
-
-    pub fn name(&self) -> String {
-        self.name.clone()
-    }
-}
-
-impl Clone for HRL {
-    fn clone(&self) -> Self {
-        Python::with_gil(|py| HRL {
-            ss: self.ss.clone(),
-            goals_vec: self.goals_vec.clone(),
-            constants_vec: self.constants_vec.clone(),
-            h_sym: self.h_sym.clone(),
-            callable: self.callable.clone_ref(py),
-            name: self.name.clone(),
-        })
-    }
-}
 
 #[derive(Debug)]
 pub struct CustomHeuristic {

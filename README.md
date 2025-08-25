@@ -74,12 +74,10 @@ Defines parameters for a single search strategy.
 
 | Field                      | Type              | Description                                                                 |
 |----------------------------|-------------------|-----------------------------------------------------------------------------|
-| `search`                   | `Optional[str]`   | The search algorithm to use. Supported values: `"astar"`, `"wastar"`, `"gbfs"`, `"bfs"`, `"dfs"`, `"ehs"`. |
-| `heuristic`                | `Optional[str]`   | The heuristic function to use. Supported values: `"hff"`, `"hadd"`, `"hmax"`, `"hmax_numeric"`, `"blind"`, `"custom"`. |
-| `weight`                   | `Optional[str]`   | A numeric value between 0 and 1 (as string), used by weighted search variants like `wastar`. |
-| `internal_heuristic_cache` | `Optional[bool]`  | Enables internal caching within the heuristic if set to `True`.             |
-| `rl_params`                | `Optional[Any]`   | Reserved for RL-related heuristics.                      |
-| `cache_heuristic_in_state` | `Optional[bool]`  | If `True`, stores heuristic values in the state to avoid recomputation in certain RL-related heuristics.     |
+| `search`                   | `Optional[str]`   | The search algorithm to use. Supported values: `"astar"`, `"wastar"`, `"gbfs"`, `"bfs"`, `"dfs"`, `"ehs"`. Default: `"wastar"`. |
+| `heuristic`                | `Optional[str]`   | The heuristic function to use. Supported values: `"hff"`, `"hadd"`, `"hmax"`, `"hmax_numeric"`, `"blind"`, `"custom"`. Default: `"hff"`. |
+| `weight`                   | `Optional[str]`   | A numeric value between 0 and 1 (as string), used by weighted search variants like `wastar`. Default: `0.8`. |
+| `internal_heuristic_cache` | `Optional[bool]`  | Enables internal caching within the heuristic if set to `True`. Default: `True`. |
 
 ---
 

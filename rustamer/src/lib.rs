@@ -22,7 +22,6 @@ mod multiqueue;
 mod search;
 mod search_space;
 mod search_state;
-mod state_encoder;
 mod stn;
 mod structures;
 mod tn_interpreter;
@@ -37,7 +36,6 @@ use heuristics::*;
 use multiqueue::*;
 use search::*;
 use search_space::*;
-use state_encoder::CoreStateEncoder;
 use structures::*;
 
 /// A Python module implemented in Rust.
@@ -49,7 +47,6 @@ fn rustamer(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Event>()?;
     m.add_class::<SearchSpace>()?;
     m.add_class::<Heuristic>()?;
-    m.add_class::<CoreStateEncoder>()?;
 
     m.add_function(wrap_pyfunction!(make_operator_node, &m)?)?;
     m.add_function(wrap_pyfunction!(make_bool_constant_node, &m)?)?;

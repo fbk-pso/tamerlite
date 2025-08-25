@@ -32,7 +32,7 @@ from rustamer import (
     shift_expression,
     simplify,
 )
-from rustamer import CoreStateEncoder, Heuristic
+from rustamer import Heuristic
 
 def HFF(fluents, objects, events, goals, internal_caching, cache_value_in_state):
     return Heuristic.hff(fluents, objects, events, goals, internal_caching, cache_value_in_state)
@@ -45,16 +45,6 @@ def HMaxNumeric(fluents, objects, events, goals, internal_caching, cache_value_i
 
 def HMax(fluents, objects, events, goals, internal_caching, cache_value_in_state):
     return Heuristic.hmax(fluents, objects, events, goals, internal_caching, cache_value_in_state)
-
-def RLRank(state_encoder, model, ModelClass, other_params, sym_h, cache_value_in_state):
-    from tamerlite.rl_heuristics import RLRank
-    h = RLRank(state_encoder, model, ModelClass, other_params, sym_h, cache_value_in_state)
-    return Heuristic.hrl(h.name, state_encoder._general_state_encoder._cse, state_encoder._goals_vec, state_encoder._constants_vec, h.eval_state_vecs, sym_h, cache_value_in_state)
-
-def RLHeuristic(state_encoder, model, ModelClass, other_params, sym_h, cache_value_in_state):
-    from tamerlite.rl_heuristics import RLHeuristic
-    h = RLHeuristic(state_encoder, model, ModelClass, other_params, sym_h, cache_value_in_state)
-    return Heuristic.hrl(h.name, state_encoder._general_state_encoder._cse, state_encoder._goals_vec, state_encoder._constants_vec, h.eval_state_vecs, sym_h, cache_value_in_state)
 
 def CustomHeuristic(callable, cache_value_in_state):
     return Heuristic.custom(callable, cache_value_in_state)

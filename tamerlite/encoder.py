@@ -17,90 +17,12 @@
 
 import unified_planning as up
 import unified_planning.model
-from unified_planning.model.fluent import get_all_fluent_exp
 from unified_planning.plans import TimeTriggeredPlan, SequentialPlan, Plan
-from unified_planning.engines.compilers import Grounder
 from fractions import Fraction
-from typing import List, Tuple, Dict, Union, Optional
+from typing import List, Tuple, Dict, Optional
 
 from tamerlite.core import Expression, Effect, Timing, Event, SearchSpace, get_fluents
-from tamerlite.state_encoder import StateEncoder, GeneralStateEncoder
 from tamerlite.converter import Converter
-
-
-def get_encoders(domain, problem=None):
-    """
-    Returns the problem encoder, the state encoder and the callable to map back
-    the ground actions to their lifted version.
-    If both the domain and the problem are specified, the problem is updated
-    adding all the domain's objects "disabling" the ones not already present in
-    the problem, using an extra fluent.
-    If only the domain is specified, returns the general state encoder instead of
-    the state encoder.
-    """
-    full = problem is not None
-
-    if problem is None:
-        problem = domain.clone()
-    else:
-        problem = problem.clone()
-
-    is_active_fluents = {}
-    for ut in problem.user_types:
-        f = up.model.Fluent(f"_is_active_{ut.name}", p=ut)
-        is_active_fluents[ut] = f
-        problem.add_fluent(f, default_initial_value=False)
-        if full:
-            for obj in problem.objects(ut):
-                problem.set_initial_value(f(obj), True)
-    if full:
-        for obj in domain.all_objects:
-            if obj not in problem.all_objects:
-                problem.add_object(obj)
-        domain_initial_values = domain.initial_values
-        initial_values = problem.initial_values
-        for f in problem.fluents:
-            for f_exp in get_all_fluent_exp(problem, f):
-                if f_exp not in initial_values and f_exp in domain_initial_values:
-                    problem.set_initial_value(f_exp, domain_initial_values[f_exp])
-
-    em = problem.environment.expression_manager
-    for f in problem.fluents:
-        if f in problem.fluents_defaults:
-            pass
-        elif f.type.is_bool_type():
-            problem.fluents_defaults[f] = em.FALSE()
-        elif f.type.is_int_type():
-            problem.fluents_defaults[f] = em.Int(0)
-        elif f.type.is_real_type():
-            problem.fluents_defaults[f] = em.Real(Fraction(0))
-        elif f.type.is_user_type():
-            problem.fluents_defaults[f] = em.ObjectExp(next(problem.objects(f.type)))
-        else:
-            raise NotImplementedError()
-
-    for a in problem.actions:
-        for p in a.parameters:
-            if p.type.is_user_type():
-                f = is_active_fluents[p.type]
-                if isinstance(a, up.model.InstantaneousAction):
-                    a.add_precondition(f(p))
-                else:
-                    a.add_condition(up.model.StartTiming(), f(p))
-
-    grounder = Grounder(prune_actions=False)
-    grounding_result = grounder.compile(problem)
-
-    ground_problem = grounding_result.problem
-
-    encoder = Encoder(ground_problem, full)
-    gen_state_encoder = GeneralStateEncoder(problem, grounding_result, encoder.events, encoder.search_space)
-    if full:
-        state_encoder = StateEncoder(problem.environment, gen_state_encoder, problem.initial_values, problem.goals)
-    else:
-        state_encoder = gen_state_encoder
-
-    return encoder, state_encoder, grounding_result.map_back_action_instance
 
 
 class Encoder:
