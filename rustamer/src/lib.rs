@@ -29,14 +29,13 @@ mod utils;
 
 pub use search::{
     wastar_search,
-    astar_search,
-    gbfs_search,
     ehc_search,
     bfs_search,
     dfs_search,
 };
-pub use multiqueue::multiqueue_search;
+pub use multiqueue::{StateContainer, multiqueue_search};
 pub use search_space::SearchSpace;
+pub use search_state::State;
 pub use structures::{Timing, Effect, Event};
 pub use expressions::{
     PyExpressionNode,
@@ -52,4 +51,10 @@ pub use expressions_utils::{
     shift_expression,
     simplify,
 };
-pub use heuristics::Heuristic;
+pub use heuristics::{
+    DeleteRelaxationHeuristic,
+    HMaxNumeric,
+    CustomHeuristic,
+    HeuristicKind,
+    HeuristicTrait,
+};

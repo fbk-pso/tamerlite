@@ -15,10 +15,14 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 
+mod heuristic;
+mod search;
 
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
+use heuristic::*;
+use search::*;
 use rustamerlib;
 
 /// A Python module implemented in Rust.
@@ -29,7 +33,7 @@ fn rustamer(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<rustamerlib::Timing>()?;
     m.add_class::<rustamerlib::Event>()?;
     m.add_class::<rustamerlib::SearchSpace>()?;
-    m.add_class::<rustamerlib::Heuristic>()?;
+    m.add_class::<Heuristic>()?;
 
     m.add_function(wrap_pyfunction!(rustamerlib::make_operator_node, &m)?)?;
     m.add_function(wrap_pyfunction!(rustamerlib::make_bool_constant_node, &m)?)?;
@@ -38,11 +42,11 @@ fn rustamer(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rustamerlib::make_object_node, &m)?)?;
     m.add_function(wrap_pyfunction!(rustamerlib::make_fluent_node, &m)?)?;
     m.add_function(wrap_pyfunction!(rustamerlib::shift_expression, &m)?)?;
-    m.add_function(wrap_pyfunction!(rustamerlib::wastar_search, &m)?)?;
-    m.add_function(wrap_pyfunction!(rustamerlib::multiqueue_search, &m)?)?;
-    m.add_function(wrap_pyfunction!(rustamerlib::astar_search, &m)?)?;
-    m.add_function(wrap_pyfunction!(rustamerlib::gbfs_search, &m)?)?;
-    m.add_function(wrap_pyfunction!(rustamerlib::ehc_search, &m)?)?;
+    m.add_function(wrap_pyfunction!(multiqueue_search, &m)?)?;
+    m.add_function(wrap_pyfunction!(wastar_search, &m)?)?;
+    m.add_function(wrap_pyfunction!(astar_search, &m)?)?;
+    m.add_function(wrap_pyfunction!(gbfs_search, &m)?)?;
+    m.add_function(wrap_pyfunction!(ehc_search, &m)?)?;
     m.add_function(wrap_pyfunction!(rustamerlib::bfs_search, &m)?)?;
     m.add_function(wrap_pyfunction!(rustamerlib::dfs_search, &m)?)?;
     m.add_function(wrap_pyfunction!(rustamerlib::evaluate, &m)?)?;
