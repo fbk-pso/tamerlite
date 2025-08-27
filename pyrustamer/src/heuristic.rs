@@ -144,6 +144,11 @@ impl Heuristic {
             String::from("")
         }
     }
+
+    #[pyo3(name = "eval")]
+    pub fn py_eval(&self, state: &State, ss: &SearchSpace) -> PyResult<Option<f64>> {
+        self.eval(state, ss)
+    }
 }
 
 impl HeuristicTrait for Heuristic {
