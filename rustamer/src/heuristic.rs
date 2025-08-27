@@ -17,7 +17,7 @@
 
 use std::{collections::HashMap, vec::Vec};
 use pyo3::prelude::*;
-use rustamerlib::*;
+use rustamer_base::*;
 
 
 #[pyclass(frozen)]

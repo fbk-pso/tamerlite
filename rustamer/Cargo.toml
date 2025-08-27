@@ -1,14 +1,18 @@
 [package]
-name = "rustamerlib"
+name = "rustamer"
 version = "0.1.0"
 edition = "2021"
 license = "GPLv3"
 
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "rustamer"
+crate-type = ["cdylib"]
+
 [dependencies]
 pyo3 = "0.23.4"
-num-rational = "0.4.1"
-num = "0.4.1"
-multiset = "0.0.5"
-num-traits = "0.2.16"
-regex = "1.9.3"
-itertools = "0.14"
+rustamer-base = { path = "../rustamer-base" }
+
+[profile.profiling]
+inherits = "release"
+debug = true

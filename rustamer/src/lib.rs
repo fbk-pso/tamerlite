@@ -15,46 +15,42 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 
-mod expressions;
-mod expressions_utils;
-mod heuristics;
-mod multiqueue;
+mod heuristic;
 mod search;
-mod search_space;
-mod search_state;
-mod stn;
-mod structures;
-mod tn_interpreter;
-mod utils;
 
-pub use search::{
-    wastar_search,
-    ehc_search,
-    bfs_search,
-    dfs_search,
-};
-pub use multiqueue::{StateContainer, multiqueue_search};
-pub use search_space::SearchSpace;
-pub use search_state::State;
-pub use structures::{Timing, Effect, Event};
-pub use expressions::{
-    PyExpressionNode,
-    make_bool_constant_node,
-    make_fluent_node,
-    make_int_constant_node,
-    make_object_node,
-    make_operator_node,
-    make_rational_constant_node,
-};
-pub use expressions_utils::{
-    evaluate,
-    shift_expression,
-    simplify,
-};
-pub use heuristics::{
-    DeleteRelaxationHeuristic,
-    HMaxNumeric,
-    CustomHeuristic,
-    HeuristicKind,
-    HeuristicTrait,
-};
+use pyo3::prelude::*;
+use pyo3::types::PyModule;
+
+use heuristic::*;
+use search::*;
+use rustamer_base;
+
+/// A Python module implemented in Rust.
+#[pymodule]
+fn rustamer(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<rustamer_base::PyExpressionNode>()?;
+    m.add_class::<rustamer_base::Effect>()?;
+    m.add_class::<rustamer_base::Timing>()?;
+    m.add_class::<rustamer_base::Event>()?;
+    m.add_class::<rustamer_base::SearchSpace>()?;
+    m.add_class::<Heuristic>()?;
+
+    m.add_function(wrap_pyfunction!(rustamer_base::make_operator_node, &m)?)?;
+    m.add_function(wrap_pyfunction!(rustamer_base::make_bool_constant_node, &m)?)?;
+    m.add_function(wrap_pyfunction!(rustamer_base::make_int_constant_node, &m)?)?;
+    m.add_function(wrap_pyfunction!(rustamer_base::make_rational_constant_node, &m)?)?;
+    m.add_function(wrap_pyfunction!(rustamer_base::make_object_node, &m)?)?;
+    m.add_function(wrap_pyfunction!(rustamer_base::make_fluent_node, &m)?)?;
+    m.add_function(wrap_pyfunction!(rustamer_base::shift_expression, &m)?)?;
+    m.add_function(wrap_pyfunction!(multiqueue_search, &m)?)?;
+    m.add_function(wrap_pyfunction!(wastar_search, &m)?)?;
+    m.add_function(wrap_pyfunction!(astar_search, &m)?)?;
+    m.add_function(wrap_pyfunction!(gbfs_search, &m)?)?;
+    m.add_function(wrap_pyfunction!(ehc_search, &m)?)?;
+    m.add_function(wrap_pyfunction!(rustamer_base::bfs_search, &m)?)?;
+    m.add_function(wrap_pyfunction!(rustamer_base::dfs_search, &m)?)?;
+    m.add_function(wrap_pyfunction!(rustamer_base::evaluate, &m)?)?;
+    m.add_function(wrap_pyfunction!(rustamer_base::simplify, &m)?)?;
+
+    Ok(())
+}
