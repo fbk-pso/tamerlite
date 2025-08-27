@@ -27,11 +27,10 @@ use std::{collections::HashMap, vec::Vec};
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
-use crate::multiqueue::StateContainer;
-use crate::{internal_evaluate, SearchSpace};
-
 use super::expressions::*;
 use super::expressions_utils::*;
+use super::multiqueue::StateContainer;
+use super::search_space::SearchSpace;
 use super::search_state::State;
 use super::structures::*;
 
@@ -152,7 +151,7 @@ impl Heuristic {
         })
     }
 
-    pub fn eval(&self, state: &State, ss: &SearchSpace) -> PyResult<Option<f64>> {
+    pub fn eval(&self, state: &State, _ss: &SearchSpace) -> PyResult<Option<f64>> {
         if self.cache_value_in_state {
             let heuristic_cache = state.heuristic_cache.lock().unwrap();
             if let Some(h_value) = heuristic_cache.get(&self.name()) {

@@ -11,8 +11,8 @@ setup(name='tamerlite',
       packages=find_packages(),
       install_requires=['rustamer~=0.1.0'],
       python_requires='>=3.10',
-      license='Free For Educational Use',
+      license='LGPLv3',
       classifiers=[
-          'License :: Free For Educational Use'
+          'License :: GNU Lesser General Public License v3.0'
       ]
      )

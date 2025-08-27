@@ -27,43 +27,29 @@ mod structures;
 mod tn_interpreter;
 mod utils;
 
-use pyo3::prelude::*;
-use pyo3::types::PyModule;
-
-use expressions::*;
-use expressions_utils::*;
-use heuristics::*;
-use multiqueue::*;
-use search::*;
-use search_space::*;
-use structures::*;
-
-/// A Python module implemented in Rust.
-#[pymodule]
-fn rustamer(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyExpressionNode>()?;
-    m.add_class::<Effect>()?;
-    m.add_class::<Timing>()?;
-    m.add_class::<Event>()?;
-    m.add_class::<SearchSpace>()?;
-    m.add_class::<Heuristic>()?;
-
-    m.add_function(wrap_pyfunction!(make_operator_node, &m)?)?;
-    m.add_function(wrap_pyfunction!(make_bool_constant_node, &m)?)?;
-    m.add_function(wrap_pyfunction!(make_int_constant_node, &m)?)?;
-    m.add_function(wrap_pyfunction!(make_rational_constant_node, &m)?)?;
-    m.add_function(wrap_pyfunction!(make_object_node, &m)?)?;
-    m.add_function(wrap_pyfunction!(make_fluent_node, &m)?)?;
-    m.add_function(wrap_pyfunction!(shift_expression, &m)?)?;
-    m.add_function(wrap_pyfunction!(wastar_search, &m)?)?;
-    m.add_function(wrap_pyfunction!(multiqueue_search, &m)?)?;
-    m.add_function(wrap_pyfunction!(astar_search, &m)?)?;
-    m.add_function(wrap_pyfunction!(gbfs_search, &m)?)?;
-    m.add_function(wrap_pyfunction!(ehc_search, &m)?)?;
-    m.add_function(wrap_pyfunction!(bfs_search, &m)?)?;
-    m.add_function(wrap_pyfunction!(dfs_search, &m)?)?;
-    m.add_function(wrap_pyfunction!(evaluate, &m)?)?;
-    m.add_function(wrap_pyfunction!(simplify, &m)?)?;
-
-    Ok(())
-}
+pub use search::{
+    wastar_search,
+    astar_search,
+    gbfs_search,
+    ehc_search,
+    bfs_search,
+    dfs_search,
+};
+pub use multiqueue::multiqueue_search;
+pub use search_space::SearchSpace;
+pub use structures::{Timing, Effect, Event};
+pub use expressions::{
+    PyExpressionNode,
+    make_bool_constant_node,
+    make_fluent_node,
+    make_int_constant_node,
+    make_object_node,
+    make_operator_node,
+    make_rational_constant_node,
+};
+pub use expressions_utils::{
+    evaluate,
+    shift_expression,
+    simplify,
+};
+pub use heuristics::Heuristic;
