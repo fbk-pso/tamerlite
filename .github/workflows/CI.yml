@@ -26,12 +26,12 @@ jobs:
       - name: Build rustamer
         uses: PyO3/maturin-action@v1
         with:
-          working-directory: pyrustamer
+          working-directory: rustamer
           command: build
           args: --release
       - name: Install unified-planning and tamerlite
         run: |
-          python3 -m pip install --find-links pyrustamer/target/wheels/ rustamer
+          python3 -m pip install --find-links rustamer/target/wheels/ rustamer
           python3 -m pip install .
           git clone https://github.com/aiplan4eu/unified-planning.git
           python3 -m pip install -r unified-planning/requirements.txt
@@ -68,7 +68,7 @@ jobs:
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
-          working-directory: pyrustamer
+          working-directory: rustamer
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter
           sccache: 'true'
@@ -77,7 +77,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wheels-linux
-          path: pyrustamer/dist
+          path: rustamer/dist
 
   windows:
     runs-on: windows-latest
@@ -101,7 +101,7 @@ jobs:
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
-          working-directory: pyrustamer
+          working-directory: rustamer
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter
           sccache: 'true'
@@ -109,7 +109,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wheels-windows
-          path: pyrustamer/dist
+          path: rustamer/dist
 
   macos:
     runs-on: macos-latest
@@ -131,7 +131,7 @@ jobs:
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
-          working-directory: pyrustamer
+          working-directory: rustamer
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter
           sccache: 'true'
@@ -139,7 +139,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wheels-macos-${{ matrix.target }}
-          path: pyrustamer/dist
+          path: rustamer/dist
 
   sdist:
     runs-on: ubuntu-latest
@@ -150,14 +150,14 @@ jobs:
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:
-          working-directory: pyrustamer
+          working-directory: rustamer
           command: sdist
           args: --out dist
       - name: Upload sdist
         uses: actions/upload-artifact@v4
         with:
           name: wheels-sdist
-          path: pyrustamer/dist
+          path: rustamer/dist
 
   tamerlite:
     runs-on: ubuntu-latest
