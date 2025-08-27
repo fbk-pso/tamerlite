@@ -94,37 +94,9 @@ pub fn build_plan(
     Ok(Some(res))
 }
 
-#[pyfunction]
-#[pyo3(signature = (ss, heuristic, timeout=None))]
-pub fn astar_search(
+pub fn wastar_search<H: HeuristicTrait>(
     ss: &SearchSpace,
-    heuristic: &Heuristic,
-    timeout: Option<f32>,
-) -> PyResult<(
-    Option<Vec<(Option<String>, String, Option<String>)>>,
-    HashMap<String, String>,
-)> {
-    wastar_search(ss, heuristic, 0.5, timeout)
-}
-
-#[pyfunction]
-#[pyo3(signature = (ss, heuristic, timeout=None))]
-pub fn gbfs_search(
-    ss: &SearchSpace,
-    heuristic: &Heuristic,
-    timeout: Option<f32>,
-) -> PyResult<(
-    Option<Vec<(Option<String>, String, Option<String>)>>,
-    HashMap<String, String>,
-)> {
-    wastar_search(ss, heuristic, 1.0, timeout)
-}
-
-#[pyfunction]
-#[pyo3(signature = (ss, heuristic, weight, timeout=None))]
-pub fn wastar_search(
-    ss: &SearchSpace,
-    heuristic: &Heuristic,
+    heuristic: &H,
     weight: f64,
     timeout: Option<f32>,
 ) -> PyResult<(
@@ -270,11 +242,10 @@ fn basic_search(
     Ok((None, metrics))
 }
 
-#[pyfunction]
-#[pyo3(signature = (ss, heuristic, timeout=None))]
-pub fn ehc_search(
+
+pub fn ehc_search<H: HeuristicTrait>(
     ss: &SearchSpace,
-    heuristic: &Heuristic,
+    heuristic: &H,
     timeout: Option<f32>,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,

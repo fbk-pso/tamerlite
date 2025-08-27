@@ -1,0 +1,88 @@
+// Copyright (C) 2025 PSO Unit, Fondazione Bruno Kessler
+// This file is part of TamerLite.
+//
+// TamerLite is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// TamerLite is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
+//
+
+use std::collections::HashMap;
+
+use rustamerlib;
+use super::heuristic::Heuristic;
+use pyo3::prelude::*;
+
+#[pyfunction]
+#[pyo3(signature = (ss, heuristic, timeout=None))]
+pub fn ehc_search(
+    ss: &rustamerlib::SearchSpace,
+    heuristic: &Heuristic,
+    timeout: Option<f32>,
+) -> PyResult<(
+    Option<Vec<(Option<String>, String, Option<String>)>>,
+    HashMap<String, String>,
+)> {
+    rustamerlib::ehc_search(ss, heuristic, timeout)
+}
+
+#[pyfunction]
+#[pyo3(signature = (ss, heuristic, weight, timeout=None))]
+pub fn wastar_search(
+    ss: &rustamerlib::SearchSpace,
+    heuristic: &Heuristic,
+    weight: f64,
+    timeout: Option<f32>,
+) -> PyResult<(
+    Option<Vec<(Option<String>, String, Option<String>)>>,
+    HashMap<String, String>,
+)> {
+    rustamerlib::wastar_search(ss, heuristic, weight, timeout)
+}
+
+#[pyfunction]
+#[pyo3(signature = (ss, heuristic, timeout=None))]
+pub fn astar_search(
+    ss: &rustamerlib::SearchSpace,
+    heuristic: &Heuristic,
+    timeout: Option<f32>,
+) -> PyResult<(
+    Option<Vec<(Option<String>, String, Option<String>)>>,
+    HashMap<String, String>,
+)> {
+    wastar_search(ss, heuristic, 0.5, timeout)
+}
+
+#[pyfunction]
+#[pyo3(signature = (ss, heuristic, timeout=None))]
+pub fn gbfs_search(
+    ss: &rustamerlib::SearchSpace,
+    heuristic: &Heuristic,
+    timeout: Option<f32>,
+) -> PyResult<(
+    Option<Vec<(Option<String>, String, Option<String>)>>,
+    HashMap<String, String>,
+)> {
+    wastar_search(ss, heuristic, 1.0, timeout)
+}
+
+#[pyfunction]
+#[pyo3(signature = (ss, heuristics, timeout=None))]
+pub fn multiqueue_search(
+    ss: &rustamerlib::SearchSpace,
+    heuristics: Vec<(Heuristic, f64)>,
+    timeout: Option<f32>,
+) -> PyResult<(
+    Option<Vec<(Option<String>, String, Option<String>)>>,
+    HashMap<String, String>,
+)> {
+    rustamerlib::multiqueue_search(ss, heuristics, timeout)
+}
