@@ -6,7 +6,7 @@
 ## Installation
 
 TamerLite is not currently available on PyPI and must be installed from source.
-It includes a core module written in Rust (under the `rustamer/` directory), which must be compiled using [Maturin](https://github.com/PyO3/maturin) before installing the package.
+It includes a core module written in Rust (under the `rustamer/` and `rustamer-base` directories), which must be compiled using [Maturin](https://github.com/PyO3/maturin) before installing the package.
 
 ### Prerequisites
 
@@ -24,24 +24,17 @@ Make sure the following tools are installed:
    cd tamerlite
    ```
 
-2. Build the Rust extension (wheel format):
+2. Build and install the Rust extension:
    ```bash
-   cd rustamer
-   maturin build --release
+   pip install rustamer/
    ```
 
-3. Install the generated wheel (replace `*.whl` with the actual filename):
-   ```bash
-   pip install target/wheels/*.whl
-   cd ..
-   ```
-
-4. Install the remaining Python code:
+3. Install the remaining Python code:
    ```bash
    pip install .
    ```
 
-> **Note:** Precompiled wheels for `rustamer` are available as artifacts from the GitHub Actions CI on the `main` branch. If you download and install the precompiled rustamer wheel manually, you can skip steps 2 and 3 above and proceed directly to step 4. You can find the artifacts in the [Actions tab](https://github.com/fbk-pso/tamerlite/actions) of the GitHub repository.
+> **Note:** Precompiled wheels for `rustamer` are available as artifacts from the GitHub Actions CI on the `main` branch. If you download and install the precompiled rustamer wheel manually, you can skip step 2 and proceed directly to step 4. You can find the artifacts in the [Actions tab](https://github.com/fbk-pso/tamerlite/actions) of the GitHub repository.
 
 ## Usage
 
