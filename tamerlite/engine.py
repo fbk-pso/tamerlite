@@ -179,26 +179,24 @@ class TamerLite(
 
         return h, w
 
-    def _get_search(self, params, heuristic, encoder):
-        if params is None:
+    def _get_search(self, params, heuristic, weight):
+        if params is None or params.search is None:
             s = "wastar"
         else:
-            s = "wastar" if params.search is None else params.search
-
-        h, w = self._get_heuristic(params, heuristic, encoder)
+            s = params.search
 
         if s == "wastar":
-            search = partial(wastar_search, heuristic=h, weight=w)
+            search = partial(wastar_search, heuristic=heuristic, weight=weight)
         elif s == "astar":
-            search = partial(astar_search, heuristic=h)
+            search = partial(astar_search, heuristic=heuristic)
         elif s == "gbfs":
-            search = partial(gbfs_search, heuristic=h)
+            search = partial(gbfs_search, heuristic=heuristic)
         elif s == "dfs":
             search = dfs_search
         elif s == "bfs":
             search = bfs_search
         elif s == "ehs":
-            search = partial(ehc_search, heuristic=h)
+            search = partial(ehc_search, heuristic=heuristic)
 
         return search
 
@@ -221,7 +219,8 @@ class TamerLite(
                     heuristics.append((h, w))
                 plan, metrics = multiqueue_search(encoder.search_space, heuristics, timeout)
             else:
-                search = self._get_search(self._params, heuristic, encoder)
+                h, w = self._get_heuristic(self._params, heuristic, encoder)
+                search = self._get_search(self._params, h, w)
                 plan, metrics = search(encoder.search_space, timeout=timeout)
 
             if plan:

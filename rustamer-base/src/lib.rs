@@ -15,17 +15,17 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 
-mod expressions;
+pub mod expressions;
 mod expressions_utils;
 mod heuristics;
 mod multiqueue;
 mod search;
-mod search_space;
-mod search_state;
+pub mod search_space;
+pub mod search_state;
 mod stn;
-mod structures;
+pub mod structures;
 mod tn_interpreter;
-mod utils;
+pub mod utils;
 
 pub use search::{
     wastar_search,

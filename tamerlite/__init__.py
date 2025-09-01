@@ -15,4 +15,5 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 
+from tamerlite import engine
 from tamerlite.engine import SearchParams, MultiqueueParams
