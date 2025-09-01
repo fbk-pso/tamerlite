@@ -15,17 +15,17 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 
-pub mod expressions;
+mod expressions;
 mod expressions_utils;
 mod heuristics;
 mod multiqueue;
 mod search;
-pub mod search_space;
-pub mod search_state;
+mod search_space;
+mod search_state;
 mod stn;
-pub mod structures;
+mod structures;
 mod tn_interpreter;
-pub mod utils;
+mod utils;
 
 pub use search::{
     wastar_search,
@@ -38,6 +38,7 @@ pub use search_space::SearchSpace;
 pub use search_state::State;
 pub use structures::{Timing, Effect, Event};
 pub use expressions::{
+    ExpressionNode,
     PyExpressionNode,
     make_bool_constant_node,
     make_fluent_node,
