@@ -19,7 +19,7 @@ import unified_planning as up
 import unified_planning.model
 from unified_planning.plans import TimeTriggeredPlan, SequentialPlan, Plan
 from fractions import Fraction
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple, Dict, Optional, Union
 
 from tamerlite.core import Expression, Effect, Timing, Event, SearchSpace, get_fluents
 from tamerlite.converter import Converter
@@ -133,6 +133,15 @@ class Encoder:
     @property
     def goal(self) -> Expression:
         return self._goal
+    
+    @property
+    def encode_fluents(self) -> bool:
+        return self._encode_fluents
+    
+    def get_fluent_encoding(self, fluent: str) -> Union[str, int]:
+        if self.encode_fluents:
+            return self.fluent_ids[fluent]
+        return fluent
 
     def build_plan(self, plan: List[Tuple[Optional[Fraction], str, Optional[Fraction]]]) -> Plan:
         if self._is_temporal:
