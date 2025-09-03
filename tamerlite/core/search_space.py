@@ -219,6 +219,13 @@ def evaluate(exp: Expression, state: State) -> Union[bool, int, Fraction, str]:
                         v = False
                         break
                 res.append(v)
+            elif e.kind == "or":
+                v = False
+                for i in e.operands:
+                    if res[i]:
+                        v = True
+                        break
+                res.append(v)
             if e.kind == "not":
                 res.append(not res[e.operands[0]])
             elif e.kind == "==":

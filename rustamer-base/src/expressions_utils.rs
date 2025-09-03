@@ -402,6 +402,10 @@ pub fn internal_evaluate(exp: &Vec<ExpressionNode>, state: &State) -> PyResult<E
                 let val = v.iter().all(|&p| res[p] == ExpressionNode::Bool(true));
                 ExpressionNode::Bool(val)
             }
+            ExpressionNode::Or(v) => {
+                let val = v.iter().any(|&p| res[p] == ExpressionNode::Bool(true));
+                ExpressionNode::Bool(val)
+            }
             ExpressionNode::Not(p) => ExpressionNode::Bool(ExpressionNode::Bool(false) == res[*p]),
             ExpressionNode::Equals(p1, p2) => ExpressionNode::Bool(res[*p1] == res[*p2]),
             ExpressionNode::LE(p1, p2) => {

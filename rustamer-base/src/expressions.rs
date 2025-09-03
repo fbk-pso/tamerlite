@@ -30,6 +30,7 @@ pub enum ExpressionNode {
     Fluent(String),
     Object(String),
     And(Vec<usize>),
+    Or(Vec<usize>),
     Not(usize),
     Equals(usize, usize),
     LE(usize, usize),
@@ -156,6 +157,7 @@ impl PyExpressionNode {
 pub fn make_operator(kind: String, operands: Vec<usize>) -> PyResult<ExpressionNode> {
     match kind.as_str() {
         "and" => Ok(ExpressionNode::And(operands)),
+        "or" => Ok(ExpressionNode::Or(operands)),
         "not" => Ok(ExpressionNode::Not(operands[0])),
         "==" => Ok(ExpressionNode::Equals(operands[0], operands[1])),
         "<=" => Ok(ExpressionNode::LE(operands[0], operands[1])),

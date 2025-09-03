@@ -123,7 +123,7 @@ class TamerLite(
         supported_kind.set_effects_kind("STATIC_FLUENTS_IN_OBJECT_ASSIGNMENTS")
         supported_kind.set_effects_kind("FLUENTS_IN_OBJECT_ASSIGNMENTS")
         supported_kind.set_conditions_kind('NEGATIVE_CONDITIONS')
-        # supported_kind.set_conditions_kind('DISJUNCTIVE_CONDITIONS')
+        supported_kind.set_conditions_kind('DISJUNCTIVE_CONDITIONS')
         supported_kind.set_conditions_kind('EQUALITIES')
         supported_kind.set_fluents_type('NUMERIC_FLUENTS')
         supported_kind.set_fluents_type('OBJECT_FLUENTS')
@@ -149,35 +149,35 @@ class TamerLite(
         if h == "custom":
             def rewrite_h(search_state):
                 return heuristic(StateWrapper(encoder.problem, search_state))
-            h = CustomHeuristic(rewrite_h, cache_h)
+            heuristic = CustomHeuristic(rewrite_h, cache_h)
             w = 1 if params is None or params.weight is None else params.weight
         elif h == "hff":
             internal_heuristic_cache = True if params is None or params.internal_heuristic_cache is None else params.internal_heuristic_cache
             events = {a: e for a, e in encoder.events.items() if a in encoder.applicable_actions}
-            h = HFF(encoder.fluents, encoder.objects, events, encoder.goal, internal_caching=internal_heuristic_cache, cache_value_in_state=cache_h)
+            heuristic = HFF(encoder.fluents, encoder.objects, events, encoder.goal, internal_caching=internal_heuristic_cache, cache_value_in_state=cache_h)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "hadd":
             internal_heuristic_cache = True if params is None or params.internal_heuristic_cache is None else params.internal_heuristic_cache
             events = {a: e for a, e in encoder.events.items() if a in encoder.applicable_actions}
-            h = HAdd(encoder.fluents, encoder.objects, events, encoder.goal, internal_caching=internal_heuristic_cache, cache_value_in_state=cache_h)
+            heuristic = HAdd(encoder.fluents, encoder.objects, events, encoder.goal, internal_caching=internal_heuristic_cache, cache_value_in_state=cache_h)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "hmax":
             internal_heuristic_cache = True if params is None or params.internal_heuristic_cache is None else params.internal_heuristic_cache
             events = {a: e for a, e in encoder.events.items() if a in encoder.applicable_actions}
-            h = HMax(encoder.fluents, encoder.objects, events, encoder.goal, internal_caching=internal_heuristic_cache, cache_value_in_state=cache_h)
+            heuristic = HMax(encoder.fluents, encoder.objects, events, encoder.goal, internal_caching=internal_heuristic_cache, cache_value_in_state=cache_h)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "hmax_numeric":
             internal_heuristic_cache = True if params is None or params.internal_heuristic_cache is None else params.internal_heuristic_cache
             events = {a: e for a, e in encoder.events.items() if a in encoder.applicable_actions}
-            h = HMaxNumeric(encoder.fluents, encoder.objects, events, encoder.goal, internal_caching=internal_heuristic_cache, cache_value_in_state=cache_h)
+            heuristic = HMaxNumeric(encoder.fluents, encoder.objects, events, encoder.goal, internal_caching=internal_heuristic_cache, cache_value_in_state=cache_h)
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "blind":
-            h = CustomHeuristic(lambda x: 0.0, cache_h)
+            heuristic = CustomHeuristic(lambda x: 0.0, cache_h)
             w = 0
         else:
             raise NotImplementedError
 
-        return h, w
+        return h, heuristic, w
 
     def _get_search(self, params, heuristic, weight):
         if params is None or params.search is None:
@@ -198,13 +198,14 @@ class TamerLite(
         elif s == "ehs":
             search = partial(ehc_search, heuristic=heuristic)
 
-        return search
+        return s, search
 
     def _solve(self, problem: 'up.model.AbstractProblem',
                heuristic: Optional[Callable[["up.model.state.State"], Optional[float]]] = None,
                timeout: Optional[float] = None,
                output_stream: Optional[IO[str]] = None) -> 'up.engines.results.PlanGenerationResult':
         assert isinstance(problem, up.model.Problem)
+        has_disjunctive_conditions = problem.kind.has_conditions_kind(features=['DISJUNCTIVE_CONDITIONS'])
         try:
             with problem.environment.factory.Compiler(compilation_kind="GROUNDING", problem_kind=problem.kind) as compiler:
                 compilation_res = compiler.compile(problem)
@@ -215,12 +216,22 @@ class TamerLite(
             if isinstance(self._params, MultiqueueParams):
                 heuristics = []
                 for p in self._params.queues:
-                    h, w = self._get_heuristic(p, heuristic, encoder)
+                    h_name, h, w = self._get_heuristic(p, heuristic, encoder)
                     heuristics.append((h, w))
+                    if has_disjunctive_conditions and h_name in ("hff", "hadd", "hmax"):
+                        status = up.engines.PlanGenerationResultStatus.UNSUPPORTED_PROBLEM
+                        return up.engines.PlanGenerationResult(status, None, self.name)
                 plan, metrics = multiqueue_search(encoder.search_space, heuristics, timeout)
             else:
-                h, w = self._get_heuristic(self._params, heuristic, encoder)
-                search = self._get_search(self._params, h, w)
+                h_name, h, w = self._get_heuristic(self._params, heuristic, encoder)
+                s_name, search = self._get_search(self._params, h, w)
+                if (
+                    has_disjunctive_conditions
+                    and h_name in ("hff", "hadd", "hmax")
+                    and s_name in ("wastar", "astar", "gbfs", "ehs")
+                ):
+                    status = up.engines.PlanGenerationResultStatus.UNSUPPORTED_PROBLEM
+                    return up.engines.PlanGenerationResult(status, None, self.name)
                 plan, metrics = search(encoder.search_space, timeout=timeout)
 
             if plan:
