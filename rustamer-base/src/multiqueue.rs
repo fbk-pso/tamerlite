@@ -78,11 +78,9 @@ impl Ord for PrioritizedItem {
     }
 }
 
-#[pyfunction]
-#[pyo3(signature = (ss, heuristics, timeout=None))]
-pub fn multiqueue_search(
+pub fn multiqueue_search<H: HeuristicTrait>(
     ss: &SearchSpace,
-    heuristics: Vec<(Heuristic, f64)>,
+    heuristics: Vec<(H, f64)>,
     timeout: Option<f32>,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,

@@ -78,14 +78,6 @@ class CustomHeuristic(Heuristic):
     def name(self):
         return "custom"
 
-def RLRank(state_encoder, model, ModelClass, other_params, sym_h, cache_value_in_state):
-    from tamerlite.rl_heuristics import RLRank
-    return RLRank(state_encoder, model, ModelClass, other_params, sym_h, cache_value_in_state)
-
-def RLHeuristic(state_encoder, model, ModelClass, other_params, sym_h, cache_value_in_state):
-    from tamerlite.rl_heuristics import RLHeuristic
-    return RLHeuristic(state_encoder, model, ModelClass, other_params, sym_h, cache_value_in_state)
-
 def HFF(fluents: Dict[str, str], objects: Dict[str, List[str]],
          events: Dict[str, List[Tuple[Timing, Event]]], goals: Expression, internal_caching: bool, cache_value_in_state: bool):
     return DeleteRelaxationHeuristic(fluents, objects, events, goals, HeuristicKind.HFF, internal_caching, cache_value_in_state)
