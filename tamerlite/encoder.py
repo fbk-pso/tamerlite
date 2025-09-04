@@ -253,20 +253,39 @@ class Encoder:
                 for t, le in a.effects.items():
                     action_events.append((t.delay, t, 4, le))
 
+                has_ice_from_start = False
+                has_ice_from_end = False
                 for d, t, p, e in action_events:
                     if t.is_from_start():
                         from_start.setdefault(d, (t, [], [], [], []))
                         from_start[d][p].extend(e)
+                        if d > 0:
+                            has_ice_from_start = True
                     else:
                         from_end.setdefault(d, (t, [], [], [], []))
                         from_end[d][p].extend(e)
+                        if d < 0:
+                            has_ice_from_end = True
+
+                if has_ice_from_start and has_ice_from_end:
+                    lower, upper = a.duration.lower, a.duration.upper
+                    if lower.is_constant() and upper.is_constant() and lower.constant_value() == upper.constant_value():
+                        duration = lower.constant_value()
+                        for d in from_end:
+                            t, lc, lsc, lec, le = from_end[d]
+                            d_from_start = duration + d
+                            from_start.setdefault(d_from_start, (t, [], [], [], []))
+                            from_start[d_from_start][1].extend(lc)
+                            from_start[d_from_start][2].extend(lsc)
+                            from_start[d_from_start][3].extend(lec)
+                            from_start[d_from_start][4].extend(le)
+                        from_end.clear()
+                    else:
+                        raise Exception("TamerLite does not support ICE from start and from end inside the same action!")
 
                 self._events[a.name] = []
-                has_ice = False
                 pos = 0
                 for d in sorted(from_start):
-                    if d > 0:
-                        has_ice = True
                     t, lc, lsc, lec, le = from_start[d]
                     t = self._convert_timing(t)
                     c = self._convert_expression(em.And(lc))
@@ -276,8 +295,6 @@ class Encoder:
                     self._events[a.name].append((t, Event(a.name, pos, c, tsc, tec, te)))
                     pos += 1
                 for d in sorted(from_end):
-                    if d < 0 and has_ice:
-                        raise Exception("TamerLite does not support ICE from start and from end inside the same action!")
                     t, lc, lsc, lec, le = from_end[d]
                     t = self._convert_timing(t)
                     c = self._convert_expression(em.And(lc))
