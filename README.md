@@ -6,7 +6,7 @@
 ## Installation
 
 TamerLite is not currently available on PyPI and must be installed from source.
-It includes a core module written in Rust (under the `rustamer/` directory), which must be compiled using [Maturin](https://github.com/PyO3/maturin) before installing the package.
+It includes a core module written in Rust (under the `rustamer/` and `rustamer-base` directories), which must be compiled using [Maturin](https://github.com/PyO3/maturin) before installing the package.
 
 ### Prerequisites
 
@@ -24,24 +24,17 @@ Make sure the following tools are installed:
    cd tamerlite
    ```
 
-2. Build the Rust extension (wheel format):
+2. Build and install the Rust extension:
    ```bash
-   cd rustamer
-   maturin build --release
+   pip install rustamer/
    ```
 
-3. Install the generated wheel (replace `*.whl` with the actual filename):
-   ```bash
-   pip install target/wheels/*.whl
-   cd ..
-   ```
-
-4. Install the remaining Python code:
+3. Install the remaining Python code:
    ```bash
    pip install .
    ```
 
-> **Note:** Precompiled wheels for `rustamer` are available as artifacts from the GitHub Actions CI on the `main` branch. If you download and install the precompiled rustamer wheel manually, you can skip steps 2 and 3 above and proceed directly to step 4. You can find the artifacts in the [Actions tab](https://github.com/fbk-pso/tamerlite/actions) of the GitHub repository.
+> **Note:** Precompiled wheels for `rustamer` are available as artifacts from the GitHub Actions CI on the `main` branch. If you download and install the precompiled rustamer wheel manually, you can skip step 2 and proceed directly to step 4. You can find the artifacts in the [Actions tab](https://github.com/fbk-pso/tamerlite/actions) of the GitHub repository.
 
 ## Usage
 
@@ -74,12 +67,10 @@ Defines parameters for a single search strategy.
 
 | Field                      | Type              | Description                                                                 |
 |----------------------------|-------------------|-----------------------------------------------------------------------------|
-| `search`                   | `Optional[str]`   | The search algorithm to use. Supported values: `"astar"`, `"wastar"`, `"gbfs"`, `"bfs"`, `"dfs"`, `"ehs"`. |
-| `heuristic`                | `Optional[str]`   | The heuristic function to use. Supported values: `"hff"`, `"hadd"`, `"hmax"`, `"hmax_numeric"`, `"blind"`, `"custom"`. |
-| `weight`                   | `Optional[str]`   | A numeric value between 0 and 1 (as string), used by weighted search variants like `wastar`. |
-| `internal_heuristic_cache` | `Optional[bool]`  | Enables internal caching within the heuristic if set to `True`.             |
-| `rl_params`                | `Optional[Any]`   | Reserved for RL-related heuristics.                      |
-| `cache_heuristic_in_state` | `Optional[bool]`  | If `True`, stores heuristic values in the state to avoid recomputation in certain RL-related heuristics.     |
+| `search`                   | `Optional[str]`   | The search algorithm to use. Supported values: `"astar"`, `"wastar"`, `"gbfs"`, `"bfs"`, `"dfs"`, `"ehs"`. Default: `"wastar"`. |
+| `heuristic`                | `Optional[str]`   | The heuristic function to use. Supported values: `"hff"`, `"hadd"`, `"hmax"`, `"hmax_numeric"`, `"blind"`, `"custom"`. Default: `"hff"`. |
+| `weight`                   | `Optional[str]`   | A numeric value between 0 and 1 (as string), used by weighted search variants like `wastar`. Default: `0.8`. |
+| `internal_heuristic_cache` | `Optional[bool]`  | Enables internal caching within the heuristic if set to `True`. Default: `True`. |
 
 ---
 

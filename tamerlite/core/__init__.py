@@ -17,28 +17,35 @@
 
 import os
 import sys
+import warnings
+import importlib
 
 use_rustamer = True
-if 'DISABLE_RUSTAMER' in os.environ:
-    if os.environ['DISABLE_RUSTAMER'].lower() in ("1", "true", "yes"):
+if "DISABLE_RUSTAMER" in os.environ:
+    if os.environ["DISABLE_RUSTAMER"].lower() in ("1", "true", "yes"):
         use_rustamer = False
-    elif os.environ['DISABLE_RUSTAMER'].lower() in ("0", "false", "no"):
+    elif os.environ["DISABLE_RUSTAMER"].lower() in ("0", "false", "no"):
         use_rustamer = True
     else:
         sys.exit("The DISABLE_RUSTAMER environment variable has an invalid value.")
 
 if use_rustamer:
     try:
-        import rustamer
+        libname = os.environ.get("RUSTAMER_LIB", "rustamer")
+        rustamer_lib = importlib.import_module(libname)
     except ImportError:
         use_rustamer = False
 
 if not use_rustamer:
+    warnings.warn(
+        "TamerLite is using the Python implementation (Rust implementation disabled or not available)."
+    )
+
     from tamerlite.core.search import wastar_search, astar_search, gbfs_search
     from tamerlite.core.search import bfs_search, dfs_search, ehc_search
     from tamerlite.core.multiqueue import multiqueue_search
     from tamerlite.core.search_space import SearchSpace, get_fluent_value
-    from tamerlite.core.heuristics import HFF, HAdd, HMax, HMaxNumeric, CustomHeuristic, RLRank, RLHeuristic
+    from tamerlite.core.heuristics import HFF, HAdd, HMax, HMaxNumeric, CustomHeuristic
     from tamerlite.core.search_space import Timing, Effect, Event
     from tamerlite.core.search_space import Expression, evaluate, get_fluents, simplify
     from tamerlite.core.search_space import (
@@ -50,16 +57,30 @@ if not use_rustamer:
         make_rational_constant_node,
         shift_expression,
     )
-    from tamerlite.core.state_encoder import CoreStateEncoder
 else:
-    from tamerlite.rustamer import wastar_search, astar_search, gbfs_search
-    from tamerlite.rustamer import bfs_search, dfs_search, ehc_search
-    from tamerlite.rustamer import multiqueue_search
-    from tamerlite.rustamer import SearchSpace, get_fluent_value
-    from tamerlite.rustamer import HFF, HAdd, HMax, HMaxNumeric, CustomHeuristic, RLRank, RLHeuristic
-    from tamerlite.rustamer import Timing, Effect, Event
-    from tamerlite.rustamer import Expression, evaluate, get_fluents, simplify
-    from tamerlite.rustamer import (
+    from fractions import Fraction
+    from typing import List, Union
+
+    wastar_search, astar_search, gbfs_search = (
+        rustamer_lib.wastar_search,
+        rustamer_lib.astar_search,
+        rustamer_lib.gbfs_search,
+    )
+    ehc_search, bfs_search, dfs_search = (
+        rustamer_lib.ehc_search,
+        rustamer_lib.bfs_search,
+        rustamer_lib.dfs_search,
+    )
+    multiqueue_search = rustamer_lib.multiqueue_search
+    SearchSpace, rustevaluate = rustamer_lib.SearchSpace, rustamer_lib.evaluate
+    Timing, Effect, Event, ExpressionNode = (
+        rustamer_lib.Timing,
+        rustamer_lib.Effect,
+        rustamer_lib.Event,
+        rustamer_lib.ExpressionNode,
+    )
+
+    (
         make_bool_constant_node,
         make_fluent_node,
         make_int_constant_node,
@@ -67,5 +88,76 @@ else:
         make_operator_node,
         make_rational_constant_node,
         shift_expression,
+        simplify,
+    ) = (
+        rustamer_lib.make_bool_constant_node,
+        rustamer_lib.make_fluent_node,
+        rustamer_lib.make_int_constant_node,
+        rustamer_lib.make_object_node,
+        rustamer_lib.make_operator_node,
+        rustamer_lib.make_rational_constant_node,
+        rustamer_lib.shift_expression,
+        rustamer_lib.simplify,
     )
-    from tamerlite.rustamer import CoreStateEncoder
+    Heuristic = rustamer_lib.Heuristic
+
+    def HFF(fluents, objects, events, goals, internal_caching, cache_value_in_state):
+        return Heuristic.hff(
+            fluents, objects, events, goals, internal_caching, cache_value_in_state
+        )
+
+    def HAdd(fluents, objects, events, goals, internal_caching, cache_value_in_state):
+        return Heuristic.hadd(
+            fluents, objects, events, goals, internal_caching, cache_value_in_state
+        )
+
+    def HMaxNumeric(
+        fluents, objects, events, goals, internal_caching, cache_value_in_state
+    ):
+        return Heuristic.hmax_numeric(
+            fluents, objects, events, goals, internal_caching, cache_value_in_state
+        )
+
+    def HMax(fluents, objects, events, goals, internal_caching, cache_value_in_state):
+        return Heuristic.hmax(
+            fluents, objects, events, goals, internal_caching, cache_value_in_state
+        )
+
+    def CustomHeuristic(callable, cache_value_in_state):
+        return Heuristic.custom(callable, cache_value_in_state)
+
+    def get_fluents(exp):
+        for e in exp:
+            f = e.fluent
+            if f is not None:
+                yield f
+
+    def get_fluent_value(fluent: str, state) -> Union[bool, int, Fraction, str]:
+        exp = state.get_py_value(fluent)
+        if exp.bool_constant is not None:
+            return exp.bool_constant
+        elif exp.object is not None:
+            return exp.object
+        elif exp.int_constant is not None:
+            return exp.int_constant
+        elif exp.real_constant is not None:
+            n, d = exp.real_constant
+            return Fraction(n, d)
+        else:
+            raise NotImplementedError("Unreachable code")
+
+    def evaluate(exp, state):
+        r = rustevaluate(exp, state)
+        if r.bool_constant is not None:
+            return r.bool_constant
+        elif r.object is not None:
+            return r.object
+        elif r.int_constant is not None:
+            return r.int_constant
+        elif r.real_constant is not None:
+            n, d = r.real_constant
+            return Fraction(n, d)
+        else:
+            raise NotImplementedError("Unreachable code")
+
+    Expression = List[ExpressionNode]
