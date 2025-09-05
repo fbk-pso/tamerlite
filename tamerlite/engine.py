@@ -138,11 +138,12 @@ class TamerLite(
     def satisfies(optimality_guarantee: up.engines.OptimalityGuarantee) -> bool:
         return optimality_guarantee == up.engines.OptimalityGuarantee.SATISFICING
 
-    def _get_heuristic(self, params, heuristic, encoder):
+    def _get_heuristic(self, params, heuristic, encoder, problem_has_disjunctive_conditions):
+        default_heuristic = "hmax_numeric" if problem_has_disjunctive_conditions else "hff"
         if params is None:
-            h = "custom" if heuristic else "hff"
+            h = "custom" if heuristic else default_heuristic
         else:
-            h = "custom" if heuristic and params.heuristic is None else params.heuristic if params.heuristic else "hff"
+            h = "custom" if heuristic and params.heuristic is None else params.heuristic if params.heuristic else default_heuristic
 
         cache_h = False # useful only for residual heuristics
 
@@ -177,7 +178,7 @@ class TamerLite(
         else:
             raise NotImplementedError
 
-        return h, heuristic, w
+        return heuristic, w
 
     def _get_search(self, params, heuristic, weight):
         if params is None or params.search is None:
@@ -205,7 +206,7 @@ class TamerLite(
                timeout: Optional[float] = None,
                output_stream: Optional[IO[str]] = None) -> 'up.engines.results.PlanGenerationResult':
         assert isinstance(problem, up.model.Problem)
-        has_disjunctive_conditions = problem.kind.has_conditions_kind(features=['DISJUNCTIVE_CONDITIONS'])
+        has_disjunctive_conditions = problem.kind.has_disjunctive_conditions()
         try:
             with problem.environment.factory.Compiler(compilation_kind="GROUNDING", problem_kind=problem.kind) as compiler:
                 compilation_res = compiler.compile(problem)
@@ -216,18 +217,18 @@ class TamerLite(
             if isinstance(self._params, MultiqueueParams):
                 heuristics = []
                 for p in self._params.queues:
-                    h_name, h, w = self._get_heuristic(p, heuristic, encoder)
+                    h, w = self._get_heuristic(p, heuristic, encoder, has_disjunctive_conditions)
                     heuristics.append((h, w))
-                    if has_disjunctive_conditions and h_name in ("hff", "hadd", "hmax"):
+                    if has_disjunctive_conditions and h.name in ("hff", "hadd", "hmax"):
                         status = up.engines.PlanGenerationResultStatus.UNSUPPORTED_PROBLEM
                         return up.engines.PlanGenerationResult(status, None, self.name)
                 plan, metrics = multiqueue_search(encoder.search_space, heuristics, timeout)
             else:
-                h_name, h, w = self._get_heuristic(self._params, heuristic, encoder)
+                h, w = self._get_heuristic(self._params, heuristic, encoder, has_disjunctive_conditions)
                 s_name, search = self._get_search(self._params, h, w)
                 if (
                     has_disjunctive_conditions
-                    and h_name in ("hff", "hadd", "hmax")
+                    and h.name in ("hff", "hadd", "hmax")
                     and s_name in ("wastar", "astar", "gbfs", "ehs")
                 ):
                     status = up.engines.PlanGenerationResultStatus.UNSUPPORTED_PROBLEM
