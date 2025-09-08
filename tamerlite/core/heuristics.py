@@ -111,7 +111,7 @@ class _DeleteRelaxationHeuristicBase(Heuristic):
         ignore_real_int: bool = False,
     ):
         super().__init__(cache_value_in_state)
-        self._fluents = fluents
+        self._fluents = list(fluents)
         self._fluent_ids = {f: i for i, f in enumerate(self._fluents)}
         self._fluent_types = fluent_types
         self._objects = objects
