@@ -70,11 +70,13 @@ class SearchParams:
     heuristic: Optional[str] = None
     internal_heuristic_cache: Optional[bool] = None
     weight: Optional[str] = None
+    early_termination: Optional[bool] = None
 
 
 @dataclass(frozen=True)
 class MultiqueueParams:
     queues: List[SearchParams]
+    early_termination: Optional[bool] = None     # the parameter early_termination inside queues is ignored
 
 
 class TamerLite(
@@ -214,6 +216,10 @@ class TamerLite(
             new_problem = compilation_res.problem
             encoder = Encoder(new_problem)
 
+            early_termination = False
+            if self._params is not None and self._params.early_termination is not None:
+                early_termination = self._params.early_termination
+
             if isinstance(self._params, MultiqueueParams):
                 heuristics = []
                 for p in self._params.queues:
@@ -222,7 +228,7 @@ class TamerLite(
                     if has_disjunctive_conditions and h.name in ("hff", "hadd", "hmax"):
                         status = up.engines.PlanGenerationResultStatus.UNSUPPORTED_PROBLEM
                         return up.engines.PlanGenerationResult(status, None, self.name)
-                plan, metrics = multiqueue_search(encoder.search_space, heuristics, timeout)
+                plan, metrics = multiqueue_search(encoder.search_space, heuristics, timeout, early_termination=early_termination)
             else:
                 h, w = self._get_heuristic(self._params, heuristic, encoder, has_disjunctive_conditions)
                 s_name, search = self._get_search(self._params, h, w)
@@ -233,7 +239,7 @@ class TamerLite(
                 ):
                     status = up.engines.PlanGenerationResultStatus.UNSUPPORTED_PROBLEM
                     return up.engines.PlanGenerationResult(status, None, self.name)
-                plan, metrics = search(encoder.search_space, timeout=timeout)
+                plan, metrics = search(encoder.search_space, timeout=timeout, early_termination=early_termination)
 
             if plan:
                 plan = encoder.build_plan(plan)
