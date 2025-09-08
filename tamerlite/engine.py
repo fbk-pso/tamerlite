@@ -18,14 +18,12 @@
 from dataclasses import dataclass
 from functools import partial
 import unified_planning as up
-import unified_planning.model
 import unified_planning.engines
 import unified_planning.engines.mixins
 from unified_planning.model import ProblemKind, FNode
 from unified_planning.model.state import State
-from typing import IO, Any, Callable, List, Optional, Union
+from typing import IO, Callable, List, Optional, Union
 
-from tamerlite.core import use_rustamer
 from tamerlite.core import wastar_search, astar_search, gbfs_search
 from tamerlite.core import bfs_search, dfs_search, ehc_search
 from tamerlite.core import multiqueue_search
@@ -211,7 +209,7 @@ class TamerLite(
                 compilation_res = compiler.compile(problem)
                 map_back_action_instance = compilation_res.map_back_action_instance
             new_problem = compilation_res.problem
-            encoder = Encoder(new_problem, encode_fluents=use_rustamer)
+            encoder = Encoder(new_problem)
 
             if isinstance(self._params, MultiqueueParams):
                 heuristics = []

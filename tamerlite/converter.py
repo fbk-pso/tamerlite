@@ -134,7 +134,7 @@ class Converter(DagWalker):
     def walk_fluent_exp(self, expression: 'FNode',
                         args: List[Expression]) -> Expression:
         fluent = str(expression)
-        return (make_fluent_node(fluent, self._fluent_ids[fluent]), )
+        return (make_fluent_node(self._fluent_ids[fluent]), )
 
     def walk_object_exp(self, expression: 'FNode',
                         args: List[Expression]) -> Expression:
