@@ -128,6 +128,7 @@ pub fn simplify(
                             true_to_remove.push(*p);
                         } else {
                             val = false;
+                            unresolved = false;
                             break;
                         }
                     } else {
@@ -139,6 +140,31 @@ pub fn simplify(
                     ExpressionNode::Bool(val)
                 } else {
                     to_remove.extend(true_to_remove);
+                    e.v.clone()
+                }
+            }
+            ExpressionNode::Or(v) => {
+                let mut val = false;
+                let mut unresolved = false;
+                let mut false_to_remove = vec![];
+                for p in v.iter() {
+                    if let ExpressionNode::Bool(pv) = res[*p] {
+                        if pv {
+                            val = true;
+                            unresolved = false;
+                            break;
+                        } else {
+                            false_to_remove.push(*p);
+                        }
+                    } else {
+                        unresolved = true;
+                    }
+                }
+                if !unresolved {
+                    to_remove.extend(v.iter().clone());
+                    ExpressionNode::Bool(val)
+                } else {
+                    to_remove.extend(false_to_remove);
                     e.v.clone()
                 }
             }
