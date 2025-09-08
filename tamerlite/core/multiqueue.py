@@ -31,7 +31,7 @@ class StateContainer:
 
 @dataclass
 class PrioritizedItem:
-    heuristic: int
+    heuristic: float
     state_container: StateContainer
 
     def __lt__(self, other):
@@ -39,20 +39,74 @@ class PrioritizedItem:
             return True
         if self.heuristic > other.heuristic:
             return False
-        return len(self.state_container.state.todo) < len(other.state_container.state.todo)
+        return len(self.state_container.state.todo) < len(
+            other.state_container.state.todo
+        )
 
 
-def multiqueue_search(ss: SearchSpace, heuristics: List[Tuple[Heuristic, float]], timeout: float = None):
+class MQSwitchPolicy:
+    """Abstract class for multi-queue switching policies."""
+
+    def switching_policy(self, i: int) -> int:
+        """Given the number of expansions done so far, return the index of the
+        next queue to use."""
+        raise NotImplementedError()
+
+    def notify_push(self, i: int, item: PrioritizedItem) -> None:
+        """Called by algorithm to notify the policy that an item has been pushed
+        to queue i."""
+        pass
+
+    def notify_pop(self, i: int, item: PrioritizedItem) -> None:
+        """Called by algorithm to notify the policy that an item has been
+        removed from queue i (and marked as expanded in all other queues)."""
+        pass
+
+
+class RoundRobinSwitchPolicy(MQSwitchPolicy):
+    """The simple round-robin switching policy."""
+
+    def __init__(self, num_queues: int):
+        self.num_queues = num_queues
+
+    def switching_policy(self, i: int) -> int:
+        return i % self.num_queues
+
+
+def multiqueue_search(
+    ss: SearchSpace,
+    heuristics: List[Tuple[Heuristic, float]],
+    timeout: float = None,
+    early_termination: bool = False,
+):
+    return _multiqueue_search(
+        ss=ss,
+        heuristics=heuristics,
+        switch_policy=RoundRobinSwitchPolicy(len(heuristics)),
+        timeout=timeout,
+        early_termination=early_termination,
+    )
+
+
+def _multiqueue_search(
+    ss: SearchSpace,
+    heuristics: List[Tuple[Heuristic, float]],
+    switch_policy: MQSwitchPolicy,
+    timeout: float = None,
+    early_termination: bool = False,
+):
     st = time.time()
     opens = []
     closed_set = set()
     open_set = set()
     init = ss.initial_state()
     item = PrioritizedItem(0, StateContainer(init, False))
-    for _ in heuristics:
+    for i, _ in enumerate(heuristics):
         open = []
         heapq.heappush(open, item)
         opens.append(open)
+        switch_policy.notify_push(i, item)
+
     counter = 0
     states_expanded = 0
     while True:
@@ -60,9 +114,10 @@ def multiqueue_search(ss: SearchSpace, heuristics: List[Tuple[Heuristic, float]]
             raise TimeoutError
         if any(len(o) == 0 for o in opens):
             break
-        i = counter % len(opens)
+        i = switch_policy.switching_policy(counter)
         open = opens[i]
         item = heapq.heappop(open)
+        switch_policy.notify_pop(i, item)
         sc = item.state_container
         if sc.expanded:
             continue
@@ -74,11 +129,19 @@ def multiqueue_search(ss: SearchSpace, heuristics: List[Tuple[Heuristic, float]]
         counter += 1
         states_expanded += 1
         if ss.goal_reached(state):
-            return state.extract_solution(), {"expanded_states": str(states_expanded), "goal_depth": str(state.g)}
+            return state.extract_solution(), {
+                "expanded_states": str(states_expanded),
+                "goal_depth": str(state.g),
+            }
 
         # Here, we create a temporary list of the successor states to reuse it among multiple heuristics
         candidate_states = []
         for s in ss.get_successor_states(state):
+            if early_termination and ss.goal_reached(s):
+                return s.extract_solution(), {
+                    "expanded_states": str(states_expanded),
+                    "goal_depth": str(s.g),
+                }
             if not ss.is_temporal:
                 if s in closed_set or s in open_set:
                     continue
@@ -86,9 +149,12 @@ def multiqueue_search(ss: SearchSpace, heuristics: List[Tuple[Heuristic, float]]
             candidate_states.append(s)
         candidate_containers = [StateContainer(s, False) for s in candidate_states]
         for i, (heuristic, weight) in enumerate(heuristics):
-            for j, (succ_state, h) in enumerate(heuristic.eval_gen(candidate_states, ss)):
+            for j, (succ_state, h) in enumerate(
+                heuristic.eval_gen(candidate_states, ss)
+            ):
                 if h is not None:
-                    f = (1-weight)*succ_state.g + weight*h
+                    f = (1 - weight) * succ_state.g + weight * h
                     item = PrioritizedItem(f, candidate_containers[j])
                     heapq.heappush(opens[i], item)
+                    switch_policy.notify_push(i, item)
     return None, {"expanded_states": str(states_expanded)}
