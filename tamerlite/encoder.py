@@ -16,10 +16,9 @@
 #
 
 import unified_planning as up
-import unified_planning.model
 from unified_planning.plans import TimeTriggeredPlan, SequentialPlan, Plan
 from fractions import Fraction
-from typing import List, Tuple, Dict, Optional, Union
+from typing import List, Tuple, Dict, Optional
 
 from tamerlite.core import Expression, Effect, Timing, Event, SearchSpace, get_fluents
 from tamerlite.converter import Converter
@@ -33,14 +32,13 @@ class Encoder:
     """
 
     def __init__(
-        self, problem: "up.model.Problem", encode_fluents: bool, full: bool = True
+        self, problem: "up.model.Problem", full: bool = True
     ):
         self._problem = problem
         if full:
             self._simplifier = up.model.walkers.Simplifier(problem.environment, problem)
         else:
             self._simplifier = problem.environment.simplifier
-        self._encode_fluents = encode_fluents
         
         self._fluent_types = {}
         for f in problem.initial_values.keys():
@@ -91,8 +89,6 @@ class Encoder:
         initial_state_values = {}
         for f, v in initial_values.items():
             initial_state_values[self._convert_fluent(f)] = self._convert_expression(v)[0]
-        if not self._encode_fluents:
-            return initial_state_values
 
         initial_state = []
         for f in self._fluents:
@@ -133,15 +129,6 @@ class Encoder:
     @property
     def goal(self) -> Expression:
         return self._goal
-    
-    @property
-    def encode_fluents(self) -> bool:
-        return self._encode_fluents
-    
-    def get_fluent_encoding(self, fluent: str) -> Union[str, int]:
-        if self.encode_fluents:
-            return self.fluent_ids[fluent]
-        return fluent
 
     def build_plan(self, plan: List[Tuple[Optional[Fraction], str, Optional[Fraction]]]) -> Plan:
         if self._is_temporal:
@@ -168,10 +155,8 @@ class Encoder:
             value = em.Minus(effect.fluent, effect.value)
         else:
             value = effect.value
-        if self._encode_fluents:
-            f = self.fluent_ids[self._convert_fluent(effect.fluent)]
-        else:
-            f = self._convert_fluent(effect.fluent)
+
+        f = self.fluent_ids[self._convert_fluent(effect.fluent)]
         v = self._convert_expression(value)
         return Effect(f, v)
 

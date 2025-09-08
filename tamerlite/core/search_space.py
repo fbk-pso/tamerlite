@@ -27,7 +27,12 @@ class OperatorNode:
     operands: Tuple[int, ...]
 
 
-ExpressionNode = Union[OperatorNode, bool, int, Fraction, str]
+@dataclass(eq=True, frozen=True)
+class FluentNode:
+    fluent_id: int
+
+
+ExpressionNode = Union[OperatorNode, FluentNode, bool, int, Fraction, str]
 Expression = Tuple[ExpressionNode, ...]
 
 
@@ -46,8 +51,8 @@ def make_rational_constant_node(numerator: int, denominator:int) -> ExpressionNo
 def make_object_node(name: str) -> ExpressionNode:
     return name
 
-def make_fluent_node(name: str, _id: int) -> ExpressionNode:
-    return name
+def make_fluent_node(fluent_id: int) -> ExpressionNode:
+    return FluentNode(fluent_id)
 
 def shift_expression(exp: Expression, offset: int) -> Expression:
     res = []
@@ -58,7 +63,7 @@ def shift_expression(exp: Expression, offset: int) -> Expression:
             res.append(e)
     return tuple(res)
 
-def split_expression(exp: Expression) -> Tuple[Expression]:
+def split_expression(exp: Expression) -> Tuple[Expression, ...]:
     if not isinstance(exp[-1], OperatorNode) or not exp[-1].kind == "and":
         return (exp, )
     res = []
@@ -75,15 +80,15 @@ def split_expression(exp: Expression) -> Tuple[Expression]:
         last = i+1
     return tuple(res)
 
-def get_fluents(exp: Expression) -> Iterator[str]:
+def get_fluents(exp: Expression) -> Iterator[int]:
     for e in exp:
-        if isinstance(e, str):
-            yield e
+        if isinstance(e, FluentNode):
+            yield e.fluent_id
 
 
 @dataclass(eq=True, frozen=True)
 class Effect:
-    fluent: str
+    fluent: int
     value: Expression
 
 
@@ -142,7 +147,7 @@ class MultiSet:
 
 @dataclass
 class State:
-    assignments: Dict[str, Union[bool, int, Fraction, str]]
+    assignments: List[Union[bool, int, Fraction, str]]
     temporal_network: Optional[DeltaSimpleTemporalNetwork]
     todo: Dict[str, Tuple[int, int]]
     active_conditions: MultiSet
@@ -151,10 +156,7 @@ class State:
     heuristic_cache: Dict[str, float] = field(default_factory=dict)
 
     def __hash__(self) -> int:
-        res = 0
-        for k, v in self.assignments.items():
-            res += hash(k) + hash(v)
-        return res
+        return hash(tuple(self.assignments))
 
     def __eq__(self, oth) -> bool:
         if self.temporal_network is None:
@@ -162,12 +164,12 @@ class State:
         else:
             return False
 
-    def get_value(self, fluent: str) -> Union[bool, int, Fraction, str]:
+    def get_value(self, fluent: int) -> Union[bool, int, Fraction, str]:
         return self.assignments[fluent]
 
     def clone(self):
-        assignments = {k : v for k, v in self.assignments.items()}
-        todo = {k : v for k, v in self.todo.items()}
+        assignments = list(self.assignments)
+        todo = self.todo.copy()
         tn = self.temporal_network.copy_stn() if self.temporal_network else None
         return State(assignments, tn, todo, self.active_conditions.clone(), self.g, self.path[:])
 
@@ -195,7 +197,7 @@ class State:
             return l
 
 
-def get_fluent_value(fluent: str, state: State) -> Union[bool, int, Fraction, str]:
+def get_fluent_value(fluent: int, state: State) -> Union[bool, int, Fraction, str]:
     return state.assignments[fluent]
 
 
@@ -204,12 +206,10 @@ def evaluate(exp: Expression, state: State) -> Union[bool, int, Fraction, str]:
     for e in exp:
         if isinstance(e, bool) or isinstance(e, int) or isinstance(e, Fraction):
             res.append(e)
+        elif isinstance(e, FluentNode):
+            res.append(state.assignments[e.fluent_id])
         elif isinstance(e, str):
-            v = state.assignments.get(e, None)
-            if v is None:
-                res.append(e)
-            else:
-                res.append(v)
+            res.append(e)
         else:
             assert isinstance(e, OperatorNode)
             if e.kind == "and":
@@ -261,12 +261,10 @@ def simplify(exp: Expression, assignments: Dict[str, Union[bool, int, Fraction, 
     for e in exp:
         if isinstance(e, bool) or isinstance(e, int) or isinstance(e, Fraction):
             res.append(e)
+        elif isinstance(e, FluentNode):
+            res.append(assignments[e.fluent_id])
         elif isinstance(e, str):
-            v = assignments.get(e, None)
-            if v is None:
-                res.append(e)
-            else:
-                res.append(v)
+            res.append(e)
         else:
             assert isinstance(e, OperatorNode)
             if e.kind == "and":
@@ -382,7 +380,7 @@ class SearchSpace:
                  actions_duration: Dict[str, Optional[Tuple[Expression, Expression, bool, bool]]],
                  events: Dict[str, List[Tuple[Timing, Event]]],
                  mutex: Set[Tuple[Event, Event]],
-                 initial_state: Optional[Dict[str, Union[bool, int, Fraction, str]]] = None,
+                 initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
                  goal: Optional[Expression] = None,
                  epsilon: Optional[Fraction] = None):
         self._actions_duration = actions_duration
@@ -402,8 +400,10 @@ class SearchSpace:
     def reset(self):
         pass
 
-    def initial_state(self,
-                      initial_state: Optional[Dict[str, Union[bool, int, Fraction, str]]] = None) -> State:
+    def initial_state(
+        self,
+        initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
+    ) -> State:
         # initial_state parameter can be None if it was passed to the class constructor
         assert initial_state is not None or self._initial_state is not None
         tn = DeltaSimpleTemporalNetwork() if self._is_temporal else None

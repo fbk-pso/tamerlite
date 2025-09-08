@@ -190,7 +190,7 @@ def test_heuristic_values(problems):
             ) as compiler:
                 compilation_res = compiler.compile(problem)
             new_problem = compilation_res.problem
-            encoder = Encoder(new_problem, encode_fluents=not disable_rustamer)
+            encoder = Encoder(new_problem)
             ss: SearchSpace = encoder.search_space
             init_state = ss.initial_state()
 
@@ -320,7 +320,7 @@ def test_search_space(problems):
             ) as compiler:
                 compilation_res = compiler.compile(problem)
             new_problem = compilation_res.problem
-            encoder = Encoder(new_problem, encode_fluents=not disable_rustamer)
+            encoder = Encoder(new_problem)
             ss: tamerlite.core.SearchSpace = encoder.search_space
 
             init_state = ss.initial_state()
