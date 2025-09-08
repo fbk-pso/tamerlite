@@ -283,22 +283,13 @@ impl DeleteRelaxationHeuristic {
                             ]));
                         }
                     } else if t != "real" && t != "int" {
-                        if eff.value.len() == 1 {
-                            if let ExpressionNode::Object(_) = eff.value[0] {
-                                effects.push(expression_manager.put(&vec![
-                                    ExpressionNode::Fluent(eff.fluent),
-                                    eff.value[0].clone(),
-                                    make_operator("==".to_string(), vec![0, 1])?,
-                                ]));
-                            } else {
-                                for o in objects[&t].iter() {
-                                    effects.push(expression_manager.put(&vec![
-                                        ExpressionNode::Fluent(eff.fluent),
-                                        ExpressionNode::Object(o.to_string()),
-                                        make_operator("==".to_string(), vec![0, 1])?,
-                                    ]));
-                                }
-                            }
+                        if eff.value.len() == 1 && matches!(eff.value[0], ExpressionNode::Object(_))
+                        {
+                            effects.push(expression_manager.put(&vec![
+                                ExpressionNode::Fluent(eff.fluent),
+                                eff.value[0].clone(),
+                                make_operator("==".to_string(), vec![0, 1])?,
+                            ]));
                         } else {
                             for o in objects[&t].iter() {
                                 effects.push(expression_manager.put(&vec![
