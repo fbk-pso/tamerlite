@@ -219,6 +219,13 @@ def evaluate(exp: Expression, state: State) -> Union[bool, int, Fraction, str]:
                         v = False
                         break
                 res.append(v)
+            elif e.kind == "or":
+                v = False
+                for i in e.operands:
+                    if res[i]:
+                        v = True
+                        break
+                res.append(v)
             if e.kind == "not":
                 res.append(not res[e.operands[0]])
             elif e.kind == "==":
@@ -267,11 +274,13 @@ def simplify(exp: Expression, assignments: Dict[str, Union[bool, int, Fraction, 
                 unresolved = False
                 true_to_remove = []
                 for i in e.operands:
-                    if isinstance(res[i], bool) and not res[i]:
-                        v = False
-                        break
-                    elif isinstance(res[i], bool):
-                        true_to_remove.append(i)
+                    if isinstance(res[i], bool):
+                        if not res[i]:
+                            v = False
+                            unresolved = False
+                            break
+                        else:
+                            true_to_remove.append(i)
                     else:
                         unresolved = True
                 if not unresolved:
@@ -280,7 +289,27 @@ def simplify(exp: Expression, assignments: Dict[str, Union[bool, int, Fraction, 
                 else:
                     to_remove.extend(true_to_remove)
                     res.append(e)
-            if e.kind == "not":
+            elif e.kind == "or":
+                v = False
+                unresolved = False
+                false_to_remove = []
+                for i in e.operands:
+                    if isinstance(res[i], bool):
+                        if res[i]:
+                            v = True
+                            unresolved = False
+                            break
+                        else:
+                            false_to_remove.append(i)
+                    else:
+                        unresolved = True
+                if not unresolved:
+                    to_remove.extend(e.operands)
+                    res.append(v)
+                else:
+                    to_remove.extend(false_to_remove)
+                    res.append(e)
+            elif e.kind == "not":
                 v = res[e.operands[0]]
                 if isinstance(v, bool):
                     to_remove.extend(e.operands)

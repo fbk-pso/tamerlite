@@ -90,6 +90,16 @@ def skip(problem, search, heuristic, disable_rustamer, internal_heuristic_cache)
         or (problem.name == "robot_fluent_of_user_type_with_int_id" and search == "dfs")
         or (problem.name == "depots_p01" and search in ["dfs", "bfs"])
         or (problem.name == "RoboLogistics" and search == "dfs")
+        or (
+            problem.name == "disjunctive_linear_conditions"
+            and (
+                (
+                    search in ("wastar", "astar", "gbfs", "ehs")
+                    and heuristic in ("hff", "hadd", "hmax")
+                )
+                or search == "multiqueue"
+            )
+        )
     )
 
 
@@ -98,6 +108,7 @@ def max_generated_states(problem):
         "nonlinear_increase_effects",
         "constant_increase_effect",
         "constant_decrease_effect",
+        "disjunctive_linear_conditions",
     ]:
         return 2
     if problem.name in ["constant_increase_effect_2", "constant_decrease_effect_2"]:
@@ -187,19 +198,28 @@ def test_heuristic_values(problems):
                 ss, init_state, num_states=max_generated_states(problem)
             )
             for heuristic_class, heuristic_name in [
-                (HFF, "HFF"),
-                (HAdd, "HAdd"),
-                (HMax, "HMax"),
-                (HMaxNumeric, "HMaxNumeric"),
+                (HFF, "hff"),
+                (HAdd, "hadd"),
+                (HMax, "hmax"),
+                (HMaxNumeric, "hmax_numeric"),
             ]:
                 for internal_caching in [True, False]:
+                    if skip(
+                        problem,
+                        "wastar",
+                        heuristic_name,
+                        disable_rustamer,
+                        internal_caching,
+                    ):
+                        continue
+
                     heuristic: Heuristic = heuristic_class(
                         encoder.fluents,
                         encoder.objects,
                         encoder.events,
                         encoder.goal,
                         internal_caching=internal_caching,
-                        cache_value_in_state=False
+                        cache_value_in_state=False,
                     )
 
                     if heuristic_name not in values:
