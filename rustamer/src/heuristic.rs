@@ -130,6 +130,7 @@ impl Heuristic {
         })
     }
 
+    #[getter]
     pub fn name(&self) -> String {
         if self.hdr.is_some() {
             let h = self.hdr.as_ref().unwrap();

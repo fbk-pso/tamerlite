@@ -66,7 +66,15 @@ class Converter(DagWalker):
         elif len(args) == 1:
             return args[0]
         else:
-            raise NotImplementedError
+            res = args[0]
+            l = len(res)-1
+            operands = [l]
+            for i in range(1, len(args)):
+                res += tuple(shift_expression(args[i], l+1))
+                l += len(args[i])
+                operands.append(l)
+            res += (make_operator_node("or", tuple(operands)), )
+            return res
 
     def walk_not(self, expression: 'FNode',
                  args: List[Expression]) -> Expression:
