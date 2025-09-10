@@ -207,48 +207,34 @@ pub struct DeleteRelaxationHeuristic {
 
 impl DeleteRelaxationHeuristic {
     pub fn new(
-        fluents: Vec<String>,
-        fluent_types: HashMap<String, String>,
+        fluent_types: Vec<String>,
         objects: HashMap<String, Vec<String>>,
         events: HashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
         heuristic_kind: HeuristicKind,
         internal_caching: bool,
     ) -> PyResult<Self> {
-        let mut fluents = fluents.clone();
-        let mut fluent_ids: HashMap<String, usize> = fluents
-            .iter()
-            .enumerate()
-            .map(|(i, v)| (v.clone(), i))
-            .collect();
-
         let mut operators = Vec::new();
         let mut extra_fluents: HashMap<String, Vec<Expression>> = HashMap::new();
         let mut extra_goals = Vec::new();
         let mut expression_manager = ExpressionManager::new();
+        let mut num_fluents = fluent_types.len();
 
         for (a, le) in events.iter() {
             let mut a_extra_fluents: Vec<Expression> = Vec::new();
-            let f_cond = format!("__f_{}_{}", a, le.len() - 1);
-            if !fluent_ids.contains_key(&f_cond) {
-                fluent_ids.insert(f_cond.clone(), fluent_ids.len());
-                fluents.push(f_cond.clone());
-            }
-            let mut cond: Vec<ExpressionNode> = vec![ExpressionNode::Fluent(fluent_ids[&f_cond])];
+            let f_cond = num_fluents + le.len() - 1;
+            let mut cond: Vec<ExpressionNode> = vec![ExpressionNode::Fluent(f_cond)];
             extra_goals.push(expression_manager.put(&cond));
-            for (i, (_, e)) in le.iter().enumerate() {
+            for (_, e) in le.iter() {
                 let mut effects: Vec<Expression> = Vec::new();
                 let mut conditions: Vec<Expression> = Vec::new();
-                let f = format!("__f_{}_{}", a, i);
-                if !fluent_ids.contains_key(&f) {
-                    fluent_ids.insert(f.clone(), fluent_ids.len());
-                    fluents.push(f.clone());
-                }
+                let f = num_fluents;
+                num_fluents += 1;
                 a_extra_fluents
-                    .push(expression_manager.put(&vec![ExpressionNode::Fluent(fluent_ids[&f])]));
-                effects.push(expression_manager.put(&vec![ExpressionNode::Fluent(fluent_ids[&f])]));
+                    .push(expression_manager.put(&vec![ExpressionNode::Fluent(f)]));
+                effects.push(expression_manager.put(&vec![ExpressionNode::Fluent(f)]));
                 for eff in e.effects.iter() {
-                    let t = fluent_types[&fluents[eff.fluent]].to_string();
+                    let t = fluent_types[eff.fluent].to_string();
                     if t == "bool" {
                         if eff.value.len() == 1 {
                             if let ExpressionNode::Bool(value) = eff.value[0] {
@@ -316,7 +302,7 @@ impl DeleteRelaxationHeuristic {
                         cost: 1.0,
                     });
                 }
-                cond = vec![ExpressionNode::Fluent(fluent_ids[&f])];
+                cond = vec![ExpressionNode::Fluent(f)];
             }
             extra_fluents.insert(a.to_string(), a_extra_fluents);
         }
@@ -618,11 +604,10 @@ impl DeleteRelaxationHeuristic {
 
 #[derive(Clone, Debug)]
 pub struct HMaxNumeric {
-    fluents: Vec<String>,
     goals: Vec<Vec<ExpressionNode>>,
     goal_expressions: Vec<Expression>,
     extra_fluents: HashMap<String, Vec<Vec<ExpressionNode>>>,
-    all_fluents: Vec<String>,
+    num_fluents: usize,
     operators: Vec<OperatorHmax>,
     operator_conditions_fluents: Vec<HashSet<usize>>,
     operator_effects_fluents: Vec<HashSet<usize>>,
@@ -632,47 +617,30 @@ pub struct HMaxNumeric {
 
 impl HMaxNumeric {
     pub fn new(
-        fluents: Vec<String>,
-        fluent_types: HashMap<String, String>,
+        fluent_types: Vec<String>,
         events: HashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
         internal_caching: bool,
     ) -> PyResult<Self> {
         let mut operators = Vec::new();
         let mut extra_fluents = HashMap::new();
-        let mut all_fluents = Vec::new();
         let mut extra_goals = Vec::new();
         let mut expression_manager = ExpressionManager::new();
-
-        let mut fluents = fluents.clone();
-        let mut fluent_ids: HashMap<String, usize> = fluents
-            .iter()
-            .enumerate()
-            .map(|(i, v)| (v.clone(), i))
-            .collect();
+        let mut num_fluents = fluent_types.len();
 
         for (a, le) in events.iter() {
             let mut a_extra_fluents = Vec::new();
-            let f_cond = format!("__f_{}_{}", a, le.len() - 1);
-            if !fluent_ids.contains_key(&f_cond) {
-                fluent_ids.insert(f_cond.clone(), fluent_ids.len());
-                fluents.push(f_cond.clone());
-            }
-            let mut cond: Vec<ExpressionNode> = vec![ExpressionNode::Fluent(fluent_ids[&f_cond])];
+            let f_cond = num_fluents + le.len() - 1;
+            let mut cond: Vec<ExpressionNode> = vec![ExpressionNode::Fluent(f_cond)];
             extra_goals.push(cond.clone());
-            for (i, (_, e)) in le.iter().enumerate() {
+            for (_, e) in le.iter() {
                 let mut effects = Vec::new();
                 let mut conditions = Vec::new();
-                let f = format!("__f_{}_{}", a, i);
-                if !fluent_ids.contains_key(&f) {
-                    fluent_ids.insert(f.clone(), fluent_ids.len());
-                    fluents.push(f.clone());
-                }
-
-                all_fluents.push(f.clone());
-                a_extra_fluents.push(vec![ExpressionNode::Fluent(fluent_ids[&f])]);
+                let f = num_fluents;
+                num_fluents += 1;
+                a_extra_fluents.push(vec![ExpressionNode::Fluent(f)]);
                 effects.push(Effect {
-                    fluent: fluent_ids[&f],
+                    fluent: f,
                     value: vec![ExpressionNode::Bool(true)],
                 });
                 for eff in e.effects.iter() {
@@ -695,7 +663,7 @@ impl HMaxNumeric {
                         cost: 1.0,
                     });
                 }
-                cond = vec![ExpressionNode::Fluent(fluent_ids[&f])];
+                cond = vec![ExpressionNode::Fluent(f)];
             }
             extra_fluents.insert(a.to_string(), a_extra_fluents);
         }
@@ -733,9 +701,6 @@ impl HMaxNumeric {
             operator_effects_fluents.push(effects_fluents);
         }
 
-        for (f, _v) in &fluent_types {
-            all_fluents.push(f.clone());
-        }
         let ordered_actions: Vec<String> = events.keys().map(|action| action.clone()).collect();
         let internal_caching = if internal_caching {
             Some(HashMap::new())
@@ -744,11 +709,10 @@ impl HMaxNumeric {
         };
 
         let res = HMaxNumeric {
-            fluents,
             goals,
             goal_expressions,
             extra_fluents,
-            all_fluents,
+            num_fluents,
             operators,
             operator_conditions_fluents,
             operator_effects_fluents,
@@ -894,7 +858,7 @@ impl HMaxNumeric {
         };
 
         let mut assignments: Vec<HashSet<ExpressionNode>> =
-            vec![HashSet::new(); self.all_fluents.len()];
+            vec![HashSet::new(); self.num_fluents];
         // add state assignments to assignments
         for (f, v) in state.assignments.iter().enumerate() {
             assignments[f] = HashSet::from([v.clone()]);
@@ -916,7 +880,7 @@ impl HMaxNumeric {
 
         let mut cache_can_be_true: HashMap<Expression, bool> = HashMap::new();
         let mut applied_operators = vec![false; self.operators.len()];
-        let mut assignments_changes: HashSet<usize> = (0..self.fluents.len()).collect();
+        let mut assignments_changes: HashSet<usize> = (0..self.num_fluents).collect();
         let mut depth = 0;
         while assignments_changes.len() > 0 {
             if self.can_be_true(

@@ -40,7 +40,7 @@ class Encoder:
         else:
             self._simplifier = problem.environment.simplifier
         
-        self._fluent_types = {}
+        fluent_types = {}
         for f in problem.initial_values.keys():
             if f.type.is_bool_type():
                 t = "bool"
@@ -52,9 +52,10 @@ class Encoder:
                 t = f.type.name
             else:
                 raise NotImplementedError
-            self._fluent_types[self._convert_fluent(f)] = t
-        self._fluents: List[str] = sorted(self._fluent_types.keys())
+            fluent_types[self._convert_fluent(f)] = t
+        self._fluents: List[str] = sorted(fluent_types.keys())
         self._fluent_ids = dict((f,i) for i, f in enumerate(self._fluents))
+        self._fluent_types = [fluent_types[f] for f in self._fluents]
 
         self._converter = Converter(problem, self._fluent_ids)
         actions_duration = {}
@@ -105,13 +106,13 @@ class Encoder:
     @property
     def fluents(self) -> List[str]:
         return self._fluents
-    
+
     @property
     def fluent_ids(self) -> Dict[str, int]:
         return self._fluent_ids
-    
+
     @property
-    def fluent_types(self) -> Dict[str, str]:
+    def fluent_types(self) -> List[str]:
         return self._fluent_types
 
     @property
