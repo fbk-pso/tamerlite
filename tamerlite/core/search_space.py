@@ -29,7 +29,7 @@ class OperatorNode:
 
 @dataclass(eq=True, frozen=True)
 class FluentNode:
-    fluent_id: int
+    fluent: int
 
 
 ExpressionNode = Union[OperatorNode, FluentNode, bool, int, Fraction, str]
@@ -51,8 +51,8 @@ def make_rational_constant_node(numerator: int, denominator:int) -> ExpressionNo
 def make_object_node(name: str) -> ExpressionNode:
     return name
 
-def make_fluent_node(fluent_id: int) -> ExpressionNode:
-    return FluentNode(fluent_id)
+def make_fluent_node(fluent: int) -> ExpressionNode:
+    return FluentNode(fluent)
 
 def shift_expression(exp: Expression, offset: int) -> Expression:
     res = []
@@ -83,7 +83,7 @@ def split_expression(exp: Expression) -> Tuple[Expression, ...]:
 def get_fluents(exp: Expression) -> Iterator[int]:
     for e in exp:
         if isinstance(e, FluentNode):
-            yield e.fluent_id
+            yield e.fluent
 
 
 @dataclass(eq=True, frozen=True)
@@ -207,7 +207,7 @@ def evaluate(exp: Expression, state: State) -> Union[bool, int, Fraction, str]:
         if isinstance(e, bool) or isinstance(e, int) or isinstance(e, Fraction):
             res.append(e)
         elif isinstance(e, FluentNode):
-            res.append(state.assignments[e.fluent_id])
+            res.append(state.assignments[e.fluent])
         elif isinstance(e, str):
             res.append(e)
         else:
@@ -255,7 +255,7 @@ def simplify(exp: Expression, assignments: Dict[int, Union[bool, int, Fraction, 
         if isinstance(e, bool) or isinstance(e, int) or isinstance(e, Fraction):
             res.append(e)
         elif isinstance(e, FluentNode):
-            v = assignments.get(e.fluent_id, None)
+            v = assignments.get(e.fluent, None)
             if v is None:
                 res.append(e)
             else:

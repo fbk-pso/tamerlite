@@ -206,8 +206,8 @@ pub fn make_object_node(name: String) -> PyExpressionNode {
 }
 
 #[pyfunction]
-pub fn make_fluent_node(fluent_id: usize) -> PyExpressionNode {
+pub fn make_fluent_node(fluent: usize) -> PyExpressionNode {
     PyExpressionNode {
-        v: ExpressionNode::Fluent(fluent_id),
+        v: ExpressionNode::Fluent(fluent),
     }
 }

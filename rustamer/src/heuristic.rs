@@ -42,8 +42,7 @@ impl Heuristic {
 
     #[staticmethod]
     pub fn hff(
-        fluents: Vec<String>,
-        fluent_types: HashMap<String, String>,
+        fluent_types: Vec<String>,
         objects: HashMap<String, Vec<String>>,
         events: HashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
@@ -52,7 +51,6 @@ impl Heuristic {
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: Some(DeleteRelaxationHeuristic::new(
-                fluents,
                 fluent_types,
                 objects,
                 events,
@@ -68,8 +66,7 @@ impl Heuristic {
 
     #[staticmethod]
     pub fn hadd(
-        fluents: Vec<String>,
-        fluent_types: HashMap<String, String>,
+        fluent_types: Vec<String>,
         objects: HashMap<String, Vec<String>>,
         events: HashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
@@ -78,7 +75,6 @@ impl Heuristic {
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: Some(DeleteRelaxationHeuristic::new(
-                fluents,
                 fluent_types,
                 objects,
                 events,
@@ -94,8 +90,7 @@ impl Heuristic {
 
     #[staticmethod]
     pub fn hmax(
-        fluents: Vec<String>,
-        fluent_types: HashMap<String, String>,
+        fluent_types: Vec<String>,
         objects: HashMap<String, Vec<String>>,
         events: HashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
@@ -104,7 +99,6 @@ impl Heuristic {
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: Some(DeleteRelaxationHeuristic::new(
-                fluents,
                 fluent_types,
                 objects,
                 events,
@@ -120,8 +114,7 @@ impl Heuristic {
 
     #[staticmethod]
     pub fn hmax_numeric(
-        fluents: Vec<String>,
-        fluent_types: HashMap<String, String>,
+        fluent_types: Vec<String>,
         _objects: HashMap<String, Vec<String>>,
         events: HashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
@@ -131,7 +124,6 @@ impl Heuristic {
         Ok(Heuristic {
             hdr: None,
             hmax: Some(HMaxNumeric::new(
-                fluents,
                 fluent_types,
                 events,
                 goal,

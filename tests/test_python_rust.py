@@ -194,7 +194,6 @@ def test_heuristic_values(problems):
             ]:
                 for internal_caching in [True, False]:
                     heuristic: Heuristic = heuristic_class(
-                        encoder.fluents,
                         encoder.fluent_types,
                         encoder.objects,
                         encoder.events,
