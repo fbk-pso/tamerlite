@@ -59,7 +59,7 @@ if not use_rustamer:
     )
 else:
     from fractions import Fraction
-    from typing import List, Union
+    from typing import List, Union, Iterator
 
     wastar_search, astar_search, gbfs_search = (
         rustamer_lib.wastar_search,
@@ -72,13 +72,14 @@ else:
         rustamer_lib.dfs_search,
     )
     multiqueue_search = rustamer_lib.multiqueue_search
-    SearchSpace, rustevaluate = rustamer_lib.SearchSpace, rustamer_lib.evaluate
-    Timing, Effect, Event, ExpressionNode = (
+    SearchSpace, Timing, Effect, Event = (
+        rustamer_lib.SearchSpace,
         rustamer_lib.Timing,
         rustamer_lib.Effect,
         rustamer_lib.Event,
-        rustamer_lib.ExpressionNode,
     )
+    Expression = List[rustamer_lib.ExpressionNode]
+    State = rustamer_lib.State
 
     (
         make_bool_constant_node,
@@ -99,94 +100,22 @@ else:
         rustamer_lib.shift_expression,
         rustamer_lib.simplify,
     )
-    Heuristic = rustamer_lib.Heuristic
 
-    def HFF(
-        fluents,
-        fluent_types,
-        objects,
-        events,
-        goals,
-        internal_caching,
-        cache_value_in_state,
-    ):
-        return Heuristic.hff(
-            fluents,
-            fluent_types,
-            objects,
-            events,
-            goals,
-            internal_caching,
-            cache_value_in_state,
-        )
+    HFF, HAdd, HMax, HMaxNumeric, CustomHeuristic = (
+        rustamer_lib.Heuristic.hff,
+        rustamer_lib.Heuristic.hadd,
+        rustamer_lib.Heuristic.hmax,
+        rustamer_lib.Heuristic.hmax_numeric,
+        rustamer_lib.Heuristic.custom,
+    )
 
-    def HAdd(
-        fluents,
-        fluent_types,
-        objects,
-        events,
-        goals,
-        internal_caching,
-        cache_value_in_state,
-    ):
-        return Heuristic.hadd(
-            fluents,
-            fluent_types,
-            objects,
-            events,
-            goals,
-            internal_caching,
-            cache_value_in_state,
-        )
-
-    def HMaxNumeric(
-        fluents,
-        fluent_types,
-        objects,
-        events,
-        goals,
-        internal_caching,
-        cache_value_in_state,
-    ):
-        return Heuristic.hmax_numeric(
-            fluents,
-            fluent_types,
-            objects,
-            events,
-            goals,
-            internal_caching,
-            cache_value_in_state,
-        )
-
-    def HMax(
-        fluents,
-        fluent_types,
-        objects,
-        events,
-        goals,
-        internal_caching,
-        cache_value_in_state,
-    ):
-        return Heuristic.hmax(
-            fluents,
-            fluent_types,
-            objects,
-            events,
-            goals,
-            internal_caching,
-            cache_value_in_state,
-        )
-
-    def CustomHeuristic(callable, cache_value_in_state):
-        return Heuristic.custom(callable, cache_value_in_state)
-
-    def get_fluents(exp):
+    def get_fluents(exp: Expression) -> Iterator[int]:
         for e in exp:
             f = e.fluent
             if f is not None:
                 yield f
 
-    def get_fluent_value(fluent: str, state) -> Union[bool, int, Fraction, str]:
+    def get_fluent_value(fluent: int, state: State) -> Union[bool, int, Fraction, str]:
         exp = state.get_py_value(fluent)
         if exp.bool_constant is not None:
             return exp.bool_constant
@@ -200,8 +129,8 @@ else:
         else:
             raise NotImplementedError("Unreachable code")
 
-    def evaluate(exp, state):
-        r = rustevaluate(exp, state)
+    def evaluate(exp: Expression, state: State) -> Union[bool, int, Fraction, str]:
+        r = rustamer_lib.evaluate(exp, state)
         if r.bool_constant is not None:
             return r.bool_constant
         elif r.object is not None:
@@ -213,5 +142,3 @@ else:
             return Fraction(n, d)
         else:
             raise NotImplementedError("Unreachable code")
-
-    Expression = List[ExpressionNode]
