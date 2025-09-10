@@ -78,8 +78,8 @@ impl Ord for PrioritizedItem {
     }
 }
 
-pub fn multiqueue_search<H: HeuristicTrait>(
-    ss: &SearchSpace,
+pub fn multiqueue_search<H: HeuristicTrait, S: SearchSpaceTrait>(
+    ss: &S,
     heuristics: Vec<(H, f64)>,
     timeout: Option<f32>,
 ) -> PyResult<(
@@ -92,7 +92,7 @@ pub fn multiqueue_search<H: HeuristicTrait>(
 
     let mut open_set: HashSet<State> = HashSet::new();
     let mut closed_set: HashSet<State> = HashSet::new();
-    if !ss.is_temporal {
+    if !ss.is_temporal() {
         open_set.insert(init.full_clone());
     }
 
@@ -134,7 +134,7 @@ pub fn multiqueue_search<H: HeuristicTrait>(
                 }
                 sc.set_expanded(true);
                 let state = &sc.state;
-                if !ss.is_temporal {
+                if !ss.is_temporal() {
                     let opened = open_set.take(state);
                     if let Some(s) = opened {
                         closed_set.insert(s);
@@ -154,7 +154,7 @@ pub fn multiqueue_search<H: HeuristicTrait>(
                         state: s,
                         expanded: false,
                     };
-                    if !ss.is_temporal {
+                    if !ss.is_temporal() {
                         if closed_set.contains(&sc.state) || open_set.contains(&sc.state) {
                             continue;
                         }

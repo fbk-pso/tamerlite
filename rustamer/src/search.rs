@@ -22,6 +22,30 @@ use super::heuristic::Heuristic;
 use pyo3::prelude::*;
 
 #[pyfunction]
+#[pyo3(signature = (ss, timeout=None))]
+pub fn bfs_search(
+    ss: &rustamer_base::SearchSpace,
+    timeout: Option<f32>,
+) -> PyResult<(
+    Option<Vec<(Option<String>, String, Option<String>)>>,
+    HashMap<String, String>,
+)> {
+    rustamer_base::bfs_search(ss, timeout)
+}
+
+#[pyfunction]
+#[pyo3(signature = (ss, timeout=None))]
+pub fn dfs_search(
+    ss: &rustamer_base::SearchSpace,
+    timeout: Option<f32>,
+) -> PyResult<(
+    Option<Vec<(Option<String>, String, Option<String>)>>,
+    HashMap<String, String>,
+)> {
+    rustamer_base::dfs_search(ss, timeout)
+}
+
+#[pyfunction]
 #[pyo3(signature = (ss, heuristic, timeout=None))]
 pub fn ehc_search(
     ss: &rustamer_base::SearchSpace,

@@ -34,7 +34,7 @@ pub use search::{
     dfs_search,
 };
 pub use multiqueue::{StateContainer, multiqueue_search};
-pub use search_space::SearchSpace;
+pub use search_space::{SearchSpace, SearchSpaceTrait};
 pub use search_state::State;
 pub use structures::{Timing, Effect, Event};
 pub use expressions::{
