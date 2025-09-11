@@ -19,7 +19,7 @@ import heapq
 from dataclasses import dataclass
 import time
 from typing import List, Tuple
-from tamerlite.core.search_space import SearchSpace, State
+from tamerlite.core.search_space import SearchSpaceABC, State
 from tamerlite.core.heuristics import Heuristic
 
 
@@ -42,7 +42,7 @@ class PrioritizedItem:
         return len(self.state_container.state.todo) < len(other.state_container.state.todo)
 
 
-def multiqueue_search(ss: SearchSpace, heuristics: List[Tuple[Heuristic, float]], timeout: float = None):
+def multiqueue_search(ss: SearchSpaceABC, heuristics: List[Tuple[Heuristic, float]], timeout: float = None):
     st = time.time()
     opens = []
     closed_set = set()

@@ -19,7 +19,7 @@ from collections import deque
 import heapq
 import time
 from dataclasses import dataclass
-from tamerlite.core.search_space import SearchSpace, State
+from tamerlite.core.search_space import SearchSpaceABC, State
 from tamerlite.core.heuristics import Heuristic
 
 
@@ -35,13 +35,13 @@ class PrioritizedItem:
             return False
         return len(self.state.todo) < len(other.state.todo)
 
-def bfs_search(ss: SearchSpace, timeout=None):
+def bfs_search(ss: SearchSpaceABC, timeout=None):
     return _basic_search(ss, True, timeout)
 
-def dfs_search(ss: SearchSpace, timeout=None):
+def dfs_search(ss: SearchSpaceABC, timeout=None):
     return _basic_search(ss, False, timeout)
 
-def _basic_search(ss: SearchSpace, bfs: bool, timeout):
+def _basic_search(ss: SearchSpaceABC, bfs: bool, timeout):
     st = time.time()
     init = ss.initial_state()
     open = deque()
@@ -61,13 +61,13 @@ def _basic_search(ss: SearchSpace, bfs: bool, timeout):
             open.append(succ_state)
     return None, {"expanded_states": str(counter)}
 
-def astar_search(ss: SearchSpace, heuristic: Heuristic, timeout=None):
+def astar_search(ss: SearchSpaceABC, heuristic: Heuristic, timeout=None):
     return wastar_search(ss, heuristic, 0.5, timeout)
 
-def gbfs_search(ss: SearchSpace, heuristic: Heuristic, timeout=None):
+def gbfs_search(ss: SearchSpaceABC, heuristic: Heuristic, timeout=None):
     return wastar_search(ss, heuristic, 1, timeout)
 
-def wastar_search(ss: SearchSpace, heuristic: Heuristic, weight: float = 0.5, timeout=None):
+def wastar_search(ss: SearchSpaceABC, heuristic: Heuristic, weight: float = 0.5, timeout=None):
     st = time.time()
     open = []
     closed_set = set()
@@ -99,7 +99,7 @@ def wastar_search(ss: SearchSpace, heuristic: Heuristic, weight: float = 0.5, ti
                     open_set.add(succ_state)
     return None, {"expanded_states": str(counter)}
 
-def ehc_search(ss: SearchSpace, heuristic: Heuristic, timeout=None):
+def ehc_search(ss: SearchSpaceABC, heuristic: Heuristic, timeout=None):
     st = time.time()
     init = ss.initial_state()
     open = deque()

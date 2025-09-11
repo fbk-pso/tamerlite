@@ -19,6 +19,7 @@ from unified_planning.model import DeltaSimpleTemporalNetwork
 from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import List, Tuple, Dict, Iterator, Optional, Union, Set
+from abc import ABC, abstractmethod
 
 
 @dataclass(eq=True, frozen=True)
@@ -349,7 +350,43 @@ def simplify(exp: Expression, assignments: Dict[int, Union[bool, int, Fraction, 
     return tuple(final_res)
 
 
-class SearchSpace:
+class SearchSpaceABC(ABC):
+    @property
+    @abstractmethod
+    def is_temporal(self) -> bool:
+        pass
+
+    @abstractmethod
+    def reset(self):
+        pass
+
+    @abstractmethod
+    def initial_state(
+        self,
+        initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
+    ) -> State:
+        pass
+
+    @abstractmethod
+    def get_successor_state(self, state: State, action: str) -> Optional[State]:
+        pass
+
+    def get_successor_states(self, state: State) -> Iterator[State]:
+        for action in self._actions:
+            new_state = self.get_successor_state(state, action)
+            if new_state:
+                yield new_state
+
+    @abstractmethod
+    def goal_reached(self, state: State, goal: Optional[Fraction] = None) -> bool:
+        pass
+
+    @abstractmethod
+    def subgoals_sat(self, state: State, goal: Optional[Fraction] = None) -> Set[Expression]:
+        pass
+
+
+class SearchSpace(SearchSpaceABC):
 
     def __init__(self,
                  actions_duration: Dict[str, Optional[Tuple[Expression, Expression, bool, bool]]],
@@ -402,12 +439,6 @@ class SearchSpace:
         else:
             new_state = self._open_action(state, new_state, action, events)
         return new_state
-
-    def get_successor_states(self, state: State) -> Iterator[State]:
-        for action in self._actions:
-            new_state = self.get_successor_state(state, action)
-            if new_state:
-                yield new_state
 
     def goal_reached(self, state: State, goal: Optional[Fraction] = None) -> bool:
         # goal parameter can be None if it was passed to the class constructor

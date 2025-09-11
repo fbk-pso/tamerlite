@@ -26,7 +26,7 @@ import tamerlite
 import tamerlite.core
 from tamerlite.core.heuristics import Heuristic
 from tamerlite.core import HFF, HAdd, HMax, HMaxNumeric
-from tamerlite.core.search_space import SearchSpace
+from tamerlite.core.search_space import SearchSpaceABC
 from tamerlite.encoder import Encoder
 import tamerlite.encoder
 import tamerlite.engine
@@ -105,7 +105,7 @@ def max_generated_states(problem):
     return 1000
 
 
-def generate_states(ss: SearchSpace, state, num_states: int):
+def generate_states(ss: SearchSpaceABC, state, num_states: int):
     states = [state]
     i = 0
     while i < len(states) and len(states) < num_states:
@@ -180,7 +180,7 @@ def test_heuristic_values(problems):
                 compilation_res = compiler.compile(problem)
             new_problem = compilation_res.problem
             encoder = Encoder(new_problem)
-            ss: SearchSpace = encoder.search_space
+            ss: SearchSpaceABC = encoder.search_space
             init_state = ss.initial_state()
 
             states = generate_states(
@@ -300,7 +300,7 @@ def test_search_space(problems):
                 compilation_res = compiler.compile(problem)
             new_problem = compilation_res.problem
             encoder = Encoder(new_problem)
-            ss: tamerlite.core.SearchSpace = encoder.search_space
+            ss: SearchSpaceABC = encoder.search_space
 
             init_state = ss.initial_state()
             l = "python" if disable_rustamer else "rust"
