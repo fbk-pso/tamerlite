@@ -22,67 +22,72 @@ use super::heuristic::Heuristic;
 use pyo3::prelude::*;
 
 #[pyfunction]
-#[pyo3(signature = (ss, heuristic, timeout=None))]
+#[pyo3(signature = (ss, heuristic, timeout=None, early_termination=false))]
 pub fn ehc_search(
     ss: &rustamer_base::SearchSpace,
     heuristic: &Heuristic,
     timeout: Option<f32>,
+    early_termination: bool
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
 )> {
-    rustamer_base::ehc_search(ss, heuristic, timeout)
+    rustamer_base::ehc_search(ss, heuristic, timeout, early_termination)
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, heuristic, weight, timeout=None))]
+#[pyo3(signature = (ss, heuristic, weight, timeout=None, early_termination=false))]
 pub fn wastar_search(
     ss: &rustamer_base::SearchSpace,
     heuristic: &Heuristic,
     weight: f64,
     timeout: Option<f32>,
+    early_termination: bool
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
 )> {
-    rustamer_base::wastar_search(ss, heuristic, weight, timeout)
+    rustamer_base::wastar_search(ss, heuristic, weight, timeout, early_termination)
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, heuristic, timeout=None))]
+#[pyo3(signature = (ss, heuristic, timeout=None, early_termination=false))]
 pub fn astar_search(
     ss: &rustamer_base::SearchSpace,
     heuristic: &Heuristic,
     timeout: Option<f32>,
+    early_termination: bool
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
 )> {
-    wastar_search(ss, heuristic, 0.5, timeout)
+    wastar_search(ss, heuristic, 0.5, timeout, early_termination)
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, heuristic, timeout=None))]
+#[pyo3(signature = (ss, heuristic, timeout=None, early_termination=false))]
 pub fn gbfs_search(
     ss: &rustamer_base::SearchSpace,
     heuristic: &Heuristic,
     timeout: Option<f32>,
+    early_termination: bool
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
 )> {
-    wastar_search(ss, heuristic, 1.0, timeout)
+    wastar_search(ss, heuristic, 1.0, timeout, early_termination)
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, heuristics, timeout=None))]
+#[pyo3(signature = (ss, heuristics, timeout=None, early_termination=false))]
 pub fn multiqueue_search(
     ss: &rustamer_base::SearchSpace,
     heuristics: Vec<(Heuristic, f64)>,
     timeout: Option<f32>,
+    early_termination: bool
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
 )> {
-    rustamer_base::multiqueue_search(ss, heuristics, timeout)
+    rustamer_base::multiqueue_search(ss, heuristics, timeout, early_termination)
 }
