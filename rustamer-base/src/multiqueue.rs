@@ -78,10 +78,60 @@ impl Ord for PrioritizedItem {
     }
 }
 
+/// Trait for multi-queue switching policies.
+trait MQSwitchPolicy {
+    /// Given the number of expansions done so far, return the index of the next
+    /// queue to use
+    fn switching_policy(&mut self, i: usize) -> usize;
+
+    /// Notify the policy that an item has been pushed to queue `i`
+    fn notify_push(&mut self, i: usize, item: &PrioritizedItem);
+
+    /// Notify the policy that an item has been popped from queue `i` (and
+    /// marked as expanded in all other queues)
+    fn notify_pop(&mut self, i: usize, item: &PrioritizedItem);
+}
+
+/// A simple round-robin switching policy.
+struct RoundRobinSwitchPolicy {
+    num_queues: usize,
+}
+
+impl RoundRobinSwitchPolicy {
+    pub fn new(num_queues: usize) -> Self {
+        Self { num_queues }
+    }
+}
+
+impl MQSwitchPolicy for RoundRobinSwitchPolicy {
+    fn switching_policy(&mut self, i: usize) -> usize {
+        i % self.num_queues
+    }
+
+    fn notify_push(&mut self, _i: usize, _item: &PrioritizedItem) {}
+
+    fn notify_pop(&mut self, _i: usize, _item: &PrioritizedItem) {}
+}
+
 pub fn multiqueue_search<H: HeuristicTrait>(
     ss: &SearchSpace,
     heuristics: Vec<(H, f64)>,
     timeout: Option<f32>,
+    early_termination: bool
+) -> PyResult<(
+    Option<Vec<(Option<String>, String, Option<String>)>>,
+    HashMap<String, String>,
+)> {
+    let mut switch_policy = RoundRobinSwitchPolicy::new(heuristics.len());
+    _multiqueue_search(ss, heuristics, &mut switch_policy, timeout, early_termination)
+}
+
+fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait>(
+    ss: &SearchSpace,
+    heuristics: Vec<(H, f64)>,
+    switch_policy: &mut T,
+    timeout: Option<f32>,
+    early_termination: bool
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
@@ -105,10 +155,11 @@ pub fn multiqueue_search<H: HeuristicTrait>(
     };
 
     let mut opens = Vec::new();
-    for _ in heuristics.iter() {
+    for (i, _) in heuristics.iter().enumerate() {
         let mut open = BinaryHeap::new();
         open.push(item.clone());
         opens.push(open);
+        switch_policy.notify_push(i, &item);
     }
 
     let mut counter = 0;
@@ -123,9 +174,10 @@ pub fn multiqueue_search<H: HeuristicTrait>(
         if opens.iter().any(|o| o.is_empty()) {
             break;
         }
-        let i = counter % opens.len();
+        let i = switch_policy.switching_policy(counter);
         let open = &mut opens[i];
         if let Some(current) = open.pop() {
+            switch_policy.notify_pop(i, &current);
             let mut candidate_containers: Vec<Rc<RefCell<StateContainer>>> = Vec::new();
             {
                 let sc = &mut (*(current.state_container)).borrow_mut();
@@ -150,6 +202,11 @@ pub fn multiqueue_search<H: HeuristicTrait>(
 
                 for rs in ss.get_successor_states_iter(&state) {
                     let s = rs?;
+                    if early_termination && ss.goal_reached(&s, None)? {
+                        metrics.insert("expanded_states".to_string(), states_expanded.to_string());
+                        metrics.insert("goal_depth".to_string(), s.g.to_string());
+                        return build_plan(ss, &s).map(|plan| (plan, metrics));
+                    }
                     let sc = StateContainer {
                         state: s,
                         expanded: false,
@@ -168,15 +225,18 @@ pub fn multiqueue_search<H: HeuristicTrait>(
                     .eval_gen_container(&candidate_containers, ss)?
                 {
                     let (si, h) = sh?;
+                    let g: f64 = candidate_containers[si].borrow().state.g;
                     match h {
                         Some(v) => {
-                            let f = *weight * v
-                                + (1.0 - *weight) * candidate_containers[si].borrow().state.g;
+                            let f = *weight * v + (1.0 - *weight) * g;
                             let sc = candidate_containers[si].clone();
-                            opens[i].push(PrioritizedItem {
+
+                            let item = PrioritizedItem {
                                 heuristic: f,
                                 state_container: sc,
-                            });
+                            };
+                            switch_policy.notify_push(i, &item);
+                            opens[i].push(item);
                         }
                         None => continue,
                     }
