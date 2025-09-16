@@ -25,7 +25,7 @@ import up_test_cases.builtin
 import tamerlite
 import tamerlite.core
 from tamerlite.core.heuristics import Heuristic
-from tamerlite.core import HFF, HAdd, HMax, HMaxNumeric
+from tamerlite.core import HFF, HAdd, HMax, HMaxNumeric, CustomHeuristic
 from tamerlite.core.search_space import SearchSpace
 from tamerlite.encoder import Encoder
 import tamerlite.encoder
@@ -214,7 +214,7 @@ def test_heuristic_values(problems):
                         continue
 
                     heuristic: Heuristic = heuristic_class(
-                        encoder.fluents,
+                        encoder.fluent_types,
                         encoder.objects,
                         encoder.events,
                         encoder.goal,
@@ -237,6 +237,51 @@ def test_heuristic_values(problems):
                             if h_val is not None:
                                 h_val = int(h_val)
                             assert h_val == values[heuristic_name][i]
+
+
+def test_custom_heuristic(problems):
+    search_kind = "wastar"
+    heuristic = "custom"
+
+    def custom_heuristic(state: State):
+        return 1
+
+    for problem in problems:
+        print(problem.name)
+        results = []
+        for disable_rustamer in [True, False]:
+            reload_tamerlite(disable_rustamer)
+
+            for internal_heuristic_cache in [True, False]:
+                if skip(
+                    problem,
+                    search_kind,
+                    heuristic,
+                    disable_rustamer,
+                    internal_heuristic_cache,
+                ):
+                    continue
+
+                search = tamerlite.SearchParams(
+                    search=search_kind,
+                    heuristic=heuristic,
+                    weight=0.1,
+                    internal_heuristic_cache=internal_heuristic_cache,
+                )
+
+                with OneshotPlanner(
+                    name="tamerlite", params={"search": search}
+                ) as planner:
+                    planner: tamerlite.engine.TamerLite
+                    res: PlanGenerationResult = planner.solve(
+                        problem, heuristic=custom_heuristic, timeout=None
+                    )
+                    assert res.status == PlanGenerationResultStatus.SOLVED_SATISFICING
+                    results.append(res)
+                    with PlanValidator(problem_kind=problem.kind) as v:
+                        assert v.validate(problem, res.plan)
+
+        check_metrics_equality(results)
 
 
 def test_search_algorithms(problems):

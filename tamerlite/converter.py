@@ -15,7 +15,7 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 
-from typing import List
+from typing import List, Dict
 
 from unified_planning.model import FNode
 from unified_planning.model.walkers import DagWalker, Dnf
@@ -33,9 +33,10 @@ from tamerlite.core import (
 
 
 class Converter(DagWalker):
-    def __init__(self, problem):
+    def __init__(self, problem, fluent_ids: Dict[str, int]):
         DagWalker.__init__(self)
         self.static_fluents = problem.get_static_fluents()
+        self._fluent_ids = fluent_ids
 
     def convert(self, expression: 'FNode') -> Expression:
         """Converts the given expression."""
@@ -140,7 +141,8 @@ class Converter(DagWalker):
 
     def walk_fluent_exp(self, expression: 'FNode',
                         args: List[Expression]) -> Expression:
-        return (make_fluent_node(str(expression)), )
+        fluent = str(expression)
+        return (make_fluent_node(self._fluent_ids[fluent]), )
 
     def walk_object_exp(self, expression: 'FNode',
                         args: List[Expression]) -> Expression:

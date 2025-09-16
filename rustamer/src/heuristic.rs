@@ -15,10 +15,9 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 
-use std::{collections::HashMap, vec::Vec};
 use pyo3::prelude::*;
 use rustamer_base::*;
-
+use std::{collections::HashMap, vec::Vec};
 
 #[pyclass(frozen)]
 #[derive(Clone)]
@@ -43,7 +42,7 @@ impl Heuristic {
 
     #[staticmethod]
     pub fn hff(
-        fluents: HashMap<String, String>,
+        fluent_types: Vec<String>,
         objects: HashMap<String, Vec<String>>,
         events: HashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
@@ -52,7 +51,7 @@ impl Heuristic {
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: Some(DeleteRelaxationHeuristic::new(
-                fluents,
+                fluent_types,
                 objects,
                 events,
                 goal,
@@ -67,7 +66,7 @@ impl Heuristic {
 
     #[staticmethod]
     pub fn hadd(
-        fluents: HashMap<String, String>,
+        fluent_types: Vec<String>,
         objects: HashMap<String, Vec<String>>,
         events: HashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
@@ -76,7 +75,7 @@ impl Heuristic {
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: Some(DeleteRelaxationHeuristic::new(
-                fluents,
+                fluent_types,
                 objects,
                 events,
                 goal,
@@ -91,7 +90,7 @@ impl Heuristic {
 
     #[staticmethod]
     pub fn hmax(
-        fluents: HashMap<String, String>,
+        fluent_types: Vec<String>,
         objects: HashMap<String, Vec<String>>,
         events: HashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
@@ -100,7 +99,7 @@ impl Heuristic {
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: Some(DeleteRelaxationHeuristic::new(
-                fluents,
+                fluent_types,
                 objects,
                 events,
                 goal,
@@ -115,7 +114,7 @@ impl Heuristic {
 
     #[staticmethod]
     pub fn hmax_numeric(
-        fluents: HashMap<String, String>,
+        fluent_types: Vec<String>,
         _objects: HashMap<String, Vec<String>>,
         events: HashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
@@ -124,7 +123,12 @@ impl Heuristic {
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: None,
-            hmax: Some(HMaxNumeric::new(fluents, events, goal, internal_caching)?),
+            hmax: Some(HMaxNumeric::new(
+                fluent_types,
+                events,
+                goal,
+                internal_caching,
+            )?),
             hcustom: None,
             cache_value_in_state: cache_value_in_state,
         })

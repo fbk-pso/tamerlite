@@ -108,7 +108,7 @@ pub fn split_expression(exp: &Vec<ExpressionNode>) -> PyResult<Vec<Vec<Expressio
 #[pyfunction]
 pub fn simplify(
     exp: Vec<PyExpressionNode>,
-    assignments: HashMap<String, PyExpressionNode>,
+    assignments: HashMap<usize, PyExpressionNode>,
 ) -> PyResult<Vec<PyExpressionNode>> {
     // This function simplify the given expression using the given assignments
 
@@ -486,7 +486,7 @@ pub fn internal_evaluate(exp: &Vec<ExpressionNode>, state: &State) -> PyResult<E
                     ExpressionNode::Rational(r)
                 }
             }
-            ExpressionNode::Fluent(s) => state.get_value(&s).clone(),
+            ExpressionNode::Fluent(s) => state.get_value(*s).clone(),
             other => (*other).clone(),
         };
         if res.len() == exp.len() - 1 {

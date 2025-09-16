@@ -27,7 +27,7 @@ pub enum ExpressionNode {
     Bool(bool),
     Int(BigInt),
     Rational(BigRational),
-    Fluent(String),
+    Fluent(usize),
     Object(String),
     And(Vec<usize>),
     Or(Vec<usize>),
@@ -105,9 +105,9 @@ pub struct PyExpressionNode {
 #[pymethods]
 impl PyExpressionNode {
     #[getter]
-    fn fluent(&self) -> Option<String> {
+    fn fluent(&self) -> Option<usize> {
         if let ExpressionNode::Fluent(v) = &self.v {
-            Some(v.to_string())
+            Some(*v)
         } else {
             None
         }
@@ -208,8 +208,8 @@ pub fn make_object_node(name: String) -> PyExpressionNode {
 }
 
 #[pyfunction]
-pub fn make_fluent_node(name: String) -> PyExpressionNode {
+pub fn make_fluent_node(fluent: usize) -> PyExpressionNode {
     PyExpressionNode {
-        v: ExpressionNode::Fluent(name),
+        v: ExpressionNode::Fluent(fluent),
     }
 }

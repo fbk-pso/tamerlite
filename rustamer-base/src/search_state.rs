@@ -31,7 +31,7 @@ use super::utils::*;
 #[pyclass(frozen)]
 #[derive(Debug)]
 pub struct State {
-    pub assignments: HashMap<String, ExpressionNode>,
+    pub assignments: Vec<ExpressionNode>,
     pub temporal_network: Option<DeltaSTN<u64, f32>>,
     pub todo: HashMap<String, (usize, u32)>,
     pub active_conditions: HashMultiSet<Vec<ExpressionNode>>,
@@ -57,14 +57,17 @@ impl State {
         PersistentList::to_vec_copy(&self.path)
     }
 
-    fn get_py_value(&self, fluent: &str) -> PyResult<PyExpressionNode> {
-        let value = self.assignments.get(fluent).ok_or_else(|| PyException::new_err("Fluent not found!"))?;
-        Ok(PyExpressionNode {v: value.clone()})
+    fn get_py_value(&self, fluent: usize) -> PyResult<PyExpressionNode> {
+        let value = self
+            .assignments
+            .get(fluent)
+            .ok_or_else(|| PyException::new_err("Fluent not found!"))?;
+        Ok(PyExpressionNode { v: value.clone() })
     }
 }
 
 impl State {
-    pub fn get_value(&self, fluent: &String) -> &ExpressionNode {
+    pub fn get_value(&self, fluent: usize) -> &ExpressionNode {
         &self.assignments[fluent]
     }
 
@@ -110,8 +113,6 @@ impl Eq for State {}
 
 impl Hash for State {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        let mut pairs: Vec<_> = self.assignments.iter().collect();
-        pairs.sort_by_key(|i| i.0);
-        Hash::hash(&pairs, state);
+        Hash::hash(&self.assignments, state);
     }
 }
