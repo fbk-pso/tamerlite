@@ -17,6 +17,7 @@ multiset = "0.0.5"
 num-traits = "0.2.16"
 regex = "1.9.3"
 itertools = "0.14"
+fastnum = "0.7.1"
 
 [profile.profiling]
 inherits = "release"

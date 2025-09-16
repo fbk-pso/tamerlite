@@ -18,7 +18,8 @@
 import functools
 import heapq
 from dataclasses import dataclass
-import math
+#import math
+from decimal import Decimal, getcontext
 import time
 from typing import Callable, List, Optional, Tuple, Type
 from tamerlite.core.search_space import SearchSpace, State
@@ -85,8 +86,8 @@ class EntropySwitchPolicy(MQSwitchPolicy):
     def __init__(self, threshold: float, max_successive_steps: Optional[int]):
         self.threshold = threshold
         self.max_successive_steps = max_successive_steps
-        self.exp_sum = 0.0 # sum of exp(logit)
-        self.exp_logit_sum = 0.0 # sum of exp(logit) * logit
+        self.exp_sum = Decimal(0.0) # sum of exp(logit)
+        self.exp_logit_sum = Decimal(0.0) # sum of exp(logit) * logit
         self.n = 0
         self._successive_steps = 0
 
@@ -100,28 +101,28 @@ class EntropySwitchPolicy(MQSwitchPolicy):
             self._successive_steps += 1
             return 1 # Use the rank queue
 
-    def _compute_normalized_entropy(self) -> float:
+    def _compute_normalized_entropy(self) -> Decimal:
         if self.n <= 1:
-            return 0.0
-        entropy = math.log(self.exp_sum) - self.exp_logit_sum / self.exp_sum
-        return entropy / math.log(self.n)
+            return Decimal(0.0)
+        entropy = self.exp_sum.ln() - self.exp_logit_sum / self.exp_sum
+        return entropy / Decimal(self.n).ln()
 
     def notify_push(self, i: int, item: PrioritizedItem):
         if i == 1: # Only consider push on rank queue
             self.n += 1
-            logit = -item.heuristic
-            self.exp_sum += math.exp(logit)
-            self.exp_logit_sum += math.exp(logit) * logit
+            logit = Decimal(-item.heuristic)
+            self.exp_sum += logit.exp()
+            self.exp_logit_sum += logit.exp() * logit
 
     def notify_pop(self, i: int, item: PrioritizedItem):
         if not item.state_container.expanded: # Only consider the first time I pop this state
             self.n -= 1
             if i == 1 or self.n == 0:
-                logit = -item.heuristic
+                logit = Decimal(-item.heuristic)
             else:
-                logit = -item.state_container.state.heuristic_cache["rlrank"]
-            self.exp_sum -= math.exp(logit)
-            self.exp_logit_sum -= math.exp(logit) * logit
+                logit = Decimal(-item.state_container.state.heuristic_cache["rlrank"])
+            self.exp_sum -= logit.exp()
+            self.exp_logit_sum -= logit.exp() * logit
 
 def entropy_dual_queue_search(
     ss: SearchSpace,
@@ -132,6 +133,7 @@ def entropy_dual_queue_search(
     timeout: float = None,
     early_termination: bool = False,
 ):
+    getcontext().prec = 77
     return _multiqueue_search(
         ss=ss,
         heuristics=[astar_h, (rank_policy, 1)],

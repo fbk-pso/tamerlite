@@ -28,6 +28,8 @@ use super::search::*;
 use super::search_space::*;
 use super::search_state::*;
 
+use fastnum::{dec256, D256};
+
 #[derive(Debug)]
 pub struct StateContainer {
     pub state: State,
@@ -86,8 +88,8 @@ trait MQSwitchPolicy {
 
 struct EntropyDualQueueSwitchPolicy {
     threshold: f64,
-    exp_sum: f64,
-    exp_logit_sum: f64,
+    exp_sum: D256,
+    exp_logit_sum: D256,
     n: usize,
     max_successive_steps: Option<usize>,
     successive_steps: usize,
@@ -97,26 +99,26 @@ impl EntropyDualQueueSwitchPolicy {
     pub fn new(threshold: f64, max_successive_steps: Option<usize>) -> Self {
         Self {
             threshold,
-            exp_sum: 0.0,
-            exp_logit_sum: 0.0,
+            exp_sum: dec256!(0.0),
+            exp_logit_sum: dec256!(0.0),
             n: 0,
             max_successive_steps: max_successive_steps,
             successive_steps: 0,
         }
     }
 
-    fn _compute_normalized_entropy(&self) -> f64 {
+    fn _compute_normalized_entropy(&self) -> D256 {
         if self.n <= 1 {
-            return 0.0;
+            return dec256!(0.0);
         }
         let entropy = self.exp_sum.ln() - self.exp_logit_sum / self.exp_sum;
-        return entropy / (self.n as f64).ln();
+        return entropy / (D256::from_usize(self.n)).ln();
     }
 }
 
 impl MQSwitchPolicy for EntropyDualQueueSwitchPolicy {
     fn switching_policy(&mut self, _i: usize) -> usize {
-        let nentropy = self._compute_normalized_entropy();
+        let nentropy = self._compute_normalized_entropy().to_f64();
         // print!("Normalized Entropy: {:.4}\n", nentropy);
         if self.max_successive_steps.is_some_and(|mss| self.successive_steps >= mss) || nentropy > self.threshold {
             self.successive_steps = 0;
@@ -130,7 +132,7 @@ impl MQSwitchPolicy for EntropyDualQueueSwitchPolicy {
     fn notify_push(&mut self, i: usize, item: &PrioritizedItem) {
         if i == 1 {
             self.n += 1;
-            let logit = -item.heuristic;
+            let logit = D256::from_f64(-item.heuristic);
             self.exp_sum += logit.exp();
             self.exp_logit_sum += logit.exp() * logit;
         }
@@ -153,6 +155,7 @@ impl MQSwitchPolicy for EntropyDualQueueSwitchPolicy {
                     .unwrap() // Here we assume that a queue with a heuristic "rlrank" is always present
                     .unwrap()) // This is surely not None, because the element was pushed to the queue
             };
+            let logit = D256::from_f64(logit);
             self.exp_sum -= logit.exp();
             self.exp_logit_sum -= logit.exp() * logit;
         }
