@@ -40,7 +40,7 @@ pub struct SearchSpace {
     events: HashMap<String, Vec<(Timing, Event)>>,
     actions: Vec<String>,
     mutex: HashSet<((String, usize), (String, usize))>,
-    initial_state: Option<HashMap<String, ExpressionNode>>,
+    initial_state: Option<Vec<ExpressionNode>>,
     goal: Option<Vec<ExpressionNode>>,
     pub tn_interpreter: TNInterpreter,
     epsilon: f32,
@@ -60,7 +60,7 @@ impl SearchSpace {
         >,
         events: HashMap<String, Vec<(Timing, Event)>>,
         mutex: HashSet<((String, usize), (String, usize))>,
-        initial_state: Option<HashMap<String, PyExpressionNode>>,
+        initial_state: Option<Vec<PyExpressionNode>>,
         goal: Option<Vec<PyExpressionNode>>,
         #[pyo3(from_py_with = "get_option_big_rational")] epsilon: Option<BigRational>,
     ) -> PyResult<Self> {
@@ -94,7 +94,7 @@ impl SearchSpace {
             actions: actions,
             mutex: mutex,
             initial_state: initial_state
-                .map(|inner_map| inner_map.into_iter().map(|(k, v)| (k, v.v)).collect()),
+                .map(|inner_map| inner_map.into_iter().map(|v| v.v).collect()),
             goal: goal.map(|inner_vec| inner_vec.into_iter().map(|e| e.v).collect()),
             tn_interpreter: tn_interpreter,
             epsilon: match &epsilon {
@@ -116,12 +116,9 @@ impl SearchSpace {
     }
 
     #[pyo3(signature = (initial_state=None))]
-    pub fn initial_state(
-        &self,
-        initial_state: Option<HashMap<String, PyExpressionNode>>,
-    ) -> PyResult<State> {
+    pub fn initial_state(&self, initial_state: Option<Vec<PyExpressionNode>>) -> PyResult<State> {
         let init = match initial_state {
-            Some(v) => v.into_iter().map(|(k, v)| (k, v.v)).collect(),
+            Some(v) => v.iter().map(|v| v.v.clone()).collect(),
             None => match &self.initial_state {
                 Some(v) => v.clone(),
                 None => {
@@ -454,10 +451,7 @@ impl SearchSpace {
 
         // apply effects
         for eff in e.effects.iter() {
-            new_state.assignments.insert(
-                eff.fluent.to_string(),
-                internal_evaluate(&eff.value, state)?,
-            );
+            new_state.assignments[eff.fluent] = internal_evaluate(&eff.value, state)?;
         }
 
         // check active conditions

@@ -25,14 +25,14 @@ use super::utils::get_big_rational;
 #[pyclass(frozen)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Effect {
-    pub fluent: String,
+    pub fluent: usize,
     pub value: Vec<ExpressionNode>,
 }
 
 #[pymethods]
 impl Effect {
     #[new]
-    fn new(fluent: String, value: Vec<PyExpressionNode>) -> Self {
+    fn new(fluent: usize, value: Vec<PyExpressionNode>) -> Self {
         Effect {
             fluent,
             value: value.into_iter().map(|e| e.v).collect(),
@@ -40,8 +40,8 @@ impl Effect {
     }
 
     #[getter]
-    fn fluent(&self) -> String {
-        self.fluent.to_string()
+    fn fluent(&self) -> usize {
+        self.fluent
     }
 
     #[getter]

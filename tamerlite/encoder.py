@@ -16,7 +16,6 @@
 #
 
 import unified_planning as up
-import unified_planning.model
 from unified_planning.plans import TimeTriggeredPlan, SequentialPlan, Plan
 from fractions import Fraction
 from typing import List, Tuple, Dict, Optional
@@ -32,13 +31,33 @@ class Encoder:
     in the search space.
     """
 
-    def __init__(self, problem: "up.model.Problem", full: bool = True):
+    def __init__(
+        self, problem: "up.model.Problem", full: bool = True
+    ):
         self._problem = problem
         if full:
             self._simplifier = up.model.walkers.Simplifier(problem.environment, problem)
         else:
             self._simplifier = problem.environment.simplifier
-        self._converter = Converter(problem)
+        
+        fluent_types = {}
+        for f in problem.initial_values.keys():
+            if f.type.is_bool_type():
+                t = "bool"
+            elif f.type.is_int_type():
+                t = "int"
+            elif f.type.is_real_type():
+                t = "real"
+            elif f.type.is_user_type():
+                t = f.type.name
+            else:
+                raise NotImplementedError
+            fluent_types[self._convert_fluent(f)] = t
+        self._fluents: List[str] = sorted(fluent_types.keys())
+        self._fluent_ids = dict((f,i) for i, f in enumerate(self._fluents))
+        self._fluent_types = [fluent_types[f] for f in self._fluents]
+
+        self._converter = Converter(problem, self._fluent_ids)
         actions_duration = {}
         self._is_temporal = False
         for a in problem.actions:
@@ -52,9 +71,7 @@ class Encoder:
         self._build_events()
         self._build_mutex()
         if full:
-            initial_state = {}
-            for f, v in problem.initial_values.items():
-                initial_state[self._convert_fluent(f)] = self._convert_expression(v)[0]
+            initial_state = self.initial_state(problem.initial_values)
             self._goal = self._convert_expression(problem.environment.expression_manager.And(problem.goals))
         else:
             initial_state = None
@@ -64,28 +81,19 @@ class Encoder:
         self._objects = {}
         for ut in problem.user_types:
             self._objects[ut.name] = [o.name for o in problem.objects(ut)]
-        self._fluents = {}
-        for f in problem.initial_values.keys():
-            if f.type.is_bool_type():
-                t = "bool"
-            elif f.type.is_int_type():
-                t = "int"
-            elif f.type.is_real_type():
-                t = "real"
-            elif f.type.is_user_type():
-                t = f.type.name
-            else:
-                raise NotImplementedError
-            self._fluents[self._convert_fluent(f)] = t
 
     @property
     def problem(self):
         return self._problem
 
     def initial_state(self, initial_values: Dict["up.model.FNode", "up.model.FNode"]):
-        initial_state = {}
+        initial_state_values = {}
         for f, v in initial_values.items():
-            initial_state[self._convert_fluent(f)] = self._convert_expression(v)[0]
+            initial_state_values[self._convert_fluent(f)] = self._convert_expression(v)[0]
+
+        initial_state = []
+        for f in self._fluents:
+            initial_state.append(initial_state_values[f])
         return initial_state
 
     def goals(self, goals: List["up.model.FNode"]):
@@ -96,8 +104,16 @@ class Encoder:
         return self._search_space
 
     @property
-    def fluents(self) -> Dict[str, str]:
+    def fluents(self) -> List[str]:
         return self._fluents
+
+    @property
+    def fluent_ids(self) -> Dict[str, int]:
+        return self._fluent_ids
+
+    @property
+    def fluent_types(self) -> List[str]:
+        return self._fluent_types
 
     @property
     def objects(self) -> Dict[str, List[str]]:
@@ -140,7 +156,8 @@ class Encoder:
             value = em.Minus(effect.fluent, effect.value)
         else:
             value = effect.value
-        f = self._convert_fluent(effect.fluent)
+
+        f = self.fluent_ids[self._convert_fluent(effect.fluent)]
         v = self._convert_expression(value)
         return Effect(f, v)
 
