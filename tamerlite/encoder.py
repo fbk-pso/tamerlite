@@ -21,6 +21,7 @@ from fractions import Fraction
 from typing import List, Tuple, Dict, Optional
 
 from tamerlite.core import Expression, Effect, Timing, Event, SearchSpace, get_fluents
+from tamerlite.core.search_space import SearchSpaceABC
 from tamerlite.converter import Converter
 
 
@@ -100,7 +101,7 @@ class Encoder:
         return self._convert_expression(self._problem.environment.expression_manager.And(goals))
 
     @property
-    def search_space(self) -> SearchSpace:
+    def search_space(self) -> SearchSpaceABC:
         return self._search_space
 
     @property

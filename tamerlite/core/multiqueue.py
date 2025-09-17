@@ -19,7 +19,7 @@ import heapq
 from dataclasses import dataclass
 import time
 from typing import List, Tuple
-from tamerlite.core.search_space import SearchSpace, State
+from tamerlite.core.search_space import SearchSpaceABC, State
 from tamerlite.core.heuristics import Heuristic
 
 
@@ -74,7 +74,7 @@ class RoundRobinSwitchPolicy(MQSwitchPolicy):
 
 
 def multiqueue_search(
-    ss: SearchSpace,
+    ss: SearchSpaceABC,
     heuristics: List[Tuple[Heuristic, float]],
     timeout: float = None,
     early_termination: bool = False,
@@ -89,7 +89,7 @@ def multiqueue_search(
 
 
 def _multiqueue_search(
-    ss: SearchSpace,
+    ss: SearchSpaceABC,
     heuristics: List[Tuple[Heuristic, float]],
     switch_policy: MQSwitchPolicy,
     timeout: float = None,

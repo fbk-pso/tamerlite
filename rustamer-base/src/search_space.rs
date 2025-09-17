@@ -140,6 +140,12 @@ impl SearchSpace {
         Ok(res)
     }
 
+    #[getter]
+    #[pyo3(name = "is_temporal")]
+    fn py_is_temporal(&self) -> bool {
+        self.is_temporal()
+    }
+
     #[pyo3(name = "reset")]
     fn py_reset(&self) {
         self.reset();
@@ -385,14 +391,6 @@ impl SearchSpaceTrait for SearchSpace {
             path: PersistentList::new(),
             heuristic_cache: Mutex::new(HashMap::new()),
         })
-    }
-
-    fn get_successor_states(&self, state: &State) -> PyResult<Vec<State>> {
-        let mut res = Vec::new();
-        for rs in self.get_successor_states_iter(state) {
-            res.push(rs?);
-        }
-        Ok(res)
     }
 
     fn get_successor_states_iter<'a>(
