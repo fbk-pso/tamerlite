@@ -157,7 +157,7 @@ impl Heuristic {
 }
 
 impl HeuristicTrait for Heuristic {
-    fn eval(&self, state: &State, _ss: &SearchSpace) -> PyResult<Option<f64>> {
+    fn eval<S: SearchSpaceTrait>(&self, state: &State, _ss: &S) -> PyResult<Option<f64>> {
         if self.cache_value_in_state {
             let heuristic_cache = state.heuristic_cache.lock().unwrap();
             if let Some(h_value) = heuristic_cache.get(&self.name()) {
