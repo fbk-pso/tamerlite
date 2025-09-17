@@ -21,10 +21,11 @@ from typing import Callable, Iterable, List, Dict, Tuple, Union, Optional, Set, 
 from fractions import Fraction
 from collections import defaultdict
 import itertools
+from abc import ABC, abstractmethod
 
 from tamerlite.core.search_space import (
     Event,
-    SearchSpace,
+    SearchSpaceABC,
     Expression,
     FluentNode,
     State,
@@ -46,11 +47,11 @@ class HeuristicKind(Enum):
     HADD = 2
     HMAX = 3
 
-class Heuristic:
+class Heuristic(ABC):
     def __init__(self, cache_value_in_state: bool = False):
         self.cache_value_in_state = cache_value_in_state
 
-    def eval(self, state: State, ss: SearchSpace) -> Optional[float]:
+    def eval(self, state: State, ss: SearchSpaceABC) -> Optional[float]:
         if self.cache_value_in_state and self.name in state.heuristic_cache:
             return state.heuristic_cache[self.name]
 
@@ -59,26 +60,29 @@ class Heuristic:
             state.heuristic_cache[self.name] = h
         return h
 
-    def eval_gen(self, states: Iterable[State], ss: SearchSpace) -> Iterable[Tuple[State, Optional[float]]]:
+    def eval_gen(self, states: Iterable[State], ss: SearchSpaceABC) -> Iterable[Tuple[State, Optional[float]]]:
         '''
         This function is used to evaluate multiple states at once.
         '''
         for state in states:
             yield state, self.eval(state, ss)
 
-    def _eval(self, state: State, ss: SearchSpace) -> Optional[float]:
-        raise NotImplementedError
+    @abstractmethod
+    def _eval(self, state: State, ss: SearchSpaceABC) -> Optional[float]:
+        pass
 
     @property
+    @abstractmethod
     def name(self):
-        raise NotImplementedError
+        pass
+
 
 class CustomHeuristic(Heuristic):
     def __init__(self, callable: Callable[[State], Optional[float]], cache_value_in_state: bool = False):
         super().__init__(cache_value_in_state)
         self.callable = callable
 
-    def _eval(self, state: State, ss: SearchSpace) -> Optional[float]:
+    def _eval(self, state: State, ss: SearchSpaceABC) -> Optional[float]:
         return self.callable(state)
 
     @property
@@ -225,7 +229,7 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
         if self._heuristic_kind == HeuristicKind.HMAX:
             return "hmax"
 
-    def _eval(self, state: State, ss: SearchSpace) -> Optional[float]:
+    def _eval(self, state: State, ss: SearchSpaceABC) -> Optional[float]:
         if self._internal_caching is not None:
             assignments_values = tuple(state.assignments) + tuple(
                 map(
@@ -490,7 +494,7 @@ class HMaxNumeric(_DeleteRelaxationHeuristicBase):
                 return False
         return True
 
-    def _eval(self, state: State, ss: SearchSpace) -> Optional[float]:
+    def _eval(self, state: State, ss: SearchSpaceABC) -> Optional[float]:
         if self._internal_caching is not None:
             assignments_values = tuple(state.assignments) + tuple(
                 map(
