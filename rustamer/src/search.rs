@@ -17,9 +17,35 @@
 
 use std::collections::HashMap;
 
-use rustamer_base;
 use super::heuristic::Heuristic;
 use pyo3::prelude::*;
+use rustamer_base;
+
+#[pyfunction]
+#[pyo3(signature = (ss, timeout=None, early_termination=false))]
+pub fn bfs_search(
+    ss: &rustamer_base::SearchSpace,
+    timeout: Option<f32>,
+    early_termination: bool,
+) -> PyResult<(
+    Option<Vec<(Option<String>, String, Option<String>)>>,
+    HashMap<String, String>,
+)> {
+    rustamer_base::bfs_search(ss, timeout, early_termination)
+}
+
+#[pyfunction]
+#[pyo3(signature = (ss, timeout=None, early_termination=false))]
+pub fn dfs_search(
+    ss: &rustamer_base::SearchSpace,
+    timeout: Option<f32>,
+    early_termination: bool,
+) -> PyResult<(
+    Option<Vec<(Option<String>, String, Option<String>)>>,
+    HashMap<String, String>,
+)> {
+    rustamer_base::dfs_search(ss, timeout, early_termination)
+}
 
 #[pyfunction]
 #[pyo3(signature = (ss, heuristic, timeout=None, early_termination=false))]
@@ -27,7 +53,7 @@ pub fn ehc_search(
     ss: &rustamer_base::SearchSpace,
     heuristic: &Heuristic,
     timeout: Option<f32>,
-    early_termination: bool
+    early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
@@ -42,7 +68,7 @@ pub fn wastar_search(
     heuristic: &Heuristic,
     weight: f64,
     timeout: Option<f32>,
-    early_termination: bool
+    early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
@@ -56,7 +82,7 @@ pub fn astar_search(
     ss: &rustamer_base::SearchSpace,
     heuristic: &Heuristic,
     timeout: Option<f32>,
-    early_termination: bool
+    early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
@@ -70,7 +96,7 @@ pub fn gbfs_search(
     ss: &rustamer_base::SearchSpace,
     heuristic: &Heuristic,
     timeout: Option<f32>,
-    early_termination: bool
+    early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
@@ -84,7 +110,7 @@ pub fn multiqueue_search(
     ss: &rustamer_base::SearchSpace,
     heuristics: Vec<(Heuristic, f64)>,
     timeout: Option<f32>,
-    early_termination: bool
+    early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,

@@ -62,8 +62,8 @@ impl Ord for PrioritizedItem {
     }
 }
 
-pub fn build_plan(
-    ss: &SearchSpace,
+pub fn build_plan<S: SearchSpaceTrait>(
+    ss: &S,
     state: &State,
 ) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
     let path = PersistentList::to_vec(&state.path)
@@ -94,12 +94,12 @@ pub fn build_plan(
     Ok(Some(res))
 }
 
-pub fn wastar_search<H: HeuristicTrait>(
-    ss: &SearchSpace,
+pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
+    ss: &S,
     heuristic: &H,
     weight: f64,
     timeout: Option<f32>,
-    early_termination: bool
+    early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
@@ -117,7 +117,7 @@ pub fn wastar_search<H: HeuristicTrait>(
     let mut open = BinaryHeap::new();
     let open_set = Mutex::new(HashSet::new());
     let mut closed_set = HashSet::new();
-    if !ss.is_temporal {
+    if !ss.is_temporal() {
         open_set.lock().unwrap().insert(init.full_clone());
     }
     open.push(PrioritizedItem {
@@ -132,7 +132,7 @@ pub fn wastar_search<H: HeuristicTrait>(
             }
         }
         let state = current.state;
-        if !ss.is_temporal {
+        if !ss.is_temporal() {
             let opened = open_set.lock().unwrap().take(&state);
             if let Some(s) = opened {
                 closed_set.insert(s);
@@ -149,7 +149,7 @@ pub fn wastar_search<H: HeuristicTrait>(
                 ss.get_successor_states_iter(&state)
                     .filter(|sx: &Result<State, PyErr>| match sx {
                         Ok(s) => {
-                            ss.is_temporal
+                            ss.is_temporal()
                                 || (!closed_set.contains(s)
                                     && !open_set.lock().unwrap().contains(s))
                         }
@@ -165,7 +165,7 @@ pub fn wastar_search<H: HeuristicTrait>(
                 match h {
                     Some(v) => {
                         let f = weight * v + (1.0 - weight) * s.g;
-                        if !ss.is_temporal {
+                        if !ss.is_temporal() {
                             open_set.lock().unwrap().insert(s.full_clone());
                         }
                         open.push(PrioritizedItem {
@@ -182,12 +182,10 @@ pub fn wastar_search<H: HeuristicTrait>(
     Ok((None, metrics))
 }
 
-#[pyfunction]
-#[pyo3(signature = (ss, timeout=None, early_termination=false))]
-pub fn bfs_search(
-    ss: &SearchSpace,
+pub fn bfs_search<S: SearchSpaceTrait>(
+    ss: &S,
     timeout: Option<f32>,
-    early_termination: bool
+    early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
@@ -195,12 +193,10 @@ pub fn bfs_search(
     basic_search(ss, true, timeout, early_termination)
 }
 
-#[pyfunction]
-#[pyo3(signature = (ss, timeout=None, early_termination=false))]
-pub fn dfs_search(
-    ss: &SearchSpace,
+pub fn dfs_search<S: SearchSpaceTrait>(
+    ss: &S,
     timeout: Option<f32>,
-    early_termination: bool
+    early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
@@ -208,11 +204,11 @@ pub fn dfs_search(
     basic_search(ss, false, timeout, early_termination)
 }
 
-fn basic_search(
-    ss: &SearchSpace,
+fn basic_search<S: SearchSpaceTrait>(
+    ss: &S,
     bfs: bool,
     timeout: Option<f32>,
-    early_termination: bool
+    early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
@@ -257,12 +253,11 @@ fn basic_search(
     Ok((None, metrics))
 }
 
-
-pub fn ehc_search<H: HeuristicTrait>(
-    ss: &SearchSpace,
+pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
+    ss: &S,
     heuristic: &H,
     timeout: Option<f32>,
-    early_termination: bool
+    early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,

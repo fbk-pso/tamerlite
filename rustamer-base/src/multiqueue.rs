@@ -113,8 +113,8 @@ impl MQSwitchPolicy for RoundRobinSwitchPolicy {
     fn notify_pop(&mut self, _i: usize, _item: &PrioritizedItem) {}
 }
 
-pub fn multiqueue_search<H: HeuristicTrait>(
-    ss: &SearchSpace,
+pub fn multiqueue_search<H: HeuristicTrait, S: SearchSpaceTrait>(
+    ss: &S,
     heuristics: Vec<(H, f64)>,
     timeout: Option<f32>,
     early_termination: bool
@@ -126,8 +126,8 @@ pub fn multiqueue_search<H: HeuristicTrait>(
     _multiqueue_search(ss, heuristics, &mut switch_policy, timeout, early_termination)
 }
 
-fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait>(
-    ss: &SearchSpace,
+fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTrait>(
+    ss: &S,
     heuristics: Vec<(H, f64)>,
     switch_policy: &mut T,
     timeout: Option<f32>,
@@ -142,7 +142,7 @@ fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait>(
 
     let mut open_set: HashSet<State> = HashSet::new();
     let mut closed_set: HashSet<State> = HashSet::new();
-    if !ss.is_temporal {
+    if !ss.is_temporal() {
         open_set.insert(init.full_clone());
     }
 
@@ -186,7 +186,7 @@ fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait>(
                 }
                 sc.set_expanded(true);
                 let state = &sc.state;
-                if !ss.is_temporal {
+                if !ss.is_temporal() {
                     let opened = open_set.take(state);
                     if let Some(s) = opened {
                         closed_set.insert(s);
@@ -211,7 +211,7 @@ fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait>(
                         state: s,
                         expanded: false,
                     };
-                    if !ss.is_temporal {
+                    if !ss.is_temporal() {
                         if closed_set.contains(&sc.state) || open_set.contains(&sc.state) {
                             continue;
                         }

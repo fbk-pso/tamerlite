@@ -30,19 +30,19 @@ use pyo3::types::PyTuple;
 use super::expressions::*;
 use super::expressions_utils::*;
 use super::multiqueue::StateContainer;
-use super::search_space::SearchSpace;
+use super::search_space::SearchSpaceTrait;
 use super::search_state::State;
 use super::structures::*;
 
 pub trait HeuristicTrait {
-    fn eval(&self, state: &State, ss: &SearchSpace) -> PyResult<Option<f64>>;
+    fn eval<S: SearchSpaceTrait>(&self, state: &State, ss: &S) -> PyResult<Option<f64>>;
 
     /// Evaluates the heuristic for a given state, returning an iterator over the results.
     /// This method is used in non-multiqueue search algorithms
-    fn eval_gen<'a, I>(
+    fn eval_gen<'a, I, S: SearchSpaceTrait>(
         &'a self,
         states_iter: I,
-        ss: &'a SearchSpace,
+        ss: &'a S,
     ) -> PyResult<Box<dyn Iterator<Item = PyResult<(State, Option<f64>)>> + 'a>>
     where
         I: Iterator<Item = PyResult<State>> + 'a,
@@ -61,10 +61,10 @@ pub trait HeuristicTrait {
 
     /// Evaluates the heuristic for a given state, returning an iterator over the results.
     /// This method is used in multiqueue search algorithms
-    fn eval_gen_container<'a>(
+    fn eval_gen_container<'a, S: SearchSpaceTrait>(
         &'a self,
         states: &'a Vec<Rc<RefCell<StateContainer>>>,
-        ss: &'a SearchSpace,
+        ss: &'a S,
     ) -> PyResult<Box<dyn Iterator<Item = PyResult<(usize, Option<f64>)>> + 'a>> {
         return Ok(Box::new(states.iter().enumerate().map(|(i, state)| {
             let h_value = self.eval(&state.borrow().state, ss);
