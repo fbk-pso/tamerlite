@@ -19,7 +19,7 @@ from collections import deque
 import heapq
 import time
 from dataclasses import dataclass
-from tamerlite.core.search_space import SearchSpace, State
+from tamerlite.core.search_space import SearchSpaceABC, State
 from tamerlite.core.heuristics import Heuristic
 
 
@@ -35,13 +35,13 @@ class PrioritizedItem:
             return False
         return len(self.state.todo) < len(other.state.todo)
 
-def bfs_search(ss: SearchSpace, timeout=None, early_termination: bool = False):
+def bfs_search(ss: SearchSpaceABC, timeout=None, early_termination: bool = False):
     return _basic_search(ss, True, timeout, early_termination)
 
-def dfs_search(ss: SearchSpace, timeout=None, early_termination: bool = False):
+def dfs_search(ss: SearchSpaceABC, timeout=None, early_termination: bool = False):
     return _basic_search(ss, False, timeout, early_termination)
 
-def _basic_search(ss: SearchSpace, bfs: bool, timeout, early_termination: bool = False):
+def _basic_search(ss: SearchSpaceABC, bfs: bool, timeout, early_termination: bool = False):
     st = time.time()
     init = ss.initial_state()
     open = deque()
@@ -63,13 +63,13 @@ def _basic_search(ss: SearchSpace, bfs: bool, timeout, early_termination: bool =
             open.append(succ_state)
     return None, {"expanded_states": str(counter)}
 
-def astar_search(ss: SearchSpace, heuristic: Heuristic, timeout=None, early_termination: bool = False):
+def astar_search(ss: SearchSpaceABC, heuristic: Heuristic, timeout=None, early_termination: bool = False):
     return wastar_search(ss, heuristic, 0.5, timeout, early_termination)
 
-def gbfs_search(ss: SearchSpace, heuristic: Heuristic, timeout=None, early_termination: bool = False):
+def gbfs_search(ss: SearchSpaceABC, heuristic: Heuristic, timeout=None, early_termination: bool = False):
     return wastar_search(ss, heuristic, 1, timeout, early_termination)
 
-def wastar_search(ss: SearchSpace, heuristic: Heuristic, weight: float = 0.5, timeout=None, early_termination: bool = False):
+def wastar_search(ss: SearchSpaceABC, heuristic: Heuristic, weight: float = 0.5, timeout=None, early_termination: bool = False):
     st = time.time()
     open = []
     closed_set = set()
@@ -103,7 +103,7 @@ def wastar_search(ss: SearchSpace, heuristic: Heuristic, weight: float = 0.5, ti
                     open_set.add(succ_state)
     return None, {"expanded_states": str(counter)}
 
-def ehc_search(ss: SearchSpace, heuristic: Heuristic, timeout=None, early_termination: bool = False):
+def ehc_search(ss: SearchSpaceABC, heuristic: Heuristic, timeout=None, early_termination: bool = False):
     st = time.time()
     init = ss.initial_state()
     open = deque()
