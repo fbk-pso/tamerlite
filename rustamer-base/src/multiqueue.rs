@@ -41,9 +41,9 @@ impl StateContainer {
 }
 
 #[derive(Debug, Clone)]
-struct PrioritizedItem {
-    heuristic: f64,
-    state_container: Rc<RefCell<StateContainer>>,
+pub struct PrioritizedItem {
+    pub heuristic: f64,
+    pub state_container: Rc<RefCell<StateContainer>>,
 }
 
 impl PartialEq for PrioritizedItem {
@@ -79,7 +79,7 @@ impl Ord for PrioritizedItem {
 }
 
 /// Trait for multi-queue switching policies.
-trait MQSwitchPolicy {
+pub trait MQSwitchPolicy {
     /// Given the number of expansions done so far, return the index of the next
     /// queue to use
     fn switching_policy(&mut self, i: usize) -> usize;
@@ -126,7 +126,7 @@ pub fn multiqueue_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     _multiqueue_search(ss, heuristics, &mut switch_policy, timeout, early_termination)
 }
 
-fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTrait>(
+pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTrait>(
     ss: &S,
     heuristics: Vec<(H, f64)>,
     switch_policy: &mut T,
