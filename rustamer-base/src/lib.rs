@@ -33,7 +33,12 @@ pub use search::{
     bfs_search,
     dfs_search,
 };
-pub use multiqueue::{StateContainer, multiqueue_search};
+pub use multiqueue::{
+    StateContainer,
+    multiqueue_search,
+    _multiqueue_search,
+    PrioritizedItem,
+    MQSwitchPolicy};
 pub use search_space::{SearchSpace, SearchSpaceTrait};
 pub use search_state::State;
 pub use structures::{Timing, Effect, Event};
