@@ -209,7 +209,6 @@ class TamerLite(
                timeout: Optional[float] = None,
                output_stream: Optional[IO[str]] = None) -> 'up.engines.results.PlanGenerationResult':
         assert isinstance(problem, up.model.Problem)
-        has_disjunctive_conditions = problem.kind.has_disjunctive_conditions()
         try:
             with problem.environment.factory.Compiler(compilation_kind="GROUNDING", problem_kind=problem.kind) as compiler:
                 compilation_res = compiler.compile(problem)
@@ -221,6 +220,7 @@ class TamerLite(
             if self._params is not None and self._params.early_termination is not None:
                 early_termination = self._params.early_termination
 
+            has_disjunctive_conditions = new_problem.kind.has_disjunctive_conditions()
             if isinstance(self._params, MultiqueueParams):
                 heuristics = []
                 for p in self._params.queues:
