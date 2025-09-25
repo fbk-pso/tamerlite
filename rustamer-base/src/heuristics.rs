@@ -377,10 +377,7 @@ impl DeleteRelaxationHeuristic {
         let mut expression_manager = self.expression_manager.lock().unwrap();
 
         let assignments_values = if internal_caching.is_some() {
-            let mut values = Vec::new();
-            for x in state.assignments.iter() {
-                values.push(x.clone());
-            }
+            let mut values: Vec<ExpressionNode> = state.assignments.iter().cloned().collect();
             values.reserve(self.ordered_actions.len());
             for action in &self.ordered_actions {
                 let r = match state.todo.get(action) {
@@ -844,10 +841,7 @@ impl HMaxNumeric {
         let mut internal_caching = self.internal_caching.lock().unwrap();
 
         let assignments_values = if internal_caching.is_some() {
-            let mut values = Vec::new();
-            for x in state.assignments.iter() {
-                values.push(x.clone());
-            }
+            let mut values: Vec<ExpressionNode> = state.assignments.iter().cloned().collect();
             values.reserve(self.ordered_actions.len());
             for action in &self.ordered_actions {
                 let r = match state.todo.get(action) {
