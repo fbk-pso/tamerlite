@@ -15,6 +15,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 
+use im::Vector;
 use multiset::HashMultiSet;
 use pyo3::{exceptions::PyException, prelude::*};
 use std::hash::{Hash, Hasher};
@@ -31,7 +32,7 @@ use super::utils::*;
 #[pyclass(frozen)]
 #[derive(Debug)]
 pub struct State {
-    pub assignments: Vec<ExpressionNode>,
+    pub assignments: Vector<ExpressionNode>,
     pub temporal_network: Option<DeltaSTN<u64, f32>>,
     pub todo: HashMap<String, (usize, u32)>,
     pub active_conditions: HashMultiSet<Vec<ExpressionNode>>,
