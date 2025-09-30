@@ -25,8 +25,8 @@ use crate::utils::integer_to_i32;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ExpressionNode {
     Bool(bool),
-    Int(BigInt),
-    Rational(BigRational),
+    Int(Box<BigInt>),
+    Rational(Box<BigRational>),
     Fluent(usize),
     Object(String),
     And(Vec<usize>),
@@ -88,9 +88,9 @@ impl ExpressionManager {
 
 pub fn get_rational_from_expression_node(exp: &ExpressionNode) -> PyResult<BigRational> {
     if let ExpressionNode::Int(v) = exp {
-        Ok(BigRational::from_integer(v.clone()))
+        Ok(BigRational::from_integer(*v.clone()))
     } else if let ExpressionNode::Rational(v) = exp {
-        Ok(v.clone())
+        Ok(*v.clone())
     } else {
         Err(PyValueError::new_err("Expected a number!"))
     }
@@ -189,14 +189,14 @@ pub fn make_bool_constant_node(v: bool) -> PyExpressionNode {
 #[pyfunction]
 pub fn make_int_constant_node(v: i32) -> PyExpressionNode {
     PyExpressionNode {
-        v: ExpressionNode::Int(super::utils::mk_integer(v)),
+        v: ExpressionNode::Int(Box::new(super::utils::mk_integer(v))),
     }
 }
 
 #[pyfunction]
 pub fn make_rational_constant_node(numerator: i32, denominator: i32) -> PyExpressionNode {
     PyExpressionNode {
-        v: ExpressionNode::Rational(super::utils::mk_rational(numerator, denominator)),
+        v: ExpressionNode::Rational(Box::new(super::utils::mk_rational(numerator, denominator))),
     }
 }
 

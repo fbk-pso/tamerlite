@@ -381,7 +381,7 @@ impl DeleteRelaxationHeuristic {
                     Some((j, _)) => *j,
                     None => 0,
                 };
-                values.push(ExpressionNode::Int(r.into()));
+                values.push(ExpressionNode::Int(Box::new(r.into())));
             }
             if let Some(res) = internal_caching.as_ref().unwrap().get(&values) {
                 return Ok(res.clone());
@@ -818,7 +818,7 @@ impl HMaxNumeric {
                     Some((j, _)) => *j,
                     None => 0,
                 };
-                values.push(ExpressionNode::Int(r.into()));
+                values.push(ExpressionNode::Int(Box::new(r.into())));
             }
             if let Some(res) = internal_caching.as_ref().unwrap().get(&values) {
                 return Ok(res.clone());

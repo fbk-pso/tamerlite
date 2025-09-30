@@ -230,9 +230,9 @@ pub fn simplify(
                 if to_simplified {
                     to_remove.extend(v.iter().clone());
                     if r.is_integer() {
-                        ExpressionNode::Int(r.to_integer())
+                        ExpressionNode::Int(Box::new(r.to_integer()))
                     } else {
-                        ExpressionNode::Rational(r)
+                        ExpressionNode::Rational(Box::new(r))
                     }
                 } else {
                     e.v.clone()
@@ -246,9 +246,9 @@ pub fn simplify(
                     to_remove.push(*p2);
                     let r = val1.unwrap() - val2.unwrap();
                     if r.is_integer() {
-                        ExpressionNode::Int(r.to_integer())
+                        ExpressionNode::Int(Box::new(r.to_integer()))
                     } else {
-                        ExpressionNode::Rational(r)
+                        ExpressionNode::Rational(Box::new(r))
                     }
                 } else {
                     e.v.clone()
@@ -269,9 +269,9 @@ pub fn simplify(
                 if to_simplified {
                     to_remove.extend(v.iter().clone());
                     if r.is_integer() {
-                        ExpressionNode::Int(r.to_integer())
+                        ExpressionNode::Int(Box::new(r.to_integer()))
                     } else {
-                        ExpressionNode::Rational(r)
+                        ExpressionNode::Rational(Box::new(r))
                     }
                 } else {
                     e.v.clone()
@@ -285,9 +285,9 @@ pub fn simplify(
                     to_remove.push(*p2);
                     let r = val1.unwrap() / val2.unwrap();
                     if r.is_integer() {
-                        ExpressionNode::Int(r.to_integer())
+                        ExpressionNode::Int(Box::new(r.to_integer()))
                     } else {
-                        ExpressionNode::Rational(r)
+                        ExpressionNode::Rational(Box::new(r))
                     }
                 } else {
                     e.v.clone()
@@ -453,9 +453,9 @@ pub fn internal_evaluate(
                     r += get_rational_from_expression_node(&res[*p])?;
                 }
                 if r.is_integer() {
-                    ExpressionNode::Int(r.to_integer())
+                    ExpressionNode::Int(Box::new(r.to_integer()))
                 } else {
-                    ExpressionNode::Rational(r)
+                    ExpressionNode::Rational(Box::new(r))
                 }
             }
             ExpressionNode::Minus(p1, p2) => {
@@ -463,9 +463,9 @@ pub fn internal_evaluate(
                 let val2 = get_rational_from_expression_node(&res[*p2])?;
                 let r = val1 - val2;
                 if r.is_integer() {
-                    ExpressionNode::Int(r.to_integer())
+                    ExpressionNode::Int(Box::new(r.to_integer()))
                 } else {
-                    ExpressionNode::Rational(r)
+                    ExpressionNode::Rational(Box::new(r))
                 }
             }
             ExpressionNode::Times(v) => {
@@ -474,9 +474,9 @@ pub fn internal_evaluate(
                     r *= get_rational_from_expression_node(&res[*p])?;
                 }
                 if r.is_integer() {
-                    ExpressionNode::Int(r.to_integer())
+                    ExpressionNode::Int(Box::new(r.to_integer()))
                 } else {
-                    ExpressionNode::Rational(r)
+                    ExpressionNode::Rational(Box::new(r))
                 }
             }
             ExpressionNode::Div(p1, p2) => {
@@ -484,9 +484,9 @@ pub fn internal_evaluate(
                 let val2 = get_rational_from_expression_node(&res[*p2])?;
                 let r = val1 / val2;
                 if r.is_integer() {
-                    ExpressionNode::Int(r.to_integer())
+                    ExpressionNode::Int(Box::new(r.to_integer()))
                 } else {
-                    ExpressionNode::Rational(r)
+                    ExpressionNode::Rational(Box::new(r))
                 }
             }
             ExpressionNode::Fluent(s) => fluent_values.get_value(*s).clone(),
