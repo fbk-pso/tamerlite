@@ -420,7 +420,10 @@ pub fn evaluate(exp: Vec<PyExpressionNode>, state: &State) -> PyResult<PyExpress
     })
 }
 
-pub fn internal_evaluate(exp: &Vec<ExpressionNode>, state: &State) -> PyResult<ExpressionNode> {
+pub fn internal_evaluate(
+    exp: &Vec<ExpressionNode>,
+    fluent_values: &impl FluentValueTrait,
+) -> PyResult<ExpressionNode> {
     let mut res: Vec<ExpressionNode> = vec![];
     for e in exp {
         let value = match &e {
@@ -486,7 +489,7 @@ pub fn internal_evaluate(exp: &Vec<ExpressionNode>, state: &State) -> PyResult<E
                     ExpressionNode::Rational(r)
                 }
             }
-            ExpressionNode::Fluent(s) => state.get_value(*s).clone(),
+            ExpressionNode::Fluent(s) => fluent_values.get_value(*s).clone(),
             other => (*other).clone(),
         };
         if res.len() == exp.len() - 1 {

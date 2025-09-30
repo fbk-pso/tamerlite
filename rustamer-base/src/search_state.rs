@@ -29,6 +29,28 @@ use super::expressions::*;
 use super::stn::DeltaSTN;
 use super::utils::*;
 
+pub trait FluentValueTrait {
+    fn get_value(&self, fluent: usize) -> &ExpressionNode;
+}
+
+pub struct FluentAssignments<'a> {
+    pub assignments: HashMap<usize, &'a ExpressionNode>,
+}
+
+impl FluentValueTrait for FluentAssignments<'_> {
+    fn get_value(&self, fluent: usize) -> &ExpressionNode {
+        self.assignments.get(&fluent).unwrap()
+    }
+}
+
+impl<'a> FluentAssignments<'a> {
+    pub fn new(fluents: &Vec<usize>, values: Vec<&'a ExpressionNode>) -> Self {
+        let assignments: HashMap<usize, &ExpressionNode> =
+            fluents.iter().cloned().zip(values.into_iter()).collect();
+        FluentAssignments { assignments }
+    }
+}
+
 #[pyclass(frozen)]
 #[derive(Debug)]
 pub struct State {
@@ -67,12 +89,14 @@ impl State {
     }
 }
 
-impl State {
-    pub fn get_value(&self, fluent: usize) -> &ExpressionNode {
+impl FluentValueTrait for State {
+    fn get_value(&self, fluent: usize) -> &ExpressionNode {
         &self.assignments[fluent]
     }
+}
 
-    /// Clones the current statw, except for the caches
+impl State {
+    /// Clones the current state, except for the caches
     /// This is useful to create children of this state
     pub fn clone_for_child(&self) -> Self {
         Self {

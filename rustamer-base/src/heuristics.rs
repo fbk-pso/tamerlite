@@ -15,9 +15,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 
-use im::Vector;
 use itertools::Itertools;
-use multiset::HashMultiSet;
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
@@ -32,7 +30,7 @@ use super::expressions::*;
 use super::expressions_utils::*;
 use super::multiqueue::StateContainer;
 use super::search_space::SearchSpaceTrait;
-use super::search_state::State;
+use super::search_state::{FluentAssignments, State};
 use super::structures::*;
 
 pub trait HeuristicTrait {
@@ -231,8 +229,7 @@ impl DeleteRelaxationHeuristic {
                 let mut conditions: Vec<Expression> = Vec::new();
                 let f = num_fluents;
                 num_fluents += 1;
-                a_extra_fluents
-                    .push(expression_manager.put(&vec![ExpressionNode::Fluent(f)]));
+                a_extra_fluents.push(expression_manager.put(&vec![ExpressionNode::Fluent(f)]));
                 effects.push(expression_manager.put(&vec![ExpressionNode::Fluent(f)]));
                 for eff in e.effects.iter() {
                     let t = fluent_types[eff.fluent].to_string();
@@ -734,48 +731,23 @@ impl HMaxNumeric {
         exp_fluents
     }
 
-    fn possible_values(
-        &self,
-        exp: &Vec<ExpressionNode>,
-        assignments: &Vec<HashSet<ExpressionNode>>,
-        exp_fluents: Option<&Vec<usize>>,
-    ) -> Vec<ExpressionNode> {
-        let exp_fluents_extracted;
-        let exp_fluents = match exp_fluents {
-            Some(fluents) => fluents,
-            None => {
-                exp_fluents_extracted = self.extract_fluents(exp);
-                &exp_fluents_extracted
-            }
-        };
-        let mut values = Vec::with_capacity(exp_fluents.len());
-        for f in exp_fluents {
-            values.push(&assignments[*f]);
-        }
+    fn possible_values<'a>(
+        &'a self,
+        exp: &'a Vec<ExpressionNode>,
+        assignments: &'a Vec<HashSet<ExpressionNode>>,
+        exp_fluents: &'a Vec<usize>,
+    ) -> impl Iterator<Item = ExpressionNode> + 'a {
+        let values: Vec<&HashSet<ExpressionNode>> =
+            exp_fluents.iter().map(|&f| &assignments[f]).collect();
 
-        let mut possible_values = Vec::new();
-        let mut tmp_state = State {
-            assignments: Vector::from(vec![ExpressionNode::Bool(false); assignments.len()]),
-            temporal_network: None,
-            todo: HashMap::new(),
-            active_conditions: HashMultiSet::new(),
-            g: 0.0,
-            path: None,
-            heuristic_cache: Mutex::new(HashMap::new()),
-        };
-        for state_values in values
+        values
             .iter()
             .map(|fluent_values| fluent_values.iter())
             .multi_cartesian_product()
-        {
-            for (i, f) in exp_fluents.iter().enumerate() {
-                tmp_state.assignments[*f] = (*state_values[i]).clone();
-            }
-
-            possible_values.push(internal_evaluate(exp, &tmp_state).unwrap());
-        }
-
-        return possible_values;
+            .map(move |state_values: Vec<&ExpressionNode>| {
+                let exp_assignments = FluentAssignments::new(exp_fluents, state_values);
+                internal_evaluate(exp, &exp_assignments).unwrap()
+            })
     }
 
     fn exp_can_be_true(
@@ -786,7 +758,7 @@ impl HMaxNumeric {
         assignments_changes: &HashSet<usize>,
         cache_can_be_true: &mut HashMap<Expression, bool>,
     ) -> bool {
-        let mut exp_fluents = Vec::new();
+        let exp_fluents;
         if cache_can_be_true.contains_key(&exp_id) {
             if cache_can_be_true[&exp_id] {
                 return true;
@@ -797,13 +769,11 @@ impl HMaxNumeric {
             if exp_fluents_set.is_disjoint(assignments_changes) {
                 return false;
             }
+        } else {
+            exp_fluents = self.extract_fluents(exp);
         }
 
-        let possible_values = if exp_fluents.len() > 0 {
-            self.possible_values(exp, assignments, Some(&exp_fluents))
-        } else {
-            self.possible_values(exp, assignments, None)
-        };
+        let possible_values = self.possible_values(exp, assignments, &exp_fluents);
 
         for value in possible_values {
             if value == ExpressionNode::Bool(true) {
@@ -858,8 +828,7 @@ impl HMaxNumeric {
             Vec::new()
         };
 
-        let mut assignments: Vec<HashSet<ExpressionNode>> =
-            vec![HashSet::new(); self.num_fluents];
+        let mut assignments: Vec<HashSet<ExpressionNode>> = vec![HashSet::new(); self.num_fluents];
         // add state assignments to assignments
         for (f, v) in state.assignments.iter().enumerate() {
             assignments[f] = HashSet::from([v.clone()]);
@@ -934,7 +903,9 @@ impl HMaxNumeric {
                 }
 
                 for effect in &operator.effects {
-                    let possible_values = self.possible_values(&effect.value, &assignments, None);
+                    let exp_fluents = self.extract_fluents(&effect.value);
+                    let possible_values =
+                        self.possible_values(&effect.value, &assignments, &exp_fluents);
                     new_assignments
                         .entry(effect.fluent)
                         .or_insert_with(HashSet::new)
