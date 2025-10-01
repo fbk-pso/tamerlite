@@ -462,11 +462,9 @@ impl SearchSpaceTrait for SearchSpace {
         };
         match internal_evaluate(&g, state)? {
             ExpressionNode::Bool(v) => Ok(v),
-            _ => {
-                return Err(PyException::new_err(
-                    "The goal is not a boolean expression!",
-                ))
-            }
+            _ => Err(PyException::new_err(
+                "The goal is not a boolean expression!",
+            )),
         }
     }
 

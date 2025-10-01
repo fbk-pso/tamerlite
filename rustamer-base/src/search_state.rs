@@ -26,30 +26,9 @@ use std::{
 };
 
 use super::expressions::*;
+use super::expressions_utils::*;
 use super::stn::DeltaSTN;
 use super::utils::*;
-
-pub trait FluentValueTrait {
-    fn get_value(&self, fluent: usize) -> &ExpressionNode;
-}
-
-pub struct FluentAssignments<'a> {
-    pub assignments: HashMap<usize, &'a ExpressionNode>,
-}
-
-impl FluentValueTrait for FluentAssignments<'_> {
-    fn get_value(&self, fluent: usize) -> &ExpressionNode {
-        self.assignments.get(&fluent).unwrap()
-    }
-}
-
-impl<'a> FluentAssignments<'a> {
-    pub fn new(fluents: &Vec<usize>, values: Vec<&'a ExpressionNode>) -> Self {
-        let assignments: HashMap<usize, &ExpressionNode> =
-            fluents.iter().cloned().zip(values.into_iter()).collect();
-        FluentAssignments { assignments }
-    }
-}
 
 #[pyclass(frozen)]
 #[derive(Debug)]
