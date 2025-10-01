@@ -232,13 +232,20 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
     def _eval(self, state: State, ss: SearchSpaceABC) -> Optional[float]:
         if self._internal_caching is not None:
             assignments_values = tuple(state.assignments) + tuple(
-                map(
-                    lambda action: state.todo.get(action, (None, None))[0], self._ordered_actions
-                )
+                state.todo.get(action, (None, None))[0]
+                for action in self._ordered_actions
             )
             if assignments_values in self._internal_caching:
                 return self._internal_caching[assignments_values]
 
+            res = self.__eval(state)
+            self._internal_caching[assignments_values] = res
+        else:
+            res = self.__eval(state)
+
+        return res
+
+    def __eval(self, state: State) -> Optional[float]:
         costs = {}
         lp = []
         for f, v in enumerate(state.assignments):
@@ -304,8 +311,6 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
         h = self._cost(self._goals, costs)
 
         if h is None:
-            if self._internal_caching is not None:
-                self._internal_caching[assignments_values] = None
             return None
 
         if self._heuristic_kind != HeuristicKind.HFF:
@@ -316,8 +321,6 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
             else:
                 res = h + eh
 
-            if self._internal_caching is not None:
-                self._internal_caching[assignments_values] = res
             return res
 
         res = 0
@@ -325,8 +328,6 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
             res += len(self._events[a]) - j
 
         if h == 0:
-            if self._internal_caching is not None:
-                self._internal_caching[assignments_values] = res
             return res
 
         relaxed_plan = set()
@@ -345,8 +346,6 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
             if a not in state.todo:
                 res += len(self._events[a])
 
-        if self._internal_caching is not None:
-            self._internal_caching[assignments_values] = res
         return res
 
     def _cost(self, exp: Tuple[Expression, ...], costs: Dict[Expression, float]) -> Optional[float]:
@@ -497,13 +496,20 @@ class HMaxNumeric(_DeleteRelaxationHeuristicBase):
     def _eval(self, state: State, ss: SearchSpaceABC) -> Optional[float]:
         if self._internal_caching is not None:
             assignments_values = tuple(state.assignments) + tuple(
-                map(
-                    lambda action: state.todo.get(action, (None, None))[0], self._ordered_actions
-                )
+                state.todo.get(action, (None, None))[0]
+                for action in self._ordered_actions
             )
             if assignments_values in self._internal_caching:
                 return self._internal_caching[assignments_values]
 
+            res = self.__eval(state)
+            self._internal_caching[assignments_values] = res
+        else:
+            res = self.__eval(state)
+
+        return res
+
+    def __eval(self, state: State) -> Optional[float]:
         assignments: List[Set[Union[bool, int, Fraction, str]]] = [
             {v} for v in state.assignments
         ] + [{} for _ in range(self._num_fluents - len(state.assignments))]
@@ -534,8 +540,6 @@ class HMaxNumeric(_DeleteRelaxationHeuristicBase):
                 cache_extract_fluents,
             ):
                 # goal satisfied
-                if self._internal_caching is not None:
-                    self._internal_caching[assignments_values] = depth
                 return depth
 
             new_assignments: Dict[int, Set[Union[bool, int, Fraction, str]]] = (
@@ -587,6 +591,4 @@ class HMaxNumeric(_DeleteRelaxationHeuristicBase):
 
             depth += 1
 
-        if self._internal_caching is not None:
-            self._internal_caching[assignments_values] = None
         return None
