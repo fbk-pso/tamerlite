@@ -420,6 +420,10 @@ pub fn evaluate(exp: Vec<PyExpressionNode>, state: &State) -> PyResult<PyExpress
     })
 }
 
+pub trait FluentValueTrait {
+    fn get_value(&self, fluent: usize) -> &ExpressionNode;
+}
+
 pub fn internal_evaluate(
     exp: &Vec<ExpressionNode>,
     fluent_values: &impl FluentValueTrait,

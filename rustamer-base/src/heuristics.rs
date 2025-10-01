@@ -30,7 +30,7 @@ use super::expressions::*;
 use super::expressions_utils::*;
 use super::multiqueue::StateContainer;
 use super::search_space::SearchSpaceTrait;
-use super::search_state::{FluentAssignments, State};
+use super::search_state::State;
 use super::structures::*;
 
 pub trait HeuristicTrait {
@@ -402,7 +402,7 @@ impl DeleteRelaxationHeuristic {
         }
     }
 
-    pub fn _eval(&self, state: &State) -> PyResult<Option<f64>> {
+    fn _eval(&self, state: &State) -> PyResult<Option<f64>> {
         let mut expression_manager = self.expression_manager.lock().unwrap();
         let mut costs: HashMap<Expression, f64> = HashMap::new();
         let mut lp: Vec<Expression> = Vec::new();
@@ -577,6 +577,24 @@ impl DeleteRelaxationHeuristic {
             HeuristicKind::HADD => String::from("hadd"),
             HeuristicKind::HMAX => String::from("hmax"),
         }
+    }
+}
+
+pub struct FluentAssignments<'a> {
+    pub assignments: HashMap<usize, &'a ExpressionNode>,
+}
+
+impl FluentValueTrait for FluentAssignments<'_> {
+    fn get_value(&self, fluent: usize) -> &ExpressionNode {
+        self.assignments.get(&fluent).unwrap()
+    }
+}
+
+impl<'a> FluentAssignments<'a> {
+    pub fn new(fluents: &Vec<usize>, values: Vec<&'a ExpressionNode>) -> Self {
+        let assignments: HashMap<usize, &ExpressionNode> =
+            fluents.iter().cloned().zip(values.into_iter()).collect();
+        FluentAssignments { assignments }
     }
 }
 
@@ -812,7 +830,7 @@ impl HMaxNumeric {
         }
     }
 
-    pub fn _eval(&self, state: &State) -> Option<f64> {
+    fn _eval(&self, state: &State) -> Option<f64> {
         let mut assignments: Vec<HashSet<ExpressionNode>> = vec![HashSet::new(); self.num_fluents];
         // add state assignments to assignments
         for (f, v) in state.assignments.iter().enumerate() {
