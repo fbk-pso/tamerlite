@@ -117,7 +117,7 @@ pub fn multiqueue_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     ss: &S,
     heuristics: Vec<(H, f64)>,
     timeout: Option<f32>,
-    early_termination: bool
+    early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
@@ -131,7 +131,7 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
     heuristics: Vec<(H, f64)>,
     switch_policy: &mut T,
     timeout: Option<f32>,
-    early_termination: bool
+    early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
     HashMap<String, String>,
@@ -139,6 +139,12 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
     let mut metrics = HashMap::new();
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
+    let mut states_expanded = 0;
+    if early_termination && ss.goal_reached(&init, None)? {
+        metrics.insert("expanded_states".to_string(), states_expanded.to_string());
+        metrics.insert("goal_depth".to_string(), init.g.to_string());
+        return build_plan(ss, &init).map(|plan| (plan, metrics));
+    }
 
     let mut open_set: HashSet<State> = HashSet::new();
     let mut closed_set: HashSet<State> = HashSet::new();
@@ -163,7 +169,6 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
     }
 
     let mut counter = 0;
-    let mut states_expanded = 0;
     loop {
         if let Some(t) = timeout {
             if start.elapsed().unwrap().as_secs_f32() > t {
@@ -194,7 +199,7 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
                 }
                 states_expanded += 1;
                 counter += 1;
-                if ss.goal_reached(&state, None)? {
+                if !early_termination && ss.goal_reached(&state, None)? {
                     metrics.insert("expanded_states".to_string(), states_expanded.to_string());
                     metrics.insert("goal_depth".to_string(), state.g.to_string());
                     return build_plan(ss, &state).map(|plan| (plan, metrics));
@@ -221,9 +226,7 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
                 }
             }
             for (i, (heuristic, weight)) in heuristics.iter().enumerate() {
-                for sh in heuristic
-                    .eval_gen_container(&candidate_containers, ss)?
-                {
+                for sh in heuristic.eval_gen_container(&candidate_containers, ss)? {
                     let (si, h) = sh?;
                     let g: f64 = candidate_containers[si].borrow().state.g;
                     match h {
