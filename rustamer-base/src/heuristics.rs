@@ -165,6 +165,12 @@ impl OperatorID {
     }
 }
 
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+struct CacheKey {
+    values: Vec<ExpressionNode>,
+    todo_values: Vec<usize>,
+}
+
 fn is_numeric_condition(cond: &Vec<ExpressionNode>) -> bool {
     if let Some(e) = cond.last() {
         if let ExpressionNode::Bool(_) = e {
@@ -200,7 +206,7 @@ pub struct DeleteRelaxationHeuristic {
     numeric_conds: HashSet<Expression>,
     heuristic_kind: HeuristicKind,
     ordered_actions: Vec<String>,
-    internal_caching: Arc<Mutex<Option<HashMap<Vec<ExpressionNode>, Option<f64>>>>>,
+    internal_caching: Arc<Mutex<Option<HashMap<CacheKey, Option<f64>>>>>,
     expression_manager: Arc<Mutex<ExpressionManager>>,
 }
 
@@ -371,26 +377,33 @@ impl DeleteRelaxationHeuristic {
 
     pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
         let mut internal_caching = self.internal_caching.lock().unwrap();
-        let mut expression_manager = self.expression_manager.lock().unwrap();
-
-        let assignments_values = if internal_caching.is_some() {
-            let mut values: Vec<ExpressionNode> = state.assignments.iter().cloned().collect();
-            values.reserve(self.ordered_actions.len());
-            for action in &self.ordered_actions {
-                let r = match state.todo.get(action) {
-                    Some((j, _)) => *j,
-                    None => 0,
-                };
-                values.push(ExpressionNode::Int(Box::new(r.into())));
-            }
-            if let Some(res) = internal_caching.as_ref().unwrap().get(&values) {
+        if let Some(internal_caching) = internal_caching.as_mut() {
+            let values: Vec<ExpressionNode> = state.assignments.iter().cloned().collect();
+            let todo_values: Vec<usize> = self
+                .ordered_actions
+                .iter()
+                .map(|action| state.todo.get(action).map(|(j, _)| *j).unwrap_or(0))
+                .collect();
+            let cache_key = CacheKey {
+                values,
+                todo_values,
+            };
+            if let Some(res) = internal_caching.get(&cache_key) {
                 return Ok(res.clone());
             }
-            values
-        } else {
-            Vec::new()
-        };
 
+            let result = self._eval(state);
+            if let Ok(v) = result {
+                internal_caching.insert(cache_key, v);
+            }
+            result
+        } else {
+            self._eval(state)
+        }
+    }
+
+    pub fn _eval(&self, state: &State) -> PyResult<Option<f64>> {
+        let mut expression_manager = self.expression_manager.lock().unwrap();
         let mut costs: HashMap<Expression, f64> = HashMap::new();
         let mut lp: Vec<Expression> = Vec::new();
         let mut init_lp: Vec<Expression> = Vec::new();
@@ -489,12 +502,6 @@ impl DeleteRelaxationHeuristic {
         let h = self.cost(&self.goals, &costs);
 
         if h.is_none() {
-            if internal_caching.is_some() {
-                internal_caching
-                    .as_mut()
-                    .unwrap()
-                    .insert(assignments_values, None);
-            }
             return Ok(None);
         }
 
@@ -502,31 +509,16 @@ impl DeleteRelaxationHeuristic {
             self.heuristic_kind,
             HeuristicKind::HADD | HeuristicKind::HMAX
         ) {
-            match self.cost(&self.extra_goals, &costs) {
+            return match self.cost(&self.extra_goals, &costs) {
                 Some(v) => {
                     let res = if let HeuristicKind::HMAX = self.heuristic_kind {
                         f64::max(h.unwrap(), v)
                     } else {
                         h.unwrap() + v
                     };
-
-                    if internal_caching.is_some() {
-                        internal_caching
-                            .as_mut()
-                            .unwrap()
-                            .insert(assignments_values, Some(res));
-                    }
-                    return Ok(Some(res));
+                    Ok(Some(res))
                 }
-                None => {
-                    if internal_caching.is_some() {
-                        internal_caching
-                            .as_mut()
-                            .unwrap()
-                            .insert(assignments_values, None);
-                    }
-                    return Ok(None);
-                }
+                None => Ok(None),
             };
         }
 
@@ -537,12 +529,6 @@ impl DeleteRelaxationHeuristic {
 
         if let Some(hv) = h {
             if hv == 0.0 {
-                if internal_caching.is_some() {
-                    internal_caching
-                        .as_mut()
-                        .unwrap()
-                        .insert(assignments_values, Some(res));
-                }
                 return Ok(Some(res));
             }
         }
@@ -565,12 +551,6 @@ impl DeleteRelaxationHeuristic {
             }
         }
 
-        if internal_caching.is_some() {
-            internal_caching
-                .as_mut()
-                .unwrap()
-                .insert(assignments_values, Some(res));
-        }
         Ok(Some(res))
     }
 
@@ -610,7 +590,7 @@ pub struct HMaxNumeric {
     operator_conditions_fluents: Vec<HashSet<usize>>,
     operator_effects_fluents: Vec<HashSet<usize>>,
     ordered_actions: Vec<String>,
-    internal_caching: Arc<Mutex<Option<HashMap<Vec<ExpressionNode>, Option<f64>>>>>,
+    internal_caching: Arc<Mutex<Option<HashMap<CacheKey, Option<f64>>>>>,
 }
 
 impl HMaxNumeric {
@@ -809,25 +789,30 @@ impl HMaxNumeric {
 
     pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
         let mut internal_caching = self.internal_caching.lock().unwrap();
-
-        let assignments_values = if internal_caching.is_some() {
-            let mut values: Vec<ExpressionNode> = state.assignments.iter().cloned().collect();
-            values.reserve(self.ordered_actions.len());
-            for action in &self.ordered_actions {
-                let r = match state.todo.get(action) {
-                    Some((j, _)) => *j,
-                    None => 0,
-                };
-                values.push(ExpressionNode::Int(Box::new(r.into())));
-            }
-            if let Some(res) = internal_caching.as_ref().unwrap().get(&values) {
+        if let Some(internal_caching) = internal_caching.as_mut() {
+            let values: Vec<ExpressionNode> = state.assignments.iter().cloned().collect();
+            let todo_values: Vec<usize> = self
+                .ordered_actions
+                .iter()
+                .map(|action| state.todo.get(action).map(|(j, _)| *j).unwrap_or(0))
+                .collect();
+            let cache_key = CacheKey {
+                values,
+                todo_values,
+            };
+            if let Some(res) = internal_caching.get(&cache_key) {
                 return Ok(res.clone());
             }
-            values
-        } else {
-            Vec::new()
-        };
 
+            let result = self._eval(state);
+            internal_caching.insert(cache_key, result);
+            Ok(result)
+        } else {
+            Ok(self._eval(state))
+        }
+    }
+
+    pub fn _eval(&self, state: &State) -> Option<f64> {
         let mut assignments: Vec<HashSet<ExpressionNode>> = vec![HashSet::new(); self.num_fluents];
         // add state assignments to assignments
         for (f, v) in state.assignments.iter().enumerate() {
@@ -861,13 +846,7 @@ impl HMaxNumeric {
                 &mut cache_can_be_true,
             ) {
                 // goal satisfied
-                if internal_caching.is_some() {
-                    internal_caching
-                        .as_mut()
-                        .unwrap()
-                        .insert(assignments_values, Some(depth as f64));
-                }
-                return Ok(Some(depth as f64));
+                return Some(depth as f64);
             }
 
             let mut new_assignments: HashMap<usize, HashSet<ExpressionNode>> = HashMap::new();
@@ -928,13 +907,7 @@ impl HMaxNumeric {
             depth += 1;
         }
 
-        if internal_caching.is_some() {
-            internal_caching
-                .as_mut()
-                .unwrap()
-                .insert(assignments_values, None);
-        }
-        Ok(None)
+        None
     }
 
     pub fn name(&self) -> String {
