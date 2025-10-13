@@ -26,7 +26,6 @@ use pyo3::prelude::*;
 use super::heuristics::*;
 use super::search_space::*;
 use super::search_state::*;
-use super::utils::*;
 
 #[derive(Debug)]
 struct PrioritizedItem {
@@ -66,11 +65,7 @@ pub fn build_plan<S: SearchSpaceTrait>(
     ss: &S,
     state: &State,
 ) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
-    let path = PersistentList::to_vec(&state.path)
-        .into_iter()
-        .map(|(a, _, _)| a.to_string())
-        .collect();
-    let plan = ss.build_plan(path)?;
+    let plan = ss.build_plan(state)?;
     let mut res = Vec::new();
     for (s, a, d) in plan.iter() {
         let mut ss = None;

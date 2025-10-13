@@ -58,7 +58,7 @@ pub trait SearchSpaceTrait {
     ) -> PyResult<Vec<Vec<PyExpressionNode>>>;
     fn build_plan(
         &self,
-        all_path: Vec<String>,
+        state: &State,
     ) -> PyResult<Vec<(Option<BigRational>, String, Option<BigRational>)>>;
 }
 
@@ -493,14 +493,18 @@ impl SearchSpaceTrait for SearchSpace {
 
     fn build_plan(
         &self,
-        all_path: Vec<String>,
+        state: &State,
     ) -> PyResult<Vec<(Option<BigRational>, String, Option<BigRational>)>> {
+        let all_path = PersistentList::to_vec(&state.path)
+            .into_iter()
+            .map(|(a, _, _)| a);
+
         let mut tn = DeltaSTN::new(mk_rational(0, 1));
         let mut todo: HashMap<String, (usize, u32)> = HashMap::new();
         let mut path: Vec<(Event, u32)> = Vec::new();
         let mut counter = 0;
         let mut state = self.initial_state(None)?;
-        for action in all_path.iter() {
+        for action in all_path {
             state = self.get_successor_state(&state, action)?.unwrap();
             if let Some(events) = self.events.get(action).cloned() {
                 if let Some((index, id)) = todo.get(action).cloned() {

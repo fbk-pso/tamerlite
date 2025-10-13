@@ -414,6 +414,9 @@ class SearchSpaceABC(ABC):
     def subgoals_sat(self, state: State, goal: Optional[Fraction] = None) -> Set[Expression]:
         pass
 
+    def build_plan(self, state: State) -> List[Tuple[Optional[Fraction], str, Optional[Fraction]]]:
+        return state.extract_solution()
+
 
 class SearchSpace(SearchSpaceABC):
 
