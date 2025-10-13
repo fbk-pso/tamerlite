@@ -48,7 +48,7 @@ def _basic_search(ss: SearchSpaceABC, bfs: bool, timeout, early_termination: boo
     counter = 0
 
     if early_termination and ss.goal_reached(init):
-        return init.extract_solution(), {"expanded_states": counter, "goal_depth": init.g}
+        return ss.build_plan(init), {"expanded_states": counter, "goal_depth": init.g}
     open.append(init)
 
     while len(open) > 0:
@@ -60,10 +60,10 @@ def _basic_search(ss: SearchSpaceABC, bfs: bool, timeout, early_termination: boo
             state = open.pop()
         counter += 1
         if not early_termination and ss.goal_reached(state):
-            return state.extract_solution(), {"expanded_states": counter, "goal_depth": state.g}
+            return ss.build_plan(state), {"expanded_states": counter, "goal_depth": state.g}
         for succ_state in ss.get_successor_states(state):
             if early_termination and ss.goal_reached(succ_state):
-                return succ_state.extract_solution(), {"expanded_states": counter, "goal_depth": succ_state.g}
+                return ss.build_plan(succ_state), {"expanded_states": counter, "goal_depth": succ_state.g}
             open.append(succ_state)
     return None, {"expanded_states": str(counter)}
 
@@ -81,7 +81,7 @@ def wastar_search(ss: SearchSpaceABC, heuristic: Heuristic, weight: float = 0.5,
     init = ss.initial_state()
     counter = 0
     if early_termination and ss.goal_reached(init):
-        return init.extract_solution(), {"expanded_states": str(counter), "goal_depth": str(init.g)}
+        return ss.build_plan(init), {"expanded_states": str(counter), "goal_depth": str(init.g)}
 
     init_h = heuristic.eval(init, ss)
     if init_h is None:
@@ -97,12 +97,12 @@ def wastar_search(ss: SearchSpaceABC, heuristic: Heuristic, weight: float = 0.5,
             open_set.discard(state)
         counter += 1
         if not early_termination and ss.goal_reached(state):
-            return state.extract_solution(), {"expanded_states": str(counter), "goal_depth": str(state.g)}
+            return ss.build_plan(state), {"expanded_states": str(counter), "goal_depth": str(state.g)}
 
         candidate_states = (s for s in ss.get_successor_states(state) if s not in closed_set and s not in open_set)
         for succ_state, h in heuristic.eval_gen(candidate_states, ss):
             if early_termination and ss.goal_reached(succ_state):
-                return succ_state.extract_solution(), {"expanded_states": str(counter), "goal_depth": str(succ_state.g)}
+                return ss.build_plan(succ_state), {"expanded_states": str(counter), "goal_depth": str(succ_state.g)}
             if h is not None:
                 f = (1-weight)*succ_state.g + weight*h
                 heapq.heappush(open, PrioritizedItem(f, succ_state))
@@ -115,7 +115,7 @@ def ehc_search(ss: SearchSpaceABC, heuristic: Heuristic, timeout=None, early_ter
     init = ss.initial_state()
     counter = 0
     if early_termination and ss.goal_reached(init):
-        return init.extract_solution(), {"expanded_states": str(counter), "goal_depth": str(init.g)}
+        return ss.build_plan(init), {"expanded_states": str(counter), "goal_depth": str(init.g)}
 
     open = deque()
     open.append(init)
@@ -128,10 +128,10 @@ def ehc_search(ss: SearchSpaceABC, heuristic: Heuristic, timeout=None, early_ter
         state = open.popleft()
         counter += 1
         if not early_termination and ss.goal_reached(state):
-            return state.extract_solution(), {"expanded_states": str(counter), "goal_depth": str(state.g)}
+            return ss.build_plan(state), {"expanded_states": str(counter), "goal_depth": str(state.g)}
         for succ_state, h in heuristic.eval_gen(ss.get_successor_states(state), ss):
             if early_termination and ss.goal_reached(succ_state):
-                return succ_state.extract_solution(), {"expanded_states": str(counter), "goal_depth": str(succ_state.g)}
+                return ss.build_plan(succ_state), {"expanded_states": str(counter), "goal_depth": str(succ_state.g)}
             if h is not None:
                 if h < best_h:
                     best_h = h
