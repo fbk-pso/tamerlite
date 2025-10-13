@@ -102,7 +102,7 @@ def _multiqueue_search(
     init = ss.initial_state()
     states_expanded = 0
     if early_termination and ss.goal_reached(init):
-        return init.extract_solution(), {
+        return ss.build_plan(init), {
             "expanded_states": str(states_expanded),
             "goal_depth": str(init.g),
         }
@@ -135,7 +135,7 @@ def _multiqueue_search(
         counter += 1
         states_expanded += 1
         if not early_termination and ss.goal_reached(state):
-            return state.extract_solution(), {
+            return ss.build_plan(state), {
                 "expanded_states": str(states_expanded),
                 "goal_depth": str(state.g),
             }
@@ -144,7 +144,7 @@ def _multiqueue_search(
         candidate_states = []
         for s in ss.get_successor_states(state):
             if early_termination and ss.goal_reached(s):
-                return s.extract_solution(), {
+                return ss.build_plan(s), {
                     "expanded_states": str(states_expanded),
                     "goal_depth": str(s.g),
                 }
