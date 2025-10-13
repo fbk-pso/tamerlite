@@ -107,6 +107,13 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     let mut metrics = HashMap::new();
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
+    let mut counter = 0;
+    if early_termination && ss.goal_reached(&init, None)? {
+        metrics.insert("expanded_states".to_string(), counter.to_string());
+        metrics.insert("goal_depth".to_string(), init.g.to_string());
+        return build_plan(ss, &init).map(|plan| (plan, metrics));
+    }
+
     let init_h = match heuristic.eval(&init, ss)? {
         Some(v) => v,
         None => {
@@ -124,7 +131,6 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         heuristic: init_h,
         state: init,
     });
-    let mut counter = 0;
     while let Some(current) = open.pop() {
         if let Some(t) = timeout {
             if start.elapsed().unwrap().as_secs_f32() > t {
@@ -140,7 +146,7 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         }
         // println!("{:?} {:?}", state.path.iter().map(|(ev, _)| &ev.action).collect::<Vec<&String>>(), current.heuristic);
         counter += 1;
-        if ss.goal_reached(&state, None)? {
+        if !early_termination && ss.goal_reached(&state, None)? {
             metrics.insert("expanded_states".to_string(), counter.to_string());
             metrics.insert("goal_depth".to_string(), state.g.to_string());
             return build_plan(ss, &state).map(|plan| (plan, metrics));
@@ -217,8 +223,15 @@ fn basic_search<S: SearchSpaceTrait>(
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
     let mut open = VecDeque::new();
-    open.push_back(init);
     let mut counter = 0;
+
+    if early_termination && ss.goal_reached(&init, None)? {
+        metrics.insert("expanded_states".to_string(), counter.to_string());
+        metrics.insert("goal_depth".to_string(), init.g.to_string());
+        return build_plan(ss, &init).map(|plan| (plan, metrics));
+    }
+    open.push_back(init);
+
     while !open.is_empty() {
         if let Some(t) = timeout {
             if start.elapsed().unwrap().as_secs_f32() > t {
@@ -233,7 +246,7 @@ fn basic_search<S: SearchSpaceTrait>(
         };
 
         counter += 1;
-        if ss.goal_reached(&state, None)? {
+        if !early_termination && ss.goal_reached(&state, None)? {
             metrics.insert("expanded_states".to_string(), counter.to_string());
             metrics.insert("goal_depth".to_string(), state.g.to_string());
             return build_plan(ss, &state).map(|plan| (plan, metrics));
@@ -265,6 +278,12 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     let mut metrics = HashMap::new();
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
+    let mut counter = 0;
+    if early_termination && ss.goal_reached(&init, None)? {
+        metrics.insert("expanded_states".to_string(), counter.to_string());
+        metrics.insert("goal_depth".to_string(), init.g.to_string());
+        return build_plan(ss, &init).map(|plan| (plan, metrics));
+    }
     let mut best_h = match heuristic.eval(&init, ss)? {
         Some(v) => v,
         None => {
@@ -274,7 +293,6 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     };
     let mut open = VecDeque::new();
     open.push_back(init);
-    let mut counter = 0;
     while let Some(state) = open.pop_front() {
         if let Some(t) = timeout {
             if start.elapsed().unwrap().as_secs_f32() > t {
@@ -283,7 +301,7 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         }
 
         counter += 1;
-        if ss.goal_reached(&state, None)? {
+        if !early_termination && ss.goal_reached(&state, None)? {
             metrics.insert("expanded_states".to_string(), counter.to_string());
             metrics.insert("goal_depth".to_string(), state.g.to_string());
             return build_plan(ss, &state).map(|plan| (plan, metrics));

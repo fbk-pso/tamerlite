@@ -100,6 +100,13 @@ def _multiqueue_search(
     closed_set = set()
     open_set = set()
     init = ss.initial_state()
+    states_expanded = 0
+    if early_termination and ss.goal_reached(init):
+        return init.extract_solution(), {
+            "expanded_states": str(states_expanded),
+            "goal_depth": str(init.g),
+        }
+
     item = PrioritizedItem(0, StateContainer(init, False))
     for i, _ in enumerate(heuristics):
         open = []
@@ -108,7 +115,6 @@ def _multiqueue_search(
         switch_policy.notify_push(i, item)
 
     counter = 0
-    states_expanded = 0
     while True:
         if timeout is not None and time.time() - st > timeout:
             raise TimeoutError
@@ -128,7 +134,7 @@ def _multiqueue_search(
             open_set.discard(state)
         counter += 1
         states_expanded += 1
-        if ss.goal_reached(state):
+        if not early_termination and ss.goal_reached(state):
             return state.extract_solution(), {
                 "expanded_states": str(states_expanded),
                 "goal_depth": str(state.g),

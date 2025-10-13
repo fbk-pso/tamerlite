@@ -15,6 +15,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 
+use im::Vector;
 use multiset::HashMultiSet;
 use num_rational::BigRational;
 use pyo3::{exceptions::PyException, prelude::*};
@@ -367,10 +368,10 @@ impl SearchSpaceTrait for SearchSpace {
     }
 
     fn initial_state(&self, initial_state: Option<Vec<PyExpressionNode>>) -> PyResult<State> {
-        let init = match initial_state {
+        let init: Vector<ExpressionNode> = match initial_state {
             Some(v) => v.iter().map(|v| v.v.clone()).collect(),
             None => match &self.initial_state {
-                Some(v) => v.clone(),
+                Some(v) => Vector::from(v),
                 None => {
                     return Err(PyException::new_err(
                         "The initial state must be defined somewhere!",
@@ -461,11 +462,9 @@ impl SearchSpaceTrait for SearchSpace {
         };
         match internal_evaluate(&g, state)? {
             ExpressionNode::Bool(v) => Ok(v),
-            _ => {
-                return Err(PyException::new_err(
-                    "The goal is not a boolean expression!",
-                ))
-            }
+            _ => Err(PyException::new_err(
+                "The goal is not a boolean expression!",
+            )),
         }
     }
 

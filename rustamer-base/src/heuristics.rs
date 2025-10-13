@@ -16,7 +16,6 @@
 //
 
 use itertools::Itertools;
-use multiset::HashMultiSet;
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
@@ -166,6 +165,12 @@ impl OperatorID {
     }
 }
 
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+struct CacheKey {
+    values: Vec<ExpressionNode>,
+    todo_values: Vec<usize>,
+}
+
 fn is_numeric_condition(cond: &Vec<ExpressionNode>) -> bool {
     if let Some(e) = cond.last() {
         if let ExpressionNode::Bool(_) = e {
@@ -201,7 +206,7 @@ pub struct DeleteRelaxationHeuristic {
     numeric_conds: HashSet<Expression>,
     heuristic_kind: HeuristicKind,
     ordered_actions: Vec<String>,
-    internal_caching: Arc<Mutex<Option<HashMap<Vec<ExpressionNode>, Option<f64>>>>>,
+    internal_caching: Arc<Mutex<Option<HashMap<CacheKey, Option<f64>>>>>,
     expression_manager: Arc<Mutex<ExpressionManager>>,
 }
 
@@ -230,8 +235,7 @@ impl DeleteRelaxationHeuristic {
                 let mut conditions: Vec<Expression> = Vec::new();
                 let f = num_fluents;
                 num_fluents += 1;
-                a_extra_fluents
-                    .push(expression_manager.put(&vec![ExpressionNode::Fluent(f)]));
+                a_extra_fluents.push(expression_manager.put(&vec![ExpressionNode::Fluent(f)]));
                 effects.push(expression_manager.put(&vec![ExpressionNode::Fluent(f)]));
                 for eff in e.effects.iter() {
                     let t = fluent_types[eff.fluent].to_string();
@@ -373,26 +377,33 @@ impl DeleteRelaxationHeuristic {
 
     pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
         let mut internal_caching = self.internal_caching.lock().unwrap();
-        let mut expression_manager = self.expression_manager.lock().unwrap();
-
-        let assignments_values = if internal_caching.is_some() {
-            let mut values = state.assignments.clone();
-            values.reserve(self.ordered_actions.len());
-            for action in &self.ordered_actions {
-                let r = match state.todo.get(action) {
-                    Some((j, _)) => *j,
-                    None => 0,
-                };
-                values.push(ExpressionNode::Int(r.into()));
-            }
-            if let Some(res) = internal_caching.as_ref().unwrap().get(&values) {
+        if let Some(internal_caching) = internal_caching.as_mut() {
+            let values: Vec<ExpressionNode> = state.assignments.iter().cloned().collect();
+            let todo_values: Vec<usize> = self
+                .ordered_actions
+                .iter()
+                .map(|action| state.todo.get(action).map(|(j, _)| *j).unwrap_or(0))
+                .collect();
+            let cache_key = CacheKey {
+                values,
+                todo_values,
+            };
+            if let Some(res) = internal_caching.get(&cache_key) {
                 return Ok(res.clone());
             }
-            values
-        } else {
-            Vec::new()
-        };
 
+            let result = self._eval(state);
+            if let Ok(v) = result {
+                internal_caching.insert(cache_key, v);
+            }
+            result
+        } else {
+            self._eval(state)
+        }
+    }
+
+    fn _eval(&self, state: &State) -> PyResult<Option<f64>> {
+        let mut expression_manager = self.expression_manager.lock().unwrap();
         let mut costs: HashMap<Expression, f64> = HashMap::new();
         let mut lp: Vec<Expression> = Vec::new();
         let mut init_lp: Vec<Expression> = Vec::new();
@@ -491,12 +502,6 @@ impl DeleteRelaxationHeuristic {
         let h = self.cost(&self.goals, &costs);
 
         if h.is_none() {
-            if internal_caching.is_some() {
-                internal_caching
-                    .as_mut()
-                    .unwrap()
-                    .insert(assignments_values, None);
-            }
             return Ok(None);
         }
 
@@ -504,31 +509,16 @@ impl DeleteRelaxationHeuristic {
             self.heuristic_kind,
             HeuristicKind::HADD | HeuristicKind::HMAX
         ) {
-            match self.cost(&self.extra_goals, &costs) {
+            return match self.cost(&self.extra_goals, &costs) {
                 Some(v) => {
                     let res = if let HeuristicKind::HMAX = self.heuristic_kind {
                         f64::max(h.unwrap(), v)
                     } else {
                         h.unwrap() + v
                     };
-
-                    if internal_caching.is_some() {
-                        internal_caching
-                            .as_mut()
-                            .unwrap()
-                            .insert(assignments_values, Some(res));
-                    }
-                    return Ok(Some(res));
+                    Ok(Some(res))
                 }
-                None => {
-                    if internal_caching.is_some() {
-                        internal_caching
-                            .as_mut()
-                            .unwrap()
-                            .insert(assignments_values, None);
-                    }
-                    return Ok(None);
-                }
+                None => Ok(None),
             };
         }
 
@@ -539,12 +529,6 @@ impl DeleteRelaxationHeuristic {
 
         if let Some(hv) = h {
             if hv == 0.0 {
-                if internal_caching.is_some() {
-                    internal_caching
-                        .as_mut()
-                        .unwrap()
-                        .insert(assignments_values, Some(res));
-                }
                 return Ok(Some(res));
             }
         }
@@ -567,12 +551,6 @@ impl DeleteRelaxationHeuristic {
             }
         }
 
-        if internal_caching.is_some() {
-            internal_caching
-                .as_mut()
-                .unwrap()
-                .insert(assignments_values, Some(res));
-        }
         Ok(Some(res))
     }
 
@@ -602,6 +580,24 @@ impl DeleteRelaxationHeuristic {
     }
 }
 
+pub struct FluentAssignments<'a> {
+    pub assignments: HashMap<usize, &'a ExpressionNode>,
+}
+
+impl FluentValueTrait for FluentAssignments<'_> {
+    fn get_value(&self, fluent: usize) -> &ExpressionNode {
+        self.assignments.get(&fluent).unwrap()
+    }
+}
+
+impl<'a> FluentAssignments<'a> {
+    pub fn new(fluents: &Vec<usize>, values: Vec<&'a ExpressionNode>) -> Self {
+        let assignments: HashMap<usize, &ExpressionNode> =
+            fluents.iter().cloned().zip(values.into_iter()).collect();
+        FluentAssignments { assignments }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct HMaxNumeric {
     goals: Vec<Vec<ExpressionNode>>,
@@ -612,7 +608,7 @@ pub struct HMaxNumeric {
     operator_conditions_fluents: Vec<HashSet<usize>>,
     operator_effects_fluents: Vec<HashSet<usize>>,
     ordered_actions: Vec<String>,
-    internal_caching: Arc<Mutex<Option<HashMap<Vec<ExpressionNode>, Option<f64>>>>>,
+    internal_caching: Arc<Mutex<Option<HashMap<CacheKey, Option<f64>>>>>,
 }
 
 impl HMaxNumeric {
@@ -733,48 +729,23 @@ impl HMaxNumeric {
         exp_fluents
     }
 
-    fn possible_values(
-        &self,
-        exp: &Vec<ExpressionNode>,
-        assignments: &Vec<HashSet<ExpressionNode>>,
-        exp_fluents: Option<&Vec<usize>>,
-    ) -> Vec<ExpressionNode> {
-        let exp_fluents_extracted;
-        let exp_fluents = match exp_fluents {
-            Some(fluents) => fluents,
-            None => {
-                exp_fluents_extracted = self.extract_fluents(exp);
-                &exp_fluents_extracted
-            }
-        };
-        let mut values = Vec::with_capacity(exp_fluents.len());
-        for f in exp_fluents {
-            values.push(&assignments[*f]);
-        }
+    fn possible_values<'a>(
+        &'a self,
+        exp: &'a Vec<ExpressionNode>,
+        assignments: &'a Vec<HashSet<ExpressionNode>>,
+        exp_fluents: &'a Vec<usize>,
+    ) -> impl Iterator<Item = ExpressionNode> + 'a {
+        let values: Vec<&HashSet<ExpressionNode>> =
+            exp_fluents.iter().map(|&f| &assignments[f]).collect();
 
-        let mut possible_values = Vec::new();
-        let mut tmp_state = State {
-            assignments: vec![ExpressionNode::Bool(false); assignments.len()],
-            temporal_network: None,
-            todo: HashMap::new(),
-            active_conditions: HashMultiSet::new(),
-            g: 0.0,
-            path: None,
-            heuristic_cache: Mutex::new(HashMap::new()),
-        };
-        for state_values in values
+        values
             .iter()
             .map(|fluent_values| fluent_values.iter())
             .multi_cartesian_product()
-        {
-            for (i, f) in exp_fluents.iter().enumerate() {
-                tmp_state.assignments[*f] = (*state_values[i]).clone();
-            }
-
-            possible_values.push(internal_evaluate(exp, &tmp_state).unwrap());
-        }
-
-        return possible_values;
+            .map(move |state_values: Vec<&ExpressionNode>| {
+                let exp_assignments = FluentAssignments::new(exp_fluents, state_values);
+                internal_evaluate(exp, &exp_assignments).unwrap()
+            })
     }
 
     fn exp_can_be_true(
@@ -785,7 +756,7 @@ impl HMaxNumeric {
         assignments_changes: &HashSet<usize>,
         cache_can_be_true: &mut HashMap<Expression, bool>,
     ) -> bool {
-        let mut exp_fluents = Vec::new();
+        let exp_fluents;
         if cache_can_be_true.contains_key(&exp_id) {
             if cache_can_be_true[&exp_id] {
                 return true;
@@ -796,13 +767,11 @@ impl HMaxNumeric {
             if exp_fluents_set.is_disjoint(assignments_changes) {
                 return false;
             }
+        } else {
+            exp_fluents = self.extract_fluents(exp);
         }
 
-        let possible_values = if exp_fluents.len() > 0 {
-            self.possible_values(exp, assignments, Some(&exp_fluents))
-        } else {
-            self.possible_values(exp, assignments, None)
-        };
+        let possible_values = self.possible_values(exp, assignments, &exp_fluents);
 
         for value in possible_values {
             if value == ExpressionNode::Bool(true) {
@@ -838,27 +807,31 @@ impl HMaxNumeric {
 
     pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
         let mut internal_caching = self.internal_caching.lock().unwrap();
-
-        let assignments_values = if internal_caching.is_some() {
-            let mut values = state.assignments.clone();
-            values.reserve(self.ordered_actions.len());
-            for action in &self.ordered_actions {
-                let r = match state.todo.get(action) {
-                    Some((j, _)) => *j,
-                    None => 0,
-                };
-                values.push(ExpressionNode::Int(r.into()));
-            }
-            if let Some(res) = internal_caching.as_ref().unwrap().get(&values) {
+        if let Some(internal_caching) = internal_caching.as_mut() {
+            let values: Vec<ExpressionNode> = state.assignments.iter().cloned().collect();
+            let todo_values: Vec<usize> = self
+                .ordered_actions
+                .iter()
+                .map(|action| state.todo.get(action).map(|(j, _)| *j).unwrap_or(0))
+                .collect();
+            let cache_key = CacheKey {
+                values,
+                todo_values,
+            };
+            if let Some(res) = internal_caching.get(&cache_key) {
                 return Ok(res.clone());
             }
-            values
-        } else {
-            Vec::new()
-        };
 
-        let mut assignments: Vec<HashSet<ExpressionNode>> =
-            vec![HashSet::new(); self.num_fluents];
+            let result = self._eval(state);
+            internal_caching.insert(cache_key, result);
+            Ok(result)
+        } else {
+            Ok(self._eval(state))
+        }
+    }
+
+    fn _eval(&self, state: &State) -> Option<f64> {
+        let mut assignments: Vec<HashSet<ExpressionNode>> = vec![HashSet::new(); self.num_fluents];
         // add state assignments to assignments
         for (f, v) in state.assignments.iter().enumerate() {
             assignments[f] = HashSet::from([v.clone()]);
@@ -891,13 +864,7 @@ impl HMaxNumeric {
                 &mut cache_can_be_true,
             ) {
                 // goal satisfied
-                if internal_caching.is_some() {
-                    internal_caching
-                        .as_mut()
-                        .unwrap()
-                        .insert(assignments_values, Some(depth as f64));
-                }
-                return Ok(Some(depth as f64));
+                return Some(depth as f64);
             }
 
             let mut new_assignments: HashMap<usize, HashSet<ExpressionNode>> = HashMap::new();
@@ -933,7 +900,9 @@ impl HMaxNumeric {
                 }
 
                 for effect in &operator.effects {
-                    let possible_values = self.possible_values(&effect.value, &assignments, None);
+                    let exp_fluents = self.extract_fluents(&effect.value);
+                    let possible_values =
+                        self.possible_values(&effect.value, &assignments, &exp_fluents);
                     new_assignments
                         .entry(effect.fluent)
                         .or_insert_with(HashSet::new)
@@ -956,13 +925,7 @@ impl HMaxNumeric {
             depth += 1;
         }
 
-        if internal_caching.is_some() {
-            internal_caching
-                .as_mut()
-                .unwrap()
-                .insert(assignments_values, None);
-        }
-        Ok(None)
+        None
     }
 
     pub fn name(&self) -> String {
