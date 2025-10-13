@@ -238,14 +238,14 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
             if assignments_values in self._internal_caching:
                 return self._internal_caching[assignments_values]
 
-            res = self.__eval(state)
+            res = self._eval_core(state)
             self._internal_caching[assignments_values] = res
         else:
-            res = self.__eval(state)
+            res = self._eval_core(state)
 
         return res
 
-    def __eval(self, state: State) -> Optional[float]:
+    def _eval_core(self, state: State) -> Optional[float]:
         costs = {}
         lp = []
         for f, v in enumerate(state.assignments):
@@ -502,14 +502,14 @@ class HMaxNumeric(_DeleteRelaxationHeuristicBase):
             if assignments_values in self._internal_caching:
                 return self._internal_caching[assignments_values]
 
-            res = self.__eval(state)
+            res = self._eval_core(state)
             self._internal_caching[assignments_values] = res
         else:
-            res = self.__eval(state)
+            res = self._eval_core(state)
 
         return res
 
-    def __eval(self, state: State) -> Optional[float]:
+    def _eval_core(self, state: State) -> Optional[float]:
         assignments: List[Set[Union[bool, int, Fraction, str]]] = [
             {v} for v in state.assignments
         ] + [{} for _ in range(self._num_fluents - len(state.assignments))]
