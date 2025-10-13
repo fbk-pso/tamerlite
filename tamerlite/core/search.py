@@ -45,8 +45,12 @@ def _basic_search(ss: SearchSpaceABC, bfs: bool, timeout, early_termination: boo
     st = time.time()
     init = ss.initial_state()
     open = deque()
-    open.append(init)
     counter = 0
+
+    if early_termination and ss.goal_reached(init):
+        return init.extract_solution(), {"expanded_states": counter, "goal_depth": init.g}
+    open.append(init)
+
     while len(open) > 0:
         if timeout is not None and time.time() - st > timeout:
             raise TimeoutError
@@ -55,7 +59,7 @@ def _basic_search(ss: SearchSpaceABC, bfs: bool, timeout, early_termination: boo
         else:
             state = open.pop()
         counter += 1
-        if ss.goal_reached(state):
+        if not early_termination and ss.goal_reached(state):
             return state.extract_solution(), {"expanded_states": counter, "goal_depth": state.g}
         for succ_state in ss.get_successor_states(state):
             if early_termination and ss.goal_reached(succ_state):
@@ -75,11 +79,14 @@ def wastar_search(ss: SearchSpaceABC, heuristic: Heuristic, weight: float = 0.5,
     closed_set = set()
     open_set = set()
     init = ss.initial_state()
+    counter = 0
+    if early_termination and ss.goal_reached(init):
+        return init.extract_solution(), {"expanded_states": str(counter), "goal_depth": str(init.g)}
+
     init_h = heuristic.eval(init, ss)
     if init_h is None:
         return None, {"expanded_states": str(0)}
     heapq.heappush(open, PrioritizedItem(init_h, init))
-    counter = 0
     while open:
         if timeout is not None and time.time() - st > timeout:
             raise TimeoutError
@@ -89,7 +96,7 @@ def wastar_search(ss: SearchSpaceABC, heuristic: Heuristic, weight: float = 0.5,
             closed_set.add(state)
             open_set.discard(state)
         counter += 1
-        if ss.goal_reached(state):
+        if not early_termination and ss.goal_reached(state):
             return state.extract_solution(), {"expanded_states": str(counter), "goal_depth": str(state.g)}
 
         candidate_states = (s for s in ss.get_successor_states(state) if s not in closed_set and s not in open_set)
@@ -106,18 +113,21 @@ def wastar_search(ss: SearchSpaceABC, heuristic: Heuristic, weight: float = 0.5,
 def ehc_search(ss: SearchSpaceABC, heuristic: Heuristic, timeout=None, early_termination: bool = False):
     st = time.time()
     init = ss.initial_state()
+    counter = 0
+    if early_termination and ss.goal_reached(init):
+        return init.extract_solution(), {"expanded_states": str(counter), "goal_depth": str(init.g)}
+
     open = deque()
     open.append(init)
     best_h = heuristic.eval(init, ss)
     if best_h is None:
         return None, {"expanded_states": str(0)}
-    counter = 0
     while len(open) > 0:
         if timeout is not None and time.time() - st > timeout:
             raise TimeoutError
         state = open.popleft()
         counter += 1
-        if ss.goal_reached(state):
+        if not early_termination and ss.goal_reached(state):
             return state.extract_solution(), {"expanded_states": str(counter), "goal_depth": str(state.g)}
         for succ_state, h in heuristic.eval_gen(ss.get_successor_states(state), ss):
             if early_termination and ss.goal_reached(succ_state):

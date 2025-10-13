@@ -15,6 +15,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 
+use im::Vector;
 use multiset::HashMultiSet;
 use pyo3::{exceptions::PyException, prelude::*};
 use std::hash::{Hash, Hasher};
@@ -25,13 +26,14 @@ use std::{
 };
 
 use super::expressions::*;
+use super::expressions_utils::*;
 use super::stn::DeltaSTN;
 use super::utils::*;
 
 #[pyclass(frozen)]
 #[derive(Debug)]
 pub struct State {
-    pub assignments: Vec<ExpressionNode>,
+    pub assignments: Vector<ExpressionNode>,
     pub temporal_network: Option<DeltaSTN<u64, f32>>,
     pub todo: HashMap<String, (usize, u32)>,
     pub active_conditions: HashMultiSet<Vec<ExpressionNode>>,
@@ -66,12 +68,14 @@ impl State {
     }
 }
 
-impl State {
-    pub fn get_value(&self, fluent: usize) -> &ExpressionNode {
+impl FluentValueTrait for State {
+    fn get_value(&self, fluent: usize) -> &ExpressionNode {
         &self.assignments[fluent]
     }
+}
 
-    /// Clones the current statw, except for the caches
+impl State {
+    /// Clones the current state, except for the caches
     /// This is useful to create children of this state
     pub fn clone_for_child(&self) -> Self {
         Self {
