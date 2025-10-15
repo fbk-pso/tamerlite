@@ -499,6 +499,10 @@ impl SearchSpaceTrait for SearchSpace {
             .into_iter()
             .map(|(a, _, _)| a);
 
+        if !self.is_temporal {
+            return Ok(all_path.map(|a| (None, a.clone(), None)).collect());
+        }
+
         let mut tn = DeltaSTN::new(mk_rational(0, 1));
         let mut todo: HashMap<String, (usize, u32)> = HashMap::new();
         let mut path: Vec<(Event, u32)> = Vec::new();
@@ -548,19 +552,25 @@ impl SearchSpaceTrait for SearchSpace {
                     let end = self.tn_interpreter.get_action_id(action, false, counter);
                     counter += 1;
                     let duration = self.actions_duration[action].as_ref();
-                    let mut lb = mk_rational(0, 1);
-                    let mut ub = mk_rational(0, 1);
-                    if duration.is_some() {
-                        let d = duration.unwrap();
-                        lb = -get_rational_from_expression_node(&internal_evaluate(&d.0, &state)?)?;
-                        ub = get_rational_from_expression_node(&internal_evaluate(&d.1, &state)?)?;
-                        if d.2 {
-                            lb -= self.epsilon_rational.clone();
+                    let (lb, ub) = match duration {
+                        Some(d) => {
+                            // let d = duration.unwrap();
+                            let mut lb = -get_rational_from_expression_node(&internal_evaluate(
+                                &d.0, &state,
+                            )?)?;
+                            let mut ub = get_rational_from_expression_node(&internal_evaluate(
+                                &d.1, &state,
+                            )?)?;
+                            if d.2 {
+                                lb -= self.epsilon_rational.clone();
+                            }
+                            if d.3 {
+                                ub -= self.epsilon_rational.clone();
+                            }
+                            (lb, ub)
                         }
-                        if d.3 {
-                            ub -= self.epsilon_rational.clone();
-                        }
-                    }
+                        None => (mk_rational(0, 1), mk_rational(0, 1)),
+                    };
                     tn.add(&start, &end, &lb);
                     tn.add(&end, &start, &ub);
                     let id = counter;
