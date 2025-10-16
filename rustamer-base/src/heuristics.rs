@@ -482,11 +482,14 @@ impl DeleteRelaxationHeuristic {
                             || (new_cost_k.is_none() && cost_k.is_none())
                             || (new_cost_k.is_none() && *cost_k.unwrap() > c + o.cost)
                         {
-                            reached_by.insert(*k, oid);
-                            new_costs.insert(k, c + o.cost);
+                            if matches!(self.heuristic_kind, HeuristicKind::HFF) {
+                                reached_by.insert(*k, oid);
+                            }
+                            new_costs.insert(*k, c + o.cost);
                             lp.push(*k);
-                        } else if ((new_cost_k.is_some() && *new_cost_k.unwrap() == c + o.cost)
-                            || (new_cost_k.is_none() && *cost_k.unwrap() == c + o.cost))
+                        } else if matches!(self.heuristic_kind, HeuristicKind::HFF)
+                            && ((new_cost_k.is_some() && *new_cost_k.unwrap() == c + o.cost)
+                                || (new_cost_k.is_none() && *cost_k.unwrap() == c + o.cost))
                             && oid.id > reached_by[k].id
                         {
                             reached_by.insert(*k, oid);
@@ -494,8 +497,8 @@ impl DeleteRelaxationHeuristic {
                     }
                 }
             }
-            for (k, v) in new_costs.iter() {
-                costs.insert(**k, *v);
+            for (k, v) in new_costs.into_iter() {
+                costs.insert(k, v);
             }
         }
 
