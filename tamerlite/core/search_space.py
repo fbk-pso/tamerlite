@@ -204,7 +204,7 @@ def evaluate(exp: Expression, state: State) -> Union[bool, int, Fraction, str]:
                         v = True
                         break
                 res.append(v)
-            if e.kind == "not":
+            elif e.kind == "not":
                 res.append(not res[e.operands[0]])
             elif e.kind == "==":
                 res.append(res[e.operands[0]] == res[e.operands[1]])

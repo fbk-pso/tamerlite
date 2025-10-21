@@ -163,22 +163,111 @@ class _DeleteRelaxationHeuristicBase(Heuristic):
 
         self._ordered_actions = list(self._events.keys())
         self._internal_caching = {} if internal_caching else None
+        self._extract_sub_expression_cache = {}
 
     def _is_numeric_condition(self, exp: Expression) -> bool:
-        if isinstance(exp[-1], bool): # boolean constant
-            return False
-        if isinstance(exp[-1], FluentNode): # boolean fluent expression
-            return False
-        if isinstance(exp[-1], Op) and exp[-1].kind == "not": # not of a boolean fluent expression
-            i = exp[-1].operands[0]
-            if isinstance(exp[i], FluentNode):
-                return False
-        if isinstance(exp[-1], Op) and exp[-1].kind == "==": # equals between a fluent and an object
-            i1 = exp[-1].operands[0]
-            i2 = exp[-1].operands[1]
-            if isinstance(exp[i1], FluentNode) and isinstance(exp[i2], str):
-                return False
-        return True
+        stack = [len(exp) - 1]
+        while len(stack) > 0:
+            idx = stack.pop()
+            is_numeric = True
+
+            if isinstance(exp[idx], bool):  # boolean constant
+                is_numeric = False
+            elif isinstance(exp[idx], FluentNode):  # boolean fluent expression
+                is_numeric = False
+            elif (
+                isinstance(exp[idx], Op) and exp[idx].kind == "not"
+            ):  # not of a boolean fluent expression
+                i = exp[idx].operands[0]
+                if isinstance(exp[i], FluentNode):
+                    is_numeric = False
+            elif (
+                isinstance(exp[idx], Op) and exp[idx].kind == "=="
+            ):  # equals between a fluent and an object
+                i1 = exp[idx].operands[0]
+                i2 = exp[idx].operands[1]
+                if isinstance(exp[i1], FluentNode) and isinstance(exp[i2], str):
+                    is_numeric = False
+            elif isinstance(exp[idx], Op) and exp[idx].kind in ("or", "and"):
+                for i in exp[idx].operands:
+                    stack.append(i)
+                is_numeric = False
+
+            if is_numeric:
+                return True
+        return False
+
+    def _extract_numeric_expressions(
+        self, exp: Expression, idx: int = -1
+    ) -> List[Expression]:
+        numeric_expressions = []
+        stack = [idx]
+        while len(stack) > 0:
+            idx = stack.pop()
+            is_numeric = True
+
+            if isinstance(exp[idx], bool):  # boolean constant
+                is_numeric = False
+            elif isinstance(exp[idx], FluentNode):  # boolean fluent expression
+                is_numeric = False
+            elif (
+                isinstance(exp[idx], Op) and exp[idx].kind == "not"
+            ):  # not of a boolean fluent expression
+                i = exp[idx].operands[0]
+                if isinstance(exp[i], FluentNode):
+                    is_numeric = False
+            elif (
+                isinstance(exp[idx], Op) and exp[idx].kind == "=="
+            ):  # equals between a fluent and an object
+                i1 = exp[idx].operands[0]
+                i2 = exp[idx].operands[1]
+                if isinstance(exp[i1], FluentNode) and isinstance(exp[i2], str):
+                    is_numeric = False
+            elif isinstance(exp[idx], Op) and exp[idx].kind in ("or", "and"):
+                for i in exp[idx].operands:
+                    stack.append(i)
+                is_numeric = False
+
+            if is_numeric:
+                numeric_expressions.append(self._extract_sub_expression(exp, idx))
+        return numeric_expressions
+
+    def _extract_sub_expression(self, exp: Expression, idx: int) -> Expression:
+        cache_key = (id(exp), idx)
+        if cache_key in self._extract_sub_expression_cache:
+            return self._extract_sub_expression_cache[cache_key]
+
+        stack = [(idx, False)]
+        results = []
+        while len(stack) > 0:
+            idx, processed = stack.pop()
+            e = exp[idx]
+
+            if (
+                isinstance(e, bool)
+                or isinstance(e, int)
+                or isinstance(e, Fraction)
+                or isinstance(e, FluentNode)
+                or isinstance(e, str)
+            ):
+                results.append((e,))
+            else:
+                assert isinstance(e, Op)
+                if processed:
+                    sub_e = tuple()
+                    operands = []
+                    for i in e.operands:
+                        sub_e += results.pop()
+                        operands.append(len(sub_e) - 1)
+                    sub_e += (Op(e.kind, tuple(operands)),)
+                    results.append(sub_e)
+                else:
+                    stack.append((idx, True))
+                    for i in e.operands:
+                        stack.append((i, False))
+
+        self._extract_sub_expression_cache[cache_key] = results.pop()
+        return self._extract_sub_expression_cache[cache_key]
 
 
 class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
@@ -210,8 +299,9 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
             if len(o.conditions) == 0 or o.conditions == ((True,),):
                 self._empty_pre_operators.append(o)
             for c in o.conditions:
-                if self._is_numeric_condition(c):
-                    self._numeric_conds.add(c)
+                expressions = self._extract_numeric_expressions(c)
+                if len(expressions) > 0:
+                    self._numeric_conds.update(expressions)
                 else:
                     if c not in self._precondition_of:
                         self._precondition_of[c] = []
@@ -258,6 +348,7 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
             costs[k] = 0
             lp.append(k)
 
+        # TODO: lazy eval?
         for x in self._numeric_conds:
             if evaluate(x, state):
                 costs[x] = 0
@@ -355,12 +446,17 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
 
         return res
 
-    def _cost(self, exp: Tuple[Expression, ...], costs: Dict[Expression, float]) -> Optional[float]:
-        if len(exp) == 0:
-            return 0
+    def _cost(
+        self, exp: Tuple[Expression, ...], costs: Dict[Expression, float]
+    ) -> Optional[float]:
         res = 0
-        for g in exp:
-            c = costs.get(g, None)
+        for e in exp:
+            if isinstance(e[-1], Op) and e[-1].kind == "or":
+                c = self._cost_exp_or(e, costs)
+            else:
+                assert not (isinstance(e[-1], Op) and e[-1].kind == "and")
+                c = costs.get(e, None)
+
             if c is None:
                 return None
 
@@ -370,6 +466,52 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
                 res += c
 
         return res
+
+    def _cost_exp_or(
+        self, exp: Expression, costs: Dict[Expression, float]
+    ) -> Optional[float]:
+        res = []
+        for idx, e in enumerate(exp):
+            if (
+                isinstance(e, bool)
+                or isinstance(e, int)
+                or isinstance(e, Fraction)
+                or isinstance(e, str)
+            ):
+                res.append(None)
+            elif isinstance(e, FluentNode):
+                k = (e,)
+                res.append(costs.get(k, None))
+            else:
+                assert isinstance(e, Op)
+                if e.kind == "and":
+                    v = 0
+                    for i in e.operands:
+                        if isinstance(res[i], int):
+                            if self._heuristic_kind == HeuristicKind.HMAX:
+                                v = max(v, res[i])
+                            else:
+                                v += res[i]
+                        else:
+                            return None
+                    res.append(v)
+                elif e.kind == "or":
+                    # FIXME
+                    v = 99999999999
+                    for i in e.operands:
+                        if isinstance(res[i], int):
+                            v = min(v, res[i])
+                        else:
+                            return None
+                    res.append(v)
+                else:
+                    k = self._extract_sub_expression(exp, idx)
+                    res.append(costs.get(k, None))
+
+        if isinstance(res[-1], int):
+            return res[-1]
+
+        return None
 
 
 class HMaxNumeric(_DeleteRelaxationHeuristicBase):

@@ -171,27 +171,134 @@ struct CacheKey {
     todo_values: Vec<usize>,
 }
 
-fn is_numeric_condition(cond: &Vec<ExpressionNode>) -> bool {
-    if let Some(e) = cond.last() {
-        if let ExpressionNode::Bool(_) = e {
-            return false;
-        } else if let ExpressionNode::Fluent(_) = e {
-            return false;
-        } else if let ExpressionNode::Not(i) = e {
-            if let ExpressionNode::Fluent(_) = cond[*i] {
-                return false;
+fn is_numeric_condition(expr: &Vec<ExpressionNode>) -> bool {
+    let mut stack = vec![expr.len() - 1];
+    while stack.len() > 0 {
+        let idx = stack.pop().unwrap();
+
+        let is_numeric = match &expr[idx] {
+            ExpressionNode::Bool(_) | ExpressionNode::Fluent(_) => false,
+            ExpressionNode::Not(i) => match expr[*i] {
+                ExpressionNode::Fluent(_) => false,
+                _ => true,
+            },
+            ExpressionNode::Equals(i1, i2) => {
+                !(matches!(expr[*i1], ExpressionNode::Fluent(_))
+                    && matches!(expr[*i2], ExpressionNode::Object(_)))
             }
-        } else if let ExpressionNode::Equals(i1, i2) = e {
-            if let ExpressionNode::Fluent(_) = cond[*i1] {
-                if let ExpressionNode::Object(_) = cond[*i2] {
-                    return false;
+            ExpressionNode::And(operands) | ExpressionNode::Or(operands) => {
+                for i in operands {
+                    stack.push(*i);
+                }
+                false
+            }
+            _ => true,
+        };
+        if is_numeric {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn extract_numeric_expressions(
+    expr: &Vec<ExpressionNode>,
+    expression_manager: &mut ExpressionManager,
+) -> Vec<Expression> {
+    let mut numeric_expressions = Vec::new();
+    let mut stack = vec![expr.len() - 1];
+    while stack.len() > 0 {
+        let idx = stack.pop().unwrap();
+
+        let is_numeric = match &expr[idx] {
+            ExpressionNode::Bool(_) | ExpressionNode::Fluent(_) => false,
+            ExpressionNode::Not(i) => match expr[*i] {
+                ExpressionNode::Fluent(_) => false,
+                _ => true,
+            },
+            ExpressionNode::Equals(i1, i2) => {
+                !(matches!(expr[*i1], ExpressionNode::Fluent(_))
+                    && matches!(expr[*i2], ExpressionNode::Object(_)))
+            }
+            ExpressionNode::And(operands) | ExpressionNode::Or(operands) => {
+                for i in operands {
+                    stack.push(*i);
+                }
+                false
+            }
+            _ => true,
+        };
+        if is_numeric {
+            let sub_expr = extract_sub_expression(expr, idx);
+            let sub_expr = expression_manager.put(&sub_expr);
+            numeric_expressions.push(sub_expr);
+        }
+    }
+    return numeric_expressions;
+}
+
+fn extract_sub_expression(expr: &Vec<ExpressionNode>, idx: usize) -> Vec<ExpressionNode> {
+    let mut stack = vec![(idx, false)];
+    let mut results = Vec::new();
+    while stack.len() > 0 {
+        let (idx, processed) = stack.pop().unwrap();
+
+        match &expr[idx] {
+            ExpressionNode::Bool(_)
+            | ExpressionNode::Int(_)
+            | ExpressionNode::Rational(_)
+            | ExpressionNode::Fluent(_)
+            | ExpressionNode::Object(_) => results.push(vec![expr[idx].clone()]),
+            _ => {
+                let expr_operands = match &expr[idx] {
+                    ExpressionNode::Not(operand) => &vec![*operand],
+                    ExpressionNode::Equals(op1, op2)
+                    | ExpressionNode::LE(op1, op2)
+                    | ExpressionNode::LT(op1, op2)
+                    | ExpressionNode::Minus(op1, op2)
+                    | ExpressionNode::Div(op1, op2) => &vec![*op1, *op2],
+                    ExpressionNode::And(operands)
+                    | ExpressionNode::Or(operands)
+                    | ExpressionNode::Plus(operands)
+                    | ExpressionNode::Times(operands) => operands,
+                    _ => panic!("Unreachable code"),
+                };
+                if processed {
+                    let mut sub_expr = vec![];
+                    let mut operands = Vec::with_capacity(expr_operands.len());
+                    for _ in expr_operands {
+                        sub_expr.append(results.pop().unwrap().as_mut());
+                        operands.push(sub_expr.len() - 1);
+                    }
+                    let op = match &expr[idx] {
+                        ExpressionNode::Not(_) => ExpressionNode::Not(operands[0]),
+                        ExpressionNode::Equals(_, _) => {
+                            ExpressionNode::Equals(operands[0], operands[1])
+                        }
+                        ExpressionNode::LE(_, _) => ExpressionNode::LE(operands[0], operands[1]),
+                        ExpressionNode::LT(_, _) => ExpressionNode::LT(operands[0], operands[1]),
+                        ExpressionNode::Minus(_, _) => {
+                            ExpressionNode::Minus(operands[0], operands[1])
+                        }
+                        ExpressionNode::Div(_, _) => ExpressionNode::Div(operands[0], operands[1]),
+                        ExpressionNode::And(_) => ExpressionNode::And(operands),
+                        ExpressionNode::Or(_) => ExpressionNode::Or(operands),
+                        ExpressionNode::Plus(_) => ExpressionNode::Plus(operands),
+                        ExpressionNode::Times(_) => ExpressionNode::Times(operands),
+                        _ => panic!("Unreachable code"),
+                    };
+                    sub_expr.push(op);
+                    results.push(sub_expr);
+                } else {
+                    stack.push((idx, true));
+                    for i in expr_operands {
+                        stack.push((*i, false));
+                    }
                 }
             }
         }
-    } else {
-        return false;
     }
-    true
+    return results.pop().unwrap();
 }
 
 #[derive(Clone, Debug)]
@@ -327,8 +434,11 @@ impl DeleteRelaxationHeuristic {
                 empty_pre_operators.insert(OperatorID::new(idx_o));
             }
             for c in o.conditions.iter() {
-                if is_numeric_condition(expression_manager.force_get(c)) {
-                    numeric_conds.insert(*c);
+                let expr = expression_manager.force_get(c).clone();
+                let numeric_expressions =
+                    extract_numeric_expressions(&expr, &mut expression_manager);
+                if numeric_expressions.len() > 0 {
+                    numeric_conds.extend(numeric_expressions);
                 } else {
                     if !precondition_of.contains_key(c) {
                         precondition_of.insert(*c, Vec::new());
@@ -341,7 +451,8 @@ impl DeleteRelaxationHeuristic {
             }
         }
         for c in goals.iter() {
-            if is_numeric_condition(expression_manager.force_get(c)) {
+            let expr = expression_manager.force_get(c);
+            if is_numeric_condition(expr) {
                 numeric_conds.insert(*c);
             }
         }
@@ -436,6 +547,7 @@ impl DeleteRelaxationHeuristic {
         }
 
         for c in self.numeric_conds.iter() {
+            // TODO: lazy eval?
             if internal_evaluate(expression_manager.force_get(c), state)?
                 == ExpressionNode::Bool(true)
             {
@@ -474,7 +586,7 @@ impl DeleteRelaxationHeuristic {
             let mut new_costs = HashMap::new();
             for oid in lo {
                 let o: &Operator = &self.operators[oid.id];
-                if let Some(c) = self.cost(&o.conditions, &costs) {
+                if let Some(c) = self.cost(&o.conditions, &costs, &mut expression_manager) {
                     for k in o.effects.iter() {
                         let new_cost_k = new_costs.get(k);
                         let cost_k = costs.get(k);
@@ -502,7 +614,7 @@ impl DeleteRelaxationHeuristic {
             }
         }
 
-        let h = self.cost(&self.goals, &costs);
+        let h = self.cost(&self.goals, &costs, &mut expression_manager);
 
         if h.is_none() {
             return Ok(None);
@@ -512,7 +624,7 @@ impl DeleteRelaxationHeuristic {
             self.heuristic_kind,
             HeuristicKind::HADD | HeuristicKind::HMAX
         ) {
-            return match self.cost(&self.extra_goals, &costs) {
+            return match self.cost(&self.extra_goals, &costs, &mut expression_manager) {
                 Some(v) => {
                     let res = if let HeuristicKind::HMAX = self.heuristic_kind {
                         f64::max(h.unwrap(), v)
@@ -557,13 +669,22 @@ impl DeleteRelaxationHeuristic {
         Ok(Some(res))
     }
 
-    fn cost(&self, exp: &Vec<Expression>, costs: &HashMap<Expression, f64>) -> Option<f64> {
+    fn cost(
+        &self,
+        exp: &Vec<Expression>,
+        costs: &HashMap<Expression, f64>,
+        expression_manager: &mut ExpressionManager,
+    ) -> Option<f64> {
         let mut res = 0.0;
-        for g in exp.iter() {
-            let c = costs.get(g);
+        for g in exp {
+            let c = match expression_manager.force_get(g).last()? {
+                ExpressionNode::Or(_) => self.cost_exp_or(g, costs, expression_manager),
+                _ => costs.get(g).cloned(),
+            };
+
             if let Some(cost) = c {
                 if let HeuristicKind::HMAX = self.heuristic_kind {
-                    res = f64::max(res, *cost);
+                    res = f64::max(res, cost);
                 } else {
                     res += cost;
                 }
@@ -572,6 +693,66 @@ impl DeleteRelaxationHeuristic {
             }
         }
         Some(res)
+    }
+
+    fn cost_exp_or(
+        &self,
+        expr: &Expression,
+        costs: &HashMap<Expression, f64>,
+        expression_manager: &mut ExpressionManager,
+    ) -> Option<f64> {
+        let expr = expression_manager.force_get(expr);
+        let mut res: Vec<Option<f64>> = Vec::with_capacity(expr.len());
+        for (idx, e) in expr.iter().enumerate() {
+            match e {
+                ExpressionNode::Bool(_)
+                | ExpressionNode::Int(_)
+                | ExpressionNode::Rational(_)
+                | ExpressionNode::Object(_) => res.push(None),
+                ExpressionNode::Fluent(_) => res.push(
+                    expression_manager
+                        .get_expression(&vec![e.clone()])
+                        .and_then(|e| costs.get(e).cloned()),
+                ),
+                ExpressionNode::And(operands) => {
+                    let mut r = 0.0;
+                    for i in operands {
+                        match res[*i] {
+                            Some(v) => {
+                                if let HeuristicKind::HMAX = self.heuristic_kind {
+                                    r = f64::max(r, v)
+                                } else {
+                                    r += v
+                                }
+                            }
+                            None => return None,
+                        }
+                    }
+                    res.push(Some(r));
+                }
+                ExpressionNode::Or(operands) => {
+                    // FIXME
+                    let mut r = 99999999999.0;
+                    for i in operands {
+                        match res[*i] {
+                            Some(v) => r = f64::min(r, v),
+                            None => return None,
+                        }
+                    }
+                    res.push(Some(r));
+                }
+                _ => {
+                    let sub_expr = extract_sub_expression(expr, idx);
+                    let sub_expr = expression_manager.get_expression(&sub_expr);
+                    res.push(sub_expr.and_then(|e| costs.get(e).cloned()))
+                }
+            }
+        }
+
+        match res.last() {
+            Some(v) => *v,
+            None => None,
+        }
     }
 
     pub fn name(&self) -> String {
