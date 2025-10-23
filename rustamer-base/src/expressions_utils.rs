@@ -22,23 +22,44 @@ use num_rational::BigRational;
 use pyo3::{exceptions::PyException, prelude::*};
 use std::{collections::HashMap, vec::Vec};
 
-fn do_shift(e: &ExpressionNode, offset: usize) -> ExpressionNode {
+pub fn do_shift(e: &ExpressionNode, offset: i32) -> ExpressionNode {
     match e {
-        ExpressionNode::And(v) => ExpressionNode::And(v.iter().map(|&o| o + offset).collect()),
-        ExpressionNode::Plus(v) => ExpressionNode::Plus(v.iter().map(|&o| o + offset).collect()),
-        ExpressionNode::Times(v) => ExpressionNode::Times(v.iter().map(|&o| o + offset).collect()),
-        ExpressionNode::Not(o) => ExpressionNode::Not(o + offset),
-        ExpressionNode::Equals(o1, o2) => ExpressionNode::Equals(o1 + offset, o2 + offset),
-        ExpressionNode::LE(o1, o2) => ExpressionNode::LE(o1 + offset, o2 + offset),
-        ExpressionNode::LT(o1, o2) => ExpressionNode::LT(o1 + offset, o2 + offset),
-        ExpressionNode::Minus(o1, o2) => ExpressionNode::Minus(o1 + offset, o2 + offset),
-        ExpressionNode::Div(o1, o2) => ExpressionNode::Div(o1 + offset, o2 + offset),
+        ExpressionNode::And(v) => {
+            ExpressionNode::And(v.iter().map(|&o| ((o as i32) + offset) as usize).collect())
+        }
+        ExpressionNode::Plus(v) => {
+            ExpressionNode::Plus(v.iter().map(|&o| ((o as i32) + offset) as usize).collect())
+        }
+        ExpressionNode::Times(v) => {
+            ExpressionNode::Times(v.iter().map(|&o| ((o as i32) + offset) as usize).collect())
+        }
+        ExpressionNode::Not(o) => ExpressionNode::Not(((*o as i32) + offset) as usize),
+        ExpressionNode::Equals(o1, o2) => ExpressionNode::Equals(
+            ((*o1 as i32) + offset) as usize,
+            ((*o2 as i32) + offset) as usize,
+        ),
+        ExpressionNode::LE(o1, o2) => ExpressionNode::LE(
+            ((*o1 as i32) + offset) as usize,
+            ((*o2 as i32) + offset) as usize,
+        ),
+        ExpressionNode::LT(o1, o2) => ExpressionNode::LT(
+            ((*o1 as i32) + offset) as usize,
+            ((*o2 as i32) + offset) as usize,
+        ),
+        ExpressionNode::Minus(o1, o2) => ExpressionNode::Minus(
+            ((*o1 as i32) + offset) as usize,
+            ((*o2 as i32) + offset) as usize,
+        ),
+        ExpressionNode::Div(o1, o2) => ExpressionNode::Div(
+            ((*o1 as i32) + offset) as usize,
+            ((*o2 as i32) + offset) as usize,
+        ),
         other => other.clone(),
     }
 }
 
 #[pyfunction]
-pub fn shift_expression(exp: Vec<PyExpressionNode>, offset: usize) -> Vec<PyExpressionNode> {
+pub fn shift_expression(exp: Vec<PyExpressionNode>, offset: i32) -> Vec<PyExpressionNode> {
     exp.iter()
         .map(|e| PyExpressionNode {
             v: do_shift(&e.v, offset),

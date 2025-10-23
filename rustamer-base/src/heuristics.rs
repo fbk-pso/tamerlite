@@ -171,134 +171,64 @@ struct CacheKey {
     todo_values: Vec<usize>,
 }
 
-fn is_numeric_condition(expr: &Vec<ExpressionNode>) -> bool {
-    let mut stack = vec![expr.len() - 1];
-    while stack.len() > 0 {
-        let idx = stack.pop().unwrap();
-
-        let is_numeric = match &expr[idx] {
-            ExpressionNode::Bool(_) | ExpressionNode::Fluent(_) => false,
-            ExpressionNode::Not(i) => match expr[*i] {
-                ExpressionNode::Fluent(_) => false,
-                _ => true,
-            },
-            ExpressionNode::Equals(i1, i2) => {
-                !(matches!(expr[*i1], ExpressionNode::Fluent(_))
-                    && matches!(expr[*i2], ExpressionNode::Object(_)))
-            }
-            ExpressionNode::And(operands) | ExpressionNode::Or(operands) => {
-                for i in operands {
-                    stack.push(*i);
-                }
-                false
-            }
+fn is_numeric_leaf_expression(expr: &Vec<ExpressionNode>) -> bool {
+    match expr.last() {
+        Some(ExpressionNode::Bool(_) | ExpressionNode::Fluent(_)) => false,
+        Some(ExpressionNode::Not(i)) => match expr[*i] {
+            ExpressionNode::Fluent(_) => false,
             _ => true,
-        };
-        if is_numeric {
-            return true;
+        },
+        Some(ExpressionNode::Equals(i1, i2)) => {
+            !(matches!(expr[*i1], ExpressionNode::Fluent(_))
+                && matches!(expr[*i2], ExpressionNode::Object(_)))
         }
+        Some(_) => true,
+        None => false,
     }
-    return false;
 }
 
-fn extract_numeric_expressions(
-    expr: &Vec<ExpressionNode>,
-    expression_manager: &mut ExpressionManager,
-) -> Vec<Expression> {
-    let mut numeric_expressions = Vec::new();
+fn extract_leaf_expressions(expr: &Vec<ExpressionNode>) -> Vec<Vec<ExpressionNode>> {
+    let mut leaf_expressions = Vec::new();
     let mut stack = vec![expr.len() - 1];
-    while stack.len() > 0 {
-        let idx = stack.pop().unwrap();
-
-        let is_numeric = match &expr[idx] {
-            ExpressionNode::Bool(_) | ExpressionNode::Fluent(_) => false,
-            ExpressionNode::Not(i) => match expr[*i] {
-                ExpressionNode::Fluent(_) => false,
-                _ => true,
-            },
-            ExpressionNode::Equals(i1, i2) => {
-                !(matches!(expr[*i1], ExpressionNode::Fluent(_))
-                    && matches!(expr[*i2], ExpressionNode::Object(_)))
-            }
-            ExpressionNode::And(operands) | ExpressionNode::Or(operands) => {
-                for i in operands {
-                    stack.push(*i);
-                }
-                false
-            }
-            _ => true,
-        };
-        if is_numeric {
-            let sub_expr = extract_sub_expression(expr, idx);
-            let sub_expr = expression_manager.put(&sub_expr);
-            numeric_expressions.push(sub_expr);
-        }
-    }
-    return numeric_expressions;
-}
-
-fn extract_sub_expression(expr: &Vec<ExpressionNode>, idx: usize) -> Vec<ExpressionNode> {
-    let mut stack = vec![(idx, false)];
-    let mut results = Vec::new();
-    while stack.len() > 0 {
-        let (idx, processed) = stack.pop().unwrap();
-
+    while let Some(idx) = stack.pop() {
         match &expr[idx] {
             ExpressionNode::Bool(_)
             | ExpressionNode::Int(_)
             | ExpressionNode::Rational(_)
-            | ExpressionNode::Fluent(_)
-            | ExpressionNode::Object(_) => results.push(vec![expr[idx].clone()]),
-            _ => {
-                let expr_operands = match &expr[idx] {
-                    ExpressionNode::Not(operand) => &vec![*operand],
-                    ExpressionNode::Equals(op1, op2)
-                    | ExpressionNode::LE(op1, op2)
-                    | ExpressionNode::LT(op1, op2)
-                    | ExpressionNode::Minus(op1, op2)
-                    | ExpressionNode::Div(op1, op2) => &vec![*op1, *op2],
-                    ExpressionNode::And(operands)
-                    | ExpressionNode::Or(operands)
-                    | ExpressionNode::Plus(operands)
-                    | ExpressionNode::Times(operands) => operands,
-                    _ => panic!("Unreachable code"),
-                };
-                if processed {
-                    let mut sub_expr = vec![];
-                    let mut operands = Vec::with_capacity(expr_operands.len());
-                    for _ in expr_operands {
-                        sub_expr.append(results.pop().unwrap().as_mut());
-                        operands.push(sub_expr.len() - 1);
-                    }
-                    let op = match &expr[idx] {
-                        ExpressionNode::Not(_) => ExpressionNode::Not(operands[0]),
-                        ExpressionNode::Equals(_, _) => {
-                            ExpressionNode::Equals(operands[0], operands[1])
-                        }
-                        ExpressionNode::LE(_, _) => ExpressionNode::LE(operands[0], operands[1]),
-                        ExpressionNode::LT(_, _) => ExpressionNode::LT(operands[0], operands[1]),
-                        ExpressionNode::Minus(_, _) => {
-                            ExpressionNode::Minus(operands[0], operands[1])
-                        }
-                        ExpressionNode::Div(_, _) => ExpressionNode::Div(operands[0], operands[1]),
-                        ExpressionNode::And(_) => ExpressionNode::And(operands),
-                        ExpressionNode::Or(_) => ExpressionNode::Or(operands),
-                        ExpressionNode::Plus(_) => ExpressionNode::Plus(operands),
-                        ExpressionNode::Times(_) => ExpressionNode::Times(operands),
-                        _ => panic!("Unreachable code"),
-                    };
-                    sub_expr.push(op);
-                    results.push(sub_expr);
-                } else {
-                    stack.push((idx, true));
-                    for i in expr_operands {
-                        stack.push((*i, false));
-                    }
-                }
+            | ExpressionNode::Object(_)
+            | ExpressionNode::Fluent(_) => leaf_expressions.push(vec![expr[idx].clone()]),
+            ExpressionNode::And(operands) | ExpressionNode::Or(operands) => {
+                stack.extend(operands.iter().copied());
             }
-        }
+            _ => leaf_expressions.push(extract_sub_expression(expr, idx)),
+        };
     }
-    return results.pop().unwrap();
+    leaf_expressions
+}
+
+fn extract_sub_expression(expr: &Vec<ExpressionNode>, idx: usize) -> Vec<ExpressionNode> {
+    // find the start index of the sub-expression
+    let mut i = idx;
+    loop {
+        let operands = match &expr[i] {
+            ExpressionNode::Not(operand) => &vec![*operand],
+            ExpressionNode::Equals(op1, op2)
+            | ExpressionNode::LE(op1, op2)
+            | ExpressionNode::LT(op1, op2)
+            | ExpressionNode::Minus(op1, op2)
+            | ExpressionNode::Div(op1, op2) => &vec![*op1, *op2],
+            ExpressionNode::And(operands)
+            | ExpressionNode::Or(operands)
+            | ExpressionNode::Plus(operands)
+            | ExpressionNode::Times(operands) => operands,
+            _ => break,
+        };
+        i = *operands.iter().min().unwrap();
+    }
+
+    let offset = -(i as i32);
+    let res: Vec<ExpressionNode> = (i..(idx + 1)).map(|j| do_shift(&expr[j], offset)).collect();
+    res
 }
 
 #[derive(Clone, Debug)]
@@ -432,28 +362,34 @@ impl DeleteRelaxationHeuristic {
                 || o.conditions == vec![expression_manager.put(&vec![ExpressionNode::Bool(true)])]
             {
                 empty_pre_operators.insert(OperatorID::new(idx_o));
-            }
-            for c in o.conditions.iter() {
-                let expr = expression_manager.force_get(c).clone();
-                let numeric_expressions =
-                    extract_numeric_expressions(&expr, &mut expression_manager);
-                if numeric_expressions.len() > 0 {
-                    numeric_conds.extend(numeric_expressions);
-                } else {
-                    if !precondition_of.contains_key(c) {
-                        precondition_of.insert(*c, Vec::new());
+            } else {
+                for c in o.conditions.iter() {
+                    let expr = expression_manager.force_get(c);
+                    for leaf_expr in extract_leaf_expressions(expr) {
+                        let e = expression_manager.put(&leaf_expr);
+                        if is_numeric_leaf_expression(&leaf_expr) {
+                            numeric_conds.insert(e);
+                        } else {
+                            if !precondition_of.contains_key(&e) {
+                                precondition_of.insert(e, vec![OperatorID::new(idx_o)]);
+                            } else {
+                                precondition_of
+                                    .get_mut(&e)
+                                    .unwrap()
+                                    .push(OperatorID::new(idx_o));
+                            }
+                        }
                     }
-                    precondition_of
-                        .get_mut(c)
-                        .unwrap()
-                        .push(OperatorID::new(idx_o));
                 }
             }
         }
         for c in goals.iter() {
             let expr = expression_manager.force_get(c);
-            if is_numeric_condition(expr) {
-                numeric_conds.insert(*c);
+            for leaf_expr in extract_leaf_expressions(expr) {
+                let e = expression_manager.put(&leaf_expr);
+                if is_numeric_leaf_expression(&leaf_expr) {
+                    numeric_conds.insert(e);
+                }
             }
         }
 
@@ -516,8 +452,9 @@ impl DeleteRelaxationHeuristic {
     fn _eval(&self, state: &State) -> PyResult<Option<f64>> {
         let mut expression_manager = self.expression_manager.lock().unwrap();
         let mut costs: HashMap<Expression, f64> = HashMap::new();
-        let mut lp: Vec<Expression> = Vec::new();
-        let mut init_lp: Vec<Expression> = Vec::new();
+        let mut lp: Vec<Expression> = Vec::with_capacity(
+            state.assignments.len() + self.numeric_conds.len() + self.events.len(),
+        );
 
         for (f, v) in state.assignments.iter().enumerate() {
             let k = match v {
@@ -539,11 +476,9 @@ impl DeleteRelaxationHeuristic {
                     ]
                 }
             };
-            init_lp.push(expression_manager.put(&k));
-        }
-        for k in init_lp.iter() {
-            costs.insert(*k, 0.0);
-            lp.push(*k);
+            let k = expression_manager.put(&k);
+            lp.push(k);
+            costs.insert(k, 0.0);
         }
 
         for c in self.numeric_conds.iter() {
@@ -731,8 +666,7 @@ impl DeleteRelaxationHeuristic {
                     res.push(Some(r));
                 }
                 ExpressionNode::Or(operands) => {
-                    // FIXME
-                    let mut r = 99999999999.0;
+                    let mut r = f64::MAX;
                     for i in operands {
                         match res[*i] {
                             Some(v) => r = f64::min(r, v),

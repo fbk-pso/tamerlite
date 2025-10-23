@@ -165,108 +165,73 @@ class _DeleteRelaxationHeuristicBase(Heuristic):
         self._internal_caching = {} if internal_caching else None
         self._extract_sub_expression_cache = {}
 
-    def _is_numeric_condition(self, exp: Expression) -> bool:
+    def _extract_numeric_expressions(self, exp: Expression) -> Iterator[Expression]:
+        return filter(self._is_numeric_leaf_expression, self._extract_leaf_expressions(exp))
+
+    def _is_numeric_leaf_expression(self, exp: Expression) -> bool:
+        is_numeric = True
+        if isinstance(exp[-1], bool):  # boolean constant
+            is_numeric = False
+        elif isinstance(exp[-1], FluentNode):  # boolean fluent expression
+            is_numeric = False
+        elif (
+            isinstance(exp[-1], Op) and exp[-1].kind == "not"
+        ):  # not of a boolean fluent expression
+            i = exp[-1].operands[0]
+            if isinstance(exp[i], FluentNode):
+                is_numeric = False
+        elif (
+            isinstance(exp[-1], Op) and exp[-1].kind == "=="
+        ):  # equals between a fluent and an object
+            i1 = exp[-1].operands[0]
+            i2 = exp[-1].operands[1]
+            if isinstance(exp[i1], FluentNode) and isinstance(exp[i2], str):
+                is_numeric = False
+
+        return is_numeric
+
+    def _extract_leaf_expressions(self, exp: Expression) -> Iterator[Expression]:
         stack = [len(exp) - 1]
         while len(stack) > 0:
             idx = stack.pop()
-            is_numeric = True
-
-            if isinstance(exp[idx], bool):  # boolean constant
-                is_numeric = False
-            elif isinstance(exp[idx], FluentNode):  # boolean fluent expression
-                is_numeric = False
-            elif (
-                isinstance(exp[idx], Op) and exp[idx].kind == "not"
-            ):  # not of a boolean fluent expression
-                i = exp[idx].operands[0]
-                if isinstance(exp[i], FluentNode):
-                    is_numeric = False
-            elif (
-                isinstance(exp[idx], Op) and exp[idx].kind == "=="
-            ):  # equals between a fluent and an object
-                i1 = exp[idx].operands[0]
-                i2 = exp[idx].operands[1]
-                if isinstance(exp[i1], FluentNode) and isinstance(exp[i2], str):
-                    is_numeric = False
-            elif isinstance(exp[idx], Op) and exp[idx].kind in ("or", "and"):
-                for i in exp[idx].operands:
-                    stack.append(i)
-                is_numeric = False
-
-            if is_numeric:
-                return True
-        return False
-
-    def _extract_numeric_expressions(
-        self, exp: Expression, idx: int = -1
-    ) -> List[Expression]:
-        numeric_expressions = []
-        stack = [idx]
-        while len(stack) > 0:
-            idx = stack.pop()
-            is_numeric = True
-
-            if isinstance(exp[idx], bool):  # boolean constant
-                is_numeric = False
-            elif isinstance(exp[idx], FluentNode):  # boolean fluent expression
-                is_numeric = False
-            elif (
-                isinstance(exp[idx], Op) and exp[idx].kind == "not"
-            ):  # not of a boolean fluent expression
-                i = exp[idx].operands[0]
-                if isinstance(exp[i], FluentNode):
-                    is_numeric = False
-            elif (
-                isinstance(exp[idx], Op) and exp[idx].kind == "=="
-            ):  # equals between a fluent and an object
-                i1 = exp[idx].operands[0]
-                i2 = exp[idx].operands[1]
-                if isinstance(exp[i1], FluentNode) and isinstance(exp[i2], str):
-                    is_numeric = False
-            elif isinstance(exp[idx], Op) and exp[idx].kind in ("or", "and"):
-                for i in exp[idx].operands:
-                    stack.append(i)
-                is_numeric = False
-
-            if is_numeric:
-                numeric_expressions.append(self._extract_sub_expression(exp, idx))
-        return numeric_expressions
-
-    def _extract_sub_expression(self, exp: Expression, idx: int) -> Expression:
-        cache_key = (id(exp), idx)
-        if cache_key in self._extract_sub_expression_cache:
-            return self._extract_sub_expression_cache[cache_key]
-
-        stack = [(idx, False)]
-        results = []
-        while len(stack) > 0:
-            idx, processed = stack.pop()
             e = exp[idx]
 
             if (
                 isinstance(e, bool)
                 or isinstance(e, int)
                 or isinstance(e, Fraction)
-                or isinstance(e, FluentNode)
                 or isinstance(e, str)
+                or isinstance(e, FluentNode)
             ):
-                results.append((e,))
+                yield (e,)
             else:
                 assert isinstance(e, Op)
-                if processed:
-                    sub_e = tuple()
-                    operands = []
+                if e.kind in ("and", "or"):
                     for i in e.operands:
-                        sub_e += results.pop()
-                        operands.append(len(sub_e) - 1)
-                    sub_e += (Op(e.kind, tuple(operands)),)
-                    results.append(sub_e)
+                        stack.append(i)
                 else:
-                    stack.append((idx, True))
-                    for i in e.operands:
-                        stack.append((i, False))
+                    yield self._extract_sub_expression(exp, idx)
 
-        self._extract_sub_expression_cache[cache_key] = results.pop()
+    def _extract_sub_expression(self, exp: Expression, idx: int) -> Expression:
+        cache_key = (id(exp), idx)
+        if cache_key in self._extract_sub_expression_cache:
+            return self._extract_sub_expression_cache[cache_key]
+
+        # find the start index of the sub-expression
+        i = idx
+        while isinstance(exp[i], Op):
+            i = min(exp[i].operands)
+
+        offset = i
+        res = []
+        for j in range(i, idx + 1):
+            e = exp[j]
+            if isinstance(e, Op):
+                res.append(Op(e.kind, tuple([o - offset for o in e.operands])))
+            else:
+                res.append(e)
+
+        self._extract_sub_expression_cache[cache_key] = tuple(res)
         return self._extract_sub_expression_cache[cache_key]
 
 
@@ -298,17 +263,19 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
         for o in self._operators:
             if len(o.conditions) == 0 or o.conditions == ((True,),):
                 self._empty_pre_operators.append(o)
-            for c in o.conditions:
-                expressions = self._extract_numeric_expressions(c)
-                if len(expressions) > 0:
-                    self._numeric_conds.update(expressions)
-                else:
-                    if c not in self._precondition_of:
-                        self._precondition_of[c] = []
-                    self._precondition_of[c].append(o)
+            else:
+                for c in o.conditions:
+                    for e in self._extract_leaf_expressions(c):
+                        if self._is_numeric_leaf_expression(e):
+                            self._numeric_conds.add(e)
+                        else:
+                            if e not in self._precondition_of:
+                                self._precondition_of[e] = []
+                            self._precondition_of[e].append(o)
         for c in self._goals:
-            if self._is_numeric_condition(c):
-                self._numeric_conds.add(c)
+            numeric_expressions = list(self._extract_numeric_expressions(c))
+            if len(numeric_expressions) > 0:
+                self._numeric_conds.update(numeric_expressions)
 
     @property
     def name(self):
@@ -403,11 +370,9 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
                         ):
                             reached_by[k] = o
 
-            for k, v in new_costs.items():
-                costs[k] = v
+            costs.update(new_costs)
 
         h = self._cost(self._goals, costs)
-
         if h is None:
             return None
 
@@ -496,8 +461,7 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
                             return None
                     res.append(v)
                 elif e.kind == "or":
-                    # FIXME
-                    v = 99999999999
+                    v = float('inf')
                     for i in e.operands:
                         if isinstance(res[i], int):
                             v = min(v, res[i])
