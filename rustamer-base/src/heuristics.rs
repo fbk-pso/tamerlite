@@ -451,10 +451,9 @@ impl DeleteRelaxationHeuristic {
 
     fn _eval(&self, state: &State) -> PyResult<Option<f64>> {
         let mut expression_manager = self.expression_manager.lock().unwrap();
-        let mut costs: HashMap<Expression, f64> = HashMap::new();
-        let mut lp: Vec<Expression> = Vec::with_capacity(
-            state.assignments.len() + self.numeric_conds.len() + self.events.len(),
-        );
+        let init_capacity = state.assignments.len() + self.numeric_conds.len() + self.events.len();
+        let mut costs: HashMap<Expression, f64> = HashMap::with_capacity(init_capacity);
+        let mut lp: Vec<Expression> = Vec::with_capacity(init_capacity);
 
         for (f, v) in state.assignments.iter().enumerate() {
             let k = match v {
@@ -544,9 +543,7 @@ impl DeleteRelaxationHeuristic {
                     }
                 }
             }
-            for (k, v) in new_costs.into_iter() {
-                costs.insert(k, v);
-            }
+            costs.extend(new_costs);
         }
 
         let h = self.cost(&self.goals, &costs, &mut expression_manager);
@@ -615,16 +612,12 @@ impl DeleteRelaxationHeuristic {
             let c = match expression_manager.force_get(g).last()? {
                 ExpressionNode::Or(_) => self.cost_exp_or(g, costs, expression_manager),
                 _ => costs.get(g).cloned(),
-            };
+            }?;
 
-            if let Some(cost) = c {
-                if let HeuristicKind::HMAX = self.heuristic_kind {
-                    res = f64::max(res, cost);
-                } else {
-                    res += cost;
-                }
+            if let HeuristicKind::HMAX = self.heuristic_kind {
+                res = f64::max(res, c);
             } else {
-                return None;
+                res += c;
             }
         }
         Some(res)
@@ -651,6 +644,7 @@ impl DeleteRelaxationHeuristic {
                 ),
                 ExpressionNode::And(operands) => {
                     let mut r = 0.0;
+                    let mut is_none = false;
                     for i in operands {
                         match res[*i] {
                             Some(v) => {
@@ -660,20 +654,35 @@ impl DeleteRelaxationHeuristic {
                                     r += v
                                 }
                             }
-                            None => return None,
+                            None => {
+                                is_none = true;
+                                break;
+                            }
                         }
                     }
-                    res.push(Some(r));
+                    if is_none {
+                        res.push(None);
+                    } else {
+                        res.push(Some(r));
+                    }
                 }
                 ExpressionNode::Or(operands) => {
                     let mut r = f64::MAX;
+                    let mut is_none = false;
                     for i in operands {
                         match res[*i] {
                             Some(v) => r = f64::min(r, v),
-                            None => return None,
+                            None => {
+                                is_none = true;
+                                break;
+                            }
                         }
                     }
-                    res.push(Some(r));
+                    if is_none {
+                        res.push(None);
+                    } else {
+                        res.push(Some(r));
+                    }
                 }
                 _ => {
                     let sub_expr = extract_sub_expression(expr, idx);

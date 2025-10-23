@@ -458,7 +458,8 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
                             else:
                                 v += res[i]
                         else:
-                            return None
+                            v = None
+                            break
                     res.append(v)
                 elif e.kind == "or":
                     v = float('inf')
@@ -466,7 +467,8 @@ class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
                         if isinstance(res[i], int):
                             v = min(v, res[i])
                         else:
-                            return None
+                            v = None
+                            break
                     res.append(v)
                 else:
                     k = self._extract_sub_expression(exp, idx)
