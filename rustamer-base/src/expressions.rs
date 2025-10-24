@@ -84,10 +84,6 @@ impl ExpressionManager {
             Expression { id: newid }
         }
     }
-
-    pub fn get_expression(&self, expr: &Vec<ExpressionNode>) -> Option<&Expression> {
-        self.expression2id.get(expr)
-    }
 }
 
 pub fn get_rational_from_expression_node(exp: &ExpressionNode) -> PyResult<BigRational> {

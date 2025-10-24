@@ -120,7 +120,7 @@ impl Clone for CustomHeuristic {
 #[derive(Debug, Clone, PartialEq)]
 struct Operator {
     action: String,
-    conditions: Vec<Expression>,
+    conditions: Vec<HeuristicExpressionNode>,
     effects: Vec<Expression>,
     cost: f64,
 }
@@ -133,6 +133,13 @@ impl Hash for Operator {
         self.conditions.hash(state);
         self.effects.hash(state);
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Hash)]
+enum HeuristicExpressionNode {
+    And(usize),
+    Or(usize),
+    Leaf(Expression),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -171,6 +178,85 @@ struct CacheKey {
     todo_values: Vec<usize>,
 }
 
+fn build_operator_conditions(
+    conditions: &Vec<ExpressionNode>,
+    extra_fluent: ExpressionNode,
+    expression_manager: &mut ExpressionManager,
+) -> (bool, Vec<HeuristicExpressionNode>) {
+    let conditions = if conditions.len() == 0 || conditions == &vec![ExpressionNode::Bool(true)] {
+        vec![extra_fluent]
+    } else if conditions == &vec![ExpressionNode::Bool(false)] {
+        return (false, vec![]);
+    } else if matches!(conditions.last().unwrap(), ExpressionNode::And(_)) {
+        let mut conditions = conditions.clone();
+        let mut and_node = conditions.pop().unwrap();
+        if let ExpressionNode::And(ref mut operands) = and_node {
+            operands.push(conditions.len());
+        }
+        conditions.push(extra_fluent);
+        conditions.push(and_node);
+        conditions
+    } else {
+        let mut conditions = conditions.clone();
+        conditions.push(extra_fluent);
+        conditions.push(ExpressionNode::And(vec![
+            conditions.len() - 2,
+            conditions.len() - 1,
+        ]));
+        conditions
+    };
+
+    (
+        true,
+        convert_to_heuristic_expression(&conditions, expression_manager),
+    )
+}
+
+fn convert_to_heuristic_expression(
+    expr: &Vec<ExpressionNode>,
+    expression_manager: &mut ExpressionManager,
+) -> Vec<HeuristicExpressionNode> {
+    let mut result = Vec::new();
+    let mut stack = vec![(expr.len() - 1, false)];
+
+    while let Some((idx, processed)) = stack.pop() {
+        match &expr[idx] {
+            ExpressionNode::Bool(_)
+            | ExpressionNode::Int(_)
+            | ExpressionNode::Rational(_)
+            | ExpressionNode::Object(_)
+            | ExpressionNode::Fluent(_) => result.push(HeuristicExpressionNode::Leaf(
+                expression_manager.put(&vec![expr[idx].clone()]),
+            )),
+            ExpressionNode::And(operands) => {
+                if !processed {
+                    stack.push((idx, true));
+                    for &i in operands {
+                        stack.push((i, false));
+                    }
+                } else {
+                    result.push(HeuristicExpressionNode::And(operands.len()));
+                }
+            }
+            ExpressionNode::Or(operands) => {
+                if !processed {
+                    stack.push((idx, true));
+                    for &i in operands {
+                        stack.push((i, false));
+                    }
+                } else {
+                    result.push(HeuristicExpressionNode::Or(operands.len()));
+                }
+            }
+            _ => result.push(HeuristicExpressionNode::Leaf(
+                expression_manager.put(&extract_sub_expression(&expr, idx)),
+            )),
+        }
+    }
+
+    result
+}
+
 fn is_numeric_leaf_expression(expr: &Vec<ExpressionNode>) -> bool {
     match expr.last() {
         Some(ExpressionNode::Bool(_) | ExpressionNode::Fluent(_)) => false,
@@ -185,25 +271,6 @@ fn is_numeric_leaf_expression(expr: &Vec<ExpressionNode>) -> bool {
         Some(_) => true,
         None => false,
     }
-}
-
-fn extract_leaf_expressions(expr: &Vec<ExpressionNode>) -> Vec<Vec<ExpressionNode>> {
-    let mut leaf_expressions = Vec::new();
-    let mut stack = vec![expr.len() - 1];
-    while let Some(idx) = stack.pop() {
-        match &expr[idx] {
-            ExpressionNode::Bool(_)
-            | ExpressionNode::Int(_)
-            | ExpressionNode::Rational(_)
-            | ExpressionNode::Object(_)
-            | ExpressionNode::Fluent(_) => leaf_expressions.push(vec![expr[idx].clone()]),
-            ExpressionNode::And(operands) | ExpressionNode::Or(operands) => {
-                stack.extend(operands.iter().copied());
-            }
-            _ => leaf_expressions.push(extract_sub_expression(expr, idx)),
-        };
-    }
-    leaf_expressions
 }
 
 fn extract_sub_expression(expr: &Vec<ExpressionNode>, idx: usize) -> Vec<ExpressionNode> {
@@ -234,9 +301,9 @@ fn extract_sub_expression(expr: &Vec<ExpressionNode>, idx: usize) -> Vec<Express
 #[derive(Clone, Debug)]
 pub struct DeleteRelaxationHeuristic {
     events: HashMap<String, usize>,
-    goals: Vec<Expression>,
+    goals: Vec<HeuristicExpressionNode>,
     extra_fluents: HashMap<String, Vec<Expression>>,
-    extra_goals: Vec<Expression>,
+    extra_goals: Vec<HeuristicExpressionNode>,
     operators: Vec<Operator>,
     precondition_of: HashMap<Expression, Vec<OperatorID>>,
     empty_pre_operators: HashSet<OperatorID>,
@@ -265,11 +332,11 @@ impl DeleteRelaxationHeuristic {
         for (a, le) in events.iter() {
             let mut a_extra_fluents: Vec<Expression> = Vec::new();
             let f_cond = num_fluents + le.len() - 1;
-            let mut cond: Vec<ExpressionNode> = vec![ExpressionNode::Fluent(f_cond)];
-            extra_goals.push(expression_manager.put(&cond));
+            let mut cond = ExpressionNode::Fluent(f_cond);
+            extra_goals.push(cond.clone());
+            // TODO: handle e.effects.len()==1
             for (_, e) in le.iter() {
                 let mut effects: Vec<Expression> = Vec::new();
-                let mut conditions: Vec<Expression> = Vec::new();
                 let f = num_fluents;
                 num_fluents += 1;
                 a_extra_fluents.push(expression_manager.put(&vec![ExpressionNode::Fluent(f)]));
@@ -328,14 +395,9 @@ impl DeleteRelaxationHeuristic {
                         }
                     }
                 }
-                conditions.push(expression_manager.put(&cond));
-                if e.conditions.len() > 0 && e.conditions != vec![ExpressionNode::Bool(true)] {
-                    for sc in split_expression(&e.conditions)? {
-                        conditions.push(expression_manager.put(&sc))
-                    }
-                }
-                if !conditions.contains(&expression_manager.put(&vec![ExpressionNode::Bool(false)]))
-                {
+                let (is_applicable, conditions) =
+                    build_operator_conditions(&e.conditions, cond.clone(), &mut expression_manager);
+                if is_applicable {
                     operators.push(Operator {
                         action: a.to_string(),
                         conditions,
@@ -343,38 +405,33 @@ impl DeleteRelaxationHeuristic {
                         cost: 1.0,
                     });
                 }
-                cond = vec![ExpressionNode::Fluent(f)];
+                cond = ExpressionNode::Fluent(f);
             }
             extra_fluents.insert(a.to_string(), a_extra_fluents);
         }
         operators.sort_by(|a, b| a.action.cmp(&b.action));
 
-        let expr_goals = split_expression(&goal.into_iter().map(|e| e.v).collect())?;
-        let goals: Vec<Expression> = expr_goals
-            .into_iter()
-            .map(|e| expression_manager.put(&e))
-            .collect();
+        let expr_goals = goal.into_iter().map(|e| e.v).collect();
+        let goals = convert_to_heuristic_expression(&expr_goals, &mut expression_manager);
+        let extra_goals = convert_to_heuristic_expression(&extra_goals, &mut expression_manager);
+
         let mut precondition_of: HashMap<Expression, Vec<OperatorID>> = HashMap::new();
         let mut numeric_conds: HashSet<Expression> = HashSet::new();
         let mut empty_pre_operators: HashSet<OperatorID> = HashSet::new();
         for (idx_o, o) in operators.iter().enumerate() {
-            if o.conditions.len() == 0
-                || o.conditions == vec![expression_manager.put(&vec![ExpressionNode::Bool(true)])]
-            {
+            if o.conditions.len() == 0 {
                 empty_pre_operators.insert(OperatorID::new(idx_o));
             } else {
-                for c in o.conditions.iter() {
-                    let expr = expression_manager.force_get(c);
-                    for leaf_expr in extract_leaf_expressions(expr) {
-                        let e = expression_manager.put(&leaf_expr);
-                        if is_numeric_leaf_expression(&leaf_expr) {
-                            numeric_conds.insert(e);
+                for node in &o.conditions {
+                    if let HeuristicExpressionNode::Leaf(e) = node {
+                        if is_numeric_leaf_expression(expression_manager.force_get(e)) {
+                            numeric_conds.insert(*e);
                         } else {
-                            if !precondition_of.contains_key(&e) {
-                                precondition_of.insert(e, vec![OperatorID::new(idx_o)]);
+                            if !precondition_of.contains_key(e) {
+                                precondition_of.insert(*e, vec![OperatorID::new(idx_o)]);
                             } else {
                                 precondition_of
-                                    .get_mut(&e)
+                                    .get_mut(e)
                                     .unwrap()
                                     .push(OperatorID::new(idx_o));
                             }
@@ -383,12 +440,10 @@ impl DeleteRelaxationHeuristic {
                 }
             }
         }
-        for c in goals.iter() {
-            let expr = expression_manager.force_get(c);
-            for leaf_expr in extract_leaf_expressions(expr) {
-                let e = expression_manager.put(&leaf_expr);
-                if is_numeric_leaf_expression(&leaf_expr) {
-                    numeric_conds.insert(e);
+        for node in goals.iter() {
+            if let HeuristicExpressionNode::Leaf(e) = node {
+                if is_numeric_leaf_expression(expression_manager.force_get(e)) {
+                    numeric_conds.insert(*e);
                 }
             }
         }
@@ -520,7 +575,7 @@ impl DeleteRelaxationHeuristic {
             let mut new_costs = HashMap::new();
             for oid in lo {
                 let o: &Operator = &self.operators[oid.id];
-                if let Some(c) = self.cost(&o.conditions, &costs, &mut expression_manager) {
+                if let Some(c) = self.cost(&o.conditions, &costs) {
                     for k in o.effects.iter() {
                         let new_cost_k = new_costs.get(k);
                         let cost_k = costs.get(k);
@@ -546,8 +601,7 @@ impl DeleteRelaxationHeuristic {
             costs.extend(new_costs);
         }
 
-        let h = self.cost(&self.goals, &costs, &mut expression_manager);
-
+        let h = self.cost(&self.goals, &costs);
         if h.is_none() {
             return Ok(None);
         }
@@ -556,7 +610,7 @@ impl DeleteRelaxationHeuristic {
             self.heuristic_kind,
             HeuristicKind::HADD | HeuristicKind::HMAX
         ) {
-            return match self.cost(&self.extra_goals, &costs, &mut expression_manager) {
+            return match self.cost(&self.extra_goals, &costs) {
                 Some(v) => {
                     let res = if let HeuristicKind::HMAX = self.heuristic_kind {
                         f64::max(h.unwrap(), v)
@@ -580,16 +634,25 @@ impl DeleteRelaxationHeuristic {
             }
         }
 
+        // FIXME
         let mut relaxed_plan = HashSet::new();
-        let mut stack: Vec<&Expression> = self.goals.iter().collect();
+        let mut stack: Vec<&Expression> = self
+            .goals
+            .iter()
+            .filter_map(|node| match node {
+                HeuristicExpressionNode::Leaf(e) => Some(e),
+                _ => None,
+            })
+            .collect();
         while stack.len() > 0 {
             let g = stack.pop().unwrap();
             if let Some(oid) = reached_by.get(g) {
                 let o: &Operator = &self.operators[oid.id];
                 relaxed_plan.insert(o.action.to_string());
-                for c in o.conditions.iter() {
-                    stack.push(c);
-                }
+                stack.extend(o.conditions.iter().filter_map(|c| match c {
+                    HeuristicExpressionNode::Leaf(e) => Some(e),
+                    _ => None,
+                }));
             }
         }
         for a in relaxed_plan.iter() {
@@ -603,50 +666,22 @@ impl DeleteRelaxationHeuristic {
 
     fn cost(
         &self,
-        exp: &Vec<Expression>,
+        expr: &Vec<HeuristicExpressionNode>,
         costs: &HashMap<Expression, f64>,
-        expression_manager: &mut ExpressionManager,
     ) -> Option<f64> {
-        let mut res = 0.0;
-        for g in exp {
-            let c = match expression_manager.force_get(g).last()? {
-                ExpressionNode::Or(_) => self.cost_exp_or(g, costs, expression_manager),
-                _ => costs.get(g).cloned(),
-            }?;
-
-            if let HeuristicKind::HMAX = self.heuristic_kind {
-                res = f64::max(res, c);
-            } else {
-                res += c;
-            }
+        if let HeuristicExpressionNode::Leaf(e) = expr.last().unwrap() {
+            return costs.get(e).cloned();
         }
-        Some(res)
-    }
 
-    fn cost_exp_or(
-        &self,
-        expr: &Expression,
-        costs: &HashMap<Expression, f64>,
-        expression_manager: &mut ExpressionManager,
-    ) -> Option<f64> {
-        let expr = expression_manager.force_get(expr);
         let mut res: Vec<Option<f64>> = Vec::with_capacity(expr.len());
-        for (idx, e) in expr.iter().enumerate() {
-            match e {
-                ExpressionNode::Bool(_)
-                | ExpressionNode::Int(_)
-                | ExpressionNode::Rational(_)
-                | ExpressionNode::Object(_) => res.push(None),
-                ExpressionNode::Fluent(_) => res.push(
-                    expression_manager
-                        .get_expression(&vec![e.clone()])
-                        .and_then(|e| costs.get(e).cloned()),
-                ),
-                ExpressionNode::And(operands) => {
+        for node in expr {
+            match node {
+                HeuristicExpressionNode::Leaf(e) => res.push(costs.get(e).cloned()),
+                HeuristicExpressionNode::And(num_operands) => {
                     let mut r = 0.0;
                     let mut is_none = false;
-                    for i in operands {
-                        match res[*i] {
+                    for i in 0..*num_operands {
+                        match res[res.len() - i - 1] {
                             Some(v) => {
                                 if let HeuristicKind::HMAX = self.heuristic_kind {
                                     r = f64::max(r, v)
@@ -666,11 +701,11 @@ impl DeleteRelaxationHeuristic {
                         res.push(Some(r));
                     }
                 }
-                ExpressionNode::Or(operands) => {
-                    let mut r = f64::MAX;
+                HeuristicExpressionNode::Or(num_operands) => {
+                    let mut r = 0.0;
                     let mut is_none = false;
-                    for i in operands {
-                        match res[*i] {
+                    for i in 0..*num_operands {
+                        match res[res.len() - i - 1] {
                             Some(v) => r = f64::min(r, v),
                             None => {
                                 is_none = true;
@@ -684,18 +719,10 @@ impl DeleteRelaxationHeuristic {
                         res.push(Some(r));
                     }
                 }
-                _ => {
-                    let sub_expr = extract_sub_expression(expr, idx);
-                    let sub_expr = expression_manager.get_expression(&sub_expr);
-                    res.push(sub_expr.and_then(|e| costs.get(e).cloned()))
-                }
             }
         }
 
-        match res.last() {
-            Some(v) => *v,
-            None => None,
-        }
+        res.last().copied().flatten()
     }
 
     pub fn name(&self) -> String {
