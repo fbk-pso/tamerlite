@@ -413,6 +413,7 @@ impl DeleteRelaxationHeuristic {
 
         let expr_goals = goal.into_iter().map(|e| e.v).collect();
         let goals = convert_to_heuristic_expression(&expr_goals, &mut expression_manager);
+        extra_goals.push(ExpressionNode::And((0..extra_goals.len()).collect()));
         let extra_goals = convert_to_heuristic_expression(&extra_goals, &mut expression_manager);
 
         let mut precondition_of: HashMap<Expression, Vec<OperatorID>> = HashMap::new();
@@ -702,7 +703,7 @@ impl DeleteRelaxationHeuristic {
                     }
                 }
                 HeuristicExpressionNode::Or(num_operands) => {
-                    let mut r = 0.0;
+                    let mut r = f64::MAX;
                     let mut is_none = false;
                     for i in 0..*num_operands {
                         match res[res.len() - i - 1] {
