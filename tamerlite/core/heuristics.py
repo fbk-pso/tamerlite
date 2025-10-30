@@ -349,7 +349,7 @@ class DeleteRelaxationHeuristic(Heuristic):
             lp = []
             new_costs = {}
             for o in set(lo):
-                c = self._cost(o.conditions, costs)
+                c, l = self._cost(o.conditions, costs)
                 if c is not None:
                     for f, v in o.effects:
                         if v == True:
@@ -364,7 +364,7 @@ class DeleteRelaxationHeuristic(Heuristic):
                             (new_cost_k is None and cost_k is None) or
                             (new_cost_k is None and cost_k > c + o.cost)):
                             if self._heuristic_kind == HeuristicKind.HFF:
-                                reached_by[k] = o
+                                reached_by[k] = (o, l)
                             new_costs[k] = c + o.cost
                             lp.append(k)
                         elif (
@@ -373,18 +373,18 @@ class DeleteRelaxationHeuristic(Heuristic):
                                 (new_cost_k is not None and new_cost_k == c + o.cost)
                                 or (new_cost_k is None and cost_k == c + o.cost)
                             )
-                            and o.action > reached_by[k].action
+                            and o.action > reached_by[k][0].action[0]
                         ):
-                            reached_by[k] = o
+                            reached_by[k] = (o, l)
 
             costs.update(new_costs)
 
-        h = self._cost(self._goals, costs)
+        h, _ = self._cost(self._goals, costs)
         if h is None:
             return None
 
         if self._heuristic_kind != HeuristicKind.HFF:
-            eh = self._cost(self._extra_goals, costs)
+            eh, _ = self._cost(self._extra_goals, costs)
 
             if self._heuristic_kind == HeuristicKind.HMAX:
                 res = max(h, eh)
@@ -400,18 +400,15 @@ class DeleteRelaxationHeuristic(Heuristic):
         if h == 0:
             return res
 
-        # FIXME
         relaxed_plan = set()
-        stack = [node.expression for node in self._goals if isinstance(node, LeafNode)]
+        _, stack = self._cost(self._goals, costs)
         while len(stack) > 0:
             g = stack.pop()
-            o = reached_by.get(g, None)
+            o, l = reached_by.get(g, (None, None))
             if o is None:
                 continue
             relaxed_plan.add(o.action)
-            stack += [
-                node.expression for node in o.conditions if isinstance(node, LeafNode)
-            ]
+            stack.extend(set(l))
 
         for a in relaxed_plan:
             if a not in state.todo:
@@ -421,34 +418,42 @@ class DeleteRelaxationHeuristic(Heuristic):
 
     def _cost(
         self, exp: Tuple[HeuristicExpressionNode], costs: Dict[Expression, float]
-    ) -> Optional[float]:
+    ) -> Tuple[Optional[float], List[Expression]]:
         if isinstance(exp[-1], LeafNode):
-            return costs.get(exp[-1].expression, None)
+            return costs.get(exp[-1].expression, None), [exp[-1].expression]
 
         res = []
         for node in exp:
             if isinstance(node, LeafNode):
-                res.append(costs.get(node.expression, None))
+                res.append((costs.get(node.expression, None), [node.expression]))
             elif isinstance(node, AndNode):
                 v = 0
+                l = []
                 operands_values = [res.pop() for i in range(node.num_operands)]
-                for ov in operands_values:
+                for ov, ol in operands_values:
                     if isinstance(ov, int):
                         if self._heuristic_kind == HeuristicKind.HMAX:
                             v = max(v, ov)
                         else:
                             v += ov
+                            l.extend(ol)
                     else:
                         v = None
+                        l = []
                         break
-                res.append(v)
+                res.append((v, l))
             elif isinstance(node, OrNode):
                 operands_values = [res.pop() for i in range(node.num_operands)]
-                operands_values = [ov for ov in operands_values if isinstance(ov, int)]
+                operands_values = [(ov, ol) for ov, ol in operands_values if isinstance(ov, int)]
                 if len(operands_values) > 0:
-                    res.append(min(operands_values))
+                    mv, ml = operands_values[0]
+                    for ov, ol in operands_values:
+                        if ov < mv:
+                            mv = ov
+                            ml = ol
+                    res.append((mv, ml))
                 else:
-                    res.append(None)
+                    res.append((None, []))
 
         assert len(res) == 1
         return res[-1]
