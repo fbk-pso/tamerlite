@@ -579,8 +579,6 @@ class SearchSpace(SearchSpaceABC):
                     if ((e.action, e.pos), (e2.action, e2.pos)) in self._mutex:
                         b = -self._epsilon
                         tn.add((e2.action, e2.pos, id2), (e.action, e.pos, id), b)
-                    else:
-                        pass
 
                 for a, i in todo.items():
                     id2 = i[1]
@@ -589,8 +587,6 @@ class SearchSpace(SearchSpaceABC):
                         if ((e.action, e.pos), (e2.action, e2.pos)) in self._mutex:
                             b = -self._epsilon
                             tn.add((e.action, e.pos, id), (e2.action, e2.pos, id2), b)
-                        else:
-                            pass
                         id2 += 1
 
                 path.append((e, id))
@@ -633,8 +629,6 @@ class SearchSpace(SearchSpaceABC):
                     if ((e.action, e.pos), (e2.action, e2.pos)) in self._mutex:
                         b = -self._epsilon
                         tn.add(ev2, ev, b)
-                    else:
-                        pass
 
                 for a, i in todo.items():
                     id2 = i[1]
@@ -644,8 +638,6 @@ class SearchSpace(SearchSpaceABC):
                         if ((e.action, e.pos), (e2.action, e2.pos)) in self._mutex:
                             b = -self._epsilon
                             tn.add(ev, ev2, b)
-                        else:
-                            pass
                         id2 += 1
 
                 path.append((e, id))
