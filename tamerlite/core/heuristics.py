@@ -48,11 +48,12 @@ class LeafNode:
     expression: Expression
 
 HeuristicExpressionNode = Union[AndNode, OrNode, LeafNode]
+HeuristicExpression = Tuple[HeuristicExpressionNode, ...]
 
 @dataclass(eq=True, frozen=True)
 class Operator:
     action: str
-    conditions: Tuple[HeuristicExpressionNode]
+    conditions: HeuristicExpression
     effects: Tuple[Tuple[int, Union[Expression, bool, int, str]], ...]
     cost: float
 
@@ -161,7 +162,7 @@ class DeleteRelaxationHeuristic(Heuristic):
                         else:
                             for obj in objects[self._fluent_types[eff.fluent]]:
                                 effects.append((eff.fluent, obj))
-                is_applicable, conditions = self._build_operator_conditions(e.conditions, cond)
+                is_applicable, conditions = self._build_operator_condition(e.conditions, cond)
                 if is_applicable:
                     self._operators.append(Operator(a, conditions, tuple(effects), 1))
                 cond = FluentNode(f)
@@ -201,29 +202,66 @@ class DeleteRelaxationHeuristic(Heuristic):
             return "hadd"
         if self._heuristic_kind == HeuristicKind.HMAX:
             return "hmax"
-    
-    def _build_operator_conditions(
-        self, conditions: Expression, extra_fluent: FluentNode
-    ) -> Tuple[bool, Tuple[HeuristicExpressionNode]]:
-        conditions = tuple(conditions[::])
-        if conditions == (False,):
+
+    def _build_operator_condition(
+        self, condition: Expression, extra_fluent: FluentNode
+    ) -> Tuple[bool, HeuristicExpression]:
+        """
+        Build the operator condition as a `HeuristicExpression`.
+
+        This method takes an existing condition (represented as an `Expression`)
+        and add an additional fluent (`extra_fluent`). The final result is converted
+        into a `HeuristicExpression`.
+
+        Args:
+            condition (Expression): The condition of the operator.
+            extra_fluent (FluentNode): The additional fluent to include in the condition.
+
+        Returns:
+            Tuple[bool, HeuristicExpression]: A tuple where:
+                - The first element is a boolean indicating whether the operator is applicable
+                (i.e., the condition is not explicitly False)
+                - The second element is the resulting `HeuristicExpression`.
+        """
+
+        # If the condition is explicitly False, the operator is not applicable
+        if condition == (False,):
             return False, tuple()
-        if len(conditions) == 0 or conditions == (True,):
-            conditions = (extra_fluent,)
-        elif isinstance(conditions[-1], Op) and conditions[-1].kind == "and":
-            and_op = Op("and", conditions[-1].operands + (len(conditions) - 1,))
-            conditions = conditions[:-1] + (extra_fluent, and_op)
+
+        # If the condition is empty or trivially True, the condition become the extra_fluent
+        if len(condition) == 0 or condition == (True,):
+            condition = (extra_fluent,)
+
+        # If the last node is an AND operation, add the new fluent as operand
+        elif isinstance(condition[-1], Op) and condition[-1].kind == "and":
+            and_op = Op("and", condition[-1].operands + (len(condition) - 1,))
+            condition = condition[:-1] + (extra_fluent, and_op)
+
+        # Otherwise, combine the condition and extra_fluent using a new AND operation
         else:
-            conditions = conditions + (
+            condition = condition + (
                 extra_fluent,
-                Op("and", (len(conditions) - 1, len(conditions))),
+                Op("and", (len(condition) - 1, len(condition))),
             )
 
-        return True, self._convert_to_heuristic_expression(conditions)
+        return True, self._convert_to_heuristic_expression(condition)
 
-    def _convert_to_heuristic_expression(
-        self, exp: Expression
-    ) -> Tuple[HeuristicExpressionNode]:
+    def _convert_to_heuristic_expression(self, exp: Expression) -> HeuristicExpression:
+        """
+        Convert an expression into a `HeuristicExpression`.
+
+        A `HeuristicExpression` represents the input expression where:
+        - Only `AND` and `OR` operations are internal nodes.
+        - All other elements are represented as `LeafNode`s.
+
+        Args:
+            exp (Expression): The input expression to convert.
+
+        Returns:
+            HeuristicExpression: A tuple representing the converted expression
+                with `AndNode`, `OrNode`, and `LeafNode` elements.
+        """
+
         result = []
         stack = [(len(exp) - 1, False)]
         while len(stack) > 0:
@@ -258,6 +296,17 @@ class DeleteRelaxationHeuristic(Heuristic):
         return tuple(result)
 
     def _is_numeric_leaf_expression(self, exp: Expression) -> bool:
+        """
+        Determine if a leaf expression represents a numeric expression.
+        A leaf expression is assumed to contain no AND or OR nodes.
+
+        Args:
+            exp (Expression): The leaf expression to check.
+
+        Returns:
+            bool: True if the expression is numeric, False otherwise.
+        """
+
         is_numeric = True
         if isinstance(exp[-1], bool):  # boolean constant
             is_numeric = False
@@ -280,6 +329,20 @@ class DeleteRelaxationHeuristic(Heuristic):
         return is_numeric
 
     def _extract_sub_expression(self, exp: Expression, idx: int) -> Expression:
+        """
+        Extract the sub-expression from a given expression rooted at a specified index.
+        All operands in the extracted sub-expression are re-indexed relative to the 
+        start of the sub-expression.
+
+        Args:
+            exp (Expression): The full expression from which to extract the sub-expression.
+            idx (int): The index of the root node of the sub-expression.
+
+        Returns:
+            Expression: A tuple representing the extracted sub-expression with operands
+                re-indexed relative to the sub-expression start.
+        """
+
         # find the start index of the sub-expression
         i = idx
         while isinstance(exp[i], Op):
@@ -323,7 +386,6 @@ class DeleteRelaxationHeuristic(Heuristic):
                 k = (FluentNode(f), v, Op("==", (0, 1)))
             costs[k] = 0
 
-        # TODO: lazy eval?
         for x in self._numeric_conds:
             if evaluate(x, state):
                 costs[x] = 0
@@ -421,8 +483,26 @@ class DeleteRelaxationHeuristic(Heuristic):
         return res
 
     def _cost(
-        self, exp: Tuple[HeuristicExpressionNode], costs: Dict[Expression, float]
+        self, exp: HeuristicExpression, costs: Dict[Expression, float]
     ) -> Tuple[Optional[float], List[Expression]]:
+        """
+        Calculate the cost of an expression along with the leaf expressions that 
+        contributed to the computed cost.
+
+        Leaf expressions are collected according to the type of node:
+        - AND nodes: all leaf expressions from the operands are included
+        - OR nodes: only the leaf expressions from the operand with the minimum cost are included
+
+        Args:
+            exp (HeuristicExpression): The expression to evaluate.
+            costs (Dict[Expression, float]): A mapping from leaf expressions to their costs.
+
+        Returns:
+            Tuple[Optional[float], List[Expression]]: 
+                - The total cost of the expression
+                - A list of leaf expressions that were considered in computing the cost
+        """
+
         if isinstance(exp[-1], LeafNode):
             return costs.get(exp[-1].expression, None), [exp[-1].expression]
 
@@ -447,7 +527,7 @@ class DeleteRelaxationHeuristic(Heuristic):
                         break
                 res.append((v, l))
             elif isinstance(node, OrNode):
-                operands_values = [res.pop() for i in range(node.num_operands)]
+                operands_values = [res.pop() for _ in range(node.num_operands)]
                 operands_values = [(ov, ol) for ov, ol in operands_values if isinstance(ov, int)]
                 if len(operands_values) > 0:
                     mv, ml = operands_values[0]
