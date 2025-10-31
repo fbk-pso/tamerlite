@@ -84,16 +84,16 @@ pub enum HeuristicKind {
 
 #[derive(Debug)]
 pub struct CustomHeuristic {
-    callable: PyObject,
+    callable: Py<PyAny>,
 }
 
 impl CustomHeuristic {
-    pub fn new(callable: PyObject) -> PyResult<Self> {
+    pub fn new(callable: Py<PyAny>) -> PyResult<Self> {
         Ok(CustomHeuristic { callable })
     }
 
     pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let args = PyTuple::new(py, &[state.full_clone().into_pyobject(py)?])?;
             let r = self.callable.call(py, args, None)?;
             if r.is_none(py) {
@@ -111,7 +111,7 @@ impl CustomHeuristic {
 
 impl Clone for CustomHeuristic {
     fn clone(&self) -> Self {
-        Python::with_gil(|py| CustomHeuristic {
+        Python::attach(|py| CustomHeuristic {
             callable: self.callable.clone_ref(py),
         })
     }

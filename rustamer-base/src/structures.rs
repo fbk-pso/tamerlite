@@ -67,7 +67,7 @@ pub struct Timing {
 #[pymethods]
 impl Timing {
     #[new]
-    fn new(start: bool, #[pyo3(from_py_with = "get_big_rational")] delay: BigRational) -> Self {
+    fn new(start: bool, #[pyo3(from_py_with = get_big_rational)] delay: BigRational) -> Self {
         Timing { start, delay }
     }
 

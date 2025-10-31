@@ -31,7 +31,7 @@ pub struct Heuristic {
 #[pymethods]
 impl Heuristic {
     #[staticmethod]
-    pub fn custom(callable: PyObject, cache_value_in_state: bool) -> PyResult<Self> {
+    pub fn custom(callable: Py<PyAny>, cache_value_in_state: bool) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: None,
             hmax: None,
