@@ -649,13 +649,19 @@ impl DeleteRelaxationHeuristic {
             self.hff_leaves(&self.goals, &costs, &mut tmp_set);
             tmp_set.drain().collect()
         };
+        let mut visited_expressions: HashSet<Expression> = stack.iter().copied().collect();
 
         while let Some(g) = stack.pop() {
             if let Some(oid) = reached_by.get(&g) {
                 let o = &self.operators[oid.id];
                 relaxed_plan.insert(o.action.to_string());
+
                 self.hff_leaves(&o.conditions, &costs, &mut tmp_set);
-                stack.extend(tmp_set.drain());
+                for expr in tmp_set.drain() {
+                    if visited_expressions.insert(expr) {
+                        stack.push(expr);
+                    }
+                }
             }
         }
         for a in relaxed_plan.iter() {

@@ -373,7 +373,7 @@ class DeleteRelaxationHeuristic(Heuristic):
                                 (new_cost_k is not None and new_cost_k == c + o.cost)
                                 or (new_cost_k is None and cost_k == c + o.cost)
                             )
-                            and o.action > reached_by[k][0].action[0]
+                            and o.action > reached_by[k][0].action
                         ):
                             reached_by[k] = (o, l)
 
@@ -401,14 +401,18 @@ class DeleteRelaxationHeuristic(Heuristic):
             return res
 
         relaxed_plan = set()
-        _, stack = self._cost(self._goals, costs)
+        stack = list(set(self._cost(self._goals, costs)[1]))
+        visited_expressions = set()
         while len(stack) > 0:
             g = stack.pop()
             o, l = reached_by.get(g, (None, None))
             if o is None:
                 continue
             relaxed_plan.add(o.action)
-            stack.extend(set(l))
+            for exp in l:
+                if exp not in visited_expressions:
+                    visited_expressions.add(exp)
+                    stack.append(exp)
 
         for a in relaxed_plan:
             if a not in state.todo:
