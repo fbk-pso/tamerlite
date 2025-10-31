@@ -5,7 +5,7 @@ edition = "2021"
 license = "GPLv3"
 
 [dependencies]
-pyo3 = "0.23.4"
+pyo3 = "0.27.1"
 num-rational = "0.4.1"
 num = "0.4.1"
 multiset = "0.0.5"
