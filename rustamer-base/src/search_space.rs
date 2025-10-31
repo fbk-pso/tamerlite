@@ -554,7 +554,6 @@ impl SearchSpaceTrait for SearchSpace {
                     let duration = self.actions_duration[action].as_ref();
                     let (lb, ub) = match duration {
                         Some(d) => {
-                            // let d = duration.unwrap();
                             let mut lb = -get_rational_from_expression_node(&internal_evaluate(
                                 &d.0, &state,
                             )?)?;
