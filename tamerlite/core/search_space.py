@@ -115,7 +115,7 @@ class Event:
     effects: Tuple[Effect, ...]
 
     def __repr__(self):
-        return f"Event(action={self.action}, conditions={self.conditions}, start_conditions={self.start_conditions}, end_conditions={self.end_conditions}, effects={self.effects})"
+        return f"Event(action={self.action}, pos={self.pos}, conditions={self.conditions}, start_conditions={self.start_conditions}, end_conditions={self.end_conditions}, effects={self.effects})"
 
 
 class MultiSet:
@@ -173,29 +173,6 @@ class State:
         todo = self.todo.copy()
         tn = self.temporal_network.copy_stn() if self.temporal_network else None
         return State(assignments, tn, todo, self.active_conditions.clone(), self.g, self.path[:])
-
-    def extract_solution(self) -> List[Tuple[Optional[Fraction], str, Optional[Fraction]]]:
-        if self.temporal_network:
-            start_time = {}
-            end_time = {}
-            for e, t in self.temporal_network.distances.items():
-                if len(e) == 3 and isinstance(e[1], bool):
-                    if e[1]:
-                        start_time[(e[0], e[2])] = -t
-                    else:
-                        end_time[(e[0], e[2])] = -t
-            l = []
-            for a, st in start_time.items():
-                et = end_time[a]
-                d = et-st
-                l.append((st, a[0], None if d==0 else d))
-            l = sorted(l, key=lambda x: x[0])
-            return l
-        else:
-            l = []
-            for e in self.path:
-                l.append((None, e[0], None))
-            return l
 
 
 def get_fluent_value(fluent: int, state: State) -> Union[bool, int, Fraction, str]:
@@ -414,8 +391,9 @@ class SearchSpaceABC(ABC):
     def subgoals_sat(self, state: State, goal: Optional[Fraction] = None) -> Set[Expression]:
         pass
 
+    @abstractmethod
     def build_plan(self, state: State) -> List[Tuple[Optional[Fraction], str, Optional[Fraction]]]:
-        return state.extract_solution()
+        pass
 
 
 class SearchSpace(SearchSpaceABC):
@@ -423,7 +401,7 @@ class SearchSpace(SearchSpaceABC):
     def __init__(self,
                  actions_duration: Dict[str, Optional[Tuple[Expression, Expression, bool, bool]]],
                  events: Dict[str, List[Tuple[Timing, Event]]],
-                 mutex: Set[Tuple[Event, Event]],
+                 mutex: Set[Tuple[Tuple[str, int], Tuple[str, int]]],
                  initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
                  goal: Optional[Expression] = None,
                  epsilon: Optional[Fraction] = None):
@@ -573,3 +551,118 @@ class SearchSpace(SearchSpaceABC):
         else:
             id = self._counter
         return self._expand_event(state, new_state, events[0][1], 0, id)
+
+    def build_plan(
+        self, state: State
+    ) -> List[Tuple[Optional[Fraction], str, Optional[Fraction]]]:
+        if not self.is_temporal:
+            return [(None, e[0], None) for e in state.path]
+        
+        all_path = state.path
+        tn = DeltaSimpleTemporalNetwork()
+        todo = {}
+        path = []
+        counter = 0
+        state = self.initial_state(None)
+        for action, _, _ in all_path:
+            state = self.get_successor_state(state, action)
+            action_events = self._events[action]
+            if action in todo:
+                index, id = todo[action]
+                if index + 1 >= len(action_events):
+                    todo.pop(action)
+                else:
+                    todo[action] = (index + 1, id + 1)
+
+                _, e = action_events[index]
+                for e2, id2 in path:
+                    if ((e.action, e.pos), (e2.action, e2.pos)) in self._mutex:
+                        b = -self._epsilon
+                        tn.add((e2.action, e2.pos, id2), (e.action, e.pos, id), b)
+
+                for a, i in todo.items():
+                    id2 = i[1]
+                    for j in range(i[0], len(self._events[a])):
+                        _, e2 = self._events[a][j]
+                        if ((e.action, e.pos), (e2.action, e2.pos)) in self._mutex:
+                            b = -self._epsilon
+                            tn.add((e.action, e.pos, id), (e2.action, e2.pos, id2), b)
+                        id2 += 1
+
+                path.append((e, id))
+
+            else:
+                start = (action, True, counter)
+                end = (action, False, counter)
+                counter += 1
+                duration = self._actions_duration[action]
+                if duration is None:
+                    lb = Fraction(0)
+                    ub = Fraction(0)
+                else:
+                    lb = -evaluate(duration[0], state)
+                    ub = evaluate(duration[1], state)
+                    if duration[2]:
+                        lb -= self._epsilon
+                    if duration[3]:
+                        ub -= self._epsilon
+
+                tn.add(start, end, lb)
+                tn.add(end, start, ub)
+                id = counter
+                for t, e in action_events:
+                    ev = (e.action, e.pos, counter)
+                    b1 = -t.delay
+                    b2 = t.delay
+                    if t.is_from_start():
+                        tn.add(start, ev, b1)
+                        tn.add(ev, start, b2)
+                    else:
+                        tn.add(end, ev, b1)
+                        tn.add(ev, end, b2)
+                    counter += 1
+
+                e = action_events[0][1]
+                ev = (e.action, e.pos, id)
+                for e2, id2 in path:
+                    ev2 = (e2.action, e2.pos, id2)
+                    if ((e.action, e.pos), (e2.action, e2.pos)) in self._mutex:
+                        b = -self._epsilon
+                        tn.add(ev2, ev, b)
+
+                for a, i in todo.items():
+                    id2 = i[1]
+                    for j in range(i[0], len(self._events[a])):
+                        _, e2 = self._events[a][j]
+                        ev2 = (e2.action, e2.pos, id2)
+                        if ((e.action, e.pos), (e2.action, e2.pos)) in self._mutex:
+                            b = -self._epsilon
+                            tn.add(ev, ev2, b)
+                        id2 += 1
+
+                path.append((e, id))
+                if len(action_events) > 1:
+                    todo[action] = (1, id + 1)
+
+        res = []
+        start_time = {}
+        end_time = {}
+        for a, t in tn.distances.items():
+            if not isinstance(a[1], bool):
+                continue
+
+            if a[1]:
+                start_time[(a[0], a[2])] = -t
+            else:
+                end_time[(a[0], a[2])] = -t
+
+        for a, st in start_time.items():
+            et = end_time[a]
+            if (et - st) == 0:
+                d = None
+            else:
+                d = et - st
+            res.append((st, a[0], d))
+
+        res.sort()
+        return res
