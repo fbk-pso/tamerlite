@@ -367,9 +367,10 @@ fn extract_sub_expression(expr: &Vec<ExpressionNode>, idx: usize) -> Vec<Express
         i = *operands.iter().min().unwrap();
     }
 
-    let offset = -(i as i32);
-    let res: Vec<ExpressionNode> = (i..(idx + 1)).map(|j| do_shift(&expr[j], offset)).collect();
-    res
+    (i..(idx + 1))
+        .map(|j| do_shift(&expr[j], i, true))
+        .collect::<Result<Vec<ExpressionNode>, _>>()
+        .unwrap()
 }
 
 #[derive(Clone, Debug)]
