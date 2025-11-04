@@ -351,20 +351,20 @@ fn extract_sub_expression(expr: &Vec<ExpressionNode>, idx: usize) -> Vec<Express
     // find the start index of the sub-expression
     let mut i = idx;
     loop {
-        let operands = match &expr[i] {
-            ExpressionNode::Not(operand) => &vec![*operand],
-            ExpressionNode::Equals(op1, op2)
-            | ExpressionNode::LE(op1, op2)
-            | ExpressionNode::LT(op1, op2)
-            | ExpressionNode::Minus(op1, op2)
-            | ExpressionNode::Div(op1, op2) => &vec![*op1, *op2],
+        // assumes operand indices are in ascending order
+        i = match &expr[i] {
+            ExpressionNode::Not(operand) => *operand,
+            ExpressionNode::Equals(op1, _)
+            | ExpressionNode::LE(op1, _)
+            | ExpressionNode::LT(op1, _)
+            | ExpressionNode::Minus(op1, _)
+            | ExpressionNode::Div(op1, _) => *op1,
             ExpressionNode::And(operands)
             | ExpressionNode::Or(operands)
             | ExpressionNode::Plus(operands)
-            | ExpressionNode::Times(operands) => operands,
+            | ExpressionNode::Times(operands) => operands[0],
             _ => break,
         };
-        i = *operands.iter().min().unwrap();
     }
 
     (i..(idx + 1))
@@ -716,7 +716,7 @@ impl DeleteRelaxationHeuristic {
         while let Some(g) = stack.pop() {
             if let Some(oid) = reached_by.get(&g) {
                 let o = &self.operators[oid.id];
-                relaxed_plan.insert(o.action.to_string());
+                relaxed_plan.insert(&o.action);
 
                 self.hff_leaves(&o.conditions, &costs, &mut tmp_set);
                 for expr in tmp_set.drain() {
@@ -726,7 +726,7 @@ impl DeleteRelaxationHeuristic {
                 }
             }
         }
-        for a in relaxed_plan.iter() {
+        for a in relaxed_plan {
             if !state.todo.contains_key(a) {
                 res += self.events[a] as f64;
             }
