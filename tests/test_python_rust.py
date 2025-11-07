@@ -177,7 +177,65 @@ def test_heuristics(problems):
             check_metrics_equality(results)
 
 
-def test_heuristic_values(problems):
+def test_heuristic_fixed_values():
+    problem = problems_generator.get_problem_logistics(1, 1, 2, 1)
+    values = {
+        "hmax_numeric": [4, 4, 3, 3, 2, 1, 0],
+        "hmax": [4, 4, 3, 3, 2, 1, 0],
+        "hadd": [9, 8, 5, 8, 4, 1, 0],
+        "hff": [6, 6, 4, 3, 2, 1, 0],
+    }
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.core import HFF, HAdd, HMax, HMaxNumeric
+
+        with problem.environment.factory.Compiler(
+            compilation_kind="GROUNDING", problem_kind=problem.kind
+        ) as compiler:
+            compilation_res = compiler.compile(problem)
+        new_problem = compilation_res.problem
+        encoder = Encoder(new_problem)
+        ss: SearchSpaceABC = encoder.search_space
+        init_state = ss.initial_state()
+
+        path = [
+            "load_at_depot_r0_plt0_p1",
+            "move_r0_p1_p0",
+            "make_treatment_r0_plt0_p0_t0",
+            "make_treatment_r0_plt0_p0_t0",
+            "load_r0_plt0_p0_t0",
+            "make_treatment_r0_plt0_p0_t0",
+        ]
+        states = [init_state]
+        for action in path:
+            state = ss.get_successor_state(states[-1], action)
+            states.append(state)
+
+        for heuristic_class, heuristic_name in [
+            (HFF, "hff"),
+            (HAdd, "hadd"),
+            (HMax, "hmax"),
+            (HMaxNumeric, "hmax_numeric"),
+        ]:
+            for internal_caching in [True, False]:
+                heuristic: Heuristic = heuristic_class(
+                    encoder.fluent_types,
+                    encoder.objects,
+                    encoder.events,
+                    encoder.goal,
+                    internal_caching=internal_caching,
+                    cache_value_in_state=False,
+                )
+
+                for i, state in enumerate(states):
+                    h_val = heuristic.eval(state, ss)
+                    if h_val is not None:
+                        h_val = int(h_val)
+                    assert values[heuristic_name][i] == h_val
+
+
+def test_heuristic_values(problems, data_regression):
+    heuristic_values = []
     for problem in problems:
         values = {}
         for disable_rustamer in [True, False]:
@@ -236,6 +294,10 @@ def test_heuristic_values(problems):
                             if h_val is not None:
                                 h_val = int(h_val)
                             assert h_val == values[heuristic_name][i]
+
+        heuristic_values.append(values)
+
+    data_regression.check(heuristic_values)
 
 
 def test_custom_heuristic(problems):
