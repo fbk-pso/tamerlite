@@ -22,28 +22,66 @@ use num_rational::BigRational;
 use pyo3::{exceptions::PyException, prelude::*};
 use std::{collections::HashMap, vec::Vec};
 
-fn do_shift(e: &ExpressionNode, offset: usize) -> ExpressionNode {
-    match e {
-        ExpressionNode::And(v) => ExpressionNode::And(v.iter().map(|&o| o + offset).collect()),
-        ExpressionNode::Plus(v) => ExpressionNode::Plus(v.iter().map(|&o| o + offset).collect()),
-        ExpressionNode::Times(v) => ExpressionNode::Times(v.iter().map(|&o| o + offset).collect()),
-        ExpressionNode::Not(o) => ExpressionNode::Not(o + offset),
-        ExpressionNode::Equals(o1, o2) => ExpressionNode::Equals(o1 + offset, o2 + offset),
-        ExpressionNode::LE(o1, o2) => ExpressionNode::LE(o1 + offset, o2 + offset),
-        ExpressionNode::LT(o1, o2) => ExpressionNode::LT(o1 + offset, o2 + offset),
-        ExpressionNode::Minus(o1, o2) => ExpressionNode::Minus(o1 + offset, o2 + offset),
-        ExpressionNode::Div(o1, o2) => ExpressionNode::Div(o1 + offset, o2 + offset),
+pub fn do_shift(
+    e: &ExpressionNode,
+    offset: usize,
+    is_negative: bool,
+) -> Result<ExpressionNode, ArithmeticError> {
+    Ok(match e {
+        ExpressionNode::And(v) => ExpressionNode::And(
+            v.iter()
+                .map(|&o| checked_add_sub(o, offset, is_negative))
+                .collect::<Result<_, _>>()?,
+        ),
+        ExpressionNode::Plus(v) => ExpressionNode::Plus(
+            v.iter()
+                .map(|&o| checked_add_sub(o, offset, is_negative))
+                .collect::<Result<_, _>>()?,
+        ),
+        ExpressionNode::Times(v) => ExpressionNode::Times(
+            v.iter()
+                .map(|&o| checked_add_sub(o, offset, is_negative))
+                .collect::<Result<_, _>>()?,
+        ),
+        ExpressionNode::Not(o) => ExpressionNode::Not(checked_add_sub(*o, offset, is_negative)?),
+        ExpressionNode::Equals(o1, o2) => ExpressionNode::Equals(
+            checked_add_sub(*o1, offset, is_negative)?,
+            checked_add_sub(*o2, offset, is_negative)?,
+        ),
+        ExpressionNode::LE(o1, o2) => ExpressionNode::LE(
+            checked_add_sub(*o1, offset, is_negative)?,
+            checked_add_sub(*o2, offset, is_negative)?,
+        ),
+        ExpressionNode::LT(o1, o2) => ExpressionNode::LT(
+            checked_add_sub(*o1, offset, is_negative)?,
+            checked_add_sub(*o2, offset, is_negative)?,
+        ),
+        ExpressionNode::Minus(o1, o2) => ExpressionNode::Minus(
+            checked_add_sub(*o1, offset, is_negative)?,
+            checked_add_sub(*o2, offset, is_negative)?,
+        ),
+        ExpressionNode::Div(o1, o2) => ExpressionNode::Div(
+            checked_add_sub(*o1, offset, is_negative)?,
+            checked_add_sub(*o2, offset, is_negative)?,
+        ),
         other => other.clone(),
-    }
+    })
 }
 
 #[pyfunction]
-pub fn shift_expression(exp: Vec<PyExpressionNode>, offset: usize) -> Vec<PyExpressionNode> {
-    exp.iter()
-        .map(|e| PyExpressionNode {
-            v: do_shift(&e.v, offset),
-        })
-        .collect::<Vec<_>>()
+pub fn shift_expression(
+    exp: Vec<PyExpressionNode>,
+    offset: usize,
+) -> PyResult<Vec<PyExpressionNode>> {
+    let shifted: Vec<ExpressionNode> = exp
+        .iter()
+        .map(|e| do_shift(&e.v, offset, false))
+        .collect::<Result<_, _>>()
+        .map_err(|e| PyException::new_err(format!("{:?}", e)))?;
+    Ok(shifted
+        .into_iter()
+        .map(|v| PyExpressionNode { v })
+        .collect())
 }
 
 pub fn split_expression(exp: &Vec<ExpressionNode>) -> PyResult<Vec<Vec<ExpressionNode>>> {

@@ -36,9 +36,24 @@ from tamerlite.core.search_space import OperatorNode as Op, split_expression
 
 
 @dataclass(eq=True, frozen=True)
+class AndNode:
+    num_operands: int
+
+@dataclass(eq=True, frozen=True)
+class OrNode:
+    num_operands: int
+
+@dataclass(eq=True, frozen=True)
+class LeafNode:
+    expression: Expression
+
+HeuristicExpressionNode = Union[AndNode, OrNode, LeafNode]
+HeuristicExpression = Tuple[HeuristicExpressionNode, ...]
+
+@dataclass(eq=True, frozen=True)
 class Operator:
     action: str
-    conditions: Tuple[Expression, ...]
+    conditions: HeuristicExpression
     effects: Tuple[Tuple[int, Union[Expression, bool, int, str]], ...]
     cost: float
 
@@ -102,7 +117,433 @@ def HMax(fluent_types: List[str], objects: Dict[str, List[str]],
     return DeleteRelaxationHeuristic(fluent_types, objects, events, goals, HeuristicKind.HMAX, internal_caching, cache_value_in_state)
 
 
-class _DeleteRelaxationHeuristicBase(Heuristic):
+class DeleteRelaxationHeuristic(Heuristic):
+    def __init__(
+        self,
+        fluent_types: List[str],
+        objects: Dict[str, List[str]],
+        events: Dict[str, List[Tuple[Timing, Event]]],
+        goals: Expression,
+        heuristic_kind: HeuristicKind,
+        internal_caching: bool,
+        cache_value_in_state: bool,
+    ):
+        super().__init__(cache_value_in_state)
+        self._heuristic_kind = heuristic_kind
+        self._fluent_types = fluent_types
+        self._objects = objects
+        self._events = events
+        self._operators: List[Operator] = []
+        self._extra_fluents: Dict[str, List[int]] = {}
+        self._num_fluents = len(self._fluent_types)
+
+        for a, le in events.items():
+            self._extra_fluents[a] = []
+            f_cond = self._num_fluents + len(le) - 1
+            cond = FluentNode(f_cond)
+            for _, e in le:
+                effects = []
+                f = self._num_fluents
+                self._num_fluents += 1
+                self._extra_fluents[a].append(f)
+                effects.append((f, True))
+                for eff in e.effects:
+                    t = self._fluent_types[eff.fluent]
+                    if t == "bool":
+                        if len(eff.value) == 1 and isinstance(eff.value[0], bool):
+                            effects.append((eff.fluent, eff.value[0]))
+                        else:
+                            effects.append((eff.fluent, True))
+                            effects.append((eff.fluent, False))
+                    elif t != "real" and t != "int":
+                        if len(eff.value) == 1 and isinstance(eff.value[0], str):
+                            # eff.value[0] is an object
+                            effects.append((eff.fluent, eff.value[0]))
+                        else:
+                            for obj in objects[self._fluent_types[eff.fluent]]:
+                                effects.append((eff.fluent, obj))
+                is_applicable, conditions = self._build_operator_condition(e.conditions, cond)
+                if is_applicable:
+                    self._operators.append(Operator(a, conditions, tuple(effects), 1))
+                cond = FluentNode(f)
+        self._goals = self._convert_to_heuristic_expression(goals)
+        extra_goals = tuple(FluentNode(fe[-1]) for fe in self._extra_fluents.values())
+        extra_goals += (Op("and", tuple(range(len(extra_goals)))), )
+        self._extra_goals = self._convert_to_heuristic_expression(extra_goals)
+
+        self._precondition_of: Dict[Expression, List[Operator]] = {}
+        self._numeric_conds: Set[Expression] = set()
+        self._empty_pre_operators: List[Operator] = []
+        for o in self._operators:
+            if len(o.conditions) == 0:
+                self._empty_pre_operators.append(o)
+            else:
+                for node in o.conditions:
+                    if isinstance(node, LeafNode):
+                        if self._is_numeric_leaf_expression(node.expression):
+                            self._numeric_conds.add(node.expression)
+                        else:
+                            if node.expression not in self._precondition_of:
+                                self._precondition_of[node.expression] = []
+                            self._precondition_of[node.expression].append(o)
+        for node in self._goals:
+            if isinstance(node, LeafNode):
+                if self._is_numeric_leaf_expression(node.expression):
+                    self._numeric_conds.add(node.expression)
+
+        self._ordered_actions = list(self._events.keys())
+        self._internal_caching = {} if internal_caching else None
+
+    @property
+    def name(self):
+        if self._heuristic_kind == HeuristicKind.HFF:
+            return "hff"
+        if self._heuristic_kind == HeuristicKind.HADD:
+            return "hadd"
+        if self._heuristic_kind == HeuristicKind.HMAX:
+            return "hmax"
+
+    def _build_operator_condition(
+        self, condition: Expression, extra_fluent: FluentNode
+    ) -> Tuple[bool, HeuristicExpression]:
+        """
+        Build the operator condition as a `HeuristicExpression`.
+
+        This method takes an existing condition (represented as an `Expression`)
+        and add an additional fluent (`extra_fluent`). The final result is converted
+        into a `HeuristicExpression`.
+
+        Args:
+            condition (Expression): The condition of the operator.
+            extra_fluent (FluentNode): The additional fluent to include in the condition.
+
+        Returns:
+            Tuple[bool, HeuristicExpression]: A tuple where:
+                - The first element is a boolean indicating whether the operator is applicable
+                (i.e., the condition is not explicitly False)
+                - The second element is the resulting `HeuristicExpression`.
+        """
+
+        # If the condition is explicitly False, the operator is not applicable
+        if condition == (False,):
+            return False, tuple()
+
+        # If the condition is empty or trivially True, the condition become the extra_fluent
+        if len(condition) == 0 or condition == (True,):
+            condition = (extra_fluent,)
+
+        # If the last node is an AND operation, add the new fluent as operand
+        elif isinstance(condition[-1], Op) and condition[-1].kind == "and":
+            and_op = Op("and", condition[-1].operands + (len(condition) - 1,))
+            condition = condition[:-1] + (extra_fluent, and_op)
+
+        # Otherwise, combine the condition and extra_fluent using a new AND operation
+        else:
+            condition = condition + (
+                extra_fluent,
+                Op("and", (len(condition) - 1, len(condition))),
+            )
+
+        return True, self._convert_to_heuristic_expression(condition)
+
+    def _convert_to_heuristic_expression(self, exp: Expression) -> HeuristicExpression:
+        """
+        Convert an expression into a `HeuristicExpression`.
+
+        A `HeuristicExpression` represents the input expression where:
+        - Only `AND` and `OR` operations are internal nodes.
+        - All other elements are represented as `LeafNode`s.
+
+        Args:
+            exp (Expression): The input expression to convert.
+
+        Returns:
+            HeuristicExpression: A tuple representing the converted expression
+                with `AndNode`, `OrNode`, and `LeafNode` elements.
+        """
+
+        result = []
+        stack = [(len(exp) - 1, False)]
+        while len(stack) > 0:
+            idx, processed = stack.pop()
+            e = exp[idx]
+
+            if (
+                isinstance(e, bool)
+                or isinstance(e, int)
+                or isinstance(e, Fraction)
+                or isinstance(e, str)
+                or isinstance(e, FluentNode)
+            ):
+                result.append(LeafNode((e,)))
+            elif isinstance(e, Op) and e.kind == "and":
+                if not processed:
+                    stack.append((idx, True))
+                    for i in e.operands:
+                        stack.append((i, False))
+                else:
+                    result.append(AndNode(len(e.operands)))
+            elif isinstance(e, Op) and e.kind == "or":
+                if not processed:
+                    stack.append((idx, True))
+                    for i in e.operands:
+                        stack.append((i, False))
+                else:
+                    result.append(OrNode(len(e.operands)))
+            else:
+                result.append(LeafNode(self._extract_sub_expression(exp, idx)))
+
+        return tuple(result)
+
+    def _is_numeric_leaf_expression(self, exp: Expression) -> bool:
+        """
+        Determine if a leaf expression represents a numeric expression.
+        A leaf expression is assumed to contain no AND or OR nodes.
+
+        Args:
+            exp (Expression): The leaf expression to check.
+
+        Returns:
+            bool: True if the expression is numeric, False otherwise.
+        """
+
+        is_numeric = True
+        if isinstance(exp[-1], bool):  # boolean constant
+            is_numeric = False
+        elif isinstance(exp[-1], FluentNode):  # boolean fluent expression
+            is_numeric = False
+        elif (
+            isinstance(exp[-1], Op) and exp[-1].kind == "not"
+        ):  # not of a boolean fluent expression
+            i = exp[-1].operands[0]
+            if isinstance(exp[i], FluentNode):
+                is_numeric = False
+        elif (
+            isinstance(exp[-1], Op) and exp[-1].kind == "=="
+        ):  # equals between a fluent and an object
+            i1 = exp[-1].operands[0]
+            i2 = exp[-1].operands[1]
+            if isinstance(exp[i1], FluentNode) and isinstance(exp[i2], str):
+                is_numeric = False
+
+        return is_numeric
+
+    def _extract_sub_expression(self, exp: Expression, idx: int) -> Expression:
+        """
+        Extract the sub-expression from a given expression rooted at a specified index.
+        All operands in the extracted sub-expression are re-indexed relative to the 
+        start of the sub-expression.
+
+        Args:
+            exp (Expression): The full expression from which to extract the sub-expression.
+            idx (int): The index of the root node of the sub-expression.
+
+        Returns:
+            Expression: A tuple representing the extracted sub-expression with operands
+                re-indexed relative to the sub-expression start.
+        """
+
+        # find the start index of the sub-expression
+        i = idx
+        while isinstance(exp[i], Op):
+            i = min(exp[i].operands)
+
+        offset = i
+        res = []
+        for j in range(i, idx + 1):
+            e = exp[j]
+            if isinstance(e, Op):
+                res.append(Op(e.kind, tuple([o - offset for o in e.operands])))
+            else:
+                res.append(e)
+
+        return tuple(res)
+
+    def _eval(self, state: State, ss: SearchSpaceABC) -> Optional[float]:
+        if self._internal_caching is not None:
+            assignments_values = tuple(state.assignments) + tuple(
+                state.todo.get(action, (None, None))[0]
+                for action in self._ordered_actions
+            )
+            if assignments_values in self._internal_caching:
+                return self._internal_caching[assignments_values]
+
+            res = self._eval_core(state)
+            self._internal_caching[assignments_values] = res
+        else:
+            res = self._eval_core(state)
+
+        return res
+
+    def _eval_core(self, state: State) -> Optional[float]:
+        costs = {}
+        for f, v in enumerate(state.assignments):
+            if v == True:
+                k = (FluentNode(f), )
+            elif v == False:
+                k = (FluentNode(f), Op("not", (0, )))
+            else:
+                k = (FluentNode(f), v, Op("==", (0, 1)))
+            costs[k] = 0
+
+        for x in self._numeric_conds:
+            if evaluate(x, state):
+                costs[x] = 0
+            else:
+                costs[x] = 1
+
+        for a in self._events.keys():
+            j, _ = state.todo.get(a, (None, None))
+            if j is None:
+                f = self._extra_fluents[a][-1]
+            else:
+                f = self._extra_fluents[a][j-1]
+            x = (FluentNode(f), )
+            costs[x] = 0
+
+        lp = list(costs.keys())
+        reached_by = {}
+        while len(lp) > 0:
+            lo = list(self._empty_pre_operators)
+            for p in lp:
+                if p in self._precondition_of:
+                    lo.extend(self._precondition_of[p])
+            lp = []
+            new_costs = {}
+            for o in set(lo):
+                c, l = self._cost(o.conditions, costs)
+                if c is not None:
+                    for f, v in o.effects:
+                        if v == True:
+                            k = (FluentNode(f), )
+                        elif v == False:
+                            k = (FluentNode(f), Op("not", (0, )))
+                        else:
+                            k = (FluentNode(f), v, Op("==", (0, 1)))
+                        new_cost_k = new_costs.get(k, None)
+                        cost_k = costs.get(k, None)
+                        if ((new_cost_k is not None and new_cost_k > c + o.cost) or
+                            (new_cost_k is None and cost_k is None) or
+                            (new_cost_k is None and cost_k > c + o.cost)):
+                            if self._heuristic_kind == HeuristicKind.HFF:
+                                reached_by[k] = (o, l)
+                            new_costs[k] = c + o.cost
+                            lp.append(k)
+                        elif (
+                            self._heuristic_kind == HeuristicKind.HFF
+                            and (
+                                (new_cost_k is not None and new_cost_k == c + o.cost)
+                                or (new_cost_k is None and cost_k == c + o.cost)
+                            )
+                            and o.action > reached_by[k][0].action
+                        ):
+                            reached_by[k] = (o, l)
+
+            costs.update(new_costs)
+
+        h, _ = self._cost(self._goals, costs)
+        if h is None:
+            return None
+
+        if self._heuristic_kind != HeuristicKind.HFF:
+            eh, _ = self._cost(self._extra_goals, costs)
+
+            if self._heuristic_kind == HeuristicKind.HMAX:
+                res = max(h, eh)
+            else:
+                res = h + eh
+
+            return res
+
+        res = 0
+        for a, (j, _) in state.todo.items():
+            res += len(self._events[a]) - j
+
+        if h == 0:
+            return res
+
+        relaxed_plan = set()
+        stack = list(set(self._cost(self._goals, costs)[1]))
+        visited_expressions = set()
+        while len(stack) > 0:
+            g = stack.pop()
+            o, l = reached_by.get(g, (None, None))
+            if o is None:
+                continue
+            relaxed_plan.add(o.action)
+            for exp in l:
+                if exp not in visited_expressions:
+                    visited_expressions.add(exp)
+                    stack.append(exp)
+
+        for a in relaxed_plan:
+            if a not in state.todo:
+                res += len(self._events[a])
+
+        return res
+
+    def _cost(
+        self, exp: HeuristicExpression, costs: Dict[Expression, float]
+    ) -> Tuple[Optional[float], List[Expression]]:
+        """
+        Calculate the cost of an expression along with the leaf expressions that 
+        contributed to the computed cost.
+
+        Leaf expressions are collected according to the type of node:
+        - AND nodes: all leaf expressions from the operands are included
+        - OR nodes: only the leaf expressions from the operand with the minimum cost are included
+
+        Args:
+            exp (HeuristicExpression): The expression to evaluate.
+            costs (Dict[Expression, float]): A mapping from leaf expressions to their costs.
+
+        Returns:
+            Tuple[Optional[float], List[Expression]]: 
+                - The total cost of the expression
+                - A list of leaf expressions that were considered in computing the cost
+        """
+
+        if isinstance(exp[-1], LeafNode):
+            return costs.get(exp[-1].expression, None), [exp[-1].expression]
+
+        res = []
+        for node in exp:
+            if isinstance(node, LeafNode):
+                res.append((costs.get(node.expression, None), [node.expression]))
+            elif isinstance(node, AndNode):
+                v = 0
+                l = []
+                operands_values = [res.pop() for i in range(node.num_operands)]
+                for ov, ol in operands_values:
+                    if isinstance(ov, int):
+                        if self._heuristic_kind == HeuristicKind.HMAX:
+                            v = max(v, ov)
+                        else:
+                            v += ov
+                            l.extend(ol)
+                    else:
+                        v = None
+                        l = []
+                        break
+                res.append((v, l))
+            elif isinstance(node, OrNode):
+                operands_values = [res.pop() for _ in range(node.num_operands)]
+                operands_values = [(ov, ol) for ov, ol in operands_values if isinstance(ov, int)]
+                if len(operands_values) > 0:
+                    mv, ml = operands_values[0]
+                    for ov, ol in operands_values:
+                        if ov < mv:
+                            mv = ov
+                            ml = ol
+                    res.append((mv, ml))
+                else:
+                    res.append((None, []))
+
+        assert len(res) == 1
+        return res[-1]
+
+
+class HMaxNumeric(Heuristic):
     def __init__(
         self,
         fluent_types: List[str],
@@ -110,8 +551,7 @@ class _DeleteRelaxationHeuristicBase(Heuristic):
         events: Dict[str, List[Tuple[Timing, Event]]],
         goals: Expression,
         internal_caching: bool,
-        cache_value_in_state: bool,
-        ignore_real_int: bool = False,
+        cache_value_in_state: bool
     ):
         super().__init__(cache_value_in_state)
         self._fluent_types = fluent_types
@@ -139,7 +579,7 @@ class _DeleteRelaxationHeuristicBase(Heuristic):
                         else:
                             effects.append((eff.fluent, True))
                             effects.append((eff.fluent, False))
-                    elif not ignore_real_int and (t == "real" or t == "int"):
+                    elif (t == "real" or t == "int"):
                         if len(eff.value) == 1:
                             effects.append((eff.fluent, eff.value[0]))
                         else:
@@ -161,230 +601,6 @@ class _DeleteRelaxationHeuristicBase(Heuristic):
         self._extra_goals: Tuple[Expression, ...] = tuple([(FluentNode(fe[-1]), ) for fe in self._extra_fluents.values()])
         self._goals = split_expression(goals)
 
-        self._ordered_actions = list(self._events.keys())
-        self._internal_caching = {} if internal_caching else None
-
-    def _is_numeric_condition(self, exp: Expression) -> bool:
-        if isinstance(exp[-1], bool): # boolean constant
-            return False
-        if isinstance(exp[-1], FluentNode): # boolean fluent expression
-            return False
-        if isinstance(exp[-1], Op) and exp[-1].kind == "not": # not of a boolean fluent expression
-            i = exp[-1].operands[0]
-            if isinstance(exp[i], FluentNode):
-                return False
-        if isinstance(exp[-1], Op) and exp[-1].kind == "==": # equals between a fluent and an object
-            i1 = exp[-1].operands[0]
-            i2 = exp[-1].operands[1]
-            if isinstance(exp[i1], FluentNode) and isinstance(exp[i2], str):
-                return False
-        return True
-
-
-class DeleteRelaxationHeuristic(_DeleteRelaxationHeuristicBase):
-    def __init__(
-        self,
-        fluent_types: List[str],
-        objects: Dict[str, List[str]],
-        events: Dict[str, List[Tuple[Timing, Event]]],
-        goals: Expression,
-        heuristic_kind: HeuristicKind,
-        internal_caching: bool,
-        cache_value_in_state: bool,
-    ):
-        super().__init__(
-            fluent_types,
-            objects,
-            events,
-            goals,
-            internal_caching,
-            cache_value_in_state,
-            ignore_real_int=True,
-        )
-        self._heuristic_kind = heuristic_kind
-
-        self._precondition_of: Dict[Expression, List[Operator]] = {}
-        self._numeric_conds: Set[Expression] = set()
-        self._empty_pre_operators: List[Operator] = []
-        for o in self._operators:
-            if len(o.conditions) == 0 or o.conditions == ((True,),):
-                self._empty_pre_operators.append(o)
-            for c in o.conditions:
-                if self._is_numeric_condition(c):
-                    self._numeric_conds.add(c)
-                else:
-                    if c not in self._precondition_of:
-                        self._precondition_of[c] = []
-                    self._precondition_of[c].append(o)
-        for c in self._goals:
-            if self._is_numeric_condition(c):
-                self._numeric_conds.add(c)
-
-    @property
-    def name(self):
-        if self._heuristic_kind == HeuristicKind.HFF:
-            return "hff"
-        if self._heuristic_kind == HeuristicKind.HADD:
-            return "hadd"
-        if self._heuristic_kind == HeuristicKind.HMAX:
-            return "hmax"
-
-    def _eval(self, state: State, ss: SearchSpaceABC) -> Optional[float]:
-        if self._internal_caching is not None:
-            assignments_values = tuple(state.assignments) + tuple(
-                state.todo.get(action, (None, None))[0]
-                for action in self._ordered_actions
-            )
-            if assignments_values in self._internal_caching:
-                return self._internal_caching[assignments_values]
-
-            res = self._eval_core(state)
-            self._internal_caching[assignments_values] = res
-        else:
-            res = self._eval_core(state)
-
-        return res
-
-    def _eval_core(self, state: State) -> Optional[float]:
-        costs = {}
-        lp = []
-        for f, v in enumerate(state.assignments):
-            if v == True:
-                k = (FluentNode(f), )
-            elif v == False:
-                k = (FluentNode(f), Op("not", (0, )))
-            else:
-                k = (FluentNode(f), v, Op("==", (0, 1)))
-            costs[k] = 0
-            lp.append(k)
-
-        for x in self._numeric_conds:
-            if evaluate(x, state):
-                costs[x] = 0
-            else:
-                costs[x] = 1
-            lp.append(x)
-
-        for a in self._events.keys():
-            j, _ = state.todo.get(a, (None, None))
-            if j is None:
-                f = self._extra_fluents[a][-1]
-            else:
-                f = self._extra_fluents[a][j-1]
-            x = (FluentNode(f), )
-            costs[x] = 0
-            lp.append(x)
-
-        reached_by = {}
-        while len(lp) > 0:
-            lo = list(self._empty_pre_operators)
-            for p in lp:
-                if p in self._precondition_of:
-                    lo.extend(self._precondition_of[p])
-            lp = []
-            new_costs = {}
-            for o in set(lo):
-                c = self._cost(o.conditions, costs)
-                if c is not None:
-                    for f, v in o.effects:
-                        if v == True:
-                            k = (FluentNode(f), )
-                        elif v == False:
-                            k = (FluentNode(f), Op("not", (0, )))
-                        else:
-                            k = (FluentNode(f), v, Op("==", (0, 1)))
-                        new_cost_k = new_costs.get(k, None)
-                        cost_k = costs.get(k, None)
-                        if ((new_cost_k is not None and new_cost_k > c + o.cost) or
-                            (new_cost_k is None and cost_k is None) or
-                            (new_cost_k is None and cost_k > c + o.cost)):
-                            reached_by[k] = o
-                            new_costs[k] = c + o.cost
-                            lp.append(k)
-                        elif ((new_cost_k is not None and new_cost_k == c + o.cost) or
-                            (new_cost_k is None and cost_k == c + o.cost)) and o.action > reached_by[k].action:
-                            reached_by[k] = o
-
-            for k, v in new_costs.items():
-                costs[k] = v
-
-        h = self._cost(self._goals, costs)
-
-        if h is None:
-            return None
-
-        if self._heuristic_kind != HeuristicKind.HFF:
-            eh = self._cost(self._extra_goals, costs)
-
-            if self._heuristic_kind == HeuristicKind.HMAX:
-                res = max(h, eh)
-            else:
-                res = h + eh
-
-            return res
-
-        res = 0
-        for a, (j, _) in state.todo.items():
-            res += len(self._events[a]) - j
-
-        if h == 0:
-            return res
-
-        relaxed_plan = set()
-        stack = list(self._goals)
-        while len(stack) > 0:
-            g = stack.pop()
-            o = reached_by.get(g, None)
-            if o is None:
-                continue
-            relaxed_plan.add(o.action)
-            if len(o.conditions) > 0:
-                for g in o.conditions:
-                    stack.append(g)
-
-        for a in relaxed_plan:
-            if a not in state.todo:
-                res += len(self._events[a])
-
-        return res
-
-    def _cost(self, exp: Tuple[Expression, ...], costs: Dict[Expression, float]) -> Optional[float]:
-        if len(exp) == 0:
-            return 0
-        res = 0
-        for g in exp:
-            c = costs.get(g, None)
-            if c is None:
-                return None
-
-            if self._heuristic_kind == HeuristicKind.HMAX:
-                res = max(res, c)
-            else:
-                res += c
-
-        return res
-
-
-class HMaxNumeric(_DeleteRelaxationHeuristicBase):
-    def __init__(
-        self,
-        fluent_types: List[str],
-        objects: Dict[str, List[str]],
-        events: Dict[str, List[Tuple[Timing, Event]]],
-        goals: Expression,
-        internal_caching: bool,
-        cache_value_in_state: bool
-    ):
-        super().__init__(
-            fluent_types,
-            objects,
-            events,
-            goals,
-            internal_caching,
-            cache_value_in_state,
-            ignore_real_int=False,
-        )
-
         self._operator_conditions_fluents: List[Set[int]] = []
         for operator in self._operators:
             self._operator_conditions_fluents.append(set())
@@ -405,6 +621,9 @@ class HMaxNumeric(_DeleteRelaxationHeuristicBase):
                         for expression_node in eff
                         if isinstance(expression_node, FluentNode)
                     )
+
+        self._ordered_actions = list(self._events.keys())
+        self._internal_caching = {} if internal_caching else None
 
     @property
     def name(self):
