@@ -51,6 +51,18 @@ def problems():
         ):
             test_problems.append(test_case.problem)
 
+    names = set()
+    for problem in test_problems:
+        if problem.name in names:
+            # name duplicated
+            i = 0
+            new_name = problem.name
+            while new_name in names:
+                new_name = problem.name + str(i)
+                i += 1
+            problem.name = new_name
+        names.add(problem.name)
+
     return test_problems
 
 
@@ -235,7 +247,7 @@ def test_heuristic_fixed_values():
 
 
 def test_heuristic_values(problems, data_regression):
-    heuristic_values = []
+    heuristic_values = {}
     for problem in problems:
         values = {}
         for disable_rustamer in [True, False]:
@@ -295,7 +307,7 @@ def test_heuristic_values(problems, data_regression):
                                 h_val = int(h_val)
                             assert h_val == values[heuristic_name][i]
 
-        heuristic_values.append(values)
+        heuristic_values[problem.name] = values
 
     data_regression.check(heuristic_values)
 
