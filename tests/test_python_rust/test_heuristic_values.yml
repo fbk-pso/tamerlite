@@ -28457,6 +28457,15 @@ depots_p01:
   - 4
   - 4
 disjunctive_linear_conditions:
+  hadd:
+  - 1
+  - 0
+  hff:
+  - 0
+  - 0
+  hmax:
+  - 1
+  - 0
   hmax_numeric:
   - 1
   - 0
