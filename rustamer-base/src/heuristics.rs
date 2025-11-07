@@ -629,22 +629,18 @@ impl DeleteRelaxationHeuristic {
         }
 
         let mut lp: Vec<Expression> = costs.keys().copied().collect();
+        let mut lo: HashSet<OperatorID> = HashSet::new();
         let mut reached_by: HashMap<Expression, OperatorID> = HashMap::new();
+        let mut new_costs = HashMap::new();
         while lp.len() > 0 {
-            let mut lo: HashSet<OperatorID> = HashSet::new();
-            for x in self.empty_pre_operators.iter() {
-                lo.insert(*x);
-            }
+            lo.extend(&self.empty_pre_operators);
             for p in lp.iter() {
                 if let Some(po) = self.precondition_of.get(p) {
-                    for idx_o in po.iter() {
-                        lo.insert(*idx_o);
-                    }
+                    lo.extend(po);
                 }
             }
             lp.clear();
-            let mut new_costs = HashMap::new();
-            for oid in lo {
+            for oid in lo.drain() {
                 let o: &Operator = &self.operators[oid.id];
                 if let Some(c) = self.cost(&o.conditions, &costs) {
                     for k in o.effects.iter() {
@@ -658,7 +654,6 @@ impl DeleteRelaxationHeuristic {
                                 reached_by.insert(*k, oid);
                             }
                             new_costs.insert(*k, c + o.cost);
-                            lp.push(*k);
                         } else if matches!(self.heuristic_kind, HeuristicKind::HFF)
                             && ((new_cost_k.is_some() && *new_cost_k.unwrap() == c + o.cost)
                                 || (new_cost_k.is_none() && *cost_k.unwrap() == c + o.cost))
@@ -669,7 +664,8 @@ impl DeleteRelaxationHeuristic {
                     }
                 }
             }
-            costs.extend(new_costs);
+            lp.extend(new_costs.keys());
+            costs.extend(new_costs.drain());
         }
 
         let h = self.cost(&self.goals, &costs);
