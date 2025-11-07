@@ -141,8 +141,8 @@ class TamerLite(
     def satisfies(optimality_guarantee: up.engines.OptimalityGuarantee) -> bool:
         return optimality_guarantee == up.engines.OptimalityGuarantee.SATISFICING
 
-    def _get_heuristic(self, params, heuristic, encoder, problem_has_disjunctive_conditions):
-        default_heuristic = "hmax_numeric" if problem_has_disjunctive_conditions else "hff"
+    def _get_heuristic(self, params, heuristic, encoder):
+        default_heuristic = "hff"
         if params is None:
             h = "custom" if heuristic else default_heuristic
         else:
@@ -220,26 +220,15 @@ class TamerLite(
             if self._params is not None and self._params.early_termination is not None:
                 early_termination = self._params.early_termination
 
-            has_disjunctive_conditions = new_problem.kind.has_disjunctive_conditions()
             if isinstance(self._params, MultiqueueParams):
                 heuristics = []
                 for p in self._params.queues:
-                    h, w = self._get_heuristic(p, heuristic, encoder, has_disjunctive_conditions)
+                    h, w = self._get_heuristic(p, heuristic, encoder)
                     heuristics.append((h, w))
-                    if has_disjunctive_conditions and h.name in ("hff", "hadd", "hmax"):
-                        status = up.engines.PlanGenerationResultStatus.UNSUPPORTED_PROBLEM
-                        return up.engines.PlanGenerationResult(status, None, self.name)
                 plan, metrics = multiqueue_search(encoder.search_space, heuristics, timeout, early_termination=early_termination)
             else:
-                h, w = self._get_heuristic(self._params, heuristic, encoder, has_disjunctive_conditions)
-                s_name, search = self._get_search(self._params, h, w)
-                if (
-                    has_disjunctive_conditions
-                    and h.name in ("hff", "hadd", "hmax")
-                    and s_name in ("wastar", "astar", "gbfs", "ehs")
-                ):
-                    status = up.engines.PlanGenerationResultStatus.UNSUPPORTED_PROBLEM
-                    return up.engines.PlanGenerationResult(status, None, self.name)
+                h, w = self._get_heuristic(self._params, heuristic, encoder)
+                _, search = self._get_search(self._params, h, w)
                 plan, metrics = search(encoder.search_space, timeout=timeout, early_termination=early_termination)
 
             if plan:

@@ -101,16 +101,6 @@ def skip(problem, search, heuristic, disable_rustamer, internal_heuristic_cache)
         or (problem.name == "robot_fluent_of_user_type_with_int_id" and search == "dfs")
         or (problem.name == "depots_p01" and search in ["dfs", "bfs"])
         or (problem.name == "RoboLogistics" and search == "dfs")
-        or (
-            problem.name == "disjunctive_linear_conditions"
-            and (
-                (
-                    search in ("wastar", "astar", "gbfs", "ehs")
-                    and heuristic in ("hff", "hadd", "hmax")
-                )
-                or search == "multiqueue"
-            )
-        )
     )
 
 
@@ -320,7 +310,6 @@ def test_custom_heuristic(problems):
         return 1
 
     for problem in problems:
-        print(problem.name)
         results = []
         for disable_rustamer in [True, False]:
             reload_tamerlite(disable_rustamer)

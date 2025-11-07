@@ -68,6 +68,23 @@ pub fn integer_to_i32(n: &BigInt) -> i32 {
     n.to_i32().unwrap()
 }
 
+#[derive(Debug)]
+pub enum ArithmeticError {
+    Overflow,
+}
+
+pub fn checked_add_sub(
+    lhs: usize,
+    rhs: usize,
+    is_subtraction: bool,
+) -> Result<usize, ArithmeticError> {
+    if is_subtraction {
+        lhs.checked_sub(rhs).ok_or(ArithmeticError::Overflow)
+    } else {
+        lhs.checked_add(rhs).ok_or(ArithmeticError::Overflow)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PersistentList<Q> {
     pub payload: Q,
