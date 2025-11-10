@@ -18,7 +18,7 @@
 use num::BigInt;
 use num_rational::BigRational;
 use pyo3::{exceptions::PyValueError, prelude::*};
-use std::collections::HashMap;
+use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use crate::utils::integer_to_i32;
 
@@ -49,14 +49,14 @@ pub struct Expression {
 #[derive(Clone, Debug)]
 pub struct ExpressionManager {
     all_expressions: Vec<Vec<ExpressionNode>>,
-    expression2id: HashMap<Vec<ExpressionNode>, Expression>,
+    expression2id: FxHashMap<Vec<ExpressionNode>, Expression>,
 }
 
 impl ExpressionManager {
     pub fn new() -> ExpressionManager {
         ExpressionManager {
             all_expressions: vec![],
-            expression2id: HashMap::new(),
+            expression2id: FxHashMap::with_hasher(FxBuildHasher::default()),
         }
     }
 

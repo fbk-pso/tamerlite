@@ -19,11 +19,8 @@ use im::Vector;
 use multiset::HashMultiSet;
 use num_rational::BigRational;
 use pyo3::{exceptions::PyException, prelude::*};
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Mutex,
-    vec::Vec,
-};
+use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
+use std::{sync::Mutex, vec::Vec};
 
 use super::expressions::*;
 use super::expressions_utils::*;
@@ -66,10 +63,10 @@ pub trait SearchSpaceTrait {
 #[derive(Debug)]
 pub struct SearchSpace {
     actions_duration:
-        HashMap<String, Option<(Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool)>>,
-    events: HashMap<String, Vec<(Timing, Event)>>,
+        FxHashMap<String, Option<(Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool)>>,
+    events: FxHashMap<String, Vec<(Timing, Event)>>,
     actions: Vec<String>,
-    mutex: HashSet<((String, usize), (String, usize))>,
+    mutex: FxHashSet<((String, usize), (String, usize))>,
     initial_state: Option<Vec<ExpressionNode>>,
     goal: Option<Vec<ExpressionNode>>,
     tn_interpreter: TNInterpreter,
@@ -84,12 +81,12 @@ impl SearchSpace {
     #[new]
     #[pyo3(signature = (actions_duration, events, mutex, initial_state=None, goal=None, epsilon=None))]
     fn new(
-        actions_duration: HashMap<
+        actions_duration: FxHashMap<
             String,
             Option<(Vec<PyExpressionNode>, Vec<PyExpressionNode>, bool, bool)>,
         >,
-        events: HashMap<String, Vec<(Timing, Event)>>,
-        mutex: HashSet<((String, usize), (String, usize))>,
+        events: FxHashMap<String, Vec<(Timing, Event)>>,
+        mutex: FxHashSet<((String, usize), (String, usize))>,
         initial_state: Option<Vec<PyExpressionNode>>,
         goal: Option<Vec<PyExpressionNode>>,
         #[pyo3(from_py_with = get_option_big_rational)] epsilon: Option<BigRational>,
@@ -97,7 +94,7 @@ impl SearchSpace {
         let is_temporal = actions_duration.values().any(|value| !value.is_none());
         let mut actions: Vec<String> = events.keys().cloned().collect();
         actions.sort();
-        let converted_actions_duration: HashMap<
+        let converted_actions_duration: FxHashMap<
             String,
             Option<(Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool)>,
         > = actions_duration
@@ -386,11 +383,11 @@ impl SearchSpaceTrait for SearchSpace {
         Ok(State {
             assignments: init,
             temporal_network: tn,
-            todo: HashMap::new(),
+            todo: FxHashMap::with_hasher(FxBuildHasher::default()),
             active_conditions: HashMultiSet::new(),
             g: 0.0,
             path: PersistentList::new(),
-            heuristic_cache: Mutex::new(HashMap::new()),
+            heuristic_cache: Mutex::new(FxHashMap::with_hasher(FxBuildHasher::default())),
         })
     }
 
@@ -482,7 +479,7 @@ impl SearchSpaceTrait for SearchSpace {
                 }
             },
         };
-        let mut res: HashSet<_> = HashSet::new();
+        let mut res: FxHashSet<_> = FxHashSet::with_hasher(FxBuildHasher::default());
         for g in goals {
             if internal_evaluate(&g, state)? == ExpressionNode::Bool(true) {
                 res.insert(g.into_iter().map(|v| PyExpressionNode { v }).collect());
@@ -504,7 +501,8 @@ impl SearchSpaceTrait for SearchSpace {
         }
 
         let mut tn = DeltaSTN::new(mk_rational(0, 1));
-        let mut todo: HashMap<String, (usize, u32)> = HashMap::new();
+        let mut todo: FxHashMap<String, (usize, u32)> =
+            FxHashMap::with_hasher(FxBuildHasher::default());
         let mut path: Vec<(Event, u32)> = Vec::new();
         let mut counter = 0;
         let mut state = self.initial_state(None)?;
@@ -623,8 +621,10 @@ impl SearchSpaceTrait for SearchSpace {
         }
 
         let mut res = Vec::new();
-        let mut start_time: HashMap<(String, u32), BigRational> = HashMap::new();
-        let mut end_time: HashMap<(String, u32), BigRational> = HashMap::new();
+        let mut start_time: FxHashMap<(String, u32), BigRational> =
+            FxHashMap::with_hasher(FxBuildHasher::default());
+        let mut end_time: FxHashMap<(String, u32), BigRational> =
+            FxHashMap::with_hasher(FxBuildHasher::default());
         for (a, t) in self.tn_interpreter.get_actions_timings(&tn).iter() {
             if a.1 {
                 start_time.insert((a.0.to_string(), a.2), t.clone());
