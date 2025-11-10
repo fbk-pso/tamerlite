@@ -15,12 +15,12 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 
-use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fs::read_to_string;
 use std::sync::Arc;
 
 use regex::Regex;
+use rustc_hash::{FxBuildHasher, FxHashMap};
 
 #[derive(Debug)]
 struct DeltaNeighbors<T, Q> {
@@ -49,8 +49,8 @@ where
 
 #[derive(Debug, Clone)]
 pub struct DeltaSTN<T, Q> {
-    constraints: HashMap<T, Option<Arc<DeltaNeighbors<T, Q>>>>,
-    pub distances: HashMap<T, Q>,
+    constraints: FxHashMap<T, Option<Arc<DeltaNeighbors<T, Q>>>>,
+    pub distances: FxHashMap<T, Q>,
     is_sat: bool,
     pub tolerance: Q,
 }
@@ -62,8 +62,8 @@ where
 {
     pub fn new(tolerance: Q) -> Self {
         DeltaSTN {
-            constraints: HashMap::new(),
-            distances: HashMap::new(),
+            constraints: FxHashMap::with_hasher(FxBuildHasher::default()),
+            distances: FxHashMap::with_hasher(FxBuildHasher::default()),
             is_sat: true,
             tolerance,
         }
@@ -161,7 +161,7 @@ pub fn _tnsolve(fname: String) -> () {
     )
     .unwrap();
 
-    let mut tn_map = HashMap::<String, DeltaSTN<u32, f64>>::new();
+    let mut tn_map = FxHashMap::<String, DeltaSTN<u32, f64>>::with_hasher(FxBuildHasher::default());
 
     for line in read_to_string(fname).unwrap().lines() {
         if let Some(new_tn) = re_new_tn.captures(line) {

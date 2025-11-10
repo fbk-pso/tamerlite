@@ -18,7 +18,9 @@
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::SystemTime;
-use std::{collections::BinaryHeap, collections::HashMap, collections::HashSet, vec::Vec};
+use std::{collections::BinaryHeap, vec::Vec};
+
+use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use pyo3::exceptions::PyTimeoutError;
 use pyo3::prelude::*;
@@ -97,9 +99,9 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
-    HashMap<String, String>,
+    FxHashMap<String, String>,
 )> {
-    let mut metrics = HashMap::new();
+    let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
     let mut counter = 0;
@@ -117,8 +119,8 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         }
     };
     let mut open = BinaryHeap::new();
-    let open_set = Mutex::new(HashSet::new());
-    let mut closed_set = HashSet::new();
+    let open_set = Mutex::new(FxHashSet::with_hasher(FxBuildHasher::default()));
+    let mut closed_set = FxHashSet::with_hasher(FxBuildHasher::default());
     if !ss.is_temporal() {
         open_set.lock().unwrap().insert(init.full_clone());
     }
@@ -189,7 +191,7 @@ pub fn bfs_search<S: SearchSpaceTrait>(
     early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
-    HashMap<String, String>,
+    FxHashMap<String, String>,
 )> {
     basic_search(ss, true, timeout, early_termination)
 }
@@ -200,7 +202,7 @@ pub fn dfs_search<S: SearchSpaceTrait>(
     early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
-    HashMap<String, String>,
+    FxHashMap<String, String>,
 )> {
     basic_search(ss, false, timeout, early_termination)
 }
@@ -212,9 +214,9 @@ fn basic_search<S: SearchSpaceTrait>(
     early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
-    HashMap<String, String>,
+    FxHashMap<String, String>,
 )> {
-    let mut metrics = HashMap::new();
+    let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
     let mut open = VecDeque::new();
@@ -268,9 +270,9 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
-    HashMap<String, String>,
+    FxHashMap<String, String>,
 )> {
-    let mut metrics = HashMap::new();
+    let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
     let mut counter = 0;

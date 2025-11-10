@@ -20,7 +20,8 @@ use super::search_state::*;
 use super::utils::*;
 use num_rational::BigRational;
 use pyo3::{exceptions::PyException, prelude::*};
-use std::{collections::HashMap, vec::Vec};
+use rustc_hash::FxHashMap;
+use std::vec::Vec;
 
 pub fn do_shift(
     e: &ExpressionNode,
@@ -146,7 +147,7 @@ pub fn split_expression(exp: &Vec<ExpressionNode>) -> PyResult<Vec<Vec<Expressio
 #[pyfunction]
 pub fn simplify(
     exp: Vec<PyExpressionNode>,
-    assignments: HashMap<usize, PyExpressionNode>,
+    assignments: FxHashMap<usize, PyExpressionNode>,
 ) -> PyResult<Vec<PyExpressionNode>> {
     // This function simplify the given expression using the given assignments
 

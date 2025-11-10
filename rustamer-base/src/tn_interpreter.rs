@@ -17,20 +17,21 @@
 
 use super::stn::DeltaSTN;
 use super::structures::*;
-use std::{collections::HashMap, vec::Vec};
+use rustc_hash::{FxBuildHasher, FxHashMap};
+use std::vec::Vec;
 
 #[derive(Debug)]
 pub struct TNInterpreter {
-    actions_ids: HashMap<(String, bool), u32>,
-    events_ids: HashMap<(String, usize), u32>,
-    actions_ids_map_back: HashMap<u32, (String, bool)>,
-    events_ids_map_back: HashMap<u32, (String, usize)>,
+    actions_ids: FxHashMap<(String, bool), u32>,
+    events_ids: FxHashMap<(String, usize), u32>,
+    actions_ids_map_back: FxHashMap<u32, (String, bool)>,
+    events_ids_map_back: FxHashMap<u32, (String, usize)>,
 }
 
 impl TNInterpreter {
-    pub fn new(actions: &Vec<String>, events: &HashMap<String, Vec<(Timing, Event)>>) -> Self {
-        let mut actions_ids = HashMap::new();
-        let mut actions_ids_map_back = HashMap::new();
+    pub fn new(actions: &Vec<String>, events: &FxHashMap<String, Vec<(Timing, Event)>>) -> Self {
+        let mut actions_ids = FxHashMap::with_hasher(FxBuildHasher::default());
+        let mut actions_ids_map_back = FxHashMap::with_hasher(FxBuildHasher::default());
 
         let mut next_id = 1;
         for a in actions {
@@ -41,8 +42,8 @@ impl TNInterpreter {
             }
         }
 
-        let mut events_ids = HashMap::new();
-        let mut events_ids_map_back = HashMap::new();
+        let mut events_ids = FxHashMap::with_hasher(FxBuildHasher::default());
+        let mut events_ids_map_back = FxHashMap::with_hasher(FxBuildHasher::default());
 
         for (action, events) in events {
             for (_t, e) in events {
