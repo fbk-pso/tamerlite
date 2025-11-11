@@ -25,12 +25,14 @@ import up_test_cases.builtin
 import tamerlite
 from tamerlite.core.heuristics import Heuristic
 from tamerlite.core import HFF, HAdd, HMax, HMaxNumeric, CustomHeuristic
+from tamerlite.core import simplify
 from tamerlite.core.search_space import SearchSpaceABC
 from tamerlite.encoder import Encoder
 import tamerlite.encoder
 import tamerlite.engine
 
 import problems_generator
+import testing_utils
 import pytest
 import importlib
 import os
@@ -451,3 +453,30 @@ def test_search_space(problems):
                 assert state1.todo[k][0] == state2.todo[k][0]
 
             assert state1.g == state2.g
+
+
+def test_simplify():
+    num_expressions = 100
+    results = {True: [None] * num_expressions, False: [None] * num_expressions}
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        reload_package(testing_utils)
+        from tamerlite.core import simplify
+        from testing_utils import construct_expressions
+
+        expressions = construct_expressions(num_expressions, max_depth=20)
+        for i, exp in enumerate(expressions):
+            try:
+                results[disable_rustamer][i] = simplify(exp, {})
+            except ZeroDivisionError:
+                results[disable_rustamer][i] = "ZeroDivisionError"
+
+    for i in range(num_expressions):
+        if (
+            results[True][i] == "ZeroDivisionError"
+            or results[False][i] == "ZeroDivisionError"
+        ):
+            assert results[True][i] == results[False][i]
+
+        else:
+            assert len(results[True][i]) == len(results[False][i])
