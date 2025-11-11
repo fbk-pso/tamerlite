@@ -225,14 +225,14 @@ def evaluate(exp: Expression, state: State) -> Union[bool, int, Fraction, str]:
                     v *= res[i]
                 res.append(v)
             elif e.kind == "/":
-                res.append(res[e.operands[0]] / res[e.operands[1]])
+                res.append(Fraction(res[e.operands[0]], res[e.operands[1]]))
     return res[-1]
 
 
 def simplify(
     exp: Expression, assignments: Dict[int, Union[bool, int, Fraction, str]]
 ) -> Expression:
-    """This function simplify the given expression using the given assignments"""
+    """This function simplifies the given expression using the given assignments"""
 
     # We iterate over the expression elements and we store the simplified value in the res vector
     res = []
@@ -316,13 +316,13 @@ def simplify(
                     elif e.kind == "-":
                         res.append(v1 - v2)
                     elif e.kind == "/":
-                        res.append(v1 / v2)
+                        res.append(Fraction(v1, v2))
                 else:
                     res.append(e)
             elif e.kind in ["+", "*"]:
-                # TODO: simplify constants
                 v = 0 if e.kind == "+" else 1
-                to_simplified = True
+                first_constant_operand = None
+                operands = []
                 for i in e.operands:
                     v1 = res[i]
                     if isinstance(v1, int) or isinstance(v1, Fraction):
@@ -330,13 +330,20 @@ def simplify(
                             v += v1
                         else:
                             v *= v1
+
+                        if first_constant_operand is None:
+                            first_constant_operand = i
+                            operands.append(i)
                     else:
-                        to_simplified = False
-                        break
-                if to_simplified:
+                        operands.append(i)
+
+                if first_constant_operand is None:
+                    res.append(e)
+                elif len(operands) == 1:
                     res.append(v)
                 else:
-                    res.append(e)
+                    res[first_constant_operand] = v
+                    res.append(OperatorNode(e.kind, operands))
 
     # Keep only the nodes reachable from the root using a depth-first search
     final_res = []
