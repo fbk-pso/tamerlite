@@ -18,8 +18,9 @@
 use super::expressions::*;
 use super::search_state::*;
 use super::utils::*;
+use num::Zero;
 use num_rational::BigRational;
-use pyo3::{exceptions::PyException, prelude::*};
+use pyo3::{exceptions::PyException, exceptions::PyZeroDivisionError, prelude::*};
 use rustc_hash::FxHashMap;
 use std::vec::Vec;
 
@@ -244,25 +245,30 @@ pub fn simplify(
                 }
             }
             ExpressionNode::Plus(ref v) => {
-                let mut to_simplified = true;
                 let mut r = BigRational::from_integer(mk_integer(0));
+                let mut first_constant_operand = None;
+                let mut operands = Vec::new();
                 for p in v.iter() {
                     let val = get_rational_from_expression_node(&res[*p]);
                     if val.is_ok() {
                         r += val.unwrap();
+
+                        if first_constant_operand.is_none() {
+                            first_constant_operand = Some(*p);
+                            operands.push(*p);
+                        }
                     } else {
-                        to_simplified = false;
-                        break;
+                        operands.push(*p);
                     }
                 }
-                if to_simplified {
-                    if r.is_integer() {
-                        ExpressionNode::Int(Box::new(r.to_integer()))
-                    } else {
-                        ExpressionNode::Rational(Box::new(r))
-                    }
-                } else {
+
+                if first_constant_operand.is_none() {
                     e.v
+                } else if operands.len() == 1 {
+                    ExpressionNode::Rational(Box::new(r))
+                } else {
+                    res[first_constant_operand.unwrap()] = ExpressionNode::Rational(Box::new(r));
+                    ExpressionNode::Plus(operands)
                 }
             }
             ExpressionNode::Minus(p1, p2) => {
@@ -280,32 +286,42 @@ pub fn simplify(
                 }
             }
             ExpressionNode::Times(ref v) => {
-                let mut to_simplified = true;
                 let mut r = BigRational::from_integer(mk_integer(1));
+                let mut first_constant_operand = None;
+                let mut operands = Vec::new();
                 for p in v.iter() {
                     let val = get_rational_from_expression_node(&res[*p]);
                     if val.is_ok() {
                         r *= val.unwrap();
+
+                        if first_constant_operand.is_none() {
+                            first_constant_operand = Some(*p);
+                            operands.push(*p);
+                        }
                     } else {
-                        to_simplified = false;
-                        break;
+                        operands.push(*p);
                     }
                 }
-                if to_simplified {
-                    if r.is_integer() {
-                        ExpressionNode::Int(Box::new(r.to_integer()))
-                    } else {
-                        ExpressionNode::Rational(Box::new(r))
-                    }
-                } else {
+
+                if first_constant_operand.is_none() {
                     e.v
+                } else if operands.len() == 1 {
+                    ExpressionNode::Rational(Box::new(r))
+                } else {
+                    res[first_constant_operand.unwrap()] = ExpressionNode::Rational(Box::new(r));
+                    ExpressionNode::Plus(operands)
                 }
             }
             ExpressionNode::Div(p1, p2) => {
                 let val1 = get_rational_from_expression_node(&res[p1]);
                 let val2 = get_rational_from_expression_node(&res[p2]);
                 if val1.is_ok() && val2.is_ok() {
-                    let r = val1.unwrap() / val2.unwrap();
+                    let val2 = val2.unwrap();
+                    if val2.is_zero() {
+                        return Err(PyZeroDivisionError::new_err("division by zero"));
+                    }
+
+                    let r = val1.unwrap() / val2;
                     if r.is_integer() {
                         ExpressionNode::Int(Box::new(r.to_integer()))
                     } else {
@@ -484,6 +500,9 @@ pub fn internal_evaluate(
             ExpressionNode::Div(p1, p2) => {
                 let val1 = get_rational_from_expression_node(&res[*p1])?;
                 let val2 = get_rational_from_expression_node(&res[*p2])?;
+                if val2.is_zero() {
+                    return Err(PyZeroDivisionError::new_err("division by zero"));
+                }
                 let r = val1 / val2;
                 if r.is_integer() {
                     ExpressionNode::Int(Box::new(r.to_integer()))
