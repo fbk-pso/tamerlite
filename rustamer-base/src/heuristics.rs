@@ -17,11 +17,12 @@
 
 use itertools::Itertools;
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use std::{collections::HashMap, vec::Vec};
+use std::vec::Vec;
+
+use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
@@ -375,32 +376,32 @@ fn extract_sub_expression(expr: &Vec<ExpressionNode>, idx: usize) -> Vec<Express
 
 #[derive(Clone, Debug)]
 pub struct DeleteRelaxationHeuristic {
-    events: HashMap<String, usize>,
+    events: FxHashMap<String, usize>,
     goals: HeuristicExpression,
-    extra_fluents: HashMap<String, Vec<Expression>>,
+    extra_fluents: FxHashMap<String, Vec<Expression>>,
     extra_goals: HeuristicExpression,
     operators: Vec<Operator>,
-    precondition_of: HashMap<Expression, Vec<OperatorID>>,
-    empty_pre_operators: HashSet<OperatorID>,
-    numeric_conds: HashSet<Expression>,
+    precondition_of: FxHashMap<Expression, Vec<OperatorID>>,
+    empty_pre_operators: FxHashSet<OperatorID>,
+    numeric_conds: FxHashSet<Expression>,
     heuristic_kind: HeuristicKind,
     ordered_actions: Vec<String>,
-    internal_caching: Arc<Mutex<Option<HashMap<CacheKey, Option<f64>>>>>,
+    internal_caching: Arc<Mutex<Option<FxHashMap<CacheKey, Option<f64>>>>>,
     expression_manager: Arc<Mutex<ExpressionManager>>,
 }
 
 impl DeleteRelaxationHeuristic {
     pub fn new(
         fluent_types: Vec<String>,
-        objects: HashMap<String, Vec<String>>,
-        events: HashMap<String, Vec<(Timing, Event)>>,
+        objects: FxHashMap<String, Vec<String>>,
+        events: FxHashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
         heuristic_kind: HeuristicKind,
         internal_caching: bool,
     ) -> PyResult<Self> {
         let mut operators = Vec::with_capacity(events.iter().map(|(_, e)| e.len()).sum());
-        let mut extra_fluents: HashMap<String, Vec<Expression>> =
-            HashMap::with_capacity(events.len());
+        let mut extra_fluents: FxHashMap<String, Vec<Expression>> =
+            FxHashMap::with_capacity_and_hasher(events.len(), FxBuildHasher::default());
         let mut extra_goals = Vec::with_capacity(events.len() + 1);
         let mut expression_manager = ExpressionManager::new();
         let mut num_fluents = fluent_types.len();
@@ -491,9 +492,12 @@ impl DeleteRelaxationHeuristic {
         extra_goals.push(ExpressionNode::And((0..extra_goals.len()).collect()));
         let extra_goals = convert_to_heuristic_expression(&extra_goals, &mut expression_manager);
 
-        let mut precondition_of: HashMap<Expression, Vec<OperatorID>> = HashMap::new();
-        let mut numeric_conds: HashSet<Expression> = HashSet::new();
-        let mut empty_pre_operators: HashSet<OperatorID> = HashSet::new();
+        let mut precondition_of: FxHashMap<Expression, Vec<OperatorID>> =
+            FxHashMap::with_hasher(FxBuildHasher::default());
+        let mut numeric_conds: FxHashSet<Expression> =
+            FxHashSet::with_hasher(FxBuildHasher::default());
+        let mut empty_pre_operators: FxHashSet<OperatorID> =
+            FxHashSet::with_hasher(FxBuildHasher::default());
         for (idx_o, o) in operators.iter().enumerate() {
             if o.conditions.expression.is_empty() {
                 empty_pre_operators.insert(OperatorID::new(idx_o));
@@ -524,14 +528,14 @@ impl DeleteRelaxationHeuristic {
             }
         }
 
-        let events_len: HashMap<String, usize> = events
+        let events_len: FxHashMap<String, usize> = events
             .iter()
             .map(|(a, ev)| (a.to_string(), ev.len()))
             .collect();
 
         let ordered_actions: Vec<String> = events.keys().map(|action| action.clone()).collect();
         let internal_caching = if internal_caching {
-            Some(HashMap::new())
+            Some(FxHashMap::with_hasher(FxBuildHasher::default()))
         } else {
             None
         };
@@ -582,8 +586,9 @@ impl DeleteRelaxationHeuristic {
 
     fn _eval(&self, state: &State) -> PyResult<Option<f64>> {
         let mut expression_manager = self.expression_manager.lock().unwrap();
-        let mut costs: HashMap<Expression, f64> = HashMap::with_capacity(
+        let mut costs: FxHashMap<Expression, f64> = FxHashMap::with_capacity_and_hasher(
             state.assignments.len() + self.numeric_conds.len() + self.events.len(),
+            FxBuildHasher::default(),
         );
 
         for (f, v) in state.assignments.iter().enumerate() {
@@ -629,9 +634,10 @@ impl DeleteRelaxationHeuristic {
         }
 
         let mut lp: Vec<Expression> = costs.keys().copied().collect();
-        let mut lo: HashSet<OperatorID> = HashSet::new();
-        let mut reached_by: HashMap<Expression, OperatorID> = HashMap::new();
-        let mut new_costs = HashMap::new();
+        let mut lo: FxHashSet<OperatorID> = FxHashSet::with_hasher(FxBuildHasher::default());
+        let mut reached_by: FxHashMap<Expression, OperatorID> =
+            FxHashMap::with_hasher(FxBuildHasher::default());
+        let mut new_costs = FxHashMap::with_hasher(FxBuildHasher::default());
         while lp.len() > 0 {
             lo.extend(&self.empty_pre_operators);
             for p in lp.iter() {
@@ -701,13 +707,13 @@ impl DeleteRelaxationHeuristic {
             }
         }
 
-        let mut relaxed_plan = HashSet::new();
-        let mut tmp_set = HashSet::new(); // avoid reallocating the HashSet inside hff_leaves
+        let mut relaxed_plan = FxHashSet::with_hasher(FxBuildHasher::default());
+        let mut tmp_set = FxHashSet::with_hasher(FxBuildHasher::default()); // avoid reallocating the FxHashSet inside hff_leaves
         let mut stack: Vec<Expression> = {
             self.hff_leaves(&self.goals, &costs, &mut tmp_set);
             tmp_set.drain().collect()
         };
-        let mut visited_expressions: HashSet<Expression> = stack.iter().copied().collect();
+        let mut visited_expressions: FxHashSet<Expression> = stack.iter().copied().collect();
 
         while let Some(g) = stack.pop() {
             if let Some(oid) = reached_by.get(&g) {
@@ -741,7 +747,7 @@ impl DeleteRelaxationHeuristic {
     ///
     /// * `expr` - The `HeuristicExpression` to evaluate.
     /// * `costs` - A mapping from leaf expressions (`Expression`) to their costs (`f64`).
-    /// * `out` - A mutable `HashSet` where the contributing leaf expressions will be collected.
+    /// * `out` - A mutable `FxHashSet` where the contributing leaf expressions will be collected.
     ///
     /// # Notes
     ///
@@ -749,8 +755,8 @@ impl DeleteRelaxationHeuristic {
     fn hff_leaves<'a>(
         &'a self,
         expr: &'a HeuristicExpression,
-        costs: &'a HashMap<Expression, f64>,
-        out: &mut HashSet<Expression>,
+        costs: &'a FxHashMap<Expression, f64>,
+        out: &mut FxHashSet<Expression>,
     ) {
         if !expr.contains_or_node {
             for node in &expr.expression {
@@ -826,7 +832,7 @@ impl DeleteRelaxationHeuristic {
     /// # Returns
     ///
     /// Returns the total cost of the expression.
-    fn cost(&self, expr: &HeuristicExpression, costs: &HashMap<Expression, f64>) -> Option<f64> {
+    fn cost(&self, expr: &HeuristicExpression, costs: &FxHashMap<Expression, f64>) -> Option<f64> {
         if let HeuristicExpressionNode::Leaf(e) = expr.expression.last().unwrap() {
             return costs.get(e).cloned();
         }
@@ -892,7 +898,7 @@ impl DeleteRelaxationHeuristic {
 }
 
 pub struct FluentAssignments<'a> {
-    pub assignments: HashMap<usize, &'a ExpressionNode>,
+    pub assignments: FxHashMap<usize, &'a ExpressionNode>,
 }
 
 impl FluentValueTrait for FluentAssignments<'_> {
@@ -903,7 +909,7 @@ impl FluentValueTrait for FluentAssignments<'_> {
 
 impl<'a> FluentAssignments<'a> {
     pub fn new(fluents: &Vec<usize>, values: Vec<&'a ExpressionNode>) -> Self {
-        let assignments: HashMap<usize, &ExpressionNode> =
+        let assignments: FxHashMap<usize, &ExpressionNode> =
             fluents.iter().cloned().zip(values.into_iter()).collect();
         FluentAssignments { assignments }
     }
@@ -913,24 +919,24 @@ impl<'a> FluentAssignments<'a> {
 pub struct HMaxNumeric {
     goals: Vec<Vec<ExpressionNode>>,
     goal_expressions: Vec<Expression>,
-    extra_fluents: HashMap<String, Vec<Vec<ExpressionNode>>>,
+    extra_fluents: FxHashMap<String, Vec<Vec<ExpressionNode>>>,
     num_fluents: usize,
     operators: Vec<OperatorHmax>,
-    operator_conditions_fluents: Vec<HashSet<usize>>,
-    operator_effects_fluents: Vec<HashSet<usize>>,
+    operator_conditions_fluents: Vec<FxHashSet<usize>>,
+    operator_effects_fluents: Vec<FxHashSet<usize>>,
     ordered_actions: Vec<String>,
-    internal_caching: Arc<Mutex<Option<HashMap<CacheKey, Option<f64>>>>>,
+    internal_caching: Arc<Mutex<Option<FxHashMap<CacheKey, Option<f64>>>>>,
 }
 
 impl HMaxNumeric {
     pub fn new(
         fluent_types: Vec<String>,
-        events: HashMap<String, Vec<(Timing, Event)>>,
+        events: FxHashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
         internal_caching: bool,
     ) -> PyResult<Self> {
         let mut operators = Vec::new();
-        let mut extra_fluents = HashMap::new();
+        let mut extra_fluents = FxHashMap::with_hasher(FxBuildHasher::default());
         let mut extra_goals = Vec::new();
         let mut expression_manager = ExpressionManager::new();
         let mut num_fluents = fluent_types.len();
@@ -984,7 +990,7 @@ impl HMaxNumeric {
 
         let mut operator_conditions_fluents = Vec::with_capacity(operators.len());
         for operator in &operators {
-            let mut conditions_fluents = HashSet::new();
+            let mut conditions_fluents = FxHashSet::with_hasher(FxBuildHasher::default());
             for cond in &operator.conditions {
                 for exp_node in cond {
                     if let ExpressionNode::Fluent(f) = exp_node {
@@ -997,7 +1003,7 @@ impl HMaxNumeric {
 
         let mut operator_effects_fluents = Vec::with_capacity(operators.len());
         for operator in &operators {
-            let mut effects_fluents = HashSet::new();
+            let mut effects_fluents = FxHashSet::with_hasher(FxBuildHasher::default());
             for eff in &operator.effects {
                 for exp_node in &eff.value {
                     if let ExpressionNode::Fluent(f) = exp_node {
@@ -1010,7 +1016,7 @@ impl HMaxNumeric {
 
         let ordered_actions: Vec<String> = events.keys().map(|action| action.clone()).collect();
         let internal_caching = if internal_caching {
-            Some(HashMap::new())
+            Some(FxHashMap::with_hasher(FxBuildHasher::default()))
         } else {
             None
         };
@@ -1043,10 +1049,10 @@ impl HMaxNumeric {
     fn possible_values<'a>(
         &'a self,
         exp: &'a Vec<ExpressionNode>,
-        assignments: &'a Vec<HashSet<ExpressionNode>>,
+        assignments: &'a Vec<FxHashSet<ExpressionNode>>,
         exp_fluents: &'a Vec<usize>,
     ) -> impl Iterator<Item = ExpressionNode> + 'a {
-        let values: Vec<&HashSet<ExpressionNode>> =
+        let values: Vec<&FxHashSet<ExpressionNode>> =
             exp_fluents.iter().map(|&f| &assignments[f]).collect();
 
         values
@@ -1063,9 +1069,9 @@ impl HMaxNumeric {
         &self,
         exp: &Vec<ExpressionNode>,
         exp_id: Expression,
-        assignments: &Vec<HashSet<ExpressionNode>>,
-        assignments_changes: &HashSet<usize>,
-        cache_can_be_true: &mut HashMap<Expression, bool>,
+        assignments: &Vec<FxHashSet<ExpressionNode>>,
+        assignments_changes: &FxHashSet<usize>,
+        cache_can_be_true: &mut FxHashMap<Expression, bool>,
     ) -> bool {
         let exp_fluents;
         if cache_can_be_true.contains_key(&exp_id) {
@@ -1074,7 +1080,7 @@ impl HMaxNumeric {
             }
 
             exp_fluents = self.extract_fluents(exp);
-            let exp_fluents_set: HashSet<usize> = exp_fluents.iter().copied().collect();
+            let exp_fluents_set: FxHashSet<usize> = exp_fluents.iter().copied().collect();
             if exp_fluents_set.is_disjoint(assignments_changes) {
                 return false;
             }
@@ -1098,9 +1104,9 @@ impl HMaxNumeric {
         &self,
         expressions: &Vec<Vec<ExpressionNode>>,
         expression_ids: &Vec<Expression>,
-        assignments: &Vec<HashSet<ExpressionNode>>,
-        assignments_changes: &HashSet<usize>,
-        cache_can_be_true: &mut HashMap<Expression, bool>,
+        assignments: &Vec<FxHashSet<ExpressionNode>>,
+        assignments_changes: &FxHashSet<usize>,
+        cache_can_be_true: &mut FxHashMap<Expression, bool>,
     ) -> bool {
         for (i, exp) in expressions.iter().enumerate() {
             if !self.exp_can_be_true(
@@ -1142,10 +1148,11 @@ impl HMaxNumeric {
     }
 
     fn _eval(&self, state: &State) -> Option<f64> {
-        let mut assignments: Vec<HashSet<ExpressionNode>> = vec![HashSet::new(); self.num_fluents];
+        let mut assignments: Vec<FxHashSet<ExpressionNode>> =
+            vec![FxHashSet::with_hasher(FxBuildHasher::default()); self.num_fluents];
         // add state assignments to assignments
         for (f, v) in state.assignments.iter().enumerate() {
-            assignments[f] = HashSet::from([v.clone()]);
+            assignments[f] = FxHashSet::from_iter([v.clone()]);
         }
         // add extra fluents to assignments
         for action in &self.ordered_actions {
@@ -1157,14 +1164,15 @@ impl HMaxNumeric {
 
             for (i, f) in self.extra_fluents[action].iter().enumerate() {
                 if let ExpressionNode::Fluent(f) = &f[0] {
-                    assignments[*f] = HashSet::from([ExpressionNode::Bool(i == idx)]);
+                    assignments[*f] = FxHashSet::from_iter([ExpressionNode::Bool(i == idx)]);
                 }
             }
         }
 
-        let mut cache_can_be_true: HashMap<Expression, bool> = HashMap::new();
+        let mut cache_can_be_true: FxHashMap<Expression, bool> =
+            FxHashMap::with_hasher(FxBuildHasher::default());
         let mut applied_operators = vec![false; self.operators.len()];
-        let mut assignments_changes: HashSet<usize> = (0..self.num_fluents).collect();
+        let mut assignments_changes: FxHashSet<usize> = (0..self.num_fluents).collect();
         let mut depth = 0;
         while assignments_changes.len() > 0 {
             if self.can_be_true(
@@ -1178,11 +1186,12 @@ impl HMaxNumeric {
                 return Some(depth as f64);
             }
 
-            let mut new_assignments: HashMap<usize, HashSet<ExpressionNode>> = HashMap::new();
+            let mut new_assignments: FxHashMap<usize, FxHashSet<ExpressionNode>> =
+                FxHashMap::with_hasher(FxBuildHasher::default());
             for (i, operator) in self.operators.iter().enumerate() {
                 if applied_operators[i] {
                     // operator already applied
-                    let eff_fluents: HashSet<usize> =
+                    let eff_fluents: FxHashSet<usize> =
                         self.operator_effects_fluents[i].iter().copied().collect();
                     if assignments_changes.is_disjoint(&eff_fluents) {
                         // no changes in the effect fluents
@@ -1216,7 +1225,7 @@ impl HMaxNumeric {
                         self.possible_values(&effect.value, &assignments, &exp_fluents);
                     new_assignments
                         .entry(effect.fluent)
-                        .or_insert_with(HashSet::new)
+                        .or_insert_with(|| FxHashSet::with_hasher(FxBuildHasher::default()))
                         .extend(possible_values);
                 }
             }

@@ -18,7 +18,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::SystemTime;
-use std::{collections::BinaryHeap, collections::HashMap, collections::HashSet, vec::Vec};
+use std::{collections::BinaryHeap, vec::Vec};
+
+use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use pyo3::exceptions::PyTimeoutError;
 use pyo3::prelude::*;
@@ -120,10 +122,16 @@ pub fn multiqueue_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
-    HashMap<String, String>,
+    FxHashMap<String, String>,
 )> {
     let mut switch_policy = RoundRobinSwitchPolicy::new(heuristics.len());
-    _multiqueue_search(ss, heuristics, &mut switch_policy, timeout, early_termination)
+    _multiqueue_search(
+        ss,
+        heuristics,
+        &mut switch_policy,
+        timeout,
+        early_termination,
+    )
 }
 
 pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTrait>(
@@ -134,9 +142,9 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
     early_termination: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, String, Option<String>)>>,
-    HashMap<String, String>,
+    FxHashMap<String, String>,
 )> {
-    let mut metrics = HashMap::new();
+    let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
     let mut states_expanded = 0;
@@ -146,8 +154,8 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
         return build_plan(ss, &init).map(|plan| (plan, metrics));
     }
 
-    let mut open_set: HashSet<State> = HashSet::new();
-    let mut closed_set: HashSet<State> = HashSet::new();
+    let mut open_set: FxHashSet<State> = FxHashSet::with_hasher(FxBuildHasher::default());
+    let mut closed_set: FxHashSet<State> = FxHashSet::with_hasher(FxBuildHasher::default());
     if !ss.is_temporal() {
         open_set.insert(init.full_clone());
     }

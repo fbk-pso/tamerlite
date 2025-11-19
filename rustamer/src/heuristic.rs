@@ -17,7 +17,8 @@
 
 use pyo3::prelude::*;
 use rustamer_base::*;
-use std::{collections::HashMap, vec::Vec};
+use rustc_hash::FxHashMap;
+use std::vec::Vec;
 
 #[pyclass(frozen)]
 #[derive(Clone)]
@@ -43,8 +44,8 @@ impl Heuristic {
     #[staticmethod]
     pub fn hff(
         fluent_types: Vec<String>,
-        objects: HashMap<String, Vec<String>>,
-        events: HashMap<String, Vec<(Timing, Event)>>,
+        objects: FxHashMap<String, Vec<String>>,
+        events: FxHashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
         internal_caching: bool,
         cache_value_in_state: bool,
@@ -67,8 +68,8 @@ impl Heuristic {
     #[staticmethod]
     pub fn hadd(
         fluent_types: Vec<String>,
-        objects: HashMap<String, Vec<String>>,
-        events: HashMap<String, Vec<(Timing, Event)>>,
+        objects: FxHashMap<String, Vec<String>>,
+        events: FxHashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
         internal_caching: bool,
         cache_value_in_state: bool,
@@ -91,8 +92,8 @@ impl Heuristic {
     #[staticmethod]
     pub fn hmax(
         fluent_types: Vec<String>,
-        objects: HashMap<String, Vec<String>>,
-        events: HashMap<String, Vec<(Timing, Event)>>,
+        objects: FxHashMap<String, Vec<String>>,
+        events: FxHashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
         internal_caching: bool,
         cache_value_in_state: bool,
@@ -115,8 +116,8 @@ impl Heuristic {
     #[staticmethod]
     pub fn hmax_numeric(
         fluent_types: Vec<String>,
-        _objects: HashMap<String, Vec<String>>,
-        events: HashMap<String, Vec<(Timing, Event)>>,
+        _objects: FxHashMap<String, Vec<String>>,
+        events: FxHashMap<String, Vec<(Timing, Event)>>,
         goal: Vec<PyExpressionNode>,
         internal_caching: bool,
         cache_value_in_state: bool,
