@@ -18,9 +18,9 @@
 use im::Vector;
 use multiset::HashMultiSet;
 use pyo3::{exceptions::PyException, prelude::*};
+use rustc_hash::{FxBuildHasher, FxHashMap};
 use std::hash::{Hash, Hasher};
 use std::{
-    collections::HashMap,
     sync::{Arc, Mutex},
     vec::Vec,
 };
@@ -35,11 +35,11 @@ use super::utils::*;
 pub struct State {
     pub assignments: Vector<ExpressionNode>,
     pub temporal_network: Option<DeltaSTN<u64, f32>>,
-    pub todo: HashMap<String, (usize, u32)>,
+    pub todo: FxHashMap<String, (usize, u32)>,
     pub active_conditions: HashMultiSet<Vec<ExpressionNode>>,
     pub g: f64,
     pub path: Option<Arc<PersistentList<(String, usize, u32)>>>,
-    pub heuristic_cache: Mutex<HashMap<String, Option<f64>>>,
+    pub heuristic_cache: Mutex<FxHashMap<String, Option<f64>>>,
 }
 
 #[pymethods]
@@ -50,7 +50,7 @@ impl State {
     }
 
     #[getter]
-    fn todo(&self) -> HashMap<String, (usize, u32)> {
+    fn todo(&self) -> FxHashMap<String, (usize, u32)> {
         self.todo.clone()
     }
 
@@ -85,7 +85,7 @@ impl State {
             active_conditions: self.active_conditions.clone(),
             g: self.g.clone(),
             path: self.path.clone(),
-            heuristic_cache: Mutex::new(HashMap::new()), // Cloning erases the cache
+            heuristic_cache: Mutex::new(FxHashMap::with_hasher(FxBuildHasher::default())), // Cloning erases the cache
         }
     }
 

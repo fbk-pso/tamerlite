@@ -10,6 +10,7 @@ name = "rustamer"
 crate-type = ["cdylib"]
 
 [dependencies]
+rustc-hash = "2.1.1"
 pyo3 = "0.27.1"
 rustamer-base = { path = "../rustamer-base" }
 
