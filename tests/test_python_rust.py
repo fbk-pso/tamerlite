@@ -68,6 +68,25 @@ def problems():
     return test_problems
 
 
+@pytest.fixture
+def expressions():
+    import pathlib
+    import json
+
+    data_path = os.path.join(
+        pathlib.Path(__file__).parent.resolve(),
+        "test_python_rust",
+        "test_simplify_fixed_expressions.json",
+    )
+    with open(data_path) as f:
+        data = json.load(f)
+
+    expressions = []
+    for e in data["expressions"]:
+        expressions.append((e["exp"], e["simplified_exp"]))
+    return expressions
+
+
 def reload_package(package):
     assert hasattr(package, "__package__")
     fn = package.__file__
@@ -462,7 +481,11 @@ def test_simplify():
         reload_tamerlite(disable_rustamer)
         reload_package(testing_utils)
         from tamerlite.core import simplify
-        from testing_utils import construct_expressions
+        from testing_utils import (
+            construct_expressions,
+            parse_expression,
+            is_strictly_increasing,
+        )
 
         expressions = construct_expressions(num_expressions, max_depth=20)
         for i, exp in enumerate(expressions):
@@ -471,12 +494,36 @@ def test_simplify():
             except ZeroDivisionError:
                 results[disable_rustamer][i] = "ZeroDivisionError"
 
-    for i in range(num_expressions):
-        if (
-            results[True][i] == "ZeroDivisionError"
-            or results[False][i] == "ZeroDivisionError"
-        ):
-            assert results[True][i] == results[False][i]
+            if not disable_rustamer:
+                if (
+                    results[True][i] == "ZeroDivisionError"
+                    or results[False][i] == "ZeroDivisionError"
+                ):
+                    assert results[True][i] == results[False][i]
 
-        else:
-            assert len(results[True][i]) == len(results[False][i])
+                else:
+                    py_exp = results[True][i]
+                    rs_exp = parse_expression(str(py_exp))
+                    assert str(list(rs_exp)) == str(results[False][i])
+
+    # verify that operands are in ascending order
+    for i in range(num_expressions):
+        for node in results[True][i]:
+            try:
+                assert is_strictly_increasing(node.operands)
+            except AttributeError:
+                pass
+
+
+def test_simplify_fixed_expressions(expressions):
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        reload_package(testing_utils)
+        from tamerlite.core import simplify
+        from testing_utils import parse_expression
+
+        for exp, simplified_exp in expressions:
+            exp = parse_expression(exp)
+            if not disable_rustamer:
+                simplified_exp = str(list(parse_expression(simplified_exp)))
+            assert str(simplify(exp, {})) == simplified_exp
