@@ -202,7 +202,7 @@ pub fn simplify(
                     } else if new_operands.len() == 1 {
                         res[new_operands[0]].clone()
                     } else {
-                        ExpressionNode::And(new_operands)
+                        ExpressionNode::Or(new_operands)
                     }
                 }
             }
@@ -264,11 +264,19 @@ pub fn simplify(
 
                 if first_constant_operand.is_none() {
                     e.v
-                } else if operands.len() == 1 {
-                    ExpressionNode::Rational(Box::new(r))
                 } else {
-                    res[first_constant_operand.unwrap()] = ExpressionNode::Rational(Box::new(r));
-                    ExpressionNode::Plus(operands)
+                    let new_node = if r.is_integer() {
+                        ExpressionNode::Int(Box::new(r.to_integer()))
+                    } else {
+                        ExpressionNode::Rational(Box::new(r))
+                    };
+
+                    if operands.len() == 1 {
+                        new_node
+                    } else {
+                        res[first_constant_operand.unwrap()] = new_node;
+                        ExpressionNode::Plus(operands)
+                    }
                 }
             }
             ExpressionNode::Minus(p1, p2) => {
@@ -305,11 +313,19 @@ pub fn simplify(
 
                 if first_constant_operand.is_none() {
                     e.v
-                } else if operands.len() == 1 {
-                    ExpressionNode::Rational(Box::new(r))
                 } else {
-                    res[first_constant_operand.unwrap()] = ExpressionNode::Rational(Box::new(r));
-                    ExpressionNode::Plus(operands)
+                    let new_node = if r.is_integer() {
+                        ExpressionNode::Int(Box::new(r.to_integer()))
+                    } else {
+                        ExpressionNode::Rational(Box::new(r))
+                    };
+
+                    if operands.len() == 1 {
+                        new_node
+                    } else {
+                        res[first_constant_operand.unwrap()] = new_node;
+                        ExpressionNode::Times(operands)
+                    }
                 }
             }
             ExpressionNode::Div(p1, p2) => {
@@ -338,6 +354,13 @@ pub fn simplify(
                     e.v
                 }
             }
+            ExpressionNode::Rational(v) => {
+                if v.is_integer() {
+                    ExpressionNode::Int(Box::new(v.to_integer()))
+                } else {
+                    ExpressionNode::Rational(v)
+                }
+            }
             other => other,
         };
         res.push(value);
@@ -364,10 +387,8 @@ pub fn simplify(
             | ExpressionNode::Plus(operands)
             | ExpressionNode::Times(operands) => {
                 if processed {
-                    let new_operands = operands
-                        .iter()
-                        .map(|_| operands_stack.pop().unwrap())
-                        .rev()
+                    let new_operands = operands_stack
+                        .drain((operands_stack.len() - operands.len())..)
                         .collect();
                     operands_stack.push(final_res.len());
                     let exp_node = match &res[idx] {

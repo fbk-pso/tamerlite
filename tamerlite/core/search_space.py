@@ -237,8 +237,13 @@ def simplify(
     # We iterate over the expression elements and we store the simplified value in the res vector
     res = []
     for e in exp:
-        if isinstance(e, bool) or isinstance(e, int) or isinstance(e, Fraction):
+        if isinstance(e, bool) or isinstance(e, int):
             res.append(e)
+        elif isinstance(e, Fraction):
+            if e.is_integer():
+                res.append(int(e))
+            else:
+                res.append(e)
         elif isinstance(e, FluentNode):
             v = assignments.get(e.fluent, None)
             if v is None:
@@ -310,13 +315,17 @@ def simplify(
                     isinstance(v2, int) or isinstance(v2, Fraction)
                 ):
                     if e.kind == "<=":
-                        res.append(v1 <= v2)
+                        r = v1 <= v2
                     elif e.kind == "<":
-                        res.append(v1 < v2)
+                        r = v1 < v2
                     elif e.kind == "-":
-                        res.append(v1 - v2)
+                        r = v1 - v2
                     elif e.kind == "/":
-                        res.append(Fraction(v1, v2))
+                        r = Fraction(v1, v2)
+
+                    if isinstance(r, Fraction) and r.is_integer():
+                        r = int(r)
+                    res.append(r)
                 else:
                     res.append(e)
             elif e.kind in ["+", "*"]:
@@ -339,11 +348,15 @@ def simplify(
 
                 if first_constant_operand is None:
                     res.append(e)
-                elif len(operands) == 1:
-                    res.append(v)
                 else:
-                    res[first_constant_operand] = v
-                    res.append(OperatorNode(e.kind, operands))
+                    if isinstance(v, Fraction) and v.is_integer():
+                        v = int(v)
+
+                    if len(operands) == 1:
+                        res.append(v)
+                    else:
+                        res[first_constant_operand] = v
+                        res.append(OperatorNode(e.kind, operands))
 
     # Keep only the nodes reachable from the root using a depth-first search
     final_res = []
