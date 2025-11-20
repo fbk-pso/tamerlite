@@ -1,0 +1,416 @@
+{
+    "expressions": [
+        {
+            "exp": "(Fraction(-2, 1),)",
+            "simplified_exp": "(-2,)"
+        },
+        {
+            "exp": "(Fraction(-2, 1), FluentNode(fluent=0), 6, FluentNode(fluent=1), OperatorNode(kind='+', operands=(0, 1, 2, 3)))",
+            "simplified_exp": "(4, FluentNode(fluent=0), FluentNode(fluent=1), OperatorNode(kind='+', operands=(0, 1, 2)))"
+        },
+        {
+            "exp": "(FluentNode(fluent=0), 6, FluentNode(fluent=1), Fraction(-2, 1), OperatorNode(kind='+', operands=(0, 1, 2, 3)))",
+            "simplified_exp": "(FluentNode(fluent=0), 4, FluentNode(fluent=1), OperatorNode(kind='+', operands=(0, 1, 2)))"
+        },
+        {
+            "exp": "(Fraction(-2, 1), FluentNode(fluent=0), 6, FluentNode(fluent=1), OperatorNode(kind='*', operands=(0, 1, 2, 3)))",
+            "simplified_exp": "(-12, FluentNode(fluent=0), FluentNode(fluent=1), OperatorNode(kind='*', operands=(0, 1, 2)))"
+        },
+        {
+            "exp": "(FluentNode(fluent=0), 6, FluentNode(fluent=1), Fraction(-2, 1), OperatorNode(kind='*', operands=(0, 1, 2, 3)))",
+            "simplified_exp": "(FluentNode(fluent=0), -12, FluentNode(fluent=1), OperatorNode(kind='*', operands=(0, 1, 2)))"
+        },
+        {
+            "exp": "(FluentNode(fluent=1), Fraction(-5, 8), Fraction(3, 1), OperatorNode(kind='-', operands=(1, 2)), OperatorNode(kind='+', operands=(0, 3)), FluentNode(fluent=1), OperatorNode(kind='/', operands=(4, 5)), Fraction(2, 1), OperatorNode(kind='<=', operands=(6, 7)))",
+            "simplified_exp": "(FluentNode(fluent=1), Fraction(-29, 8), OperatorNode(kind='+', operands=(0, 1)), FluentNode(fluent=1), OperatorNode(kind='/', operands=(2, 3)), 2, OperatorNode(kind='<=', operands=(4, 5)))"
+        },
+        {
+            "exp": "(FluentNode(fluent=0), FluentNode(fluent=0), 1, 7, Fraction(-9, 5), 7, OperatorNode(kind='+', operands=(3, 4, 5)), -8, 9, Fraction(-2, 3), -4, OperatorNode(kind='*', operands=(8, 9, 10)), OperatorNode(kind='+', operands=(2, 6, 7, 11)), Fraction(1, 3), 0, Fraction(5, 9), OperatorNode(kind='+', operands=(14, 15)), OperatorNode(kind='-', operands=(13, 16)), OperatorNode(kind='==', operands=(12, 17)), FluentNode(fluent=0), OperatorNode(kind='not', operands=(19,)), OperatorNode(kind='and', operands=(0, 1, 18, 20)))",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(Fraction(-4, 1), Fraction(-5, 2), Fraction(4, 3), OperatorNode(kind='-', operands=(1, 2)), OperatorNode(kind='-', operands=(0, 3)), 9, OperatorNode(kind='/', operands=(4, 5)), -6, Fraction(2, 9), OperatorNode(kind='+', operands=(7, 8)), Fraction(2, 5), Fraction(-1, 1), OperatorNode(kind='/', operands=(10, 11)), Fraction(3, 5), 5, Fraction(4, 1), Fraction(2, 3), OperatorNode(kind='*', operands=(13, 14, 15, 16)), 0, Fraction(2, 3), OperatorNode(kind='/', operands=(18, 19)), OperatorNode(kind='*', operands=(12, 17, 20)), 8, -10, OperatorNode(kind='*', operands=(22, 23)), 10, OperatorNode(kind='/', operands=(24, 25)), OperatorNode(kind='*', operands=(9, 21, 26)), OperatorNode(kind='==', operands=(6, 27)))",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(1, -9, -4, -7, OperatorNode(kind='-', operands=(2, 3)), OperatorNode(kind='/', operands=(1, 4)), OperatorNode(kind='<=', operands=(0, 5)), Fraction(1, 9), -2, -3, 10, FluentNode(fluent=1), OperatorNode(kind='+', operands=(8, 9, 10, 11)), OperatorNode(kind='<', operands=(7, 12)), OperatorNode(kind='or', operands=(6, 13)))",
+            "simplified_exp": "(Fraction(1, 9), 5, FluentNode(fluent=1), OperatorNode(kind='+', operands=(1, 2)), OperatorNode(kind='<', operands=(0, 3)))"
+        },
+        {
+            "exp": "(FluentNode(fluent=1), 9, Fraction(-7, 6), OperatorNode(kind='/', operands=(1, 2)), -4, Fraction(-1, 3), OperatorNode(kind='/', operands=(4, 5)), OperatorNode(kind='-', operands=(3, 6)), OperatorNode(kind='==', operands=(0, 7)), OperatorNode(kind='not', operands=(8,)))",
+            "simplified_exp": "(FluentNode(fluent=1), Fraction(-138, 7), OperatorNode(kind='==', operands=(0, 1)), OperatorNode(kind='not', operands=(2,)))"
+        },
+        {
+            "exp": "(FluentNode(fluent=1), FluentNode(fluent=1), Fraction(1, 5), -6, OperatorNode(kind='*', operands=(2, 3)), OperatorNode(kind='/', operands=(1, 4)), OperatorNode(kind='==', operands=(0, 5)), -1, 5, -9, Fraction(9, 2), OperatorNode(kind='+', operands=(7, 8, 9, 10)), FluentNode(fluent=1), OperatorNode(kind='==', operands=(11, 12)), OperatorNode(kind='not', operands=(13,)), FluentNode(fluent=1), FluentNode(fluent=1), OperatorNode(kind='/', operands=(15, 16)), 7, Fraction(-1, 4), 5, Fraction(5, 6), OperatorNode(kind='+', operands=(19, 20, 21)), OperatorNode(kind='+', operands=(18, 22)), OperatorNode(kind='<=', operands=(17, 23)), -8, -4, OperatorNode(kind='/', operands=(25, 26)), 2, -7, OperatorNode(kind='*', operands=(28, 29)), OperatorNode(kind='<=', operands=(27, 30)), Fraction(-4, 5), 3, OperatorNode(kind='-', operands=(32, 33)), 1, OperatorNode(kind='<=', operands=(34, 35)), True, False, True, False, FluentNode(fluent=0), OperatorNode(kind='and', operands=(37, 38, 39, 40, 41)), Fraction(1, 4), -7, OperatorNode(kind='<=', operands=(43, 44)), FluentNode(fluent=0), FluentNode(fluent=0), False, FluentNode(fluent=0), True, OperatorNode(kind='or', operands=(46, 47, 48, 49, 50)), Fraction(-1, 1), 7, OperatorNode(kind='<=', operands=(52, 53)), OperatorNode(kind='or', operands=(42, 45, 51, 54)), OperatorNode(kind='and', operands=(31, 36, 55)), OperatorNode(kind='and', operands=(6, 14, 24, 56)))",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(FluentNode(fluent=1), Fraction(3, 1), Fraction(7, 10), OperatorNode(kind='/', operands=(1, 2)), FluentNode(fluent=1), Fraction(2, 9), -8, -6, -1, OperatorNode(kind='*', operands=(5, 6, 7, 8)), OperatorNode(kind='*', operands=(0, 3, 4, 9)), 4, OperatorNode(kind='==', operands=(10, 11)), Fraction(4, 3), Fraction(5, 1), 3, OperatorNode(kind='-', operands=(14, 15)), OperatorNode(kind='/', operands=(13, 16)), Fraction(-9, 10), Fraction(1, 1), -1, Fraction(-1, 4), OperatorNode(kind='+', operands=(19, 20, 21)), OperatorNode(kind='/', operands=(18, 22)), OperatorNode(kind='==', operands=(17, 23)), OperatorNode(kind='or', operands=(12, 24)))",
+            "simplified_exp": "(FluentNode(fluent=1), Fraction(-320, 7), FluentNode(fluent=1), OperatorNode(kind='*', operands=(0, 1, 2)), 4, OperatorNode(kind='==', operands=(3, 4)))"
+        },
+        {
+            "exp": "(-5, -3, Fraction(-1, 1), OperatorNode(kind='+', operands=(0, 1, 2)), 5, -6, Fraction(-1, 10), OperatorNode(kind='+', operands=(4, 5, 6)), OperatorNode(kind='<=', operands=(3, 7)), OperatorNode(kind='not', operands=(8,)), OperatorNode(kind='not', operands=(9,)))",
+            "simplified_exp": "(True,)"
+        },
+        {
+            "exp": "(-7, -9, 10, Fraction(3, 2), OperatorNode(kind='-', operands=(2, 3)), OperatorNode(kind='+', operands=(1, 4)), Fraction(-4, 1), OperatorNode(kind='+', operands=(0, 5, 6)), 9, OperatorNode(kind='<', operands=(7, 8)))",
+            "simplified_exp": "(True,)"
+        },
+        {
+            "exp": "(Fraction(7, 5), 6, OperatorNode(kind='*', operands=(0, 1)), -9, Fraction(-3, 2), OperatorNode(kind='/', operands=(3, 4)), -9, 5, Fraction(9, 10), OperatorNode(kind='+', operands=(6, 7, 8)), OperatorNode(kind='*', operands=(2, 5, 9)), Fraction(2, 9), Fraction(-2, 3), Fraction(-1, 1), Fraction(2, 7), -10, OperatorNode(kind='*', operands=(12, 13, 14, 15)), OperatorNode(kind='-', operands=(11, 16)), OperatorNode(kind='-', operands=(10, 17)), 5, Fraction(-1, 3), -7, OperatorNode(kind='*', operands=(19, 20, 21)), FluentNode(fluent=1), Fraction(-3, 1), 1, OperatorNode(kind='*', operands=(24, 25)), OperatorNode(kind='+', operands=(22, 23, 26)), 9, OperatorNode(kind='/', operands=(27, 28)), OperatorNode(kind='<', operands=(18, 29)))",
+            "simplified_exp": "(Fraction(-249428, 1575), Fraction(26, 3), FluentNode(fluent=1), OperatorNode(kind='+', operands=(1, 2)), 9, OperatorNode(kind='/', operands=(3, 4)), OperatorNode(kind='<', operands=(0, 5)))"
+        },
+        {
+            "exp": "(False, FluentNode(fluent=0), True, OperatorNode(kind='and', operands=(0, 1, 2)))",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(Fraction(3, 8), 5, OperatorNode(kind='-', operands=(0, 1)), FluentNode(fluent=1), OperatorNode(kind='*', operands=(2, 3)), Fraction(2, 3), FluentNode(fluent=1), FluentNode(fluent=1), Fraction(5, 1), 7, OperatorNode(kind='-', operands=(8, 9)), Fraction(7, 3), -3, OperatorNode(kind='-', operands=(11, 12)), OperatorNode(kind='+', operands=(7, 10, 13)), OperatorNode(kind='*', operands=(5, 6, 14)), OperatorNode(kind='==', operands=(4, 15)))",
+            "simplified_exp": "(Fraction(-37, 8), FluentNode(fluent=1), OperatorNode(kind='*', operands=(0, 1)), Fraction(2, 3), FluentNode(fluent=1), FluentNode(fluent=1), Fraction(10, 3), OperatorNode(kind='+', operands=(5, 6)), OperatorNode(kind='*', operands=(3, 4, 7)), OperatorNode(kind='==', operands=(2, 8)))"
+        },
+        {
+            "exp": "(Fraction(3, 5), FluentNode(fluent=1), OperatorNode(kind='-', operands=(0, 1)), -6, 2, -8, OperatorNode(kind='-', operands=(4, 5)), Fraction(-5, 9), Fraction(-5, 6), -3, Fraction(1, 1), 3, Fraction(-2, 3), Fraction(-2, 3), OperatorNode(kind='+', operands=(10, 11, 12, 13)), -2, 7, OperatorNode(kind='/', operands=(15, 16)), OperatorNode(kind='+', operands=(8, 9, 14, 17)), OperatorNode(kind='+', operands=(3, 6, 7, 18)), OperatorNode(kind='==', operands=(2, 19)))",
+            "simplified_exp": "(Fraction(3, 5), FluentNode(fluent=1), OperatorNode(kind='-', operands=(0, 1)), Fraction(251, 126), OperatorNode(kind='==', operands=(2, 3)))"
+        },
+        {
+            "exp": "(Fraction(-7, 3), Fraction(-2, 3), OperatorNode(kind='<=', operands=(0, 1)), 5, -1, 4, Fraction(4, 5), OperatorNode(kind='*', operands=(3, 4, 5, 6)), 10, OperatorNode(kind='<', operands=(7, 8)), FluentNode(fluent=0), True, True, FluentNode(fluent=0), False, OperatorNode(kind='and', operands=(10, 11, 12, 13, 14)), OperatorNode(kind='not', operands=(15,)), False, OperatorNode(kind='not', operands=(17,)), Fraction(-2, 5), Fraction(-2, 5), OperatorNode(kind='<=', operands=(19, 20)), OperatorNode(kind='not', operands=(21,)), OperatorNode(kind='and', operands=(9, 16, 18, 22)), FluentNode(fluent=0), False, 6, -5, OperatorNode(kind='==', operands=(26, 27)), OperatorNode(kind='not', operands=(28,)), OperatorNode(kind='not', operands=(29,)), OperatorNode(kind='and', operands=(2, 23, 24, 25, 30)))",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(FluentNode(fluent=0),)",
+            "simplified_exp": "(FluentNode(fluent=0),)"
+        },
+        {
+            "exp": "(FluentNode(fluent=1), FluentNode(fluent=1), OperatorNode(kind='/', operands=(0, 1)), Fraction(9, 2), Fraction(-5, 8), Fraction(3, 2), OperatorNode(kind='-', operands=(4, 5)), Fraction(-5, 4), 7, OperatorNode(kind='*', operands=(7, 8)), Fraction(-7, 4), Fraction(-3, 2), Fraction(8, 5), OperatorNode(kind='*', operands=(10, 11, 12)), Fraction(-1, 10), OperatorNode(kind='+', operands=(6, 9, 13, 14)), OperatorNode(kind='-', operands=(3, 15)), OperatorNode(kind='<=', operands=(2, 16)))",
+            "simplified_exp": "(FluentNode(fluent=1), FluentNode(fluent=1), OperatorNode(kind='/', operands=(0, 1)), Fraction(451, 40), OperatorNode(kind='<=', operands=(2, 3)))"
+        },
+        {
+            "exp": "(6, -8, Fraction(6, 1), 9, -2, Fraction(3, 10), OperatorNode(kind='*', operands=(2, 3, 4, 5)), OperatorNode(kind='+', operands=(0, 1, 6)), FluentNode(fluent=1), OperatorNode(kind='==', operands=(7, 8)), Fraction(-1, 2), Fraction(-3, 8), 6, Fraction(4, 3), OperatorNode(kind='+', operands=(10, 11, 12, 13)), Fraction(-8, 7), -4, Fraction(10, 1), OperatorNode(kind='+', operands=(15, 16, 17)), OperatorNode(kind='<=', operands=(14, 18)), -3, 1, 10, OperatorNode(kind='*', operands=(21, 22)), OperatorNode(kind='<=', operands=(20, 23)), OperatorNode(kind='or', operands=(19, 24)), OperatorNode(kind='or', operands=(9, 25)))",
+            "simplified_exp": "(True,)"
+        },
+        {
+            "exp": "(FluentNode(fluent=0), OperatorNode(kind='not', operands=(0,)), 10, Fraction(-8, 5), Fraction(6, 5), OperatorNode(kind='+', operands=(2, 3, 4)), -9, OperatorNode(kind='==', operands=(5, 6)), OperatorNode(kind='not', operands=(7,)), False, OperatorNode(kind='and', operands=(1, 8, 9)))",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(-1, Fraction(7, 4), 4, 0, 9, 0, OperatorNode(kind='+', operands=(2, 3, 4, 5)), FluentNode(fluent=1), OperatorNode(kind='-', operands=(6, 7)), OperatorNode(kind='*', operands=(1, 8)), OperatorNode(kind='==', operands=(0, 9)))",
+            "simplified_exp": "(-1, Fraction(7, 4), 13, FluentNode(fluent=1), OperatorNode(kind='-', operands=(2, 3)), OperatorNode(kind='*', operands=(1, 4)), OperatorNode(kind='==', operands=(0, 5)))"
+        },
+        {
+            "exp": "(FluentNode(fluent=1), FluentNode(fluent=1), OperatorNode(kind='<', operands=(0, 1)))",
+            "simplified_exp": "(FluentNode(fluent=1), FluentNode(fluent=1), OperatorNode(kind='<', operands=(0, 1)))"
+        },
+        {
+            "exp": "(False,)",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(FluentNode(fluent=0), FluentNode(fluent=0), OperatorNode(kind='not', operands=(1,)), FluentNode(fluent=0), OperatorNode(kind='not', operands=(3,)), FluentNode(fluent=0), OperatorNode(kind='not', operands=(5,)), OperatorNode(kind='or', operands=(2, 4, 6)), -9, Fraction(1, 8), OperatorNode(kind='/', operands=(8, 9)), Fraction(7, 8), Fraction(-1, 1), -3, -6, OperatorNode(kind='+', operands=(11, 12, 13, 14)), OperatorNode(kind='==', operands=(10, 15)), Fraction(-5, 1), Fraction(-1, 3), 5, OperatorNode(kind='/', operands=(18, 19)), OperatorNode(kind='<=', operands=(17, 20)), FluentNode(fluent=0), OperatorNode(kind='not', operands=(22,)), Fraction(9, 5), -1, OperatorNode(kind='==', operands=(24, 25)), Fraction(-5, 4), -7, OperatorNode(kind='<', operands=(27, 28)), OperatorNode(kind='or', operands=(23, 26, 29)), OperatorNode(kind='or', operands=(7, 16, 21, 30)), FluentNode(fluent=0), True, OperatorNode(kind='not', operands=(33,)), False, Fraction(5, 3), 7, OperatorNode(kind='<=', operands=(36, 37)), OperatorNode(kind='or', operands=(34, 35, 38)), True, FluentNode(fluent=0), True, OperatorNode(kind='or', operands=(40, 41, 42)), OperatorNode(kind='not', operands=(43,)), FluentNode(fluent=1), -6, 7, OperatorNode(kind='-', operands=(46, 47)), OperatorNode(kind='<', operands=(45, 48)), FluentNode(fluent=1), -6, Fraction(1, 3), OperatorNode(kind='-', operands=(51, 52)), OperatorNode(kind='==', operands=(50, 53)), FluentNode(fluent=0), OperatorNode(kind='and', operands=(39, 44, 49, 54, 55)), OperatorNode(kind='or', operands=(0, 31, 32, 56)))",
+            "simplified_exp": "(True,)"
+        },
+        {
+            "exp": "(-3, -3, OperatorNode(kind='/', operands=(0, 1)), Fraction(-1, 1), 10, OperatorNode(kind='/', operands=(3, 4)), OperatorNode(kind='-', operands=(2, 5)), 6, Fraction(-8, 5), OperatorNode(kind='-', operands=(7, 8)), -3, OperatorNode(kind='+', operands=(9, 10)), OperatorNode(kind='<', operands=(6, 11)), Fraction(5, 3), Fraction(6, 5), OperatorNode(kind='-', operands=(13, 14)), -9, Fraction(3, 4), OperatorNode(kind='+', operands=(16, 17)), OperatorNode(kind='<', operands=(15, 18)), -1, 1, OperatorNode(kind='==', operands=(20, 21)), False, 5, -10, OperatorNode(kind='==', operands=(24, 25)), False, FluentNode(fluent=0), OperatorNode(kind='or', operands=(27, 28)), OperatorNode(kind='or', operands=(22, 23, 26, 29)), FluentNode(fluent=0), True, Fraction(8, 7), Fraction(-5, 3), OperatorNode(kind='<=', operands=(33, 34)), OperatorNode(kind='and', operands=(19, 30, 31, 32, 35)), 3, Fraction(-1, 10), 3, OperatorNode(kind='+', operands=(37, 38, 39)), 6, 9, OperatorNode(kind='+', operands=(41, 42)), -8, Fraction(3, 4), OperatorNode(kind='/', operands=(44, 45)), -5, OperatorNode(kind='*', operands=(40, 43, 46, 47)), -8, Fraction(5, 4), OperatorNode(kind='-', operands=(49, 50)), -2, Fraction(-1, 1), OperatorNode(kind='*', operands=(52, 53)), Fraction(-3, 8), 6, OperatorNode(kind='+', operands=(55, 56)), FluentNode(fluent=1), OperatorNode(kind='*', operands=(51, 54, 57, 58)), OperatorNode(kind='==', operands=(48, 59)), OperatorNode(kind='and', operands=(12, 36, 60)))",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(FluentNode(fluent=1), -1, Fraction(-1, 9), Fraction(8, 7), OperatorNode(kind='+', operands=(1, 2, 3)), Fraction(-8, 1), -2, OperatorNode(kind='*', operands=(5, 6)), OperatorNode(kind='/', operands=(4, 7)), OperatorNode(kind='==', operands=(0, 8)), True, Fraction(1, 5), Fraction(10, 9), OperatorNode(kind='<=', operands=(11, 12)), -6, Fraction(10, 1), OperatorNode(kind='==', operands=(14, 15)), FluentNode(fluent=0), FluentNode(fluent=0), FluentNode(fluent=0), FluentNode(fluent=0), OperatorNode(kind='and', operands=(17, 18, 19, 20)), Fraction(-3, 1), 8, OperatorNode(kind='<', operands=(22, 23)), OperatorNode(kind='or', operands=(13, 16, 21, 24)), OperatorNode(kind='not', operands=(25,)), True, True, FluentNode(fluent=0), FluentNode(fluent=0), OperatorNode(kind='or', operands=(29, 30)), OperatorNode(kind='not', operands=(31,)), FluentNode(fluent=0), FluentNode(fluent=0), FluentNode(fluent=0), OperatorNode(kind='and', operands=(34, 35)), FluentNode(fluent=0), OperatorNode(kind='not', operands=(37,)), OperatorNode(kind='and', operands=(33, 36, 38)), True, OperatorNode(kind='not', operands=(40,)), OperatorNode(kind='and', operands=(28, 32, 39, 41)), OperatorNode(kind='and', operands=(9, 10, 26, 27, 42)))",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(FluentNode(fluent=1), Fraction(-3, 1), OperatorNode(kind='==', operands=(0, 1)), OperatorNode(kind='not', operands=(2,)), OperatorNode(kind='not', operands=(3,)))",
+            "simplified_exp": "(FluentNode(fluent=1), -3, OperatorNode(kind='==', operands=(0, 1)), OperatorNode(kind='not', operands=(2,)), OperatorNode(kind='not', operands=(3,)))"
+        },
+        {
+            "exp": "(Fraction(1, 6), -4, OperatorNode(kind='-', operands=(0, 1)), Fraction(2, 5), -2, 3, OperatorNode(kind='*', operands=(3, 4, 5)), OperatorNode(kind='+', operands=(2, 6)), 8, OperatorNode(kind='==', operands=(7, 8)), Fraction(-9, 2), Fraction(4, 1), OperatorNode(kind='<', operands=(10, 11)), FluentNode(fluent=1), FluentNode(fluent=1), Fraction(5, 1), Fraction(5, 4), Fraction(-1, 1), OperatorNode(kind='+', operands=(15, 16, 17)), OperatorNode(kind='*', operands=(13, 14, 18)), Fraction(-10, 3), Fraction(-1, 7), OperatorNode(kind='-', operands=(20, 21)), -9, 8, Fraction(-1, 2), -7, OperatorNode(kind='+', operands=(23, 24, 25, 26)), OperatorNode(kind='*', operands=(22, 27)), OperatorNode(kind='<=', operands=(19, 28)), 0, 0, Fraction(5, 7), OperatorNode(kind='/', operands=(31, 32)), 2, Fraction(1, 1), OperatorNode(kind='*', operands=(34, 35)), OperatorNode(kind='/', operands=(33, 36)), OperatorNode(kind='<', operands=(30, 37)), False, Fraction(-5, 1), 7, OperatorNode(kind='<=', operands=(40, 41)), FluentNode(fluent=0), FluentNode(fluent=0), FluentNode(fluent=0), FluentNode(fluent=0), OperatorNode(kind='or', operands=(43, 44, 45, 46)), False, False, FluentNode(fluent=0), False, FluentNode(fluent=0), OperatorNode(kind='and', operands=(48, 49, 50, 51, 52)), True, True, False, FluentNode(fluent=0), False, OperatorNode(kind='or', operands=(54, 55, 56, 57, 58)), FluentNode(fluent=0), OperatorNode(kind='and', operands=(47, 53, 59, 60)), Fraction(-6, 7), Fraction(1, 2), OperatorNode(kind='-', operands=(62, 63)), -5, OperatorNode(kind='<=', operands=(64, 65)), -9, Fraction(5, 7), OperatorNode(kind='==', operands=(67, 68)), False, OperatorNode(kind='and', operands=(69, 70)), OperatorNode(kind='and', operands=(39, 42, 61, 66, 71)), OperatorNode(kind='and', operands=(9, 12, 29, 38, 72)))",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(3, 4, OperatorNode(kind='/', operands=(0, 1)), FluentNode(fluent=1), OperatorNode(kind='==', operands=(2, 3)))",
+            "simplified_exp": "(Fraction(3, 4), FluentNode(fluent=1), OperatorNode(kind='==', operands=(0, 1)))"
+        },
+        {
+            "exp": "(4, Fraction(7, 2), OperatorNode(kind='+', operands=(0, 1)), FluentNode(fluent=1), OperatorNode(kind='<', operands=(2, 3)), OperatorNode(kind='not', operands=(4,)), OperatorNode(kind='not', operands=(5,)))",
+            "simplified_exp": "(Fraction(15, 2), FluentNode(fluent=1), OperatorNode(kind='<', operands=(0, 1)), OperatorNode(kind='not', operands=(2,)), OperatorNode(kind='not', operands=(3,)))"
+        },
+        {
+            "exp": "(FluentNode(fluent=0),)",
+            "simplified_exp": "(FluentNode(fluent=0),)"
+        },
+        {
+            "exp": "(FluentNode(fluent=0),)",
+            "simplified_exp": "(FluentNode(fluent=0),)"
+        },
+        {
+            "exp": "(True,)",
+            "simplified_exp": "(True,)"
+        },
+        {
+            "exp": "(False,)",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(0, Fraction(-2, 1), Fraction(-1, 9), -8, Fraction(-1, 4), OperatorNode(kind='+', operands=(1, 2, 3, 4)), -6, Fraction(1, 7), Fraction(3, 1), OperatorNode(kind='-', operands=(7, 8)), OperatorNode(kind='*', operands=(0, 5, 6, 9)), Fraction(3, 4), OperatorNode(kind='-', operands=(10, 11)), FluentNode(fluent=1), 5, OperatorNode(kind='-', operands=(13, 14)), OperatorNode(kind='<=', operands=(12, 15)))",
+            "simplified_exp": "(Fraction(-3, 4), FluentNode(fluent=1), 5, OperatorNode(kind='-', operands=(1, 2)), OperatorNode(kind='<=', operands=(0, 3)))"
+        },
+        {
+            "exp": "(-3, Fraction(-2, 1), OperatorNode(kind='<=', operands=(0, 1)))",
+            "simplified_exp": "(True,)"
+        },
+        {
+            "exp": "(2, -5, 2, OperatorNode(kind='+', operands=(0, 1, 2)), -10, 0, OperatorNode(kind='*', operands=(4, 5)), OperatorNode(kind='<=', operands=(3, 6)), False, False, OperatorNode(kind='or', operands=(7, 8, 9)), 3, Fraction(-4, 3), OperatorNode(kind='/', operands=(11, 12)), FluentNode(fluent=1), OperatorNode(kind='<=', operands=(13, 14)), FluentNode(fluent=0), FluentNode(fluent=0), True, FluentNode(fluent=0), True, FluentNode(fluent=0), OperatorNode(kind='and', operands=(17, 18, 19, 20, 21)), True, FluentNode(fluent=0), True, FluentNode(fluent=0), FluentNode(fluent=0), OperatorNode(kind='or', operands=(23, 24, 25, 26, 27)), True, True, FluentNode(fluent=0), False, True, OperatorNode(kind='or', operands=(30, 31, 32, 33)), OperatorNode(kind='or', operands=(16, 22, 28, 29, 34)), True, OperatorNode(kind='and', operands=(15, 35, 36)), Fraction(1, 2), Fraction(-3, 10), Fraction(1, 1), OperatorNode(kind='*', operands=(38, 39, 40)), Fraction(-8, 9), OperatorNode(kind='+', operands=(41, 42)), -4, FluentNode(fluent=1), OperatorNode(kind='/', operands=(44, 45)), OperatorNode(kind='<=', operands=(43, 46)), -1, Fraction(7, 5), OperatorNode(kind='<=', operands=(48, 49)), OperatorNode(kind='not', operands=(50,)), Fraction(3, 2), Fraction(1, 7), OperatorNode(kind='*', operands=(52, 53)), Fraction(-1, 1), Fraction(1, 1), OperatorNode(kind='-', operands=(55, 56)), OperatorNode(kind='<=', operands=(54, 57)), True, FluentNode(fluent=0), OperatorNode(kind='or', operands=(59, 60)), FluentNode(fluent=0), OperatorNode(kind='not', operands=(62,)), FluentNode(fluent=0), OperatorNode(kind='or', operands=(61, 63, 64)), Fraction(2, 3), Fraction(7, 9), OperatorNode(kind='/', operands=(66, 67)), FluentNode(fluent=1), OperatorNode(kind='<=', operands=(68, 69)), OperatorNode(kind='and', operands=(51, 58, 65, 70)), OperatorNode(kind='or', operands=(10, 37, 47, 71)))",
+            "simplified_exp": "(True,)"
+        },
+        {
+            "exp": "(Fraction(-7, 2), -6, OperatorNode(kind='-', operands=(0, 1)), 8, 10, 9, OperatorNode(kind='-', operands=(4, 5)), OperatorNode(kind='+', operands=(2, 3, 6)), -2, 2, OperatorNode(kind='-', operands=(8, 9)), -9, -7, FluentNode(fluent=1), OperatorNode(kind='*', operands=(10, 11, 12, 13)), OperatorNode(kind='==', operands=(7, 14)), FluentNode(fluent=1), 4, OperatorNode(kind='<', operands=(16, 17)), Fraction(1, 3), 6, -10, OperatorNode(kind='*', operands=(19, 20, 21)), 6, Fraction(8, 7), OperatorNode(kind='/', operands=(23, 24)), OperatorNode(kind='-', operands=(22, 25)), FluentNode(fluent=1), OperatorNode(kind='==', operands=(26, 27)), False, Fraction(-10, 1), Fraction(-4, 9), Fraction(4, 5), -2, Fraction(-8, 5), OperatorNode(kind='*', operands=(31, 32, 33, 34)), Fraction(3, 2), OperatorNode(kind='+', operands=(35, 36)), OperatorNode(kind='<=', operands=(30, 37)), OperatorNode(kind='or', operands=(15, 18, 28, 29, 38)))",
+            "simplified_exp": "(True,)"
+        },
+        {
+            "exp": "(FluentNode(fluent=0), FluentNode(fluent=0), Fraction(5, 8), -7, Fraction(3, 1), -9, OperatorNode(kind='+', operands=(2, 3, 4, 5)), 8, -10, OperatorNode(kind='/', operands=(7, 8)), OperatorNode(kind='<', operands=(6, 9)), True, 5, Fraction(-2, 1), -3, Fraction(-5, 4), OperatorNode(kind='*', operands=(12, 13, 14, 15)), 5, OperatorNode(kind='<', operands=(16, 17)), OperatorNode(kind='and', operands=(0, 1, 10, 11, 18)), FluentNode(fluent=1), -8, OperatorNode(kind='-', operands=(20, 21)), FluentNode(fluent=1), OperatorNode(kind='==', operands=(22, 23)), Fraction(-7, 3), Fraction(-1, 2), OperatorNode(kind='<=', operands=(25, 26)), FluentNode(fluent=1), Fraction(7, 6), Fraction(1, 1), Fraction(-6, 7), OperatorNode(kind='-', operands=(30, 31)), Fraction(8, 5), 4, OperatorNode(kind='/', operands=(33, 34)), Fraction(-4, 3), OperatorNode(kind='+', operands=(29, 32, 35, 36)), OperatorNode(kind='==', operands=(28, 37)), OperatorNode(kind='and', operands=(19, 24, 27, 38)))",
+            "simplified_exp": "(FluentNode(fluent=0), FluentNode(fluent=0), OperatorNode(kind='and', operands=(0, 1)), FluentNode(fluent=1), -8, OperatorNode(kind='-', operands=(3, 4)), FluentNode(fluent=1), OperatorNode(kind='==', operands=(5, 6)), FluentNode(fluent=1), Fraction(439, 210), OperatorNode(kind='==', operands=(8, 9)), OperatorNode(kind='and', operands=(2, 7, 10)))"
+        },
+        {
+            "exp": "(2, Fraction(7, 9), Fraction(-2, 3), OperatorNode(kind='-', operands=(1, 2)), -8, Fraction(-7, 4), OperatorNode(kind='-', operands=(4, 5)), Fraction(10, 1), Fraction(5, 4), OperatorNode(kind='/', operands=(7, 8)), OperatorNode(kind='+', operands=(3, 6, 9)), OperatorNode(kind='+', operands=(0, 10)), Fraction(1, 2), -3, -10, OperatorNode(kind='*', operands=(12, 13, 14)), OperatorNode(kind='==', operands=(11, 15)))",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(-6, 9, OperatorNode(kind='-', operands=(0, 1)), Fraction(2, 1), 6, Fraction(3, 1), -3, OperatorNode(kind='-', operands=(5, 6)), OperatorNode(kind='/', operands=(4, 7)), OperatorNode(kind='-', operands=(3, 8)), OperatorNode(kind='<=', operands=(2, 9)))",
+            "simplified_exp": "(True,)"
+        },
+        {
+            "exp": "(3, Fraction(-1, 10), OperatorNode(kind='/', operands=(0, 1)), FluentNode(fluent=1), 8, OperatorNode(kind='+', operands=(2, 3, 4)), FluentNode(fluent=1), OperatorNode(kind='<=', operands=(5, 6)))",
+            "simplified_exp": "(-22, FluentNode(fluent=1), OperatorNode(kind='+', operands=(0, 1)), FluentNode(fluent=1), OperatorNode(kind='<=', operands=(2, 3)))"
+        },
+        {
+            "exp": "(FluentNode(fluent=1), -2, -7, OperatorNode(kind='*', operands=(1, 2)), FluentNode(fluent=1), -6, OperatorNode(kind='*', operands=(3, 4, 5)), OperatorNode(kind='/', operands=(0, 6)), Fraction(5, 3), 3, OperatorNode(kind='*', operands=(8, 9)), 7, 5, OperatorNode(kind='-', operands=(11, 12)), OperatorNode(kind='/', operands=(10, 13)), 6, OperatorNode(kind='-', operands=(14, 15)), OperatorNode(kind='==', operands=(7, 16)))",
+            "simplified_exp": "(FluentNode(fluent=1), -84, FluentNode(fluent=1), OperatorNode(kind='*', operands=(1, 2)), OperatorNode(kind='/', operands=(0, 3)), Fraction(-7, 2), OperatorNode(kind='==', operands=(4, 5)))"
+        },
+        {
+            "exp": "(FluentNode(fluent=1), Fraction(-5, 7), 8, Fraction(2, 1), Fraction(-7, 1), OperatorNode(kind='-', operands=(3, 4)), OperatorNode(kind='+', operands=(0, 1, 2, 5)), 7, 3, -2, Fraction(-3, 4), OperatorNode(kind='+', operands=(8, 9, 10)), Fraction(-10, 3), -4, Fraction(1, 3), OperatorNode(kind='+', operands=(12, 13, 14)), FluentNode(fluent=1), OperatorNode(kind='+', operands=(7, 11, 15, 16)), OperatorNode(kind='+', operands=(6, 17)), 0, OperatorNode(kind='<', operands=(18, 19)))",
+            "simplified_exp": "(FluentNode(fluent=1), Fraction(114, 7), OperatorNode(kind='+', operands=(0, 1)), Fraction(1, 4), FluentNode(fluent=1), OperatorNode(kind='+', operands=(3, 4)), OperatorNode(kind='+', operands=(2, 5)), 0, OperatorNode(kind='<', operands=(6, 7)))"
+        },
+        {
+            "exp": "(-5, Fraction(2, 3), 0, OperatorNode(kind='+', operands=(0, 1, 2)), Fraction(-3, 10), OperatorNode(kind='*', operands=(3, 4)), 9, Fraction(1, 2), OperatorNode(kind='-', operands=(6, 7)), Fraction(1, 1), -6, OperatorNode(kind='-', operands=(9, 10)), Fraction(-5, 2), 6, Fraction(-3, 4), -5, Fraction(-8, 7), OperatorNode(kind='*', operands=(13, 14, 15, 16)), OperatorNode(kind='+', operands=(8, 11, 12, 17)), OperatorNode(kind='<=', operands=(5, 18)), Fraction(3, 4), -6, OperatorNode(kind='/', operands=(20, 21)), 1, -10, Fraction(2, 7), OperatorNode(kind='+', operands=(23, 24, 25)), Fraction(1, 3), Fraction(-7, 9), OperatorNode(kind='-', operands=(27, 28)), OperatorNode(kind='*', operands=(22, 26, 29)), -8, Fraction(4, 7), Fraction(-2, 1), OperatorNode(kind='-', operands=(32, 33)), OperatorNode(kind='-', operands=(31, 34)), OperatorNode(kind='<', operands=(30, 35)), Fraction(-5, 2), Fraction(-4, 7), Fraction(-2, 5), OperatorNode(kind='-', operands=(38, 39)), OperatorNode(kind='==', operands=(37, 40)), FluentNode(fluent=0), OperatorNode(kind='not', operands=(42,)), OperatorNode(kind='or', operands=(41, 43)), False, Fraction(9, 8), Fraction(-7, 1), OperatorNode(kind='-', operands=(46, 47)), 3, -6, -7, OperatorNode(kind='-', operands=(50, 51)), -9, Fraction(-7, 2), Fraction(-3, 5), OperatorNode(kind='*', operands=(53, 54, 55)), OperatorNode(kind='*', operands=(48, 49, 52, 56)), 0, -5, OperatorNode(kind='*', operands=(58, 59)), Fraction(-1, 2), 9, OperatorNode(kind='+', operands=(61, 62)), OperatorNode(kind='/', operands=(60, 63)), OperatorNode(kind='==', operands=(57, 64)), OperatorNode(kind='and', operands=(19, 36, 44, 45, 65)))",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(-2, 6, 8, OperatorNode(kind='-', operands=(1, 2)), OperatorNode(kind='/', operands=(0, 3)), Fraction(-1, 9), OperatorNode(kind='/', operands=(4, 5)), Fraction(-2, 9), -5, 2, OperatorNode(kind='/', operands=(8, 9)), OperatorNode(kind='/', operands=(7, 10)), Fraction(-2, 1), OperatorNode(kind='/', operands=(11, 12)), OperatorNode(kind='<=', operands=(6, 13)))",
+            "simplified_exp": "(True,)"
+        },
+        {
+            "exp": "(-4, Fraction(-3, 5), OperatorNode(kind='/', operands=(0, 1)), -8, Fraction(-6, 1), OperatorNode(kind='-', operands=(3, 4)), OperatorNode(kind='-', operands=(2, 5)), 9, OperatorNode(kind='==', operands=(6, 7)), OperatorNode(kind='not', operands=(8,)))",
+            "simplified_exp": "(True,)"
+        },
+        {
+            "exp": "(True,)",
+            "simplified_exp": "(True,)"
+        },
+        {
+            "exp": "(FluentNode(fluent=0),)",
+            "simplified_exp": "(FluentNode(fluent=0),)"
+        },
+        {
+            "exp": "(3, Fraction(1, 5), Fraction(-3, 5), OperatorNode(kind='-', operands=(1, 2)), OperatorNode(kind='<', operands=(0, 3)), False, OperatorNode(kind='not', operands=(5,)), True, FluentNode(fluent=0), Fraction(-1, 4), -2, OperatorNode(kind='==', operands=(9, 10)), True, OperatorNode(kind='or', operands=(6, 7, 8, 11, 12)), FluentNode(fluent=1), -2, Fraction(-4, 1), OperatorNode(kind='-', operands=(15, 16)), OperatorNode(kind='<=', operands=(14, 17)), FluentNode(fluent=1), Fraction(1, 2), OperatorNode(kind='<=', operands=(19, 20)), OperatorNode(kind='or', operands=(4, 13, 18, 21)), -3, -1, OperatorNode(kind='<=', operands=(23, 24)), FluentNode(fluent=0), 1, Fraction(9, 4), Fraction(-5, 7), OperatorNode(kind='-', operands=(28, 29)), OperatorNode(kind='<', operands=(27, 30)), -5, Fraction(4, 3), -1, -5, OperatorNode(kind='+', operands=(32, 33, 34, 35)), Fraction(3, 4), Fraction(4, 9), OperatorNode(kind='-', operands=(37, 38)), OperatorNode(kind='<=', operands=(36, 39)), True, False, FluentNode(fluent=0), True, OperatorNode(kind='or', operands=(41, 42, 43, 44)), 2, Fraction(3, 2), OperatorNode(kind='<=', operands=(46, 47)), False, OperatorNode(kind='and', operands=(45, 48, 49)), OperatorNode(kind='and', operands=(31, 40, 50)), OperatorNode(kind='and', operands=(22, 25, 26, 51)))",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(False,)",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(FluentNode(fluent=1), Fraction(3, 10), -4, -9, OperatorNode(kind='*', operands=(1, 2, 3)), 4, 4, OperatorNode(kind='-', operands=(5, 6)), 9, Fraction(10, 3), Fraction(-6, 5), Fraction(1, 8), OperatorNode(kind='*', operands=(8, 9, 10, 11)), OperatorNode(kind='+', operands=(4, 7, 12)), Fraction(-8, 5), Fraction(8, 5), OperatorNode(kind='*', operands=(14, 15)), Fraction(-10, 7), Fraction(-9, 5), OperatorNode(kind='/', operands=(17, 18)), OperatorNode(kind='/', operands=(16, 19)), -4, Fraction(5, 9), OperatorNode(kind='/', operands=(21, 22)), Fraction(10, 9), Fraction(-5, 7), Fraction(-9, 1), OperatorNode(kind='/', operands=(25, 26)), -2, Fraction(1, 4), OperatorNode(kind='/', operands=(28, 29)), OperatorNode(kind='*', operands=(23, 24, 27, 30)), OperatorNode(kind='+', operands=(0, 13, 20, 31)), -2, -4, Fraction(3, 5), OperatorNode(kind='/', operands=(34, 35)), OperatorNode(kind='-', operands=(33, 36)), OperatorNode(kind='<=', operands=(32, 37)))",
+            "simplified_exp": "(FluentNode(fluent=1), Fraction(642109, 78750), OperatorNode(kind='+', operands=(0, 1)), Fraction(14, 3), OperatorNode(kind='<=', operands=(2, 3)))"
+        },
+        {
+            "exp": "(False, OperatorNode(kind='not', operands=(0,)))",
+            "simplified_exp": "(True,)"
+        },
+        {
+            "exp": "(False,)",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(Fraction(10, 7), -10, -10, OperatorNode(kind='*', operands=(0, 1, 2)), Fraction(-4, 7), 0, OperatorNode(kind='-', operands=(4, 5)), OperatorNode(kind='<', operands=(3, 6)), 9, Fraction(1, 1), OperatorNode(kind='<', operands=(8, 9)), 10, 6, OperatorNode(kind='<=', operands=(11, 12)), FluentNode(fluent=0), OperatorNode(kind='and', operands=(10, 13, 14)), FluentNode(fluent=1), FluentNode(fluent=1), OperatorNode(kind='<=', operands=(16, 17)), 0, Fraction(-4, 5), OperatorNode(kind='==', operands=(19, 20)), Fraction(8, 3), 6, OperatorNode(kind='==', operands=(22, 23)), OperatorNode(kind='or', operands=(21, 24)), Fraction(-3, 10), Fraction(1, 5), OperatorNode(kind='<=', operands=(26, 27)), OperatorNode(kind='not', operands=(28,)), OperatorNode(kind='or', operands=(7, 15, 18, 25, 29)), OperatorNode(kind='not', operands=(30,)))",
+            "simplified_exp": "(FluentNode(fluent=1), FluentNode(fluent=1), OperatorNode(kind='<=', operands=(0, 1)), OperatorNode(kind='not', operands=(2,)))"
+        },
+        {
+            "exp": "(FluentNode(fluent=0),)",
+            "simplified_exp": "(FluentNode(fluent=0),)"
+        },
+        {
+            "exp": "(FluentNode(fluent=0), OperatorNode(kind='not', operands=(0,)), FluentNode(fluent=1), FluentNode(fluent=1), OperatorNode(kind='<=', operands=(2, 3)), FluentNode(fluent=0), -10, 9, OperatorNode(kind='/', operands=(6, 7)), -6, OperatorNode(kind='-', operands=(8, 9)), 3, OperatorNode(kind='==', operands=(10, 11)), Fraction(2, 7), -9, OperatorNode(kind='+', operands=(13, 14)), Fraction(-1, 1), OperatorNode(kind='/', operands=(15, 16)), Fraction(9, 5), Fraction(-9, 1), OperatorNode(kind='/', operands=(18, 19)), 7, 10, 8, OperatorNode(kind='*', operands=(21, 22, 23)), OperatorNode(kind='-', operands=(20, 24)), OperatorNode(kind='<=', operands=(17, 25)), OperatorNode(kind='and', operands=(1, 4, 5, 12, 26)))",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(FluentNode(fluent=1), FluentNode(fluent=1), OperatorNode(kind='<', operands=(0, 1)), False, FluentNode(fluent=0), True, False, FluentNode(fluent=0), True, OperatorNode(kind='and', operands=(6, 7, 8)), False, FluentNode(fluent=0), True, FluentNode(fluent=0), OperatorNode(kind='and', operands=(10, 11, 12, 13)), OperatorNode(kind='or', operands=(3, 4, 5, 9, 14)), OperatorNode(kind='not', operands=(15,)), OperatorNode(kind='and', operands=(2, 16)))",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(-8, Fraction(-1, 1), OperatorNode(kind='-', operands=(0, 1)), Fraction(-9, 2), -6, OperatorNode(kind='-', operands=(3, 4)), Fraction(2, 3), -9, Fraction(2, 9), OperatorNode(kind='*', operands=(6, 7, 8)), FluentNode(fluent=1), OperatorNode(kind='+', operands=(2, 5, 9, 10)), FluentNode(fluent=1), FluentNode(fluent=1), OperatorNode(kind='-', operands=(12, 13)), Fraction(-3, 2), 6, 2, OperatorNode(kind='+', operands=(15, 16, 17)), Fraction(-9, 1), 8, OperatorNode(kind='/', operands=(19, 20)), 5, 1, OperatorNode(kind='*', operands=(18, 21, 22, 23)), OperatorNode(kind='*', operands=(11, 14, 24)), Fraction(1, 1), -9, FluentNode(fluent=1), 1, OperatorNode(kind='-', operands=(28, 29)), Fraction(-5, 8), OperatorNode(kind='+', operands=(26, 27, 30, 31)), OperatorNode(kind='==', operands=(25, 32)))",
+            "simplified_exp": "(Fraction(-41, 6), FluentNode(fluent=1), OperatorNode(kind='+', operands=(0, 1)), FluentNode(fluent=1), FluentNode(fluent=1), OperatorNode(kind='-', operands=(3, 4)), Fraction(-585, 16), OperatorNode(kind='*', operands=(2, 5, 6)), Fraction(-69, 8), FluentNode(fluent=1), 1, OperatorNode(kind='-', operands=(9, 10)), OperatorNode(kind='+', operands=(8, 11)), OperatorNode(kind='==', operands=(7, 12)))"
+        },
+        {
+            "exp": "(10, Fraction(-3, 1), OperatorNode(kind='/', operands=(0, 1)), Fraction(7, 5), Fraction(1, 8), OperatorNode(kind='/', operands=(3, 4)), OperatorNode(kind='+', operands=(2, 5)), 9, Fraction(-5, 3), OperatorNode(kind='-', operands=(7, 8)), 6, Fraction(-2, 3), Fraction(-1, 1), Fraction(9, 10), OperatorNode(kind='+', operands=(10, 11, 12, 13)), OperatorNode(kind='-', operands=(9, 14)), OperatorNode(kind='/', operands=(6, 15)), FluentNode(fluent=1), Fraction(3, 2), -2, OperatorNode(kind='-', operands=(18, 19)), 7, 4, OperatorNode(kind='-', operands=(21, 22)), OperatorNode(kind='+', operands=(20, 23)), OperatorNode(kind='/', operands=(17, 24)), OperatorNode(kind='<', operands=(16, 25)))",
+            "simplified_exp": "(Fraction(236, 163), FluentNode(fluent=1), Fraction(13, 2), OperatorNode(kind='/', operands=(1, 2)), OperatorNode(kind='<', operands=(0, 3)))"
+        },
+        {
+            "exp": "(Fraction(5, 3), Fraction(9, 8), Fraction(-7, 5), OperatorNode(kind='-', operands=(1, 2)), OperatorNode(kind='<', operands=(0, 3)))",
+            "simplified_exp": "(True,)"
+        },
+        {
+            "exp": "(FluentNode(fluent=1), -4, Fraction(9, 8), OperatorNode(kind='*', operands=(1, 2)), OperatorNode(kind='<=', operands=(0, 3)), FluentNode(fluent=0), Fraction(-7, 1), -9, OperatorNode(kind='<', operands=(6, 7)), OperatorNode(kind='not', operands=(8,)), OperatorNode(kind='not', operands=(9,)), Fraction(-10, 9), Fraction(-3, 2), -8, OperatorNode(kind='-', operands=(12, 13)), 6, 8, OperatorNode(kind='/', operands=(15, 16)), Fraction(5, 2), -9, OperatorNode(kind='-', operands=(18, 19)), OperatorNode(kind='+', operands=(14, 17, 20)), OperatorNode(kind='==', operands=(11, 21)), OperatorNode(kind='or', operands=(4, 5, 10, 22)))",
+            "simplified_exp": "(FluentNode(fluent=1), Fraction(-9, 2), OperatorNode(kind='<=', operands=(0, 1)), FluentNode(fluent=0), OperatorNode(kind='or', operands=(2, 3)))"
+        },
+        {
+            "exp": "(FluentNode(fluent=0),)",
+            "simplified_exp": "(FluentNode(fluent=0),)"
+        },
+        {
+            "exp": "(FluentNode(fluent=0), OperatorNode(kind='not', operands=(0,)))",
+            "simplified_exp": "(FluentNode(fluent=0), OperatorNode(kind='not', operands=(0,)))"
+        },
+        {
+            "exp": "(-2, Fraction(3, 10), OperatorNode(kind='-', operands=(0, 1)), Fraction(3, 4), OperatorNode(kind='/', operands=(2, 3)), FluentNode(fluent=1), OperatorNode(kind='*', operands=(4, 5)), Fraction(-2, 1), Fraction(-3, 4), 1, Fraction(5, 2), OperatorNode(kind='-', operands=(9, 10)), Fraction(1, 3), 8, 3, -6, OperatorNode(kind='*', operands=(12, 13, 14, 15)), OperatorNode(kind='/', operands=(11, 16)), OperatorNode(kind='+', operands=(7, 8, 17)), OperatorNode(kind='<=', operands=(6, 18)))",
+            "simplified_exp": "(Fraction(-46, 15), FluentNode(fluent=1), OperatorNode(kind='*', operands=(0, 1)), Fraction(-87, 32), OperatorNode(kind='<=', operands=(2, 3)))"
+        },
+        {
+            "exp": "(6, FluentNode(fluent=1), OperatorNode(kind='-', operands=(0, 1)), Fraction(4, 3), OperatorNode(kind='<', operands=(2, 3)))",
+            "simplified_exp": "(6, FluentNode(fluent=1), OperatorNode(kind='-', operands=(0, 1)), Fraction(4, 3), OperatorNode(kind='<', operands=(2, 3)))"
+        },
+        {
+            "exp": "(Fraction(-2, 1), FluentNode(fluent=1), OperatorNode(kind='<', operands=(0, 1)))",
+            "simplified_exp": "(-2, FluentNode(fluent=1), OperatorNode(kind='<', operands=(0, 1)))"
+        },
+        {
+            "exp": "(FluentNode(fluent=1), FluentNode(fluent=1), OperatorNode(kind='<', operands=(0, 1)))",
+            "simplified_exp": "(FluentNode(fluent=1), FluentNode(fluent=1), OperatorNode(kind='<', operands=(0, 1)))"
+        },
+        {
+            "exp": "(-5, 6, 4, OperatorNode(kind='+', operands=(1, 2)), OperatorNode(kind='<=', operands=(0, 3)), False, OperatorNode(kind='not', operands=(5,)), FluentNode(fluent=0), FluentNode(fluent=0), OperatorNode(kind='not', operands=(8,)), Fraction(6, 7), Fraction(9, 10), OperatorNode(kind='==', operands=(10, 11)), FluentNode(fluent=0), FluentNode(fluent=0), OperatorNode(kind='and', operands=(13, 14)), OperatorNode(kind='and', operands=(6, 7, 9, 12, 15)), Fraction(-4, 7), -7, OperatorNode(kind='<=', operands=(17, 18)), 6, -9, -3, -7, OperatorNode(kind='*', operands=(21, 22, 23)), OperatorNode(kind='<=', operands=(20, 24)), OperatorNode(kind='or', operands=(4, 16, 19, 25)), OperatorNode(kind='not', operands=(26,)))",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(6, -4, OperatorNode(kind='-', operands=(0, 1)), -7, 9, OperatorNode(kind='+', operands=(3, 4)), OperatorNode(kind='/', operands=(2, 5)), Fraction(-10, 7), OperatorNode(kind='+', operands=(6, 7)), 1, Fraction(1, 4), Fraction(9, 4), OperatorNode(kind='*', operands=(9, 10, 11)), -6, 4, OperatorNode(kind='/', operands=(13, 14)), Fraction(-7, 6), Fraction(5, 1), OperatorNode(kind='+', operands=(16, 17)), OperatorNode(kind='*', operands=(12, 15, 18)), -3, 3, -10, OperatorNode(kind='+', operands=(20, 21, 22)), 6, Fraction(2, 9), Fraction(-1, 3), OperatorNode(kind='+', operands=(24, 25, 26)), OperatorNode(kind='/', operands=(23, 27)), OperatorNode(kind='/', operands=(19, 28)), OperatorNode(kind='<=', operands=(8, 29)))",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(Fraction(-1, 3), Fraction(5, 3), 9, Fraction(-3, 10), OperatorNode(kind='*', operands=(0, 1, 2, 3)), Fraction(-5, 4), OperatorNode(kind='<=', operands=(4, 5)), OperatorNode(kind='not', operands=(6,)), FluentNode(fluent=0), Fraction(1, 5), Fraction(3, 1), OperatorNode(kind='/', operands=(9, 10)), 5, OperatorNode(kind='<', operands=(11, 12)), False, Fraction(-9, 7), -3, OperatorNode(kind='<', operands=(15, 16)), OperatorNode(kind='or', operands=(14, 17)), FluentNode(fluent=0), OperatorNode(kind='and', operands=(13, 18, 19)), OperatorNode(kind='or', operands=(7, 8, 20)))",
+            "simplified_exp": "(True,)"
+        },
+        {
+            "exp": "(False, True, True, OperatorNode(kind='and', operands=(0, 1, 2)), Fraction(-1, 2), 4, OperatorNode(kind='<', operands=(4, 5)), True, OperatorNode(kind='or', operands=(3, 6, 7)), FluentNode(fluent=1), Fraction(5, 4), -8, -3, OperatorNode(kind='*', operands=(10, 11, 12)), OperatorNode(kind='==', operands=(9, 13)), OperatorNode(kind='or', operands=(8, 14)), -2, Fraction(3, 5), OperatorNode(kind='/', operands=(16, 17)), Fraction(5, 2), Fraction(-4, 5), Fraction(2, 1), Fraction(7, 8), OperatorNode(kind='*', operands=(19, 20, 21, 22)), OperatorNode(kind='==', operands=(18, 23)), True, -5, -2, 2, Fraction(1, 1), OperatorNode(kind='+', operands=(26, 27, 28, 29)), FluentNode(fluent=1), OperatorNode(kind='<=', operands=(30, 31)), Fraction(-5, 3), 0, Fraction(1, 7), OperatorNode(kind='*', operands=(34, 35)), OperatorNode(kind='<=', operands=(33, 36)), 0, Fraction(1, 2), OperatorNode(kind='==', operands=(38, 39)), OperatorNode(kind='not', operands=(40,)), OperatorNode(kind='or', operands=(24, 25, 32, 37, 41)), Fraction(6, 7), Fraction(-3, 5), -8, OperatorNode(kind='*', operands=(43, 44, 45)), Fraction(2, 1), Fraction(-4, 7), OperatorNode(kind='-', operands=(47, 48)), OperatorNode(kind='/', operands=(46, 49)), 3, -1, -1, Fraction(3, 2), OperatorNode(kind='-', operands=(53, 54)), -6, OperatorNode(kind='*', operands=(51, 52, 55, 56)), OperatorNode(kind='==', operands=(50, 57)), False, FluentNode(fluent=1), 1, Fraction(-3, 1), OperatorNode(kind='+', operands=(61, 62)), OperatorNode(kind='/', operands=(60, 63)), -7, -7, FluentNode(fluent=1), OperatorNode(kind='+', operands=(65, 66, 67)), OperatorNode(kind='==', operands=(64, 68)), OperatorNode(kind='and', operands=(15, 42, 58, 59, 69)))",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(FluentNode(fluent=0), FluentNode(fluent=0), OperatorNode(kind='not', operands=(1,)), FluentNode(fluent=0), False, OperatorNode(kind='not', operands=(4,)), OperatorNode(kind='or', operands=(0, 2, 3, 5)))",
+            "simplified_exp": "(True,)"
+        },
+        {
+            "exp": "(FluentNode(fluent=0),)",
+            "simplified_exp": "(FluentNode(fluent=0),)"
+        },
+        {
+            "exp": "(FluentNode(fluent=1), 4, 7, OperatorNode(kind='/', operands=(1, 2)), OperatorNode(kind='<', operands=(0, 3)), -7, -1, OperatorNode(kind='<=', operands=(5, 6)), FluentNode(fluent=0), OperatorNode(kind='and', operands=(4, 7, 8)), Fraction(-7, 4), Fraction(7, 1), Fraction(5, 6), OperatorNode(kind='-', operands=(11, 12)), Fraction(-8, 5), Fraction(-1, 1), OperatorNode(kind='-', operands=(14, 15)), Fraction(-6, 1), FluentNode(fluent=1), OperatorNode(kind='+', operands=(13, 16, 17, 18)), OperatorNode(kind='<=', operands=(10, 19)), Fraction(1, 2), Fraction(4, 7), OperatorNode(kind='/', operands=(21, 22)), Fraction(1, 8), Fraction(-4, 3), -4, -8, OperatorNode(kind='*', operands=(24, 25, 26, 27)), OperatorNode(kind='-', operands=(23, 28)), Fraction(-2, 1), Fraction(9, 8), OperatorNode(kind='*', operands=(30, 31)), Fraction(2, 5), Fraction(-8, 9), Fraction(1, 2), Fraction(-1, 1), OperatorNode(kind='*', operands=(33, 34, 35, 36)), OperatorNode(kind='+', operands=(32, 37)), OperatorNode(kind='<', operands=(29, 38)), 10, Fraction(-8, 3), Fraction(-7, 10), Fraction(-3, 2), OperatorNode(kind='+', operands=(40, 41, 42, 43)), FluentNode(fluent=1), OperatorNode(kind='<', operands=(44, 45)), 1, 3, OperatorNode(kind='/', operands=(47, 48)), Fraction(2, 3), 2, 9, OperatorNode(kind='+', operands=(50, 51, 52)), OperatorNode(kind='<=', operands=(49, 53)), Fraction(4, 1), -5, -3, OperatorNode(kind='/', operands=(56, 57)), OperatorNode(kind='==', operands=(55, 58)), Fraction(5, 7), Fraction(-9, 1), OperatorNode(kind='<=', operands=(60, 61)), False, True, FluentNode(fluent=0), FluentNode(fluent=0), FluentNode(fluent=0), OperatorNode(kind='and', operands=(63, 64, 65, 66, 67)), OperatorNode(kind='and', operands=(62, 68)), OperatorNode(kind='or', operands=(46, 54, 59, 69)), 8, FluentNode(fluent=1), FluentNode(fluent=1), OperatorNode(kind='/', operands=(72, 73)), OperatorNode(kind='<=', operands=(71, 74)), OperatorNode(kind='and', operands=(9, 20, 39, 70, 75)))",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(-9, Fraction(8, 5), 2, OperatorNode(kind='/', operands=(1, 2)), 3, -9, 1, -1, OperatorNode(kind='/', operands=(6, 7)), OperatorNode(kind='*', operands=(3, 4, 5, 8)), FluentNode(fluent=1), OperatorNode(kind='/', operands=(9, 10)), OperatorNode(kind='<', operands=(0, 11)))",
+            "simplified_exp": "(-9, Fraction(108, 5), FluentNode(fluent=1), OperatorNode(kind='/', operands=(1, 2)), OperatorNode(kind='<', operands=(0, 3)))"
+        },
+        {
+            "exp": "(False,)",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(False,)",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(-10, -7, OperatorNode(kind='-', operands=(0, 1)), -8, OperatorNode(kind='*', operands=(2, 3)), -4, 5, OperatorNode(kind='/', operands=(5, 6)), 5, Fraction(9, 2), OperatorNode(kind='+', operands=(8, 9)), OperatorNode(kind='-', operands=(7, 10)), OperatorNode(kind='<', operands=(4, 11)), -8, 7, OperatorNode(kind='-', operands=(13, 14)), Fraction(7, 6), OperatorNode(kind='<=', operands=(15, 16)), Fraction(-2, 5), -6, OperatorNode(kind='-', operands=(18, 19)), Fraction(-5, 6), Fraction(1, 1), OperatorNode(kind='-', operands=(21, 22)), OperatorNode(kind='==', operands=(20, 23)), False, FluentNode(fluent=0), FluentNode(fluent=0), OperatorNode(kind='or', operands=(25, 26, 27)), FluentNode(fluent=0), False, True, FluentNode(fluent=0), OperatorNode(kind='and', operands=(29, 30, 31, 32)), FluentNode(fluent=0), True, OperatorNode(kind='or', operands=(34, 35)), 10, 9, OperatorNode(kind='==', operands=(37, 38)), OperatorNode(kind='and', operands=(28, 33, 36, 39)), -2, Fraction(-1, 6), OperatorNode(kind='<=', operands=(41, 42)), True, FluentNode(fluent=0), True, True, True, OperatorNode(kind='or', operands=(44, 45, 46, 47, 48)), -2, 10, OperatorNode(kind='<=', operands=(50, 51)), FluentNode(fluent=0), False, FluentNode(fluent=0), False, OperatorNode(kind='and', operands=(53, 54, 55, 56)), OperatorNode(kind='or', operands=(43, 49, 52, 57)), OperatorNode(kind='and', operands=(17, 24, 40, 58)), FluentNode(fluent=1), -2, -10, 0, 2, OperatorNode(kind='*', operands=(61, 62, 63, 64)), Fraction(1, 9), OperatorNode(kind='/', operands=(65, 66)), OperatorNode(kind='<=', operands=(60, 67)), OperatorNode(kind='and', operands=(12, 59, 68)))",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(Fraction(-3, 1), 3, OperatorNode(kind='-', operands=(0, 1)), FluentNode(fluent=1), OperatorNode(kind='-', operands=(2, 3)), Fraction(-4, 7), OperatorNode(kind='<', operands=(4, 5)), False, Fraction(1, 1), -2, -5, -1, -7, OperatorNode(kind='+', operands=(9, 10, 11, 12)), Fraction(-3, 7), OperatorNode(kind='+', operands=(8, 13, 14)), FluentNode(fluent=1), OperatorNode(kind='<', operands=(15, 16)), FluentNode(fluent=1), Fraction(-2, 5), Fraction(-1, 1), Fraction(8, 9), OperatorNode(kind='*', operands=(19, 20, 21)), 3, Fraction(-1, 1), OperatorNode(kind='-', operands=(23, 24)), OperatorNode(kind='-', operands=(22, 25)), OperatorNode(kind='<=', operands=(18, 26)), -2, 5, Fraction(-9, 8), OperatorNode(kind='*', operands=(29, 30)), OperatorNode(kind='-', operands=(28, 31)), Fraction(10, 1), Fraction(5, 7), -3, -5, OperatorNode(kind='+', operands=(33, 34, 35, 36)), Fraction(4, 3), Fraction(8, 5), OperatorNode(kind='/', operands=(38, 39)), OperatorNode(kind='-', operands=(37, 40)), OperatorNode(kind='<=', operands=(32, 41)), OperatorNode(kind='or', operands=(6, 7, 17, 27, 42)))",
+            "simplified_exp": "(-6, FluentNode(fluent=1), OperatorNode(kind='-', operands=(0, 1)), Fraction(-4, 7), OperatorNode(kind='<', operands=(2, 3)), Fraction(-101, 7), FluentNode(fluent=1), OperatorNode(kind='<', operands=(5, 6)), FluentNode(fluent=1), Fraction(-164, 45), OperatorNode(kind='<=', operands=(8, 9)), OperatorNode(kind='or', operands=(4, 7, 10)))"
+        },
+        {
+            "exp": "(FluentNode(fluent=1), 1, Fraction(-9, 10), OperatorNode(kind='/', operands=(1, 2)), -1, OperatorNode(kind='*', operands=(3, 4)), Fraction(3, 2), FluentNode(fluent=1), Fraction(1, 8), OperatorNode(kind='*', operands=(5, 6, 7, 8)), OperatorNode(kind='<', operands=(0, 9)))",
+            "simplified_exp": "(FluentNode(fluent=1), Fraction(5, 24), FluentNode(fluent=1), OperatorNode(kind='*', operands=(1, 2)), OperatorNode(kind='<', operands=(0, 3)))"
+        },
+        {
+            "exp": "(8, -6, 8, Fraction(5, 6), OperatorNode(kind='-', operands=(2, 3)), Fraction(-6, 1), FluentNode(fluent=1), OperatorNode(kind='*', operands=(4, 5, 6)), OperatorNode(kind='-', operands=(1, 7)), OperatorNode(kind='<', operands=(0, 8)))",
+            "simplified_exp": "(8, -6, -43, FluentNode(fluent=1), OperatorNode(kind='*', operands=(2, 3)), OperatorNode(kind='-', operands=(1, 4)), OperatorNode(kind='<', operands=(0, 5)))"
+        },
+        {
+            "exp": "(FluentNode(fluent=0),)",
+            "simplified_exp": "(FluentNode(fluent=0),)"
+        },
+        {
+            "exp": "(FluentNode(fluent=0),)",
+            "simplified_exp": "(FluentNode(fluent=0),)"
+        },
+        {
+            "exp": "(FluentNode(fluent=0),)",
+            "simplified_exp": "(FluentNode(fluent=0),)"
+        },
+        {
+            "exp": "(Fraction(8, 7), -8, Fraction(-8, 7), Fraction(-3, 7), 3, OperatorNode(kind='+', operands=(1, 2, 3, 4)), OperatorNode(kind='==', operands=(0, 5)), OperatorNode(kind='not', operands=(6,)), OperatorNode(kind='not', operands=(7,)))",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(FluentNode(fluent=0), FluentNode(fluent=1), FluentNode(fluent=1), OperatorNode(kind='==', operands=(1, 2)), FluentNode(fluent=1), Fraction(8, 3), OperatorNode(kind='<', operands=(4, 5)), 5, -7, OperatorNode(kind='/', operands=(7, 8)), Fraction(-3, 2), Fraction(5, 6), OperatorNode(kind='-', operands=(10, 11)), OperatorNode(kind='==', operands=(9, 12)), FluentNode(fluent=0), FluentNode(fluent=0), OperatorNode(kind='and', operands=(3, 6, 13, 14, 15)), FluentNode(fluent=1), FluentNode(fluent=1), FluentNode(fluent=1), OperatorNode(kind='/', operands=(18, 19)), OperatorNode(kind='<=', operands=(17, 20)), -4, Fraction(1, 3), OperatorNode(kind='/', operands=(22, 23)), Fraction(-2, 1), OperatorNode(kind='/', operands=(24, 25)), FluentNode(fluent=1), 2, 2, OperatorNode(kind='*', operands=(28, 29)), -6, -7, 10, OperatorNode(kind='+', operands=(31, 32, 33)), 2, OperatorNode(kind='*', operands=(27, 30, 34, 35)), OperatorNode(kind='==', operands=(26, 36)), OperatorNode(kind='or', operands=(0, 16, 21, 37)))",
+            "simplified_exp": "(FluentNode(fluent=0), FluentNode(fluent=1), FluentNode(fluent=1), FluentNode(fluent=1), OperatorNode(kind='/', operands=(2, 3)), OperatorNode(kind='<=', operands=(1, 4)), 6, FluentNode(fluent=1), -24, OperatorNode(kind='*', operands=(7, 8)), OperatorNode(kind='==', operands=(6, 9)), OperatorNode(kind='or', operands=(0, 5, 10)))"
+        },
+        {
+            "exp": "(FluentNode(fluent=0),)",
+            "simplified_exp": "(FluentNode(fluent=0),)"
+        },
+        {
+            "exp": "(FluentNode(fluent=0), OperatorNode(kind='not', operands=(0,)))",
+            "simplified_exp": "(FluentNode(fluent=0), OperatorNode(kind='not', operands=(0,)))"
+        },
+        {
+            "exp": "(FluentNode(fluent=0),)",
+            "simplified_exp": "(FluentNode(fluent=0),)"
+        },
+        {
+            "exp": "(Fraction(-5, 6), Fraction(3, 2), 10, Fraction(-1, 3), OperatorNode(kind='*', operands=(1, 2, 3)), Fraction(-8, 1), 1, OperatorNode(kind='-', operands=(5, 6)), OperatorNode(kind='*', operands=(4, 7)), OperatorNode(kind='<=', operands=(0, 8)), FluentNode(fluent=0), FluentNode(fluent=0), True, False, FluentNode(fluent=0), False, OperatorNode(kind='and', operands=(11, 12, 13, 14, 15)), FluentNode(fluent=0), FluentNode(fluent=0), FluentNode(fluent=0), FluentNode(fluent=0), OperatorNode(kind='or', operands=(17, 18, 19, 20)), OperatorNode(kind='or', operands=(10, 16, 21)), False, OperatorNode(kind='not', operands=(23,)), FluentNode(fluent=0), FluentNode(fluent=0), OperatorNode(kind='or', operands=(25, 26)), OperatorNode(kind='not', operands=(27,)), True, Fraction(-5, 3), 0, OperatorNode(kind='<=', operands=(30, 31)), OperatorNode(kind='and', operands=(29, 32)), Fraction(8, 3), -8, OperatorNode(kind='<', operands=(34, 35)), OperatorNode(kind='and', operands=(22, 24, 28, 33, 36)), False, FluentNode(fluent=0), OperatorNode(kind='or', operands=(9, 37, 38, 39)))",
+            "simplified_exp": "(True,)"
+        },
+        {
+            "exp": "(True,)",
+            "simplified_exp": "(True,)"
+        },
+        {
+            "exp": "(False, Fraction(-4, 7), 9, OperatorNode(kind='<=', operands=(1, 2)), FluentNode(fluent=0), True, OperatorNode(kind='or', operands=(4, 5)), False, FluentNode(fluent=0), FluentNode(fluent=0), OperatorNode(kind='and', operands=(7, 8, 9)), FluentNode(fluent=0), OperatorNode(kind='not', operands=(11,)), OperatorNode(kind='and', operands=(3, 6, 10, 12)), OperatorNode(kind='or', operands=(0, 13)), OperatorNode(kind='not', operands=(14,)))",
+            "simplified_exp": "(True,)"
+        },
+        {
+            "exp": "(FluentNode(fluent=1), Fraction(-8, 9), Fraction(-6, 7), OperatorNode(kind='/', operands=(1, 2)), Fraction(1, 2), Fraction(-7, 3), OperatorNode(kind='/', operands=(4, 5)), OperatorNode(kind='+', operands=(0, 3, 6)), Fraction(-4, 3), OperatorNode(kind='-', operands=(7, 8)), Fraction(5, 9), 8, 5, OperatorNode(kind='-', operands=(11, 12)), 5, OperatorNode(kind='/', operands=(13, 14)), OperatorNode(kind='-', operands=(10, 15)), OperatorNode(kind='==', operands=(9, 16)))",
+            "simplified_exp": "(FluentNode(fluent=1), Fraction(311, 378), OperatorNode(kind='+', operands=(0, 1)), Fraction(-4, 3), OperatorNode(kind='-', operands=(2, 3)), Fraction(-2, 45), OperatorNode(kind='==', operands=(4, 5)))"
+        },
+        {
+            "exp": "(False, FluentNode(fluent=0), OperatorNode(kind='and', operands=(0, 1)), FluentNode(fluent=0), -7, Fraction(-1, 2), OperatorNode(kind='==', operands=(4, 5)), FluentNode(fluent=0), FluentNode(fluent=0), False, OperatorNode(kind='or', operands=(7, 8, 9)), -4, -5, OperatorNode(kind='<=', operands=(11, 12)), FluentNode(fluent=0), OperatorNode(kind='not', operands=(14,)), OperatorNode(kind='or', operands=(6, 10, 13, 15)), Fraction(-2, 3), -8, OperatorNode(kind='==', operands=(17, 18)), -9, Fraction(-7, 4), OperatorNode(kind='<=', operands=(20, 21)), OperatorNode(kind='and', operands=(16, 19, 22)), 0, 5, Fraction(-4, 7), 1, OperatorNode(kind='-', operands=(26, 27)), FluentNode(fluent=1), OperatorNode(kind='+', operands=(24, 25, 28, 29)), Fraction(9, 5), OperatorNode(kind='==', operands=(30, 31)), 9, 7, Fraction(-2, 7), OperatorNode(kind='/', operands=(34, 35)), Fraction(-5, 1), Fraction(4, 1), OperatorNode(kind='/', operands=(37, 38)), OperatorNode(kind='*', operands=(36, 39)), OperatorNode(kind='<', operands=(33, 40)), OperatorNode(kind='or', operands=(2, 3, 23, 32, 41)))",
+            "simplified_exp": "(True,)"
+        },
+        {
+            "exp": "(FluentNode(fluent=1), Fraction(-8, 1), Fraction(7, 1), Fraction(10, 3), OperatorNode(kind='-', operands=(2, 3)), OperatorNode(kind='-', operands=(1, 4)), OperatorNode(kind='==', operands=(0, 5)), FluentNode(fluent=0), Fraction(7, 6), 7, OperatorNode(kind='/', operands=(8, 9)), FluentNode(fluent=1), OperatorNode(kind='/', operands=(10, 11)), Fraction(1, 2), -4, OperatorNode(kind='-', operands=(13, 14)), OperatorNode(kind='<=', operands=(12, 15)), Fraction(7, 6), FluentNode(fluent=1), FluentNode(fluent=1), Fraction(-9, 1), Fraction(-7, 4), OperatorNode(kind='-', operands=(20, 21)), OperatorNode(kind='*', operands=(17, 18, 19, 22)), Fraction(9, 10), Fraction(-2, 5), Fraction(-1, 1), Fraction(1, 3), OperatorNode(kind='*', operands=(24, 25, 26, 27)), -1, Fraction(7, 1), -5, OperatorNode(kind='*', operands=(29, 30, 31)), OperatorNode(kind='/', operands=(28, 32)), OperatorNode(kind='<', operands=(23, 33)), OperatorNode(kind='and', operands=(6, 7, 16, 34)))",
+            "simplified_exp": "(FluentNode(fluent=1), Fraction(-35, 3), OperatorNode(kind='==', operands=(0, 1)), FluentNode(fluent=0), Fraction(1, 6), FluentNode(fluent=1), OperatorNode(kind='/', operands=(4, 5)), Fraction(9, 2), OperatorNode(kind='<=', operands=(6, 7)), Fraction(-203, 24), FluentNode(fluent=1), FluentNode(fluent=1), OperatorNode(kind='*', operands=(9, 10, 11)), Fraction(3, 875), OperatorNode(kind='<', operands=(12, 13)), OperatorNode(kind='and', operands=(2, 3, 8, 14)))"
+        },
+        {
+            "exp": "(8, Fraction(2, 3), OperatorNode(kind='+', operands=(0, 1)), -5, 9, 4, Fraction(9, 1), OperatorNode(kind='*', operands=(3, 4, 5, 6)), 10, 9, OperatorNode(kind='+', operands=(8, 9)), OperatorNode(kind='-', operands=(7, 10)), Fraction(2, 1), FluentNode(fluent=1), -6, Fraction(5, 3), OperatorNode(kind='-', operands=(14, 15)), OperatorNode(kind='-', operands=(13, 16)), OperatorNode(kind='*', operands=(11, 12, 17)), OperatorNode(kind='<=', operands=(2, 18)))",
+            "simplified_exp": "(Fraction(26, 3), -3278, FluentNode(fluent=1), Fraction(-23, 3), OperatorNode(kind='-', operands=(2, 3)), OperatorNode(kind='*', operands=(1, 4)), OperatorNode(kind='<=', operands=(0, 5)))"
+        },
+        {
+            "exp": "(True, 0, FluentNode(fluent=1), OperatorNode(kind='==', operands=(1, 2)), -1, 1, OperatorNode(kind='/', operands=(4, 5)), -10, OperatorNode(kind='==', operands=(6, 7)), 3, Fraction(-5, 4), OperatorNode(kind='<=', operands=(9, 10)), OperatorNode(kind='or', operands=(0, 3, 8, 11)), OperatorNode(kind='not', operands=(12,)))",
+            "simplified_exp": "(False,)"
+        },
+        {
+            "exp": "(False, OperatorNode(kind='not', operands=(0,)))",
+            "simplified_exp": "(True,)"
+        },
+        {
+            "exp": "(10, -9, -6, Fraction(-10, 3), OperatorNode(kind='/', operands=(2, 3)), OperatorNode(kind='/', operands=(1, 4)), OperatorNode(kind='-', operands=(0, 5)), -10, 2, Fraction(-3, 7), OperatorNode(kind='/', operands=(8, 9)), 0, 6, Fraction(1, 7), Fraction(2, 3), OperatorNode(kind='*', operands=(12, 13, 14)), OperatorNode(kind='*', operands=(7, 10, 11, 15)), Fraction(4, 1), Fraction(5, 6), FluentNode(fluent=1), -5, Fraction(-1, 7), 8, OperatorNode(kind='*', operands=(20, 21, 22)), OperatorNode(kind='+', operands=(17, 18, 19, 23)), OperatorNode(kind='*', operands=(16, 24)), OperatorNode(kind='<', operands=(6, 25)))",
+            "simplified_exp": "(15, 0, Fraction(443, 42), FluentNode(fluent=1), OperatorNode(kind='+', operands=(2, 3)), OperatorNode(kind='*', operands=(1, 4)), OperatorNode(kind='<', operands=(0, 5)))"
+        }
+    ]
+}
