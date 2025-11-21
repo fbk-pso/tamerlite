@@ -225,20 +225,25 @@ def evaluate(exp: Expression, state: State) -> Union[bool, int, Fraction, str]:
                     v *= res[i]
                 res.append(v)
             elif e.kind == "/":
-                res.append(res[e.operands[0]] / res[e.operands[1]])
+                res.append(Fraction(res[e.operands[0]], res[e.operands[1]]))
     return res[-1]
 
 
-def simplify(exp: Expression, assignments: Dict[int, Union[bool, int, Fraction, str]]) -> Expression:
-    """This function simplify the given expression using the given assignments"""
+def simplify(
+    exp: Expression, assignments: Dict[int, Union[bool, int, Fraction, str]]
+) -> Expression:
+    """This function simplifies the given expression using the given assignments"""
 
     # We iterate over the expression elements and we store the simplified value in the res vector
-    # In the to_remove vector we store the index of the elements that can be removed
     res = []
-    to_remove = []
     for e in exp:
-        if isinstance(e, bool) or isinstance(e, int) or isinstance(e, Fraction):
+        if isinstance(e, bool) or isinstance(e, int):
             res.append(e)
+        elif isinstance(e, Fraction):
+            if e.is_integer():
+                res.append(int(e))
+            else:
+                res.append(e)
         elif isinstance(e, FluentNode):
             v = assignments.get(e.fluent, None)
             if v is None:
@@ -250,108 +255,135 @@ def simplify(exp: Expression, assignments: Dict[int, Union[bool, int, Fraction, 
         else:
             assert isinstance(e, OperatorNode)
             if e.kind == "and":
-                v = True
-                unresolved = False
-                true_to_remove = []
+                is_false = False
+                operands = []
                 for i in e.operands:
                     if isinstance(res[i], bool):
                         if not res[i]:
-                            v = False
-                            unresolved = False
+                            is_false = True
                             break
-                        else:
-                            true_to_remove.append(i)
                     else:
-                        unresolved = True
-                if not unresolved:
-                    to_remove.extend(e.operands)
-                    res.append(v)
+                        operands.append(i)
+                if is_false:
+                    res.append(False)
                 else:
-                    to_remove.extend(true_to_remove)
-                    res.append(e)
+                    if len(operands) == 0:
+                        res.append(True)
+                    elif len(operands) == 1:
+                        res.append(res[operands[0]])
+                    else:
+                        res.append(OperatorNode("and", tuple(operands)))
             elif e.kind == "or":
-                v = False
-                unresolved = False
-                false_to_remove = []
+                is_true = False
+                operands = []
                 for i in e.operands:
                     if isinstance(res[i], bool):
                         if res[i]:
-                            v = True
-                            unresolved = False
+                            is_true = True
                             break
-                        else:
-                            false_to_remove.append(i)
                     else:
-                        unresolved = True
-                if not unresolved:
-                    to_remove.extend(e.operands)
-                    res.append(v)
+                        operands.append(i)
+                if is_true:
+                    res.append(True)
                 else:
-                    to_remove.extend(false_to_remove)
-                    res.append(e)
+                    if len(operands) == 0:
+                        res.append(False)
+                    elif len(operands) == 1:
+                        res.append(res[operands[0]])
+                    else:
+                        res.append(OperatorNode("or", tuple(operands)))
             elif e.kind == "not":
                 v = res[e.operands[0]]
                 if isinstance(v, bool):
-                    to_remove.extend(e.operands)
                     res.append(not v)
                 else:
                     res.append(e)
             elif e.kind == "==":
                 v1 = res[e.operands[0]]
                 v2 = res[e.operands[1]]
-                if v1 == v2 or ((isinstance(v1, int) or isinstance(v1, Fraction)) and (isinstance(v2, int) or isinstance(v2, Fraction))):
-                    to_remove.extend(e.operands)
+                if v1 == v2 or (
+                    (isinstance(v1, int) or isinstance(v1, Fraction))
+                    and (isinstance(v2, int) or isinstance(v2, Fraction))
+                ):
                     res.append(v1 == v2)
                 else:
                     res.append(e)
             elif e.kind in ["<=", "<", "-", "/"]:
                 v1 = res[e.operands[0]]
                 v2 = res[e.operands[1]]
-                if (isinstance(v1, int) or isinstance(v1, Fraction)) and (isinstance(v2, int) or isinstance(v2, Fraction)):
-                    to_remove.extend(e.operands)
+                if (isinstance(v1, int) or isinstance(v1, Fraction)) and (
+                    isinstance(v2, int) or isinstance(v2, Fraction)
+                ):
                     if e.kind == "<=":
-                        res.append(v1 <= v2)
+                        r = v1 <= v2
                     elif e.kind == "<":
-                        res.append(v1 < v2)
+                        r = v1 < v2
                     elif e.kind == "-":
-                        res.append(v1 - v2)
+                        r = v1 - v2
                     elif e.kind == "/":
-                        res.append(v1 / v2)
+                        r = Fraction(v1, v2)
+
+                    if isinstance(r, Fraction) and r.is_integer():
+                        r = int(r)
+                    res.append(r)
                 else:
                     res.append(e)
             elif e.kind in ["+", "*"]:
                 v = 0 if e.kind == "+" else 1
-                to_simplified = True
+                first_constant_operand = None
+                operands = []
                 for i in e.operands:
                     v1 = res[i]
-                    if (isinstance(v1, int) or isinstance(v1, Fraction)):
+                    if isinstance(v1, int) or isinstance(v1, Fraction):
                         if e.kind == "+":
                             v += v1
                         else:
                             v *= v1
-                    else:
-                        to_simplified = False
-                        break
-                if to_simplified:
-                    to_remove.extend(e.operands)
-                    res.append(v)
-                else:
-                    res.append(e)
 
-    # We build the simplified expression iterating over the res elements, removing
-    # the ones that are not needed and updating the operands indexes
+                        if first_constant_operand is None:
+                            first_constant_operand = i
+                            operands.append(i)
+                    else:
+                        operands.append(i)
+
+                if first_constant_operand is None:
+                    res.append(e)
+                else:
+                    if isinstance(v, Fraction) and v.is_integer():
+                        v = int(v)
+
+                    if len(operands) == 1:
+                        res.append(v)
+                    else:
+                        res[first_constant_operand] = v
+                        res.append(OperatorNode(e.kind, operands))
+
+    # Keep only the nodes reachable from the root using a depth-first search
     final_res = []
-    to_remove = set(to_remove)
-    for i, e in enumerate(res):
-        if i not in to_remove:
-            if isinstance(e, OperatorNode):
-                operands = []
-                for o in e.operands:
-                    if o not in to_remove:
-                        operands.append(o - len(to_remove.intersection(range(o))))
+    stack = [(len(res) - 1, False)]
+    operands_stack = []
+    while len(stack) > 0:
+        idx, processed = stack.pop()
+        e = res[idx]
+        if (
+            isinstance(e, bool)
+            or isinstance(e, int)
+            or isinstance(e, Fraction)
+            or isinstance(e, FluentNode)
+            or isinstance(e, str)
+        ):
+            operands_stack.append(len(final_res))
+            final_res.append(e)
+        else:
+            if processed:
+                operands = [operands_stack.pop() for _ in e.operands]
+                operands.reverse()
+                operands_stack.append(len(final_res))
                 final_res.append(OperatorNode(e.kind, tuple(operands)))
             else:
-                final_res.append(e)
+                stack.append((idx, True))
+                for i in e.operands[::-1]:
+                    stack.append((i, False))
 
     return tuple(final_res)
 
