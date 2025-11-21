@@ -32,15 +32,13 @@ class Encoder:
     in the search space.
     """
 
-    def __init__(
-        self, problem: "up.model.Problem", full: bool = True
-    ):
+    def __init__(self, problem: "up.model.Problem", full: bool = True):
         self._problem = problem
         if full:
             self._simplifier = up.model.walkers.Simplifier(problem.environment, problem)
         else:
             self._simplifier = problem.environment.simplifier
-        
+
         fluent_types = {}
         for f in problem.initial_values.keys():
             if f.type.is_bool_type():
@@ -55,7 +53,7 @@ class Encoder:
                 raise NotImplementedError
             fluent_types[self._convert_fluent(f)] = t
         self._fluents: List[str] = sorted(fluent_types.keys())
-        self._fluent_ids = dict((f,i) for i, f in enumerate(self._fluents))
+        self._fluent_ids = dict((f, i) for i, f in enumerate(self._fluents))
         self._fluent_types = [fluent_types[f] for f in self._fluents]
 
         self._converter = Converter(problem, self._fluent_ids)
@@ -66,19 +64,32 @@ class Encoder:
                 self._is_temporal = True
                 lb = self._convert_expression(a.duration.lower)
                 ub = self._convert_expression(a.duration.upper)
-                actions_duration[a.name] = (lb, ub, a.duration.is_left_open(), a.duration.is_right_open())
+                actions_duration[a.name] = (
+                    lb,
+                    ub,
+                    a.duration.is_left_open(),
+                    a.duration.is_right_open(),
+                )
             else:
                 actions_duration[a.name] = None
         self._build_events()
         self._build_mutex()
         if full:
             initial_state = self.initial_state(problem.initial_values)
-            self._goal = self._convert_expression(problem.environment.expression_manager.And(problem.goals))
+            self._goal = self._convert_expression(
+                problem.environment.expression_manager.And(problem.goals)
+            )
         else:
             initial_state = None
             self._goal = None
-        self._search_space = SearchSpace(actions_duration, self._events, self._mutex,
-                                         initial_state, self._goal, problem.epsilon)
+        self._search_space = SearchSpace(
+            actions_duration,
+            self._events,
+            self._mutex,
+            initial_state,
+            self._goal,
+            problem.epsilon,
+        )
         self._objects = {}
         for ut in problem.user_types:
             self._objects[ut.name] = [o.name for o in problem.objects(ut)]
@@ -90,7 +101,9 @@ class Encoder:
     def initial_state(self, initial_values: Dict["up.model.FNode", "up.model.FNode"]):
         initial_state_values = {}
         for f, v in initial_values.items():
-            initial_state_values[self._convert_fluent(f)] = self._convert_expression(v)[0]
+            initial_state_values[self._convert_fluent(f)] = self._convert_expression(v)[
+                0
+            ]
 
         initial_state = []
         for f in self._fluents:
@@ -98,7 +111,9 @@ class Encoder:
         return initial_state
 
     def goals(self, goals: List["up.model.FNode"]):
-        return self._convert_expression(self._problem.environment.expression_manager.And(goals))
+        return self._convert_expression(
+            self._problem.environment.expression_manager.And(goals)
+        )
 
     @property
     def search_space(self) -> SearchSpaceABC:
@@ -132,9 +147,16 @@ class Encoder:
     def goal(self) -> Expression:
         return self._goal
 
-    def build_plan(self, plan: List[Tuple[Optional[Fraction], str, Optional[Fraction]]]) -> Plan:
+    def build_plan(
+        self, plan: List[Tuple[Optional[Fraction], str, Optional[Fraction]]]
+    ) -> Plan:
         if self._is_temporal:
-            return TimeTriggeredPlan([(Fraction(s), self._problem.action(a)(), Fraction(d) if d else None) for s, a, d in plan])
+            return TimeTriggeredPlan(
+                [
+                    (Fraction(s), self._problem.action(a)(), Fraction(d) if d else None)
+                    for s, a, d in plan
+                ]
+            )
         else:
             return SequentialPlan([self._problem.action(a)() for _, a, _ in plan])
 
@@ -176,7 +198,7 @@ class Encoder:
                 for i, lc in a.conditions.items():
                     l = i.lower
                     u = i.upper
-                    if l == u: # conditions
+                    if l == u:  # conditions
                         action_events.append((l.delay, l, 1, lc))
                     else:
                         # lower: start conditions
@@ -186,7 +208,10 @@ class Encoder:
                         # upper: end conditions
                         action_events.append((u.delay, u, 1, lc))
                         action_events.append((u.delay, u, 3, [em.And(lc)]))
-                    is_applicable = is_applicable and not self._simplifier.simplify(em.And(lc)).is_false()
+                    is_applicable = (
+                        is_applicable
+                        and not self._simplifier.simplify(em.And(lc)).is_false()
+                    )
                 if is_applicable:
                     self._applicable_actions.append(a.name)
 
@@ -209,7 +234,11 @@ class Encoder:
 
                 if has_ice_from_start and has_ice_from_end:
                     lower, upper = a.duration.lower, a.duration.upper
-                    if lower.is_constant() and upper.is_constant() and lower.constant_value() == upper.constant_value():
+                    if (
+                        lower.is_constant()
+                        and upper.is_constant()
+                        and lower.constant_value() == upper.constant_value()
+                    ):
                         duration = lower.constant_value()
                         for d in from_end:
                             t, lc, lsc, lec, le = from_end[d]
@@ -221,7 +250,9 @@ class Encoder:
                             from_start[d_from_start][4].extend(le)
                         from_end.clear()
                     else:
-                        raise Exception("TamerLite does not support ICE from start and from end inside the same action!")
+                        raise Exception(
+                            "TamerLite does not support ICE from start and from end inside the same action!"
+                        )
 
                 self._events[a.name] = []
                 pos = 0
@@ -232,7 +263,9 @@ class Encoder:
                     tsc = tuple([self._convert_expression(sc) for sc in lsc])
                     tec = tuple([self._convert_expression(ec) for ec in lec])
                     te = tuple([self._convert_effect(e) for e in le])
-                    self._events[a.name].append((t, Event(a.name, pos, c, tsc, tec, te)))
+                    self._events[a.name].append(
+                        (t, Event(a.name, pos, c, tsc, tec, te))
+                    )
                     pos += 1
                 for d in sorted(from_end):
                     t, lc, lsc, lec, le = from_end[d]
@@ -241,12 +274,26 @@ class Encoder:
                     tsc = tuple([self._convert_expression(sc) for sc in lsc])
                     tec = tuple([self._convert_expression(ec) for ec in lec])
                     te = tuple([self._convert_effect(e) for e in le])
-                    self._events[a.name].append((t, Event(a.name, pos, c, tsc, tec, te)))
+                    self._events[a.name].append(
+                        (t, Event(a.name, pos, c, tsc, tec, te))
+                    )
                     pos += 1
             else:
                 t = Timing(True, Fraction(0))
                 te = tuple([self._convert_effect(e) for e in a.effects])
-                self._events[a.name] = [(t, Event(a.name, 0, self._convert_expression(em.And(a.preconditions)), tuple(), tuple(), te))]
+                self._events[a.name] = [
+                    (
+                        t,
+                        Event(
+                            a.name,
+                            0,
+                            self._convert_expression(em.And(a.preconditions)),
+                            tuple(),
+                            tuple(),
+                            te,
+                        ),
+                    )
+                ]
                 if not self._simplifier.simplify(em.And(a.preconditions)).is_false():
                     self._applicable_actions.append(a.name)
 
@@ -254,7 +301,7 @@ class Encoder:
         self._mutex = set()
         ev = {}
         ev_list = []
-        for (a, le) in self._events.items():
+        for a, le in self._events.items():
             for i, (_, e1) in enumerate(le):
                 a_p = set(get_fluents(e1.conditions))
                 a_p.update(x for e in e1.effects for x in get_fluents(e.value))
@@ -269,5 +316,9 @@ class Encoder:
                 else:
                     (a_p, a_e) = ev[(a1, i1)]
                     (b_p, b_e) = ev[(a2, i2)]
-                    if not a_p.isdisjoint(b_e) or not b_p.isdisjoint(a_e) or not a_e.isdisjoint(b_e):
+                    if (
+                        not a_p.isdisjoint(b_e)
+                        or not b_p.isdisjoint(a_e)
+                        or not a_e.isdisjoint(b_e)
+                    ):
                         self._mutex.add(((a1, i1), (a2, i2)))
