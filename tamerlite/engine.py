@@ -33,14 +33,15 @@ from tamerlite.core import HFF, HAdd, HMax, HMaxNumeric, CustomHeuristic
 from tamerlite.encoder import Encoder
 
 
-credits = up.engines.Credits('TamerLite',
-                  'FBK PSO Unit',
-                  'tamer@fbk.eu',
-                  'https://tamer.fbk.eu',
-                  'Free for Educational Use',
-                  '',
-                  ''
-                )
+credits = up.engines.Credits(
+    "TamerLite",
+    "FBK PSO Unit",
+    "tamer@fbk.eu",
+    "https://tamer.fbk.eu",
+    "Free for Educational Use",
+    "",
+    "",
+)
 
 
 class StateWrapper(State):
@@ -51,7 +52,7 @@ class StateWrapper(State):
         self.em = self.problem.environment.expression_manager
 
     def get_value(self, x: FNode) -> FNode:
-        key = (make_fluent_node(self.encoder.fluent_ids[str(x)]), )
+        key = (make_fluent_node(self.encoder.fluent_ids[str(x)]),)
         v = evaluate(key, self.search_state)
         if x.type.is_bool_type():
             return self.em.Bool(v)
@@ -77,13 +78,15 @@ class SearchParams:
 @dataclass(frozen=True)
 class MultiqueueParams:
     queues: List[SearchParams]
-    early_termination: Optional[bool] = None     # the parameter early_termination inside queues is ignored
+    early_termination: Optional[bool] = (
+        None  # the parameter early_termination inside queues is ignored
+    )
 
 
 class TamerLite(
-        unified_planning.engines.Engine,
-        unified_planning.engines.mixins.OneshotPlannerMixin,
-    ):
+    unified_planning.engines.Engine,
+    unified_planning.engines.mixins.OneshotPlannerMixin,
+):
 
     def __init__(self, search: Optional[Union[SearchParams, MultiqueueParams]] = None):
         unified_planning.engines.Engine.__init__(self)
@@ -101,40 +104,40 @@ class TamerLite(
     @staticmethod
     def supported_kind() -> ProblemKind:
         supported_kind = ProblemKind()
-        supported_kind.set_problem_class('ACTION_BASED')
-        supported_kind.set_time('CONTINUOUS_TIME')
-        supported_kind.set_time('INTERMEDIATE_CONDITIONS_AND_EFFECTS')
-        supported_kind.set_time('DURATION_INEQUALITIES')
-        supported_kind.set_expression_duration('STATIC_FLUENTS_IN_DURATIONS')
-        supported_kind.set_expression_duration('FLUENTS_IN_DURATIONS')
-        supported_kind.set_expression_duration('INT_TYPE_DURATIONS')
-        supported_kind.set_numbers('DISCRETE_NUMBERS')
-        supported_kind.set_numbers('CONTINUOUS_NUMBERS')
+        supported_kind.set_problem_class("ACTION_BASED")
+        supported_kind.set_time("CONTINUOUS_TIME")
+        supported_kind.set_time("INTERMEDIATE_CONDITIONS_AND_EFFECTS")
+        supported_kind.set_time("DURATION_INEQUALITIES")
+        supported_kind.set_expression_duration("STATIC_FLUENTS_IN_DURATIONS")
+        supported_kind.set_expression_duration("FLUENTS_IN_DURATIONS")
+        supported_kind.set_expression_duration("INT_TYPE_DURATIONS")
+        supported_kind.set_numbers("DISCRETE_NUMBERS")
+        supported_kind.set_numbers("CONTINUOUS_NUMBERS")
         supported_kind.set_problem_type("SIMPLE_NUMERIC_PLANNING")
         supported_kind.set_problem_type("GENERAL_NUMERIC_PLANNING")
-        supported_kind.set_typing('FLAT_TYPING')
+        supported_kind.set_typing("FLAT_TYPING")
         supported_kind.set_parameters("BOOL_FLUENT_PARAMETERS")
         supported_kind.set_parameters("BOUNDED_INT_FLUENT_PARAMETERS")
         supported_kind.set_parameters("BOOL_ACTION_PARAMETERS")
         supported_kind.set_parameters("BOUNDED_INT_ACTION_PARAMETERS")
-        supported_kind.set_effects_kind('INCREASE_EFFECTS')
-        supported_kind.set_effects_kind('DECREASE_EFFECTS')
+        supported_kind.set_effects_kind("INCREASE_EFFECTS")
+        supported_kind.set_effects_kind("DECREASE_EFFECTS")
         supported_kind.set_effects_kind("STATIC_FLUENTS_IN_BOOLEAN_ASSIGNMENTS")
         supported_kind.set_effects_kind("FLUENTS_IN_BOOLEAN_ASSIGNMENTS")
         supported_kind.set_effects_kind("STATIC_FLUENTS_IN_NUMERIC_ASSIGNMENTS")
         supported_kind.set_effects_kind("FLUENTS_IN_NUMERIC_ASSIGNMENTS")
         supported_kind.set_effects_kind("STATIC_FLUENTS_IN_OBJECT_ASSIGNMENTS")
         supported_kind.set_effects_kind("FLUENTS_IN_OBJECT_ASSIGNMENTS")
-        supported_kind.set_conditions_kind('NEGATIVE_CONDITIONS')
-        supported_kind.set_conditions_kind('DISJUNCTIVE_CONDITIONS')
-        supported_kind.set_conditions_kind('EQUALITIES')
-        supported_kind.set_fluents_type('NUMERIC_FLUENTS')
-        supported_kind.set_fluents_type('OBJECT_FLUENTS')
-        supported_kind.set_fluents_type('INT_FLUENTS')
+        supported_kind.set_conditions_kind("NEGATIVE_CONDITIONS")
+        supported_kind.set_conditions_kind("DISJUNCTIVE_CONDITIONS")
+        supported_kind.set_conditions_kind("EQUALITIES")
+        supported_kind.set_fluents_type("NUMERIC_FLUENTS")
+        supported_kind.set_fluents_type("OBJECT_FLUENTS")
+        supported_kind.set_fluents_type("INT_FLUENTS")
         return supported_kind
 
     @staticmethod
-    def supports(problem_kind: 'up.model.ProblemKind') -> bool:
+    def supports(problem_kind: "up.model.ProblemKind") -> bool:
         return problem_kind <= TamerLite.supported_kind()
 
     @staticmethod
@@ -146,34 +149,100 @@ class TamerLite(
         if params is None:
             h = "custom" if heuristic else default_heuristic
         else:
-            h = "custom" if heuristic and params.heuristic is None else params.heuristic if params.heuristic else default_heuristic
+            h = (
+                "custom"
+                if heuristic and params.heuristic is None
+                else params.heuristic if params.heuristic else default_heuristic
+            )
 
-        cache_h = False # useful only for residual heuristics
+        cache_h = False  # useful only for residual heuristics
 
         if h == "custom":
+
             def rewrite_h(search_state: search_space.State):
                 return heuristic(StateWrapper(encoder, search_state))
+
             h = CustomHeuristic(rewrite_h, cache_h)
             w = 1 if params is None or params.weight is None else params.weight
         elif h == "hff":
-            internal_heuristic_cache = True if params is None or params.internal_heuristic_cache is None else params.internal_heuristic_cache
-            events = {a: e for a, e in encoder.events.items() if a in encoder.applicable_actions}
-            h = HFF(encoder.fluent_types, encoder.objects, events, encoder.goal, internal_caching=internal_heuristic_cache, cache_value_in_state=cache_h)
+            internal_heuristic_cache = (
+                True
+                if params is None or params.internal_heuristic_cache is None
+                else params.internal_heuristic_cache
+            )
+            events = {
+                a: e
+                for a, e in encoder.events.items()
+                if a in encoder.applicable_actions
+            }
+            h = HFF(
+                encoder.fluent_types,
+                encoder.objects,
+                events,
+                encoder.goal,
+                internal_caching=internal_heuristic_cache,
+                cache_value_in_state=cache_h,
+            )
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "hadd":
-            internal_heuristic_cache = True if params is None or params.internal_heuristic_cache is None else params.internal_heuristic_cache
-            events = {a: e for a, e in encoder.events.items() if a in encoder.applicable_actions}
-            h = HAdd(encoder.fluent_types, encoder.objects, events, encoder.goal, internal_caching=internal_heuristic_cache, cache_value_in_state=cache_h)
+            internal_heuristic_cache = (
+                True
+                if params is None or params.internal_heuristic_cache is None
+                else params.internal_heuristic_cache
+            )
+            events = {
+                a: e
+                for a, e in encoder.events.items()
+                if a in encoder.applicable_actions
+            }
+            h = HAdd(
+                encoder.fluent_types,
+                encoder.objects,
+                events,
+                encoder.goal,
+                internal_caching=internal_heuristic_cache,
+                cache_value_in_state=cache_h,
+            )
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "hmax":
-            internal_heuristic_cache = True if params is None or params.internal_heuristic_cache is None else params.internal_heuristic_cache
-            events = {a: e for a, e in encoder.events.items() if a in encoder.applicable_actions}
-            h = HMax(encoder.fluent_types, encoder.objects, events, encoder.goal, internal_caching=internal_heuristic_cache, cache_value_in_state=cache_h)
+            internal_heuristic_cache = (
+                True
+                if params is None or params.internal_heuristic_cache is None
+                else params.internal_heuristic_cache
+            )
+            events = {
+                a: e
+                for a, e in encoder.events.items()
+                if a in encoder.applicable_actions
+            }
+            h = HMax(
+                encoder.fluent_types,
+                encoder.objects,
+                events,
+                encoder.goal,
+                internal_caching=internal_heuristic_cache,
+                cache_value_in_state=cache_h,
+            )
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "hmax_numeric":
-            internal_heuristic_cache = True if params is None or params.internal_heuristic_cache is None else params.internal_heuristic_cache
-            events = {a: e for a, e in encoder.events.items() if a in encoder.applicable_actions}
-            h = HMaxNumeric(encoder.fluent_types, encoder.objects, events, encoder.goal, internal_caching=internal_heuristic_cache, cache_value_in_state=cache_h)
+            internal_heuristic_cache = (
+                True
+                if params is None or params.internal_heuristic_cache is None
+                else params.internal_heuristic_cache
+            )
+            events = {
+                a: e
+                for a, e in encoder.events.items()
+                if a in encoder.applicable_actions
+            }
+            h = HMaxNumeric(
+                encoder.fluent_types,
+                encoder.objects,
+                events,
+                encoder.goal,
+                internal_caching=internal_heuristic_cache,
+                cache_value_in_state=cache_h,
+            )
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "blind":
             h = CustomHeuristic(lambda x: 0.0, cache_h)
@@ -204,13 +273,18 @@ class TamerLite(
 
         return s, search
 
-    def _solve(self, problem: 'up.model.AbstractProblem',
-               heuristic: Optional[Callable[["up.model.state.State"], Optional[float]]] = None,
-               timeout: Optional[float] = None,
-               output_stream: Optional[IO[str]] = None) -> 'up.engines.results.PlanGenerationResult':
+    def _solve(
+        self,
+        problem: "up.model.AbstractProblem",
+        heuristic: Optional[Callable[["up.model.state.State"], Optional[float]]] = None,
+        timeout: Optional[float] = None,
+        output_stream: Optional[IO[str]] = None,
+    ) -> "up.engines.results.PlanGenerationResult":
         assert isinstance(problem, up.model.Problem)
         try:
-            with problem.environment.factory.Compiler(compilation_kind="GROUNDING", problem_kind=problem.kind) as compiler:
+            with problem.environment.factory.Compiler(
+                compilation_kind="GROUNDING", problem_kind=problem.kind
+            ) as compiler:
                 compilation_res = compiler.compile(problem)
                 map_back_action_instance = compilation_res.map_back_action_instance
             new_problem = compilation_res.problem
@@ -225,11 +299,20 @@ class TamerLite(
                 for p in self._params.queues:
                     h, w = self._get_heuristic(p, heuristic, encoder)
                     heuristics.append((h, w))
-                plan, metrics = multiqueue_search(encoder.search_space, heuristics, timeout, early_termination=early_termination)
+                plan, metrics = multiqueue_search(
+                    encoder.search_space,
+                    heuristics,
+                    timeout,
+                    early_termination=early_termination,
+                )
             else:
                 h, w = self._get_heuristic(self._params, heuristic, encoder)
                 _, search = self._get_search(self._params, h, w)
-                plan, metrics = search(encoder.search_space, timeout=timeout, early_termination=early_termination)
+                plan, metrics = search(
+                    encoder.search_space,
+                    timeout=timeout,
+                    early_termination=early_termination,
+                )
 
             if plan:
                 plan = encoder.build_plan(plan)

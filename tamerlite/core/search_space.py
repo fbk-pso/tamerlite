@@ -37,49 +37,57 @@ ExpressionNode = Union[OperatorNode, FluentNode, bool, int, Fraction, str]
 Expression = Tuple[ExpressionNode, ...]
 
 
-def make_operator_node(kind: str,  operands: Tuple[int, ...]) -> ExpressionNode:
+def make_operator_node(kind: str, operands: Tuple[int, ...]) -> ExpressionNode:
     return OperatorNode(kind, operands)
+
 
 def make_bool_constant_node(v: bool) -> ExpressionNode:
     return v
 
+
 def make_int_constant_node(v: int) -> ExpressionNode:
     return v
 
-def make_rational_constant_node(numerator: int, denominator:int) -> ExpressionNode:
+
+def make_rational_constant_node(numerator: int, denominator: int) -> ExpressionNode:
     return Fraction(numerator=numerator, denominator=denominator)
+
 
 def make_object_node(name: str) -> ExpressionNode:
     return name
 
+
 def make_fluent_node(fluent: int) -> ExpressionNode:
     return FluentNode(fluent)
+
 
 def shift_expression(exp: Expression, offset: int) -> Expression:
     res = []
     for e in exp:
         if isinstance(e, OperatorNode):
-            res.append(OperatorNode(e.kind, tuple([o+offset for o in e.operands])))
+            res.append(OperatorNode(e.kind, tuple([o + offset for o in e.operands])))
         else:
             res.append(e)
     return tuple(res)
 
+
 def split_expression(exp: Expression) -> Tuple[Expression, ...]:
     if not isinstance(exp[-1], OperatorNode) or not exp[-1].kind == "and":
-        return (exp, )
+        return (exp,)
     res = []
     last = 0
     for i in exp[-1].operands:
         new_exp = []
-        for e in exp[last:i+1]:
+        for e in exp[last : i + 1]:
             if isinstance(e, OperatorNode):
-                new_operands = tuple([j-last for j in e.operands])
+                new_operands = tuple([j - last for j in e.operands])
                 new_exp.append(OperatorNode(e.kind, new_operands))
             else:
                 new_exp.append(e)
         res.append(tuple(new_exp))
-        last = i+1
+        last = i + 1
     return tuple(res)
+
 
 def get_fluents(exp: Expression) -> Iterator[int]:
     for e in exp:
@@ -172,7 +180,9 @@ class State:
         assignments = list(self.assignments)
         todo = self.todo.copy()
         tn = self.temporal_network.copy_stn() if self.temporal_network else None
-        return State(assignments, tn, todo, self.active_conditions.clone(), self.g, self.path[:])
+        return State(
+            assignments, tn, todo, self.active_conditions.clone(), self.g, self.path[:]
+        )
 
 
 def get_fluent_value(fluent: int, state: State) -> Union[bool, int, Fraction, str]:
@@ -420,23 +430,31 @@ class SearchSpaceABC(ABC):
         pass
 
     @abstractmethod
-    def subgoals_sat(self, state: State, goal: Optional[Fraction] = None) -> Set[Expression]:
+    def subgoals_sat(
+        self, state: State, goal: Optional[Fraction] = None
+    ) -> Set[Expression]:
         pass
 
     @abstractmethod
-    def build_plan(self, state: State) -> List[Tuple[Optional[Fraction], str, Optional[Fraction]]]:
+    def build_plan(
+        self, state: State
+    ) -> List[Tuple[Optional[Fraction], str, Optional[Fraction]]]:
         pass
 
 
 class SearchSpace(SearchSpaceABC):
 
-    def __init__(self,
-                 actions_duration: Dict[str, Optional[Tuple[Expression, Expression, bool, bool]]],
-                 events: Dict[str, List[Tuple[Timing, Event]]],
-                 mutex: Set[Tuple[Tuple[str, int], Tuple[str, int]]],
-                 initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
-                 goal: Optional[Expression] = None,
-                 epsilon: Optional[Fraction] = None):
+    def __init__(
+        self,
+        actions_duration: Dict[
+            str, Optional[Tuple[Expression, Expression, bool, bool]]
+        ],
+        events: Dict[str, List[Tuple[Timing, Event]]],
+        mutex: Set[Tuple[Tuple[str, int], Tuple[str, int]]],
+        initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
+        goal: Optional[Expression] = None,
+        epsilon: Optional[Fraction] = None,
+    ):
         self._actions_duration = actions_duration
         self._events = events
         self._actions = sorted(events.keys())
@@ -444,7 +462,9 @@ class SearchSpace(SearchSpaceABC):
         self._initial_state = initial_state
         self._goal = goal
         self._epsilon = Fraction(1, 100) if epsilon is None else epsilon
-        self._is_temporal = False if all([v is None for v in actions_duration.values()]) else True
+        self._is_temporal = (
+            False if all([v is None for v in actions_duration.values()]) else True
+        )
         self._counter = 0
 
     @property
@@ -473,10 +493,10 @@ class SearchSpace(SearchSpaceABC):
         if action in state.todo:
             index, id = state.todo[action]
             _, e = events[index]
-            if index+1 >= len(events):
+            if index + 1 >= len(events):
                 new_state.todo.pop(action)
             else:
-                new_state.todo[action] = index+1, id+1
+                new_state.todo[action] = index + 1, id + 1
             new_state = self._expand_event(state, new_state, e, index, id)
         else:
             new_state = self._open_action(state, new_state, action, events)
@@ -492,7 +512,9 @@ class SearchSpace(SearchSpaceABC):
         else:
             return evaluate(self._goal, state)
 
-    def subgoals_sat(self, state: State, goal: Optional[Fraction] = None) -> Set[Expression]:
+    def subgoals_sat(
+        self, state: State, goal: Optional[Fraction] = None
+    ) -> Set[Expression]:
         # goal parameter can be None if it was passed to the class constructor
         assert goal is not None or self._goal is not None
         if goal is not None:
@@ -536,16 +558,24 @@ class SearchSpace(SearchSpaceABC):
                 for e2_action, e2_pos, id2 in state.path:
                     e2_id = (e2_action, e2_pos)
                     if (e_id, e2_id) in self._mutex:
-                        new_state.temporal_network.add((e2_action, e2_pos, id2), (e.action, e.pos, id), -self._epsilon)
+                        new_state.temporal_network.add(
+                            (e2_action, e2_pos, id2),
+                            (e.action, e.pos, id),
+                            -self._epsilon,
+                        )
                     else:
-                        new_state.temporal_network.add((e2_action, e2_pos, id2), (e.action, e.pos, id), 0)
+                        new_state.temporal_network.add(
+                            (e2_action, e2_pos, id2), (e.action, e.pos, id), 0
+                        )
             for a, i in new_state.todo.items():
                 id2 = i[1]
-                for j in range(len(self._events[a][i[0]:])):
-                    e2_id = (a, i[0]+j)
-                    e2 = (a, i[0]+j, id2)
+                for j in range(len(self._events[a][i[0] :])):
+                    e2_id = (a, i[0] + j)
+                    e2 = (a, i[0] + j, id2)
                     if (e_id, e2_id) in self._mutex:
-                        new_state.temporal_network.add((e.action, e.pos, id), e2, -self._epsilon)
+                        new_state.temporal_network.add(
+                            (e.action, e.pos, id), e2, -self._epsilon
+                        )
                     else:
                         new_state.temporal_network.add((e.action, e.pos, id), e2, 0)
                     id2 += 1
@@ -569,17 +599,23 @@ class SearchSpace(SearchSpaceABC):
                 u = evaluate(duration[1], state)
                 if duration[3]:
                     u -= self._epsilon
-            new_state.temporal_network.insert_interval(start, end, left_bound=l, right_bound=u)
+            new_state.temporal_network.insert_interval(
+                start, end, left_bound=l, right_bound=u
+            )
             id = self._counter
             for t, e in events:
                 ev = (e.action, e.pos, self._counter)
                 if t.is_from_start():
-                    new_state.temporal_network.insert_interval(start, ev, left_bound=t.delay, right_bound=t.delay)
+                    new_state.temporal_network.insert_interval(
+                        start, ev, left_bound=t.delay, right_bound=t.delay
+                    )
                 else:
-                    new_state.temporal_network.insert_interval(end, ev, left_bound=t.delay, right_bound=t.delay)
+                    new_state.temporal_network.insert_interval(
+                        end, ev, left_bound=t.delay, right_bound=t.delay
+                    )
                 self._counter += 1
             if len(events) > 1:
-                new_state.todo[action] = 1, id+1
+                new_state.todo[action] = 1, id + 1
         else:
             id = self._counter
         return self._expand_event(state, new_state, events[0][1], 0, id)
@@ -589,7 +625,7 @@ class SearchSpace(SearchSpaceABC):
     ) -> List[Tuple[Optional[Fraction], str, Optional[Fraction]]]:
         if not self.is_temporal:
             return [(None, e[0], None) for e in state.path]
-        
+
         all_path = state.path
         tn = DeltaSimpleTemporalNetwork()
         todo = {}
