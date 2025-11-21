@@ -38,141 +38,172 @@ class Converter(DagWalker):
         self.static_fluents = problem.get_static_fluents()
         self._fluent_ids = fluent_ids
 
-    def convert(self, expression: 'FNode') -> Expression:
+    def convert(self, expression: "FNode") -> Expression:
         """Converts the given expression."""
         w = Dnf(expression.environment)
         return self.walk(w.get_dnf_expression(expression))
 
-    def walk_and(self, expression: 'FNode',
-                 args: List[Expression]) -> Expression:
+    def walk_and(self, expression: "FNode", args: List[Expression]) -> Expression:
         if len(args) == 0:
-            return (True, )
+            return (True,)
         elif len(args) == 1:
             return args[0]
         else:
             res = args[0]
-            l = len(res)-1
+            l = len(res) - 1
             operands = [l]
             for i in range(1, len(args)):
-                res += tuple(shift_expression(args[i], l+1))
+                res += tuple(shift_expression(args[i], l + 1))
                 l += len(args[i])
                 operands.append(l)
-            res += (make_operator_node("and", tuple(operands)), )
+            res += (make_operator_node("and", tuple(operands)),)
             return res
 
-    def walk_or(self, expression: 'FNode',
-                args: List[Expression]) -> Expression:
+    def walk_or(self, expression: "FNode", args: List[Expression]) -> Expression:
         if len(args) == 0:
-            return (False, )
+            return (False,)
         elif len(args) == 1:
             return args[0]
         else:
             res = args[0]
-            l = len(res)-1
+            l = len(res) - 1
             operands = [l]
             for i in range(1, len(args)):
-                res += tuple(shift_expression(args[i], l+1))
+                res += tuple(shift_expression(args[i], l + 1))
                 l += len(args[i])
                 operands.append(l)
-            res += (make_operator_node("or", tuple(operands)), )
+            res += (make_operator_node("or", tuple(operands)),)
             return res
 
-    def walk_not(self, expression: 'FNode',
-                 args: List[Expression]) -> Expression:
+    def walk_not(self, expression: "FNode", args: List[Expression]) -> Expression:
         assert len(args) == 1
-        return args[0] + (make_operator_node("not", (len(args[0])-1, )), )
+        return args[0] + (make_operator_node("not", (len(args[0]) - 1,)),)
 
-    def walk_plus(self, expression: 'FNode',
-                  args: List[Expression]) -> Expression:
+    def walk_plus(self, expression: "FNode", args: List[Expression]) -> Expression:
         assert len(args) >= 2
         res = args[0]
-        l = len(res)-1
+        l = len(res) - 1
         operands = [l]
         for i in range(1, len(args)):
-            res += tuple(shift_expression(args[i], l+1))
+            res += tuple(shift_expression(args[i], l + 1))
             l += len(args[i])
             operands.append(l)
-        res += (make_operator_node("+", tuple(operands)), )
+        res += (make_operator_node("+", tuple(operands)),)
         return res
 
-    def walk_minus(self, expression: 'FNode',
-                   args: List[Expression]) -> Expression:
+    def walk_minus(self, expression: "FNode", args: List[Expression]) -> Expression:
         assert len(args) == 2
-        return args[0] + tuple(shift_expression(args[1], len(args[0]))) + (make_operator_node("-", (len(args[0])-1, len(args[0])+len(args[1])-1)), )
+        return (
+            args[0]
+            + tuple(shift_expression(args[1], len(args[0])))
+            + (
+                make_operator_node(
+                    "-", (len(args[0]) - 1, len(args[0]) + len(args[1]) - 1)
+                ),
+            )
+        )
 
-    def walk_times(self, expression: 'FNode',
-                   args: List[Expression]) -> Expression:
+    def walk_times(self, expression: "FNode", args: List[Expression]) -> Expression:
         assert len(args) >= 2
         res = args[0]
-        l = len(res)-1
+        l = len(res) - 1
         operands = [l]
         for i in range(1, len(args)):
-            res += tuple(shift_expression(args[i], l+1))
+            res += tuple(shift_expression(args[i], l + 1))
             l += len(args[i])
             operands.append(l)
-        res += (make_operator_node("*", tuple(operands)), )
+        res += (make_operator_node("*", tuple(operands)),)
         return res
 
-    def walk_div(self, expression: 'FNode',
-                 args: List[Expression]) -> Expression:
+    def walk_div(self, expression: "FNode", args: List[Expression]) -> Expression:
         assert len(args) == 2
-        return args[0] + tuple(shift_expression(args[1], len(args[0]))) + (make_operator_node("/", (len(args[0])-1, len(args[0])+len(args[1])-1)), )
+        return (
+            args[0]
+            + tuple(shift_expression(args[1], len(args[0])))
+            + (
+                make_operator_node(
+                    "/", (len(args[0]) - 1, len(args[0]) + len(args[1]) - 1)
+                ),
+            )
+        )
 
-    def walk_le(self, expression: 'FNode',
-                args: List[Expression]) -> Expression:
+    def walk_le(self, expression: "FNode", args: List[Expression]) -> Expression:
         assert len(args) == 2
-        return args[0] + tuple(shift_expression(args[1], len(args[0]))) + (make_operator_node("<=", (len(args[0])-1, len(args[0])+len(args[1])-1)), )
+        return (
+            args[0]
+            + tuple(shift_expression(args[1], len(args[0])))
+            + (
+                make_operator_node(
+                    "<=", (len(args[0]) - 1, len(args[0]) + len(args[1]) - 1)
+                ),
+            )
+        )
 
-    def walk_lt(self, expression: 'FNode',
-                args: List[Expression]) -> Expression:
+    def walk_lt(self, expression: "FNode", args: List[Expression]) -> Expression:
         assert len(args) == 2
-        return args[0] + tuple(shift_expression(args[1], len(args[0]))) + (make_operator_node("<", (len(args[0])-1, len(args[0])+len(args[1])-1)), )
+        return (
+            args[0]
+            + tuple(shift_expression(args[1], len(args[0])))
+            + (
+                make_operator_node(
+                    "<", (len(args[0]) - 1, len(args[0]) + len(args[1]) - 1)
+                ),
+            )
+        )
 
-    def walk_equals(self, expression: 'FNode',
-                    args: List[Expression]) -> Expression:
+    def walk_equals(self, expression: "FNode", args: List[Expression]) -> Expression:
         assert len(args) == 2
-        if (not expression.arg(0).is_fluent_exp() or expression.arg(0).fluent() in self.static_fluents) and expression.arg(1).is_fluent_exp():
+        if (
+            not expression.arg(0).is_fluent_exp()
+            or expression.arg(0).fluent() in self.static_fluents
+        ) and expression.arg(1).is_fluent_exp():
             a0 = args[1]
             a1 = args[0]
         else:
             a0 = args[0]
             a1 = args[1]
-        return a0 + tuple(shift_expression(a1, len(a0))) + (make_operator_node("==", (len(a0)-1, len(a0)+len(a1)-1)), )
+        return (
+            a0
+            + tuple(shift_expression(a1, len(a0)))
+            + (make_operator_node("==", (len(a0) - 1, len(a0) + len(a1) - 1)),)
+        )
 
-    def walk_fluent_exp(self, expression: 'FNode',
-                        args: List[Expression]) -> Expression:
+    def walk_fluent_exp(
+        self, expression: "FNode", args: List[Expression]
+    ) -> Expression:
         fluent = str(expression)
-        return (make_fluent_node(self._fluent_ids[fluent]), )
+        return (make_fluent_node(self._fluent_ids[fluent]),)
 
-    def walk_object_exp(self, expression: 'FNode',
-                        args: List[Expression]) -> Expression:
+    def walk_object_exp(
+        self, expression: "FNode", args: List[Expression]
+    ) -> Expression:
         assert len(args) == 0
-        return (make_object_node(str(expression)), )
+        return (make_object_node(str(expression)),)
 
-    def walk_bool_constant(self, expression: 'FNode',
-                           args: List[Expression]) -> Expression:
+    def walk_bool_constant(
+        self, expression: "FNode", args: List[Expression]
+    ) -> Expression:
         assert len(args) == 0
-        return (make_bool_constant_node(expression.is_true()), )
+        return (make_bool_constant_node(expression.is_true()),)
 
-    def walk_real_constant(self, expression: 'FNode',
-                           args: List[Expression]) -> Expression:
+    def walk_real_constant(
+        self, expression: "FNode", args: List[Expression]
+    ) -> Expression:
         assert len(args) == 0
         v = expression.constant_value()
-        return (make_rational_constant_node(v.numerator, v.denominator), )
+        return (make_rational_constant_node(v.numerator, v.denominator),)
 
-    def walk_int_constant(self, expression: 'FNode',
-                          args: List[Expression]) -> Expression:
+    def walk_int_constant(
+        self, expression: "FNode", args: List[Expression]
+    ) -> Expression:
         assert len(args) == 0
-        return (make_int_constant_node(expression.constant_value()), )
+        return (make_int_constant_node(expression.constant_value()),)
 
-    def walk_implies(self, expression: 'FNode',
-                     args: List[Expression]) -> Expression:
+    def walk_implies(self, expression: "FNode", args: List[Expression]) -> Expression:
         raise NotImplementedError
 
-    def walk_iff(self, expression: 'FNode',
-                 args: List[Expression]) -> Expression:
+    def walk_iff(self, expression: "FNode", args: List[Expression]) -> Expression:
         raise NotImplementedError
 
-    def walk_param_exp(self, expression: 'FNode',
-                       args: List[Expression]) -> Expression:
+    def walk_param_exp(self, expression: "FNode", args: List[Expression]) -> Expression:
         raise NotImplementedError
