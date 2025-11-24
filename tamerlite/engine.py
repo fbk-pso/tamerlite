@@ -71,7 +71,7 @@ class SearchParams:
     search: Optional[str] = None
     heuristic: Optional[str] = None
     internal_heuristic_cache: Optional[bool] = None
-    weight: Optional[str] = None
+    weight: Optional[float] = None
     early_termination: Optional[bool] = None
 
 
@@ -144,7 +144,9 @@ class TamerLite(
     def satisfies(optimality_guarantee: up.engines.OptimalityGuarantee) -> bool:
         return optimality_guarantee == up.engines.OptimalityGuarantee.SATISFICING
 
-    def _get_heuristic(self, params, heuristic, encoder):
+    def _get_heuristic(
+        self, params, heuristic, encoder, cache_heuristic_in_state=False
+    ):
         default_heuristic = "hff"
         if params is None:
             h = "custom" if heuristic else default_heuristic
@@ -155,14 +157,12 @@ class TamerLite(
                 else params.heuristic if params.heuristic else default_heuristic
             )
 
-        cache_h = False  # useful only for residual heuristics
-
         if h == "custom":
 
             def rewrite_h(search_state: search_space.State):
                 return heuristic(StateWrapper(encoder, search_state))
 
-            h = CustomHeuristic(rewrite_h, cache_h)
+            h = CustomHeuristic(rewrite_h, cache_heuristic_in_state)
             w = 1 if params is None or params.weight is None else params.weight
         elif h == "hff":
             internal_heuristic_cache = (
@@ -181,7 +181,7 @@ class TamerLite(
                 events,
                 encoder.goal,
                 internal_caching=internal_heuristic_cache,
-                cache_value_in_state=cache_h,
+                cache_value_in_state=cache_heuristic_in_state,
             )
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "hadd":
@@ -201,7 +201,7 @@ class TamerLite(
                 events,
                 encoder.goal,
                 internal_caching=internal_heuristic_cache,
-                cache_value_in_state=cache_h,
+                cache_value_in_state=cache_heuristic_in_state,
             )
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "hmax":
@@ -221,7 +221,7 @@ class TamerLite(
                 events,
                 encoder.goal,
                 internal_caching=internal_heuristic_cache,
-                cache_value_in_state=cache_h,
+                cache_value_in_state=cache_heuristic_in_state,
             )
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "hmax_numeric":
@@ -241,11 +241,11 @@ class TamerLite(
                 events,
                 encoder.goal,
                 internal_caching=internal_heuristic_cache,
-                cache_value_in_state=cache_h,
+                cache_value_in_state=cache_heuristic_in_state,
             )
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h == "blind":
-            h = CustomHeuristic(lambda x: 0.0, cache_h)
+            h = CustomHeuristic(lambda x: 0.0, cache_heuristic_in_state)
             w = 0
         else:
             raise NotImplementedError
