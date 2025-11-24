@@ -6,7 +6,7 @@
 ## Installation
 
 TamerLite is not currently available on PyPI and must be installed from source.
-It includes a core module written in Rust (under the `rustamer/` and `rustamer-base` directories), which must be compiled using [Maturin](https://github.com/PyO3/maturin) before installing the package.
+It includes a core module written in Rust (under the `rustamer` and `rustamer-base` directories), which must be compiled using [Maturin](https://github.com/PyO3/maturin) before installing the package.
 
 ### Prerequisites
 
@@ -69,7 +69,7 @@ Defines parameters for a single search strategy.
 |----------------------------|-------------------|-----------------------------------------------------------------------------|
 | `search`                   | `Optional[str]`   | The search algorithm to use. Supported values: `"astar"`, `"wastar"`, `"gbfs"`, `"bfs"`, `"dfs"`, `"ehs"`. Default: `"wastar"`. |
 | `heuristic`                | `Optional[str]`   | The heuristic function to use. Supported values: `"hff"`, `"hadd"`, `"hmax"`, `"hmax_numeric"`, `"blind"`, `"custom"`. Default: `"hff"`. |
-| `weight`                   | `Optional[str]`   | A numeric value between 0 and 1 (as string), used by weighted search variants like `wastar`. Default: `0.8`. |
+| `weight`                   | `Optional[float]` | A numeric value between 0 and 1 used by weighted search variants like `wastar`. Default: `0.8`. |
 | `internal_heuristic_cache` | `Optional[bool]`  | Enables internal caching within the heuristic if set to `True`. Default: `True`. |
 
 ---
@@ -90,7 +90,7 @@ Defines a multi-queue search strategy composed of multiple `SearchParams`.
 params = SearchParams(
    search="wastar",
    heuristic="hadd",
-   weight="0.8"
+   weight=0.8
 )
 
 with OneshotPlanner(name="tamerlite", params={"search": params}) as planner:
@@ -102,8 +102,8 @@ Or using multiple queues:
 
 ```python
 multi_params = MultiqueueParams(queues=[
-   SearchParams(heuristic="hadd", weight="0.8"),
-   SearchParams(heuristic="hmax_numeric", weight="0.5")
+   SearchParams(heuristic="hadd", weight=0.8),
+   SearchParams(heuristic="hmax_numeric", weight=0.5)
 ])
 
 with OneshotPlanner(name="tamerlite", params={"search": multi_params}) as planner:
