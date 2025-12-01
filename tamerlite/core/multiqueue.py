@@ -18,9 +18,11 @@
 import heapq
 from dataclasses import dataclass
 import time
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Optional
+from fractions import Fraction
 from tamerlite.core.search_space import SearchSpaceABC, State
 from tamerlite.core.heuristics import Heuristic
+from abc import ABC, abstractmethod
 
 
 @dataclass
@@ -44,13 +46,14 @@ class PrioritizedItem:
         )
 
 
-class MQSwitchPolicy:
+class MQSwitchPolicy(ABC):
     """Abstract class for multi-queue switching policies."""
 
+    @abstractmethod
     def switching_policy(self, i: int) -> int:
         """Given the number of expansions done so far, return the index of the
         next queue to use."""
-        raise NotImplementedError()
+        pass
 
     def notify_push(self, i: int, item: PrioritizedItem) -> None:
         """Called by algorithm to notify the policy that an item has been pushed
@@ -76,9 +79,11 @@ class RoundRobinSwitchPolicy(MQSwitchPolicy):
 def multiqueue_search(
     ss: SearchSpaceABC,
     heuristics: List[Tuple[Heuristic, float]],
-    timeout: float = None,
+    timeout: Optional[float] = None,
     early_termination: bool = False,
-):
+) -> Tuple[
+    Optional[List[Tuple[Optional[Fraction], str, Optional[Fraction]]]], Dict[str, str]
+]:
     return _multiqueue_search(
         ss=ss,
         heuristics=heuristics,
@@ -92,9 +97,11 @@ def _multiqueue_search(
     ss: SearchSpaceABC,
     heuristics: List[Tuple[Heuristic, float]],
     switch_policy: MQSwitchPolicy,
-    timeout: float = None,
+    timeout: Optional[float] = None,
     early_termination: bool = False,
-):
+) -> Tuple[
+    Optional[List[Tuple[Optional[Fraction], str, Optional[Fraction]]]], Dict[str, str]
+]:
     st = time.time()
     opens = []
     closed_set = set()
@@ -109,7 +116,7 @@ def _multiqueue_search(
 
     item = PrioritizedItem(0, StateContainer(init, False))
     for i, _ in enumerate(heuristics):
-        open = []
+        open: List[PrioritizedItem] = []
         heapq.heappush(open, item)
         opens.append(open)
         switch_policy.notify_push(i, item)

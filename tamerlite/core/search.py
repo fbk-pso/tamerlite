@@ -21,11 +21,13 @@ import time
 from dataclasses import dataclass
 from tamerlite.core.search_space import SearchSpaceABC, State
 from tamerlite.core.heuristics import Heuristic
+from typing import Tuple, List, Dict, Deque, Optional
+from fractions import Fraction
 
 
 @dataclass
 class PrioritizedItem:
-    heuristic: int
+    heuristic: float
     state: State
 
     def __lt__(self, other):
@@ -36,24 +38,40 @@ class PrioritizedItem:
         return len(self.state.todo) < len(other.state.todo)
 
 
-def bfs_search(ss: SearchSpaceABC, timeout=None, early_termination: bool = False):
+def bfs_search(
+    ss: SearchSpaceABC, timeout: Optional[float] = None, early_termination: bool = False
+) -> Tuple[
+    Optional[List[Tuple[Optional[Fraction], str, Optional[Fraction]]]], Dict[str, str]
+]:
     return _basic_search(ss, True, timeout, early_termination)
 
 
-def dfs_search(ss: SearchSpaceABC, timeout=None, early_termination: bool = False):
+def dfs_search(
+    ss: SearchSpaceABC, timeout: Optional[float] = None, early_termination: bool = False
+) -> Tuple[
+    Optional[List[Tuple[Optional[Fraction], str, Optional[Fraction]]]], Dict[str, str]
+]:
     return _basic_search(ss, False, timeout, early_termination)
 
 
 def _basic_search(
-    ss: SearchSpaceABC, bfs: bool, timeout, early_termination: bool = False
-):
+    ss: SearchSpaceABC,
+    bfs: bool,
+    timeout: Optional[float] = None,
+    early_termination: bool = False,
+) -> Tuple[
+    Optional[List[Tuple[Optional[Fraction], str, Optional[Fraction]]]], Dict[str, str]
+]:
     st = time.time()
     init = ss.initial_state()
-    open = deque()
+    open: Deque[State] = deque()
     counter = 0
 
     if early_termination and ss.goal_reached(init):
-        return ss.build_plan(init), {"expanded_states": counter, "goal_depth": init.g}
+        return ss.build_plan(init), {
+            "expanded_states": str(counter),
+            "goal_depth": str(init.g),
+        }
     open.append(init)
 
     while len(open) > 0:
@@ -66,14 +84,14 @@ def _basic_search(
         counter += 1
         if not early_termination and ss.goal_reached(state):
             return ss.build_plan(state), {
-                "expanded_states": counter,
-                "goal_depth": state.g,
+                "expanded_states": str(counter),
+                "goal_depth": str(state.g),
             }
         for succ_state in ss.get_successor_states(state):
             if early_termination and ss.goal_reached(succ_state):
                 return ss.build_plan(succ_state), {
-                    "expanded_states": counter,
-                    "goal_depth": succ_state.g,
+                    "expanded_states": str(counter),
+                    "goal_depth": str(succ_state.g),
                 }
             open.append(succ_state)
     return None, {"expanded_states": str(counter)}
@@ -82,18 +100,22 @@ def _basic_search(
 def astar_search(
     ss: SearchSpaceABC,
     heuristic: Heuristic,
-    timeout=None,
+    timeout: Optional[float] = None,
     early_termination: bool = False,
-):
+) -> Tuple[
+    Optional[List[Tuple[Optional[Fraction], str, Optional[Fraction]]]], Dict[str, str]
+]:
     return wastar_search(ss, heuristic, 0.5, timeout, early_termination)
 
 
 def gbfs_search(
     ss: SearchSpaceABC,
     heuristic: Heuristic,
-    timeout=None,
+    timeout: Optional[float] = None,
     early_termination: bool = False,
-):
+) -> Tuple[
+    Optional[List[Tuple[Optional[Fraction], str, Optional[Fraction]]]], Dict[str, str]
+]:
     return wastar_search(ss, heuristic, 1, timeout, early_termination)
 
 
@@ -101,11 +123,13 @@ def wastar_search(
     ss: SearchSpaceABC,
     heuristic: Heuristic,
     weight: float = 0.5,
-    timeout=None,
+    timeout: Optional[float] = None,
     early_termination: bool = False,
-):
+) -> Tuple[
+    Optional[List[Tuple[Optional[Fraction], str, Optional[Fraction]]]], Dict[str, str]
+]:
     st = time.time()
-    open = []
+    open: List[PrioritizedItem] = []
     closed_set = set()
     open_set = set()
     init = ss.initial_state()
@@ -157,9 +181,11 @@ def wastar_search(
 def ehc_search(
     ss: SearchSpaceABC,
     heuristic: Heuristic,
-    timeout=None,
+    timeout: Optional[float] = None,
     early_termination: bool = False,
-):
+) -> Tuple[
+    Optional[List[Tuple[Optional[Fraction], str, Optional[Fraction]]]], Dict[str, str]
+]:
     st = time.time()
     init = ss.initial_state()
     counter = 0
@@ -169,7 +195,7 @@ def ehc_search(
             "goal_depth": str(init.g),
         }
 
-    open = deque()
+    open: Deque[State] = deque()
     open.append(init)
     best_h = heuristic.eval(init, ss)
     if best_h is None:
