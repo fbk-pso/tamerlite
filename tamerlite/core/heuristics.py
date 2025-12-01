@@ -26,6 +26,7 @@ from abc import ABC, abstractmethod
 from tamerlite.core.search_space import (
     Event,
     SearchSpaceABC,
+    ExpressionNode,
     Expression,
     FluentNode,
     State,
@@ -58,7 +59,7 @@ HeuristicExpression = Tuple[HeuristicExpressionNode, ...]
 class Operator:
     action: str
     conditions: HeuristicExpression
-    effects: Tuple[Tuple[int, Union[Expression, bool, int, str]], ...]
+    effects: Tuple[Tuple[int, Union[Expression, bool, int, Fraction, str]], ...]
     cost: float
 
 
@@ -96,7 +97,7 @@ class Heuristic(ABC):
 
     @property
     @abstractmethod
-    def name(self):
+    def name(self) -> str:
         pass
 
 
@@ -113,65 +114,8 @@ class CustomHeuristic(Heuristic):
         return self.callable(state)
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "custom"
-
-
-def HFF(
-    fluent_types: List[str],
-    objects: Dict[str, List[str]],
-    events: Dict[str, List[Tuple[Timing, Event]]],
-    goals: Expression,
-    internal_caching: bool,
-    cache_value_in_state: bool,
-):
-    return DeleteRelaxationHeuristic(
-        fluent_types,
-        objects,
-        events,
-        goals,
-        HeuristicKind.HFF,
-        internal_caching,
-        cache_value_in_state,
-    )
-
-
-def HAdd(
-    fluent_types: List[str],
-    objects: Dict[str, List[str]],
-    events: Dict[str, List[Tuple[Timing, Event]]],
-    goals: Expression,
-    internal_caching: bool,
-    cache_value_in_state: bool,
-):
-    return DeleteRelaxationHeuristic(
-        fluent_types,
-        objects,
-        events,
-        goals,
-        HeuristicKind.HADD,
-        internal_caching,
-        cache_value_in_state,
-    )
-
-
-def HMax(
-    fluent_types: List[str],
-    objects: Dict[str, List[str]],
-    events: Dict[str, List[Tuple[Timing, Event]]],
-    goals: Expression,
-    internal_caching: bool,
-    cache_value_in_state: bool,
-):
-    return DeleteRelaxationHeuristic(
-        fluent_types,
-        objects,
-        events,
-        goals,
-        HeuristicKind.HMAX,
-        internal_caching,
-        cache_value_in_state,
-    )
 
 
 class DeleteRelaxationHeuristic(Heuristic):
@@ -199,7 +143,7 @@ class DeleteRelaxationHeuristic(Heuristic):
             f_cond = self._num_fluents + len(le) - 1
             cond = FluentNode(f_cond)
             for _, e in le:
-                effects = []
+                effects: List[Tuple[int, Union[bool, str]]] = []
                 f = self._num_fluents
                 self._num_fluents += 1
                 self._extra_fluents[a].append(f)
@@ -223,10 +167,12 @@ class DeleteRelaxationHeuristic(Heuristic):
                     e.conditions, cond
                 )
                 if is_applicable:
-                    self._operators.append(Operator(a, conditions, tuple(effects), 1))
+                    self._operators.append(Operator(a, conditions, tuple(effects), 1.0))
                 cond = FluentNode(f)
         self._goals = self._convert_to_heuristic_expression(goals)
-        extra_goals = tuple(FluentNode(fe[-1]) for fe in self._extra_fluents.values())
+        extra_goals: Expression = tuple(
+            FluentNode(fe[-1]) for fe in self._extra_fluents.values()
+        )
         extra_goals += (Op("and", tuple(range(len(extra_goals)))),)
         self._extra_goals = self._convert_to_heuristic_expression(extra_goals)
 
@@ -251,10 +197,12 @@ class DeleteRelaxationHeuristic(Heuristic):
                     self._numeric_conds.add(node.expression)
 
         self._ordered_actions = list(self._events.keys())
-        self._internal_caching = {} if internal_caching else None
+        self._internal_caching: Optional[
+            Dict[Tuple[Union[bool, int, Fraction, str, None], ...], Optional[float]]
+        ] = ({} if internal_caching else None)
 
     @property
-    def name(self):
+    def name(self) -> str:
         if self._heuristic_kind == HeuristicKind.HFF:
             return "hff"
         if self._heuristic_kind == HeuristicKind.HADD:
@@ -321,7 +269,7 @@ class DeleteRelaxationHeuristic(Heuristic):
                 with `AndNode`, `OrNode`, and `LeafNode` elements.
         """
 
-        result = []
+        result: List[HeuristicExpressionNode] = []
         stack = [(len(exp) - 1, False)]
         while len(stack) > 0:
             idx, processed = stack.pop()
@@ -405,10 +353,10 @@ class DeleteRelaxationHeuristic(Heuristic):
         # find the start index of the sub-expression
         i = idx
         while isinstance(exp[i], Op):
-            i = min(exp[i].operands)
+            i = min(exp[i].operands)  # type: ignore[union-attr]
 
         offset = i
-        res = []
+        res: List[ExpressionNode] = []
         for j in range(i, idx + 1):
             e = exp[j]
             if isinstance(e, Op):
@@ -435,21 +383,21 @@ class DeleteRelaxationHeuristic(Heuristic):
         return res
 
     def _eval_core(self, state: State) -> Optional[float]:
-        costs = {}
+        costs: Dict[Expression, float] = {}
         for f, v in enumerate(state.assignments):
             if v == True:
-                k = (FluentNode(f),)
+                k: Expression = (FluentNode(f),)
             elif v == False:
                 k = (FluentNode(f), Op("not", (0,)))
             else:
                 k = (FluentNode(f), v, Op("==", (0, 1)))
-            costs[k] = 0
+            costs[k] = 0.0
 
         for x in self._numeric_conds:
             if evaluate(x, state):
-                costs[x] = 0
+                costs[x] = 0.0
             else:
-                costs[x] = 1
+                costs[x] = 1.0
 
         for a in self._events.keys():
             j, _ = state.todo.get(a, (None, None))
@@ -458,33 +406,32 @@ class DeleteRelaxationHeuristic(Heuristic):
             else:
                 f = self._extra_fluents[a][j - 1]
             x = (FluentNode(f),)
-            costs[x] = 0
+            costs[x] = 0.0
 
         lp = list(costs.keys())
-        reached_by = {}
+        reached_by: Dict[Expression, Tuple[Operator, List[Expression]]] = {}
         while len(lp) > 0:
             lo = list(self._empty_pre_operators)
             for p in lp:
                 if p in self._precondition_of:
                     lo.extend(self._precondition_of[p])
             lp = []
-            new_costs = {}
+            new_costs: Dict[Expression, float] = {}
             for o in set(lo):
                 c, l = self._cost(o.conditions, costs)
                 if c is not None:
                     for f, v in o.effects:
                         if v == True:
-                            k = (FluentNode(f),)
+                            k: Expression = (FluentNode(f),)
                         elif v == False:
                             k = (FluentNode(f), Op("not", (0,)))
                         else:
                             k = (FluentNode(f), v, Op("==", (0, 1)))
                         new_cost_k = new_costs.get(k, None)
                         cost_k = costs.get(k, None)
-                        if (
-                            (new_cost_k is not None and new_cost_k > c + o.cost)
-                            or (new_cost_k is None and cost_k is None)
-                            or (new_cost_k is None and cost_k > c + o.cost)
+                        if (new_cost_k is not None and new_cost_k > c + o.cost) or (
+                            new_cost_k is None
+                            and (cost_k is None or cost_k > c + o.cost)
                         ):
                             if self._heuristic_kind == HeuristicKind.HFF:
                                 reached_by[k] = (o, l)
@@ -508,6 +455,7 @@ class DeleteRelaxationHeuristic(Heuristic):
 
         if self._heuristic_kind != HeuristicKind.HFF:
             eh, _ = self._cost(self._extra_goals, costs)
+            assert eh is not None
 
             if self._heuristic_kind == HeuristicKind.HMAX:
                 res = max(h, eh)
@@ -520,17 +468,17 @@ class DeleteRelaxationHeuristic(Heuristic):
         for a, (j, _) in state.todo.items():
             res += len(self._events[a]) - j
 
-        if h == 0:
-            return res
+        if h == 0.0:
+            return float(res)
 
         relaxed_plan = set()
         stack = list(set(self._cost(self._goals, costs)[1]))
         visited_expressions = set()
         while len(stack) > 0:
             g = stack.pop()
-            o, l = reached_by.get(g, (None, None))
-            if o is None:
+            if g not in reached_by:
                 continue
+            o, l = reached_by[g]
             relaxed_plan.add(o.action)
             for exp in l:
                 if exp not in visited_expressions:
@@ -541,7 +489,7 @@ class DeleteRelaxationHeuristic(Heuristic):
             if a not in state.todo:
                 res += len(self._events[a])
 
-        return res
+        return float(res)
 
     def _cost(
         self, exp: HeuristicExpression, costs: Dict[Expression, float]
@@ -567,18 +515,18 @@ class DeleteRelaxationHeuristic(Heuristic):
         if isinstance(exp[-1], LeafNode):
             return costs.get(exp[-1].expression, None), [exp[-1].expression]
 
-        res = []
+        res: List[Tuple[Optional[float], List[Expression]]] = []
         for node in exp:
             if isinstance(node, LeafNode):
                 res.append((costs.get(node.expression, None), [node.expression]))
             elif isinstance(node, AndNode):
-                v = 0
+                v = 0.0
                 l = []
                 operands_values = [res.pop() for i in range(node.num_operands)]
                 for ov, ol in operands_values:
-                    if isinstance(ov, int):
+                    if ov is not None:
                         if self._heuristic_kind == HeuristicKind.HMAX:
-                            v = max(v, ov)
+                            v = max(v, ov)  # type: ignore[type-var]
                         else:
                             v += ov
                             l.extend(ol)
@@ -590,7 +538,7 @@ class DeleteRelaxationHeuristic(Heuristic):
             elif isinstance(node, OrNode):
                 operands_values = [res.pop() for _ in range(node.num_operands)]
                 operands_values = [
-                    (ov, ol) for ov, ol in operands_values if isinstance(ov, int)
+                    (ov, ol) for ov, ol in operands_values if ov is not None
                 ]
                 if len(operands_values) > 0:
                     mv, ml = operands_values[0]
@@ -604,6 +552,63 @@ class DeleteRelaxationHeuristic(Heuristic):
 
         assert len(res) == 1
         return res[-1]
+
+
+def HFF(
+    fluent_types: List[str],
+    objects: Dict[str, List[str]],
+    events: Dict[str, List[Tuple[Timing, Event]]],
+    goals: Expression,
+    internal_caching: bool,
+    cache_value_in_state: bool,
+) -> DeleteRelaxationHeuristic:
+    return DeleteRelaxationHeuristic(
+        fluent_types,
+        objects,
+        events,
+        goals,
+        HeuristicKind.HFF,
+        internal_caching,
+        cache_value_in_state,
+    )
+
+
+def HAdd(
+    fluent_types: List[str],
+    objects: Dict[str, List[str]],
+    events: Dict[str, List[Tuple[Timing, Event]]],
+    goals: Expression,
+    internal_caching: bool,
+    cache_value_in_state: bool,
+) -> DeleteRelaxationHeuristic:
+    return DeleteRelaxationHeuristic(
+        fluent_types,
+        objects,
+        events,
+        goals,
+        HeuristicKind.HADD,
+        internal_caching,
+        cache_value_in_state,
+    )
+
+
+def HMax(
+    fluent_types: List[str],
+    objects: Dict[str, List[str]],
+    events: Dict[str, List[Tuple[Timing, Event]]],
+    goals: Expression,
+    internal_caching: bool,
+    cache_value_in_state: bool,
+) -> DeleteRelaxationHeuristic:
+    return DeleteRelaxationHeuristic(
+        fluent_types,
+        objects,
+        events,
+        goals,
+        HeuristicKind.HMAX,
+        internal_caching,
+        cache_value_in_state,
+    )
 
 
 class HMaxNumeric(Heuristic):
@@ -629,7 +634,9 @@ class HMaxNumeric(Heuristic):
             f_cond = self._num_fluents + len(le) - 1
             cond = (FluentNode(f_cond),)
             for _, e in le:
-                effects = []
+                effects: List[
+                    Tuple[int, Union[Expression, bool, int, Fraction, str]]
+                ] = []
                 f = self._num_fluents
                 self._num_fluents += 1
                 self._extra_fluents[a].append(f)
@@ -647,7 +654,7 @@ class HMaxNumeric(Heuristic):
                             effects.append((eff.fluent, eff.value[0]))
                         else:
                             effects.append((eff.fluent, eff.value))
-                    elif t != "real" and t != "int":
+                    else:
                         if len(eff.value) == 1 and isinstance(eff.value[0], str):
                             # eff.value[0] is an object
                             effects.append((eff.fluent, eff.value[0]))
@@ -660,7 +667,7 @@ class HMaxNumeric(Heuristic):
                     conditions = split_expression(e.conditions) + (cond,)
                 cond = (FluentNode(f),)
                 if (False,) not in conditions:
-                    self._operators.append(Operator(a, conditions, tuple(effects), 1))
+                    self._operators.append(Operator(a, conditions, tuple(effects), 1.0))
         self._extra_goals: Tuple[Expression, ...] = tuple(
             [(FluentNode(fe[-1]),) for fe in self._extra_fluents.values()]
         )
@@ -688,16 +695,18 @@ class HMaxNumeric(Heuristic):
                     )
 
         self._ordered_actions = list(self._events.keys())
-        self._internal_caching = {} if internal_caching else None
+        self._internal_caching: Optional[
+            Dict[Tuple[Union[bool, int, Fraction, str, None], ...], Optional[float]]
+        ] = ({} if internal_caching else None)
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "hmax_numeric"
 
     def _extract_fluents(
         self,
         exp: Expression,
-        cache_extract_fluents: Dict[int, Set[str]],
+        cache_extract_fluents: Dict[int, Set[int]],
     ) -> Set[int]:
         if id(exp) not in cache_extract_fluents:
             cache_extract_fluents[id(exp)] = set(
@@ -711,14 +720,16 @@ class HMaxNumeric(Heuristic):
         self,
         exp: Union[Expression, bool, int, Fraction, str],
         assignments: List[Set[Union[bool, int, Fraction, str]]],
-        cache_extract_fluents: Dict[int, Set[str]],
-        exp_fluents: Set[int] = None,
+        cache_extract_fluents: Dict[int, Set[int]],
+        exp_fluents: Optional[Set[int]] = None,
     ) -> Iterator[Union[bool, int, Fraction, str]]:
         if isinstance(exp, tuple):
             if exp_fluents is None:
                 exp_fluents = self._extract_fluents(exp, cache_extract_fluents)
             values = map(lambda f: assignments[f], exp_fluents)
-            state_assignments = [None] * len(assignments)
+            state_assignments: List[Union[bool, int, Fraction, str, None]] = [
+                None
+            ] * len(assignments)
             for assignments_values in itertools.product(*values):
                 for f, v in zip(exp_fluents, assignments_values):
                     state_assignments[f] = v
@@ -733,7 +744,7 @@ class HMaxNumeric(Heuristic):
         assignments: List[Set[Union[bool, int, Fraction, str]]],
         assignments_changes: Set[int],
         cache_can_be_true: Dict[int, bool],
-        cache_extract_fluents: Dict[int, Set[str]],
+        cache_extract_fluents: Dict[int, Set[int]],
     ) -> bool:
         exp_fluents = None
         id_exp = id(exp)
@@ -762,7 +773,7 @@ class HMaxNumeric(Heuristic):
         assignments: List[Set[Union[bool, int, Fraction, str]]],
         assignments_changes: Set[int],
         cache_can_be_true: Dict[int, bool],
-        cache_extract_fluents: Dict[int, Set[str]],
+        cache_extract_fluents: Dict[int, Set[int]],
     ) -> bool:
         for exp in expressions:
             if not self._exp_can_be_true(
@@ -808,7 +819,7 @@ class HMaxNumeric(Heuristic):
                 assignments[f] = {i == idx}
 
         cache_can_be_true: Dict[int, bool] = {}
-        cache_extract_fluents: Dict[int, Set[str]] = {}
+        cache_extract_fluents: Dict[int, Set[int]] = {}
         applied_operators = [False] * len(self._operators)
 
         assignments_changes = set(range(self._num_fluents))
@@ -822,7 +833,7 @@ class HMaxNumeric(Heuristic):
                 cache_extract_fluents,
             ):
                 # goal satisfied
-                return depth
+                return float(depth)
 
             new_assignments: Dict[int, Set[Union[bool, int, Fraction, str]]] = (
                 defaultdict(set)

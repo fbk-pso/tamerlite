@@ -17,8 +17,9 @@
 
 import unified_planning as up
 from unified_planning.plans import TimeTriggeredPlan, SequentialPlan, Plan
+from unified_planning.model import Problem, FNode
 from fractions import Fraction
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple, Dict, Optional, Union
 
 from tamerlite.core import Expression, Effect, Timing, Event, SearchSpace, get_fluents
 from tamerlite.core.search_space import SearchSpaceABC
@@ -32,7 +33,7 @@ class Encoder:
     in the search space.
     """
 
-    def __init__(self, problem: "up.model.Problem", full: bool = True):
+    def __init__(self, problem: Problem, full: bool = True):
         self._problem = problem
         if full:
             self._simplifier = up.model.walkers.Simplifier(problem.environment, problem)
@@ -57,7 +58,9 @@ class Encoder:
         self._fluent_types = [fluent_types[f] for f in self._fluents]
 
         self._converter = Converter(problem, self._fluent_ids)
-        actions_duration = {}
+        actions_duration: Dict[
+            str, Optional[Tuple[Expression, Expression, bool, bool]]
+        ] = {}
         self._is_temporal = False
         for a in problem.actions:
             if isinstance(a, up.model.DurativeAction):
@@ -74,14 +77,14 @@ class Encoder:
                 actions_duration[a.name] = None
         self._build_events()
         self._build_mutex()
+
+        initial_state = None
+        self._goal = None
         if full:
             initial_state = self.initial_state(problem.initial_values)
             self._goal = self._convert_expression(
                 problem.environment.expression_manager.And(problem.goals)
             )
-        else:
-            initial_state = None
-            self._goal = None
         self._search_space = SearchSpace(
             actions_duration,
             self._events,
@@ -95,10 +98,10 @@ class Encoder:
             self._objects[ut.name] = [o.name for o in problem.objects(ut)]
 
     @property
-    def problem(self):
+    def problem(self) -> Problem:
         return self._problem
 
-    def initial_state(self, initial_values: Dict["up.model.FNode", "up.model.FNode"]):
+    def initial_state(self, initial_values: Dict[FNode, FNode]) -> Expression:
         initial_state_values = {}
         for f, v in initial_values.items():
             initial_state_values[self._convert_fluent(f)] = self._convert_expression(v)[
@@ -110,7 +113,7 @@ class Encoder:
             initial_state.append(initial_state_values[f])
         return initial_state
 
-    def goals(self, goals: List["up.model.FNode"]):
+    def goals(self, goals: List[FNode]) -> Expression:
         return self._convert_expression(
             self._problem.environment.expression_manager.And(goals)
         )
@@ -144,26 +147,34 @@ class Encoder:
         return self._applicable_actions
 
     @property
-    def goal(self) -> Expression:
+    def goal(self) -> Optional[Expression]:
         return self._goal
 
     def build_plan(
-        self, plan: List[Tuple[Optional[Fraction], str, Optional[Fraction]]]
+        self,
+        plan: List[
+            Tuple[Optional[Union[Fraction, str]], str, Optional[Union[Fraction, str]]]
+        ],
     ) -> Plan:
         if self._is_temporal:
+            assert all(map(lambda e: e[0] is not None, plan))
             return TimeTriggeredPlan(
                 [
-                    (Fraction(s), self._problem.action(a)(), Fraction(d) if d else None)
+                    (
+                        Fraction(s),  # type: ignore[arg-type]
+                        self._problem.action(a)(),
+                        Fraction(d) if d is not None else None,
+                    )
                     for s, a, d in plan
                 ]
             )
         else:
             return SequentialPlan([self._problem.action(a)() for _, a, _ in plan])
 
-    def _convert_fluent(self, fluent_exp: "up.model.FNode") -> str:
+    def _convert_fluent(self, fluent_exp: FNode) -> str:
         return str(fluent_exp)
 
-    def _convert_expression(self, expression: "up.model.FNode") -> Expression:
+    def _convert_expression(self, expression: FNode) -> Expression:
         expression = self._simplifier.simplify(expression)
         return self._converter.convert(expression)
 
@@ -187,7 +198,7 @@ class Encoder:
     def _build_events(self):
         env = self._problem.environment
         em = env.expression_manager
-        self._events = {}
+        self._events: Dict[str, List[Tuple[Timing, Event]]] = {}
         self._applicable_actions = []
         for a in self._problem.actions:
             if isinstance(a, up.model.DurativeAction):
