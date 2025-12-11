@@ -43,7 +43,26 @@ pub trait HeuristicTrait {
         &'a self,
         states_iter: I,
         ss: &'a S,
-    ) -> PyResult<Box<dyn Iterator<Item = PyResult<(State, Option<f64>)>> + 'a>>
+    ) -> PyResult<impl Iterator<Item = PyResult<(usize, Option<f64>)>> + 'a>
+    where
+        I: Iterator<Item = &'a State> + 'a,
+    {
+        return Ok(Box::new(states_iter.enumerate().map(|(i, state)| {
+            let h_value = self.eval(state, ss);
+            match h_value {
+                Ok(x) => Ok((i, x)),
+                Err(e) => Err(e),
+            }
+        })));
+    }
+
+    /// Evaluates the heuristic for a given state, returning an iterator over the results.
+    /// This method is used in non-multiqueue search algorithms
+    fn eval_gen_owned<'a, I, S: SearchSpaceTrait>(
+        &'a self,
+        states_iter: I,
+        ss: &'a S,
+    ) -> PyResult<impl Iterator<Item = PyResult<(State, Option<f64>)>> + 'a>
     where
         I: Iterator<Item = PyResult<State>> + 'a,
     {
@@ -65,7 +84,7 @@ pub trait HeuristicTrait {
         &'a self,
         states: &'a Vec<Rc<RefCell<StateContainer>>>,
         ss: &'a S,
-    ) -> PyResult<Box<dyn Iterator<Item = PyResult<(usize, Option<f64>)>> + 'a>> {
+    ) -> PyResult<impl Iterator<Item = PyResult<(usize, Option<f64>)>> + 'a> {
         return Ok(Box::new(states.iter().enumerate().map(|(i, state)| {
             let h_value = self.eval(&state.borrow().state, ss);
             match h_value {

@@ -73,6 +73,7 @@ class SearchParams:
     internal_heuristic_cache: Optional[bool] = None
     weight: Optional[float] = None
     early_termination: Optional[bool] = None
+    weak_equality: Optional[bool] = None
 
 
 @dataclass(frozen=True)
@@ -258,12 +259,27 @@ class TamerLite(
         else:
             s = params.search
 
+        weak_equality = (
+            False
+            if params is None or params.weak_equality is None
+            else params.weak_equality
+        )
+
         if s == "wastar":
-            search = partial(wastar_search, heuristic=heuristic, weight=weight)
+            search = partial(
+                wastar_search,
+                heuristic=heuristic,
+                weight=weight,
+                weak_equality=weak_equality,
+            )
         elif s == "astar":
-            search = partial(astar_search, heuristic=heuristic)
+            search = partial(
+                astar_search, heuristic=heuristic, weak_equality=weak_equality
+            )
         elif s == "gbfs":
-            search = partial(gbfs_search, heuristic=heuristic)
+            search = partial(
+                gbfs_search, heuristic=heuristic, weak_equality=weak_equality
+            )
         elif s == "dfs":
             search = dfs_search
         elif s == "bfs":

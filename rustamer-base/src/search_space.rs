@@ -398,9 +398,7 @@ impl SearchSpaceTrait for SearchSpace {
         return self
             .actions
             .iter()
-            .map(|action| self.get_successor_state(state, action).transpose())
-            .filter(|x| x.is_some())
-            .map(|x| x.unwrap());
+            .filter_map(|action| self.get_successor_state(state, action).transpose());
     }
 
     fn get_successor_state(&self, state: &State, action: &str) -> PyResult<Option<State>> {

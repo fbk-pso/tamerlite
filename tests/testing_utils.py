@@ -1,3 +1,5 @@
+from unified_planning.model import Problem
+from unified_planning.model.problem_kind import temporal_kind
 from tamerlite.core import *
 import random
 from tamerlite.core import (
@@ -17,6 +19,15 @@ def is_strictly_increasing(l: List):
         if l[i] >= l[i + 1]:
             return False
     return True
+
+
+def is_temporal_problem(problem: Problem):
+    # # TODO
+    # for a in problem.actions:
+    #     if isinstance(a, up.model.DurativeAction):
+    #         return True
+    # return False
+    return problem.kind.has_continuous_time() or problem.kind.has_discrete_time()
 
 
 def construct_numeric_exp_rec(offset=0, depth=0) -> tuple:
