@@ -22,11 +22,6 @@ def is_strictly_increasing(l: List):
 
 
 def is_temporal_problem(problem: Problem):
-    # # TODO
-    # for a in problem.actions:
-    #     if isinstance(a, up.model.DurativeAction):
-    #         return True
-    # return False
     return problem.kind.has_continuous_time() or problem.kind.has_discrete_time()
 
 
