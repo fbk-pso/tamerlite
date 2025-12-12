@@ -67,21 +67,24 @@ class StateWrapper(State):
 
 
 @dataclass(frozen=True)
-class SearchParams:
-    search: Optional[str] = None
+class HeuristicParams:
     heuristic: Optional[str] = None
     internal_heuristic_cache: Optional[bool] = None
     weight: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class SearchParams(HeuristicParams):
+    search: Optional[str] = None
     early_termination: Optional[bool] = None
     weak_equality: Optional[bool] = None
 
 
 @dataclass(frozen=True)
 class MultiqueueParams:
-    queues: List[SearchParams]
-    early_termination: Optional[bool] = (
-        None  # the parameter early_termination inside queues is ignored
-    )
+    queues: List[HeuristicParams]
+    early_termination: Optional[bool] = None
+    weak_equality: Optional[bool] = None
 
 
 class TamerLite(
@@ -146,7 +149,11 @@ class TamerLite(
         return optimality_guarantee == up.engines.OptimalityGuarantee.SATISFICING
 
     def _get_heuristic(
-        self, params, heuristic, encoder, cache_heuristic_in_state=False
+        self,
+        params: HeuristicParams,
+        heuristic,
+        encoder,
+        cache_heuristic_in_state=False,
     ):
         default_heuristic = "hff"
         if params is None:
@@ -253,7 +260,7 @@ class TamerLite(
 
         return h, w
 
-    def _get_search(self, params, heuristic, weight):
+    def _get_search(self, params: SearchParams, heuristic, weight):
         if params is None or params.search is None:
             s = "wastar"
         else:
@@ -315,11 +322,17 @@ class TamerLite(
                 for p in self._params.queues:
                     h, w = self._get_heuristic(p, heuristic, encoder)
                     heuristics.append((h, w))
+
+                weak_equality = False
+                if self._params is not None and self._params.weak_equality is not None:
+                    weak_equality = self._params.weak_equality
+
                 plan, metrics = multiqueue_search(
                     encoder.search_space,
                     heuristics,
                     timeout,
                     early_termination=early_termination,
+                    weak_equality=weak_equality,
                 )
             else:
                 h, w = self._get_heuristic(self._params, heuristic, encoder)
