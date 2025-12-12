@@ -33,6 +33,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    needs: basic-checks
     steps:
       - uses: actions/checkout@v3
       - name: Build rustamer

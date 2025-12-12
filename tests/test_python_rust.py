@@ -435,34 +435,43 @@ def test_search_algorithms(problems):
 
 def test_multiqueue_search(problems):
     for problem in problems:
-        results = []
-        for disable_rustamer in [True, False]:
-            if skip(
-                problem,
-                "multiqueue",
-                heuristic=None,
-                disable_rustamer=disable_rustamer,
-                internal_heuristic_cache=True,
-            ):
-                continue
+        if testing_utils.is_temporal_problem(problem):
+            weak_equality_values = [True, False]
+        else:
+            weak_equality_values = [False]
 
-            reload_tamerlite(disable_rustamer)
+        for weak_equality in weak_equality_values:
+            results = []
+            for disable_rustamer in [True, False]:
+                if skip(
+                    problem,
+                    "multiqueue",
+                    heuristic=None,
+                    disable_rustamer=disable_rustamer,
+                    internal_heuristic_cache=True,
+                ):
+                    continue
 
-            search = tamerlite.engine.MultiqueueParams(
-                [
-                    tamerlite.SearchParams(search="wastar", heuristic="hff"),
-                    tamerlite.SearchParams(search="astar", heuristic="hadd"),
-                    tamerlite.SearchParams(search="bfs", heuristic="hmax"),
-                ]
-            )
-            with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
-                res: PlanGenerationResult = planner.solve(problem, timeout=None)
-                assert res.status == PlanGenerationResultStatus.SOLVED_SATISFICING
-                results.append(res)
-                with PlanValidator(problem_kind=problem.kind) as v:
-                    assert v.validate(problem, res.plan)
+                reload_tamerlite(disable_rustamer)
 
-        check_metrics_equality(results)
+                search = tamerlite.engine.MultiqueueParams(
+                    queues=[
+                        tamerlite.HeuristicParams(heuristic="hff", weight=0.8),
+                        tamerlite.HeuristicParams(heuristic="hadd", weight=0.8),
+                        tamerlite.HeuristicParams(heuristic="hmax", weight=0.8),
+                    ],
+                    weak_equality=weak_equality,
+                )
+                with OneshotPlanner(
+                    name="tamerlite", params={"search": search}
+                ) as planner:
+                    res: PlanGenerationResult = planner.solve(problem, timeout=None)
+                    assert res.status == PlanGenerationResultStatus.SOLVED_SATISFICING
+                    results.append(res)
+                    with PlanValidator(problem_kind=problem.kind) as v:
+                        assert v.validate(problem, res.plan)
+
+            check_metrics_equality(results)
 
 
 def test_search_space(problems):
