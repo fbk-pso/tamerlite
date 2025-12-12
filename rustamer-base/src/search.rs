@@ -64,24 +64,13 @@ impl Ord for PrioritizedItem {
     }
 }
 
-struct VisitedState {
-    state: Rc<State>,
+pub struct VisitedState {
+    pub state: Rc<State>,
 }
 
 impl PartialEq for VisitedState {
     fn eq(&self, other: &Self) -> bool {
-        if self.state.todo.len() != other.state.todo.len()
-            || self.state.assignments != other.state.assignments
-        {
-            return false;
-        }
-        for (a, (idx, _)) in &self.state.todo {
-            let idx_id = other.state.todo.get(a);
-            if idx_id.is_none() || *idx != idx_id.unwrap().0 {
-                return false;
-            }
-        }
-        true
+        weak_eq(&self.state, &other.state)
     }
 }
 
@@ -91,6 +80,19 @@ impl Hash for VisitedState {
     fn hash<H: Hasher>(&self, state: &mut H) {
         Hash::hash(&self.state.assignments, state);
     }
+}
+
+pub fn weak_eq(state1: &State, state2: &State) -> bool {
+    if state1.todo.len() != state2.todo.len() || state1.assignments != state2.assignments {
+        return false;
+    }
+    for (a, (idx, _)) in &state1.todo {
+        let idx_id = state2.todo.get(a);
+        if idx_id.is_none() || *idx != idx_id.unwrap().0 {
+            return false;
+        }
+    }
+    true
 }
 
 pub fn build_plan<S: SearchSpaceTrait>(
@@ -179,7 +181,13 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         } else {
             let mut successors: Vec<Rc<State>> = Vec::new();
             for s in ss.get_successor_states_iter(&state) {
-                let s = Rc::new(s?);
+                let s = s?;
+                if early_termination && ss.goal_reached(&s, None)? {
+                    metrics.insert("expanded_states".to_string(), counter.to_string());
+                    metrics.insert("goal_depth".to_string(), s.g.to_string());
+                    return build_plan(ss, &s).map(|plan| (plan, metrics));
+                }
+                let s = Rc::new(s);
                 let keep = if !ss.is_temporal() {
                     visited_states.insert(Rc::clone(&s))
                 } else if weak_equality {
@@ -198,18 +206,6 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
             for rs in heuristic.eval_gen(successors_iter, ss)? {
                 let (i, h) = rs?;
                 let s = &successors[i];
-                if early_termination && ss.goal_reached(s, None)? {
-                    metrics.insert("expanded_states".to_string(), counter.to_string());
-                    metrics.insert("goal_depth".to_string(), s.g.to_string());
-                    return build_plan(ss, s).map(|plan| (plan, metrics));
-                }
-                if weak_equality {
-                    visited_weak_eq_states.insert(VisitedState {
-                        state: Rc::clone(s),
-                    });
-                } else if !ss.is_temporal() {
-                    visited_states.insert(Rc::clone(s));
-                }
                 match h {
                     Some(v) => {
                         let f = weight * v + (1.0 - weight) * s.g;
