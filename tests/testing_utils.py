@@ -1,5 +1,4 @@
 from unified_planning.model import Problem
-from unified_planning.model.problem_kind import temporal_kind
 from tamerlite.core import *
 import random
 from tamerlite.core import (
