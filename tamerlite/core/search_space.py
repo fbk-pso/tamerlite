@@ -250,7 +250,7 @@ def simplify(
         if isinstance(e, bool) or isinstance(e, int):
             res.append(e)
         elif isinstance(e, Fraction):
-            if e.is_integer():
+            if e.denominator == 1:
                 res.append(int(e))
             else:
                 res.append(e)
@@ -333,7 +333,7 @@ def simplify(
                     elif e.kind == "/":
                         r = Fraction(v1, v2)
 
-                    if isinstance(r, Fraction) and r.is_integer():
+                    if isinstance(r, Fraction) and r.denominator == 1:
                         r = int(r)
                     res.append(r)
                 else:
@@ -359,7 +359,7 @@ def simplify(
                 if first_constant_operand is None:
                     res.append(e)
                 else:
-                    if isinstance(v, Fraction) and v.is_integer():
+                    if isinstance(v, Fraction) and v.denominator == 1:
                         v = int(v)
 
                     if len(operands) == 1:
