@@ -39,6 +39,7 @@ import os
 import types
 
 
+print("tamelite is present", "tamerlite" in get_environment().factory._engines)
 print(get_environment().factory._engines)
 print(get_environment().factory.engine("tamerlite"))
 
