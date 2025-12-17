@@ -38,6 +38,9 @@ import importlib
 import os
 import types
 
+env = get_environment()
+env.factory.add_engine("tamerlite", "tamerlite.engine", "TamerLite")
+
 
 @pytest.fixture
 def problems():
