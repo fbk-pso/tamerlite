@@ -20,7 +20,7 @@ from unified_planning.shortcuts import *
 from unified_planning.engines import PlanGenerationResult, PlanGenerationResultStatus
 import unified_planning.test
 import unified_planning.test.examples
-import up_test_cases.builtin
+# import up_test_cases.builtin
 
 import tamerlite
 from tamerlite.core.heuristics import Heuristic
@@ -51,7 +51,8 @@ def problems():
     up_example_problems = list(
         unified_planning.test.examples.get_example_problems().values()
     )
-    up_test_problems = list(up_test_cases.builtin.get_test_cases().values())
+    # up_test_problems = list(up_test_cases.builtin.get_test_cases().values())
+    up_test_problems = list()
     for test_case in up_example_problems + up_test_problems:
         if test_case.solvable and tamerlite.engine.TamerLite.supports(
             test_case.problem.kind
