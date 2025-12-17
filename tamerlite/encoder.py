@@ -19,11 +19,16 @@ import unified_planning as up
 from unified_planning.plans import TimeTriggeredPlan, SequentialPlan, Plan
 from unified_planning.model import Problem, FNode
 from fractions import Fraction
-from typing import List, Tuple, Dict, Optional, Union
+from typing import List, Tuple, Dict, Optional, Union, Any
 
 from tamerlite.core import Expression, Effect, Timing, Event, SearchSpace, get_fluents
 from tamerlite.core.search_space import SearchSpaceABC
 from tamerlite.converter import Converter
+
+
+PlanType = List[
+    Tuple[Optional[Union[Fraction, str]], str, Optional[Union[Fraction, str]]]
+]
 
 
 class Encoder:
@@ -89,7 +94,7 @@ class Encoder:
             actions_duration,
             self._events,
             self._mutex,
-            initial_state,
+            initial_state,  # type: ignore[arg-type]
             self._goal,
             problem.epsilon,
         )
@@ -111,7 +116,7 @@ class Encoder:
         initial_state = []
         for f in self._fluents:
             initial_state.append(initial_state_values[f])
-        return initial_state
+        return initial_state  # type: ignore[return-value]
 
     def goals(self, goals: List[FNode]) -> Expression:
         return self._convert_expression(
@@ -152,9 +157,7 @@ class Encoder:
 
     def build_plan(
         self,
-        plan: List[
-            Tuple[Optional[Union[Fraction, str]], str, Optional[Union[Fraction, str]]]
-        ],
+        plan: PlanType,
     ) -> Plan:
         if self._is_temporal:
             assert all(map(lambda e: e[0] is not None, plan))
@@ -202,8 +205,8 @@ class Encoder:
         self._applicable_actions = []
         for a in self._problem.actions:
             if isinstance(a, up.model.DurativeAction):
-                from_start = {}
-                from_end = {}
+                from_start: Dict[Any, Any] = {}
+                from_end: Dict[Any, Any] = {}
                 action_events = []
                 is_applicable = True
                 for i, lc in a.conditions.items():

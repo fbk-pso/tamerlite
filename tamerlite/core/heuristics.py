@@ -59,6 +59,14 @@ HeuristicExpression = Tuple[HeuristicExpressionNode, ...]
 class Operator:
     action: str
     conditions: HeuristicExpression
+    effects: Tuple[Tuple[int, Union[bool, str]], ...]
+    cost: float
+
+
+@dataclass(eq=True, frozen=True)
+class OperatorHmax:
+    action: str
+    conditions: Tuple[Expression, ...]
     effects: Tuple[Tuple[int, Union[Expression, bool, int, Fraction, str]], ...]
     cost: float
 
@@ -420,13 +428,13 @@ class DeleteRelaxationHeuristic(Heuristic):
             for o in set(lo):
                 c, l = self._cost(o.conditions, costs)
                 if c is not None:
-                    for f, v in o.effects:
-                        if v == True:
+                    for f, e in o.effects:
+                        if e == True:
                             k: Expression = (FluentNode(f),)
-                        elif v == False:
+                        elif e == False:
                             k = (FluentNode(f), Op("not", (0,)))
                         else:
-                            k = (FluentNode(f), v, Op("==", (0, 1)))
+                            k = (FluentNode(f), e, Op("==", (0, 1)))
                         new_cost_k = new_costs.get(k, None)
                         cost_k = costs.get(k, None)
                         if (new_cost_k is not None and new_cost_k > c + o.cost) or (
@@ -531,7 +539,7 @@ class DeleteRelaxationHeuristic(Heuristic):
                             v += ov
                             l.extend(ol)
                     else:
-                        v = None
+                        v = None  # type: ignore[assignment]
                         l = []
                         break
                 res.append((v, l))
@@ -543,7 +551,7 @@ class DeleteRelaxationHeuristic(Heuristic):
                 if len(operands_values) > 0:
                     mv, ml = operands_values[0]
                     for ov, ol in operands_values:
-                        if ov < mv:
+                        if ov < mv:  # type: ignore[operator]
                             mv = ov
                             ml = ol
                     res.append((mv, ml))
@@ -625,7 +633,7 @@ class HMaxNumeric(Heuristic):
         self._fluent_types = fluent_types
         self._objects = objects
         self._events = events
-        self._operators: List[Operator] = []
+        self._operators: List[OperatorHmax] = []
         self._extra_fluents: Dict[str, List[int]] = {}
         self._num_fluents = len(self._fluent_types)
 
@@ -651,7 +659,8 @@ class HMaxNumeric(Heuristic):
                             effects.append((eff.fluent, False))
                     elif t == "real" or t == "int":
                         if len(eff.value) == 1:
-                            effects.append((eff.fluent, eff.value[0]))
+                            assert not isinstance(eff.value[0], Op)
+                            effects.append((eff.fluent, eff.value[0]))  # type: ignore[arg-type]
                         else:
                             effects.append((eff.fluent, eff.value))
                     else:
@@ -662,12 +671,14 @@ class HMaxNumeric(Heuristic):
                             for obj in objects[self._fluent_types[eff.fluent]]:
                                 effects.append((eff.fluent, obj))
                 if len(e.conditions) == 0 or e.conditions == (True,):
-                    conditions = (cond,)
+                    conditions: Tuple[Expression, ...] = (cond,)
                 else:
                     conditions = split_expression(e.conditions) + (cond,)
                 cond = (FluentNode(f),)
                 if (False,) not in conditions:
-                    self._operators.append(Operator(a, conditions, tuple(effects), 1.0))
+                    self._operators.append(
+                        OperatorHmax(a, conditions, tuple(effects), 1.0)
+                    )
         self._extra_goals: Tuple[Expression, ...] = tuple(
             [(FluentNode(fe[-1]),) for fe in self._extra_fluents.values()]
         )
@@ -676,21 +687,21 @@ class HMaxNumeric(Heuristic):
         self._operator_conditions_fluents: List[Set[int]] = []
         for operator in self._operators:
             self._operator_conditions_fluents.append(set())
-            for cond in operator.conditions:
-                for expr_node in cond:
+            for c in operator.conditions:
+                for expr_node in c:
                     if isinstance(expr_node, FluentNode):
                         self._operator_conditions_fluents[-1].add(expr_node.fluent)
 
         self._operator_effects_fluents: List[Set[int]] = []
         for operator in self._operators:
             self._operator_effects_fluents.append(set())
-            for fluent, eff in operator.effects:
-                if isinstance(eff, FluentNode):
-                    self._operator_effects_fluents[-1].add(eff.fluent)
-                elif isinstance(eff, tuple):
+            for fluent, effect in operator.effects:
+                if isinstance(effect, FluentNode):
+                    self._operator_effects_fluents[-1].add(effect.fluent)
+                elif isinstance(effect, tuple):
                     self._operator_effects_fluents[-1].update(
                         expression_node.fluent
-                        for expression_node in eff
+                        for expression_node in effect
                         if isinstance(expression_node, FluentNode)
                     )
 
@@ -733,7 +744,7 @@ class HMaxNumeric(Heuristic):
             for assignments_values in itertools.product(*values):
                 for f, v in zip(exp_fluents, assignments_values):
                     state_assignments[f] = v
-                state = State(state_assignments, None, None, None, None, None)
+                state = State(state_assignments, None, None, None, None, None)  # type: ignore
                 yield evaluate(exp, state)
         else:
             yield exp
@@ -805,7 +816,7 @@ class HMaxNumeric(Heuristic):
     def _eval_core(self, state: State) -> Optional[float]:
         assignments: List[Set[Union[bool, int, Fraction, str]]] = [
             {v} for v in state.assignments
-        ] + [{} for _ in range(self._num_fluents - len(state.assignments))]
+        ] + [set() for _ in range(self._num_fluents - len(state.assignments))]
 
         # add extra fluents to assignments
         for action in self._ordered_actions:
