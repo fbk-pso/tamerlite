@@ -44,7 +44,6 @@ from tamerlite.engine import TamerLite
 
 print("tamelite is present", "tamerlite" in get_environment().factory._engines)
 print(get_environment().factory._engines)
-print(get_environment().factory.engine("tamerlite"))
 
 
 env = get_environment()
@@ -53,7 +52,6 @@ env.factory.add_engine("tamerlite", "tamerlite.engine", "TamerLite")
 
 print("tamelite is present", "tamerlite" in get_environment().factory._engines)
 print(get_environment().factory._engines)
-print(get_environment().factory.engine("tamerlite"))
 
 
 @pytest.fixture
