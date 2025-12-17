@@ -109,6 +109,7 @@ def reload_package(package):
 
 
 def reload_tamerlite(disable_rustamer: bool):
+    return
     os.environ["DISABLE_RUSTAMER"] = str(disable_rustamer)
     reload_package(tamerlite)
 
