@@ -39,6 +39,10 @@ import os
 import types
 
 
+print(get_environment().factory._engines)
+print(get_environment().factory.engine("tamerlite"))
+
+
 @pytest.fixture
 def problems():
     test_problems = [problems_generator.get_problem_logistics(1, 1, 4, 2)]

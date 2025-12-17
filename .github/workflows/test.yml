@@ -52,7 +52,11 @@ jobs:
         run: |
           python3 unified-planning/up_test_cases/report.py tamerlite
 
+      - name: dbg
+        run: |
+          python3 tests/dbg.py
+
       - name: Run Tamerlite tests
         run: |
             export PYTHONPATH="unified-planning/up_test_cases"
-            python3 -m pytest tests/
+            python3 -m pytest -s -vv tests/
