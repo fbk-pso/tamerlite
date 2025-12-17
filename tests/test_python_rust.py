@@ -20,6 +20,7 @@ from unified_planning.shortcuts import *
 from unified_planning.engines import PlanGenerationResult, PlanGenerationResultStatus
 import unified_planning.test
 import unified_planning.test.examples
+
 # import up_test_cases.builtin
 
 import tamerlite
@@ -37,6 +38,17 @@ import pytest
 import importlib
 import os
 import types
+
+
+from tamerlite.engine import TamerLite
+
+print("tamelite is present", "tamerlite" in get_environment().factory._engines)
+print(get_environment().factory._engines)
+print(get_environment().factory.engine("tamerlite"))
+
+
+env = get_environment()
+env.factory.add_engine("tamerlite", "tamerlite.engine", "TamerLite")
 
 
 print("tamelite is present", "tamerlite" in get_environment().factory._engines)
