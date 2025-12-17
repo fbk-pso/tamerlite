@@ -748,25 +748,25 @@ class SearchSpace(SearchSpaceABC):
                 if len(action_events) > 1:
                     todo[action] = (1, id + 1)
 
-        res = []
-        start_time = {}
-        end_time = {}
-        for a, t in tn.distances.items():
-            if not isinstance(a[1], bool):
+        res: List[Tuple[Optional[Fraction], str, Optional[Fraction]]] = []
+        start_time: Dict[Tuple[str, int], Fraction] = {}
+        end_time: Dict[Tuple[str, int], Fraction] = {}
+        for ev, t in tn.distances.items():
+            if not isinstance(ev[1], bool):
                 continue
 
-            if a[1]:
-                start_time[(a[0], a[2])] = -t
+            if ev[1]:
+                start_time[(ev[0], ev[2])] = -t
             else:
-                end_time[(a[0], a[2])] = -t
+                end_time[(ev[0], ev[2])] = -t
 
-        for a, st in start_time.items():
-            et = end_time[a]
+        for a_id, st in start_time.items():
+            et = end_time[a_id]
             if (et - st) == 0:
                 d = None
             else:
                 d = et - st
-            res.append((st, a[0], d))
+            res.append((st, a_id[0], d))
 
         res.sort()
         return res

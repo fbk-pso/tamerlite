@@ -32,7 +32,7 @@ from tamerlite.core import multiqueue_search
 from tamerlite.core import evaluate, make_fluent_node
 from tamerlite.core import HFF, HAdd, HMax, HMaxNumeric, CustomHeuristic
 from tamerlite.core.heuristics import Heuristic
-from tamerlite.encoder import Encoder
+from tamerlite.encoder import Encoder, PlanType
 
 
 credits = up.engines.Credits(
@@ -163,12 +163,14 @@ class TamerLite(
                 else params.heuristic if params.heuristic else default_heuristic
             )
 
+        assert encoder.goal is not None
+
         if h_name == "custom":
 
             def rewrite_h(search_state: search_space.State):
-                return heuristic(StateWrapper(encoder, search_state))
+                return heuristic(StateWrapper(encoder, search_state))  # type: ignore[misc]
 
-            h = CustomHeuristic(rewrite_h, cache_heuristic_in_state)
+            h = CustomHeuristic(rewrite_h, cache_heuristic_in_state)  # type: ignore[assignment]
             w = 1.0 if params is None or params.weight is None else params.weight
         elif h_name == "hff":
             internal_heuristic_cache = (
@@ -181,7 +183,7 @@ class TamerLite(
                 for a, e in encoder.events.items()
                 if a in encoder.applicable_actions
             }
-            h = HFF(
+            h = HFF(  # type: ignore[assignment]
                 encoder.fluent_types,
                 encoder.objects,
                 events,
@@ -201,7 +203,7 @@ class TamerLite(
                 for a, e in encoder.events.items()
                 if a in encoder.applicable_actions
             }
-            h = HAdd(
+            h = HAdd(  # type: ignore[assignment]
                 encoder.fluent_types,
                 encoder.objects,
                 events,
@@ -221,7 +223,7 @@ class TamerLite(
                 for a, e in encoder.events.items()
                 if a in encoder.applicable_actions
             }
-            h = HMax(
+            h = HMax(  # type: ignore[assignment]
                 encoder.fluent_types,
                 encoder.objects,
                 events,
@@ -241,7 +243,7 @@ class TamerLite(
                 for a, e in encoder.events.items()
                 if a in encoder.applicable_actions
             }
-            h = HMaxNumeric(
+            h = HMaxNumeric(  # type: ignore[assignment]
                 encoder.fluent_types,
                 encoder.objects,
                 events,
@@ -251,7 +253,7 @@ class TamerLite(
             )
             w = 0.8 if params is None or params.weight is None else params.weight
         elif h_name == "blind":
-            h = CustomHeuristic(lambda x: 0.0, cache_heuristic_in_state)
+            h = CustomHeuristic(lambda x: 0.0, cache_heuristic_in_state)  # type: ignore[assignment]
             w = 0.0
         else:
             raise NotImplementedError
@@ -263,11 +265,8 @@ class TamerLite(
     ) -> Tuple[
         str,
         Callable[
-            [search_space.SearchSpaceABC, float, bool],
-            Tuple[
-                Optional[List[Tuple[Optional[Fraction], str, Optional[Fraction]]]],
-                Dict[str, str],
-            ],
+            [search_space.SearchSpaceABC, Optional[float], bool],
+            Tuple[Optional[PlanType], Dict[str, str]],
         ],
     ]:
         if params is None or params.search is None:
@@ -282,13 +281,13 @@ class TamerLite(
         elif s == "gbfs":
             search = partial(gbfs_search, heuristic=heuristic)
         elif s == "dfs":
-            search = dfs_search
+            search = partial(dfs_search)
         elif s == "bfs":
-            search = bfs_search
+            search = partial(bfs_search)
         elif s == "ehs":
             search = partial(ehc_search, heuristic=heuristic)
 
-        return s, search
+        return s, search  # type: ignore[return-value]
 
     def _solve(
         self,
@@ -325,14 +324,14 @@ class TamerLite(
             else:
                 h, w = self._get_heuristic(self._params, heuristic, encoder)
                 _, search = self._get_search(self._params, h, w)
-                plan, metrics = search(
+                plan, metrics = search(  # type: ignore
                     encoder.search_space,
                     timeout=timeout,
                     early_termination=early_termination,
                 )
 
-            if plan:
-                plan = encoder.build_plan(plan)
+            if plan is not None:
+                plan = encoder.build_plan(plan)  # type: ignore[arg-type]
                 plan = plan.replace_action_instances(map_back_action_instance)
                 status = up.engines.PlanGenerationResultStatus.SOLVED_SATISFICING
             else:
