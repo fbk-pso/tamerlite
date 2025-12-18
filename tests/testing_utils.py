@@ -1,5 +1,20 @@
-from tamerlite.core import *
-import random
+# Copyright (C) 2025 PSO Unit, Fondazione Bruno Kessler
+# This file is part of TamerLite.
+#
+# TamerLite is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# TamerLite is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+#
+
 from tamerlite.core import (
     make_bool_constant_node,
     make_fluent_node,
@@ -7,7 +22,9 @@ from tamerlite.core import (
     make_object_node,
     make_operator_node,
     make_rational_constant_node,
+    Expression,
 )
+import random
 from typing import List
 import ast
 

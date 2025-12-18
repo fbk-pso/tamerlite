@@ -23,7 +23,6 @@ import unified_planning.engines.mixins
 from unified_planning.model import ProblemKind, FNode
 from unified_planning.model.state import State
 from typing import IO, Callable, List, Optional, Union, Tuple, Dict
-from fractions import Fraction
 
 from tamerlite.core import search_space
 from tamerlite.core import wastar_search, astar_search, gbfs_search
