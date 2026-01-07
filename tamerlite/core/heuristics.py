@@ -571,7 +571,7 @@ def HFF(
     goals: Expression,
     internal_caching: bool,
     cache_value_in_state: bool,
-):
+) -> DeleteRelaxationHeuristic:
     return DeleteRelaxationHeuristic(
         actions,
         fluent_types,
@@ -592,7 +592,7 @@ def HAdd(
     goals: Expression,
     internal_caching: bool,
     cache_value_in_state: bool,
-):
+) -> DeleteRelaxationHeuristic:
     return DeleteRelaxationHeuristic(
         actions,
         fluent_types,
@@ -613,7 +613,7 @@ def HMax(
     goals: Expression,
     internal_caching: bool,
     cache_value_in_state: bool,
-):
+) -> DeleteRelaxationHeuristic:
     return DeleteRelaxationHeuristic(
         actions,
         fluent_types,

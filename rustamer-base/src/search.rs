@@ -28,7 +28,7 @@ use pyo3::prelude::*;
 use super::heuristics::*;
 use super::search_space::*;
 use super::search_state::*;
-use crate::structures::Action;
+use super::structures::Action;
 
 #[derive(Debug)]
 struct PrioritizedItem {
