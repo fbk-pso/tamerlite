@@ -43,15 +43,17 @@ impl Heuristic {
 
     #[staticmethod]
     pub fn hff(
+        actions: Vec<Action>,
         fluent_types: Vec<String>,
         objects: FxHashMap<String, Vec<String>>,
-        events: FxHashMap<String, Vec<(Timing, Event)>>,
+        events: FxHashMap<Action, Vec<(Timing, Event)>>,
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
         cache_value_in_state: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: Some(DeleteRelaxationHeuristic::new(
+                actions,
                 fluent_types,
                 objects,
                 events,
@@ -67,15 +69,17 @@ impl Heuristic {
 
     #[staticmethod]
     pub fn hadd(
+        actions: Vec<Action>,
         fluent_types: Vec<String>,
         objects: FxHashMap<String, Vec<String>>,
-        events: FxHashMap<String, Vec<(Timing, Event)>>,
+        events: FxHashMap<Action, Vec<(Timing, Event)>>,
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
         cache_value_in_state: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: Some(DeleteRelaxationHeuristic::new(
+                actions,
                 fluent_types,
                 objects,
                 events,
@@ -91,15 +95,17 @@ impl Heuristic {
 
     #[staticmethod]
     pub fn hmax(
+        actions: Vec<Action>,
         fluent_types: Vec<String>,
         objects: FxHashMap<String, Vec<String>>,
-        events: FxHashMap<String, Vec<(Timing, Event)>>,
+        events: FxHashMap<Action, Vec<(Timing, Event)>>,
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
         cache_value_in_state: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: Some(DeleteRelaxationHeuristic::new(
+                actions,
                 fluent_types,
                 objects,
                 events,
@@ -115,9 +121,10 @@ impl Heuristic {
 
     #[staticmethod]
     pub fn hmax_numeric(
+        actions: Vec<Action>,
         fluent_types: Vec<String>,
         _objects: FxHashMap<String, Vec<String>>,
-        events: FxHashMap<String, Vec<(Timing, Event)>>,
+        events: FxHashMap<Action, Vec<(Timing, Event)>>,
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
         cache_value_in_state: bool,
@@ -125,6 +132,7 @@ impl Heuristic {
         Ok(Heuristic {
             hdr: None,
             hmax: Some(HMaxNumeric::new(
+                actions,
                 fluent_types,
                 events,
                 goals,

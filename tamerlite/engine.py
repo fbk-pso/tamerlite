@@ -183,6 +183,7 @@ class TamerLite(
                 if a in encoder.applicable_actions
             }
             h = HFF(  # type: ignore[assignment]
+                encoder.actions,
                 encoder.fluent_types,
                 encoder.objects,
                 events,
@@ -203,6 +204,7 @@ class TamerLite(
                 if a in encoder.applicable_actions
             }
             h = HAdd(  # type: ignore[assignment]
+                encoder.actions,
                 encoder.fluent_types,
                 encoder.objects,
                 events,
@@ -223,6 +225,7 @@ class TamerLite(
                 if a in encoder.applicable_actions
             }
             h = HMax(  # type: ignore[assignment]
+                encoder.actions,
                 encoder.fluent_types,
                 encoder.objects,
                 events,
@@ -243,6 +246,7 @@ class TamerLite(
                 if a in encoder.applicable_actions
             }
             h = HMaxNumeric(  # type: ignore[assignment]
+                encoder.actions,
                 encoder.fluent_types,
                 encoder.objects,
                 events,

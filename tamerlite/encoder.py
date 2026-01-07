@@ -21,13 +21,21 @@ from unified_planning.model import Problem, FNode
 from fractions import Fraction
 from typing import List, Tuple, Dict, Optional, Union, Any
 
-from tamerlite.core import Expression, Effect, Timing, Event, SearchSpace, get_fluents
+from tamerlite.core import (
+    Expression,
+    Effect,
+    Timing,
+    Event,
+    Action,
+    SearchSpace,
+    get_fluents,
+)
 from tamerlite.core.search_space import SearchSpaceABC
 from tamerlite.converter import Converter
 
 
 PlanType = List[
-    Tuple[Optional[Union[Fraction, str]], str, Optional[Union[Fraction, str]]]
+    Tuple[Optional[Union[Fraction, str]], Action, Optional[Union[Fraction, str]]]
 ]
 
 
@@ -63,7 +71,16 @@ class Encoder:
         self._fluent_types = [fluent_types[f] for f in self._fluents]
 
         self._converter = Converter(problem, self._fluent_ids)
-        actions_duration: Dict[
+        self._action_names: List[str] = sorted(
+            action.name for action in problem.actions
+        )
+        self._action_by_name: Dict[str, Action] = {
+            name: Action(index) for index, name in enumerate(self._action_names)
+        }
+        self._actions: List[Action] = [
+            self._action_by_name[name] for name in self._action_names
+        ]
+        actions_duration_map: Dict[
             str, Optional[Tuple[Expression, Expression, bool, bool]]
         ] = {}
         self._is_temporal = False
@@ -72,14 +89,15 @@ class Encoder:
                 self._is_temporal = True
                 lb = self._convert_expression(a.duration.lower)
                 ub = self._convert_expression(a.duration.upper)
-                actions_duration[a.name] = (
+                actions_duration_map[a.name] = (
                     lb,
                     ub,
                     a.duration.is_left_open(),
                     a.duration.is_right_open(),
                 )
             else:
-                actions_duration[a.name] = None
+                actions_duration_map[a.name] = None
+        actions_duration = [actions_duration_map[a] for a in self._action_names]
         self._build_events()
         self._build_mutex()
 
@@ -93,6 +111,7 @@ class Encoder:
         self._search_space = SearchSpace(
             actions_duration,
             self._events,
+            self._actions,
             self._mutex,
             initial_state,  # type: ignore[arg-type]
             self._goal,
@@ -144,35 +163,46 @@ class Encoder:
         return self._objects
 
     @property
-    def events(self) -> Dict[str, List[Tuple[Timing, Event]]]:
+    def events(self) -> Dict[Action, List[Tuple[Timing, Event]]]:
         return self._events
 
     @property
-    def applicable_actions(self) -> List[str]:
+    def actions(self) -> List[Action]:
+        return self._actions
+
+    @property
+    def action_names(self) -> List[str]:
+        return self._action_names
+
+    @property
+    def action_by_name(self) -> Dict[str, Action]:
+        return self._action_by_name
+
+    @property
+    def applicable_actions(self) -> List[Action]:
         return self._applicable_actions
 
     @property
     def goal(self) -> Optional[Expression]:
         return self._goal
 
-    def build_plan(
-        self,
-        plan: PlanType,
-    ) -> Plan:
+    def build_plan(self, plan: PlanType) -> Plan:
         if self._is_temporal:
             assert all(map(lambda e: e[0] is not None, plan))
             return TimeTriggeredPlan(
                 [
                     (
                         Fraction(s),  # type: ignore[arg-type]
-                        self._problem.action(a)(),
+                        self._problem.action(self._action_names[a.idx])(),
                         Fraction(d) if d is not None else None,
                     )
                     for s, a, d in plan
                 ]
             )
         else:
-            return SequentialPlan([self._problem.action(a)() for _, a, _ in plan])
+            return SequentialPlan(
+                [self._problem.action(self._action_names[a.idx])() for _, a, _ in plan]
+            )
 
     def _convert_fluent(self, fluent_exp: FNode) -> str:
         return str(fluent_exp)
@@ -201,7 +231,7 @@ class Encoder:
     def _build_events(self):
         env = self._problem.environment
         em = env.expression_manager
-        self._events: Dict[str, List[Tuple[Timing, Event]]] = {}
+        self._events: Dict[Action, List[Tuple[Timing, Event]]] = {}
         self._applicable_actions = []
         for a in self._problem.actions:
             if isinstance(a, up.model.DurativeAction):
@@ -227,7 +257,7 @@ class Encoder:
                         and not self._simplifier.simplify(em.And(lc)).is_false()
                     )
                 if is_applicable:
-                    self._applicable_actions.append(a.name)
+                    self._applicable_actions.append(self._action_by_name[a.name])
 
                 for t, le in a.effects.items():
                     action_events.append((t.delay, t, 4, le))
@@ -268,7 +298,7 @@ class Encoder:
                             "TamerLite does not support ICE from start and from end inside the same action!"
                         )
 
-                self._events[a.name] = []
+                self._events[self._action_by_name[a.name]] = []
                 pos = 0
                 for d in sorted(from_start):
                     t, lc, lsc, lec, le = from_start[d]
@@ -277,8 +307,8 @@ class Encoder:
                     tsc = tuple([self._convert_expression(sc) for sc in lsc])
                     tec = tuple([self._convert_expression(ec) for ec in lec])
                     te = tuple([self._convert_effect(e) for e in le])
-                    self._events[a.name].append(
-                        (t, Event(a.name, pos, c, tsc, tec, te))
+                    self._events[self._action_by_name[a.name]].append(
+                        (t, Event(self._action_by_name[a.name], pos, c, tsc, tec, te))
                     )
                     pos += 1
                 for d in sorted(from_end):
@@ -288,18 +318,18 @@ class Encoder:
                     tsc = tuple([self._convert_expression(sc) for sc in lsc])
                     tec = tuple([self._convert_expression(ec) for ec in lec])
                     te = tuple([self._convert_effect(e) for e in le])
-                    self._events[a.name].append(
-                        (t, Event(a.name, pos, c, tsc, tec, te))
+                    self._events[self._action_by_name[a.name]].append(
+                        (t, Event(self._action_by_name[a.name], pos, c, tsc, tec, te))
                     )
                     pos += 1
             else:
                 t = Timing(True, Fraction(0))
                 te = tuple([self._convert_effect(e) for e in a.effects])
-                self._events[a.name] = [
+                self._events[self._action_by_name[a.name]] = [
                     (
                         t,
                         Event(
-                            a.name,
+                            self._action_by_name[a.name],
                             0,
                             self._convert_expression(em.And(a.preconditions)),
                             tuple(),
@@ -309,7 +339,7 @@ class Encoder:
                     )
                 ]
                 if not self._simplifier.simplify(em.And(a.preconditions)).is_false():
-                    self._applicable_actions.append(a.name)
+                    self._applicable_actions.append(self._action_by_name[a.name])
 
     def _build_mutex(self):
         self._mutex = set()

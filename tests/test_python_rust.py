@@ -234,7 +234,7 @@ def test_heuristic_fixed_values():
         ]
         states = [init_state]
         for action in path:
-            state = ss.get_successor_state(states[-1], action)
+            state = ss.get_successor_state(states[-1], encoder.action_by_name[action])
             states.append(state)
 
         for heuristic_class, heuristic_name in [
@@ -245,6 +245,7 @@ def test_heuristic_fixed_values():
         ]:
             for internal_caching in [True, False]:
                 heuristic: Heuristic = heuristic_class(
+                    encoder.actions,
                     encoder.fluent_types,
                     encoder.objects,
                     encoder.events,
@@ -297,6 +298,7 @@ def test_heuristic_values(problems, data_regression):
                         continue
 
                     heuristic: Heuristic = heuristic_class(
+                        encoder.actions,
                         encoder.fluent_types,
                         encoder.objects,
                         encoder.events,
@@ -465,14 +467,15 @@ def test_search_space(problems):
             state2 = states["rust"][i]
 
             assert len(state1.path) == len(state2.path)
-            actions1 = list(map(lambda e: e[0], state1.path))
-            actions2 = list(map(lambda e: e[0], state2.path))
+            actions1 = list(map(lambda e: encoder.action_names[e[0].idx], state1.path))
+            actions2 = list(map(lambda e: encoder.action_names[e[0].idx], state2.path))
             assert actions1 == actions2
 
             assert len(state1.todo) == len(state2.todo)
+            todo2 = {k.idx: v for k, v in state2.todo.items()}
             for k in state1.todo:
-                assert k in state2.todo
-                assert state1.todo[k][0] == state2.todo[k][0]
+                assert k.idx in todo2
+                assert state1.todo[k][0] == todo2[k.idx][0]
 
             assert state1.g == state2.g
 
