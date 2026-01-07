@@ -113,9 +113,14 @@ class Timing:
         return not self.start
 
 
+@dataclass(order=True, frozen=True)
+class Action:
+    idx: int
+
+
 @dataclass(eq=True, frozen=True)
 class Event:
-    action: str
+    action: Action
     pos: int
     conditions: Expression
     start_conditions: Tuple[Expression, ...]
@@ -158,10 +163,10 @@ class MultiSet:
 class State:
     assignments: List[Union[bool, int, Fraction, str]]
     temporal_network: Optional[DeltaSimpleTemporalNetwork]
-    todo: Dict[str, Tuple[int, int]]
+    todo: Dict[Action, Tuple[int, int]]
     active_conditions: MultiSet
     g: int
-    path: List[Tuple[str, int, int]]
+    path: List[Tuple[Action, int, int]]
     heuristic_cache: Dict[str, Optional[float]] = field(default_factory=dict)
 
     def __hash__(self) -> int:
@@ -423,7 +428,7 @@ class SearchSpaceABC(ABC):
         pass
 
     @abstractmethod
-    def get_successor_state(self, state: State, action: str) -> Optional[State]:
+    def get_successor_state(self, state: State, action: Action) -> Optional[State]:
         pass
 
     @abstractmethod
@@ -443,7 +448,7 @@ class SearchSpaceABC(ABC):
     @abstractmethod
     def build_plan(
         self, state: State
-    ) -> List[Tuple[Optional[Fraction], str, Optional[Fraction]]]:
+    ) -> List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]:
         pass
 
 
@@ -451,25 +456,22 @@ class SearchSpace(SearchSpaceABC):
 
     def __init__(
         self,
-        actions_duration: Dict[
-            str, Optional[Tuple[Expression, Expression, bool, bool]]
-        ],
-        events: Dict[str, List[Tuple[Timing, Event]]],
-        mutex: Set[Tuple[Tuple[str, int], Tuple[str, int]]],
+        actions_duration: List[Optional[Tuple[Expression, Expression, bool, bool]]],
+        events: Dict[Action, List[Tuple[Timing, Event]]],
+        actions: List[Action],
+        mutex: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
         initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
         goal: Optional[Expression] = None,
         epsilon: Optional[Fraction] = None,
     ):
         self._actions_duration = actions_duration
         self._events = events
-        self._actions = sorted(events.keys())
+        self._actions = actions
         self._mutex = mutex
         self._initial_state = initial_state
         self._goal = goal
         self._epsilon = Fraction(1, 100) if epsilon is None else epsilon
-        self._is_temporal = (
-            False if all([v is None for v in actions_duration.values()]) else True
-        )
+        self._is_temporal = any(v is not None for v in actions_duration)
         self._counter = 0
 
     @property
@@ -491,7 +493,7 @@ class SearchSpace(SearchSpaceABC):
             assert self._initial_state is not None
             return State(self._initial_state, tn, {}, MultiSet(), 0, [])
 
-    def get_successor_state(self, state: State, action: str) -> Optional[State]:
+    def get_successor_state(self, state: State, action: Action) -> Optional[State]:
         events = self._events[action]
         new_state = state.clone()
         new_state.g = state.g + 1
@@ -604,7 +606,7 @@ class SearchSpace(SearchSpaceABC):
         self,
         state: State,
         new_state: State,
-        action: str,
+        action: Action,
         events: List[Tuple[Timing, Event]],
     ) -> Optional[State]:
         if self._is_temporal:
@@ -612,7 +614,7 @@ class SearchSpace(SearchSpaceABC):
             start = (action, True, self._counter)
             end = (action, False, self._counter)
             self._counter += 1
-            duration = self._actions_duration[action]
+            duration = self._actions_duration[action.idx]
             l: Union[int, Fraction]
             u: Union[int, Fraction]
             if duration is None:
@@ -649,13 +651,13 @@ class SearchSpace(SearchSpaceABC):
 
     def build_plan(
         self, state: State
-    ) -> List[Tuple[Optional[Fraction], str, Optional[Fraction]]]:
+    ) -> List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]:
         if not self.is_temporal:
             return [(None, e[0], None) for e in state.path]
 
         all_path = state.path
         tn = DeltaSimpleTemporalNetwork()
-        todo: Dict[str, Tuple[int, int]] = {}
+        todo: Dict[Action, Tuple[int, int]] = {}
         path: List[Tuple[Event, int]] = []
         counter = 0
         state = self.initial_state()
@@ -693,7 +695,7 @@ class SearchSpace(SearchSpaceABC):
                 start = (action, True, counter)
                 end = (action, False, counter)
                 counter += 1
-                duration = self._actions_duration[action]
+                duration = self._actions_duration[action.idx]
                 lb: Union[int, Fraction]
                 ub: Union[int, Fraction]
                 if duration is None:
@@ -748,9 +750,9 @@ class SearchSpace(SearchSpaceABC):
                 if len(action_events) > 1:
                     todo[action] = (1, id + 1)
 
-        res: List[Tuple[Optional[Fraction], str, Optional[Fraction]]] = []
-        start_time: Dict[Tuple[str, int], Fraction] = {}
-        end_time: Dict[Tuple[str, int], Fraction] = {}
+        res: List[Tuple[Optional[Fraction], Action, Optional[Fraction]]] = []
+        start_time: Dict[Tuple[Action, int], Fraction] = {}
+        end_time: Dict[Tuple[Action, int], Fraction] = {}
         for ev, t in tn.distances.items():
             if not isinstance(ev[1], bool):
                 continue

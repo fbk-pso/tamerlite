@@ -41,7 +41,7 @@ pub use multiqueue::{
     MQSwitchPolicy};
 pub use search_space::{SearchSpace, SearchSpaceTrait};
 pub use search_state::State;
-pub use structures::{Timing, Effect, Event};
+pub use structures::{Timing, Effect, Event, Action};
 pub use expressions::{
     ExpressionNode,
     PyExpressionNode,

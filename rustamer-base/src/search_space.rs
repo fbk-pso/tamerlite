@@ -34,7 +34,7 @@ pub trait SearchSpaceTrait {
     fn is_temporal(&self) -> bool;
     fn tn_interpreter(&self) -> &TNInterpreter;
     fn initial_state(&self, initial_state: Option<Vec<PyExpressionNode>>) -> PyResult<State>;
-    fn get_successor_state(&self, state: &State, action: &str) -> PyResult<Option<State>>;
+    fn get_successor_state(&self, state: &State, action: Action) -> PyResult<Option<State>>;
     fn get_successor_states_iter<'a>(
         &'a self,
         state: &'a State,
@@ -56,17 +56,16 @@ pub trait SearchSpaceTrait {
     fn build_plan(
         &self,
         state: &State,
-    ) -> PyResult<Vec<(Option<BigRational>, String, Option<BigRational>)>>;
+    ) -> PyResult<Vec<(Option<BigRational>, Action, Option<BigRational>)>>;
 }
 
 #[pyclass(name = "SearchSpace", frozen)]
 #[derive(Debug)]
 pub struct SearchSpace {
-    actions_duration:
-        FxHashMap<String, Option<(Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool)>>,
-    events: FxHashMap<String, Vec<(Timing, Event)>>,
-    actions: Vec<String>,
-    mutex: FxHashSet<((String, usize), (String, usize))>,
+    actions_duration: Vec<Option<(Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool)>>,
+    events: FxHashMap<Action, Vec<(Timing, Event)>>,
+    actions: Vec<Action>,
+    mutex: FxHashSet<((Action, usize), (Action, usize))>,
     initial_state: Option<Vec<ExpressionNode>>,
     goal: Option<Vec<ExpressionNode>>,
     tn_interpreter: TNInterpreter,
@@ -79,37 +78,30 @@ pub struct SearchSpace {
 #[pymethods]
 impl SearchSpace {
     #[new]
-    #[pyo3(signature = (actions_duration, events, mutex, initial_state=None, goal=None, epsilon=None))]
+    #[pyo3(signature = (actions_duration, events, actions, mutex, initial_state=None, goal=None, epsilon=None))]
     fn new(
-        actions_duration: FxHashMap<
-            String,
-            Option<(Vec<PyExpressionNode>, Vec<PyExpressionNode>, bool, bool)>,
-        >,
-        events: FxHashMap<String, Vec<(Timing, Event)>>,
-        mutex: FxHashSet<((String, usize), (String, usize))>,
+        actions_duration: Vec<Option<(Vec<PyExpressionNode>, Vec<PyExpressionNode>, bool, bool)>>,
+        events: FxHashMap<Action, Vec<(Timing, Event)>>,
+        actions: Vec<Action>,
+        mutex: FxHashSet<((Action, usize), (Action, usize))>,
         initial_state: Option<Vec<PyExpressionNode>>,
         goal: Option<Vec<PyExpressionNode>>,
         #[pyo3(from_py_with = get_option_big_rational)] epsilon: Option<BigRational>,
     ) -> PyResult<Self> {
-        let is_temporal = actions_duration.values().any(|value| !value.is_none());
-        let mut actions: Vec<String> = events.keys().cloned().collect();
-        actions.sort();
-        let converted_actions_duration: FxHashMap<
-            String,
+        let is_temporal = actions_duration.iter().any(|value| !value.is_none());
+        let converted_actions_duration: Vec<
             Option<(Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool)>,
         > = actions_duration
             .into_iter()
-            .map(|(key, value)| {
-                let converted_value = match value {
-                    Some((vec1, vec2, b1, b2)) => Some((
+            .map(|value| {
+                value.map(|(vec1, vec2, b1, b2)| {
+                    (
                         vec1.into_iter().map(|e| e.v).collect(),
                         vec2.into_iter().map(|e| e.v).collect(),
                         b1,
                         b2,
-                    )),
-                    None => None,
-                };
-                (key, converted_value)
+                    )
+                })
             })
             .collect();
 
@@ -163,7 +155,7 @@ impl SearchSpace {
     }
 
     #[pyo3(name = "get_successor_state")]
-    pub fn py_get_successor_state(&self, state: &State, action: &str) -> PyResult<Option<State>> {
+    pub fn py_get_successor_state(&self, state: &State, action: Action) -> PyResult<Option<State>> {
         self.get_successor_state(state, action)
     }
 
@@ -207,8 +199,7 @@ impl SearchSpace {
         index: &usize,
         id: &u32,
     ) -> PyResult<bool> {
-        new_state.path =
-            PersistentList::append((e.action.to_string(), e.pos, *id), &new_state.path);
+        new_state.path = PersistentList::append((e.action, e.pos, *id), &new_state.path);
 
         // check conditions is done before calling this method
 
@@ -260,11 +251,11 @@ impl SearchSpace {
         if self.is_temporal {
             // Add temporal constraints between past or todo events and the current one
             let tn = new_state.temporal_network.as_mut().unwrap();
-            let ev = self.tn_interpreter.get_event_id(&e.action, e.pos, *id);
+            let ev = self.tn_interpreter.get_event_id(e.action, e.pos, *id);
             for e2 in PersistentList::to_vec(&state.path) {
-                let ev2 = self.tn_interpreter.get_event_id(&e2.0, e2.1, e2.2);
-                let e_id = (e.action.to_string(), *index);
-                let e2_id = (e2.0.to_string(), e2.1);
+                let ev2 = self.tn_interpreter.get_event_id(e2.0, e2.1, e2.2);
+                let e_id = (e.action, *index);
+                let e2_id = (e2.0, e2.1);
                 if self.mutex.contains(&(e_id, e2_id)) {
                     let b: f32 = -self.epsilon;
                     tn.add(&ev2, &ev, &b);
@@ -275,9 +266,9 @@ impl SearchSpace {
             for (a, i) in new_state.todo.iter() {
                 let mut id2 = i.1;
                 for (j, (_, e2)) in self.events[a].iter().skip(i.0).enumerate() {
-                    let e_id = (e.action.to_string(), *index);
-                    let e2_id = (a.to_string(), j + i.0);
-                    let ev2 = self.tn_interpreter.get_event_id(&e2.action, e2.pos, id2);
+                    let e_id = (e.action, *index);
+                    let e2_id = (a.clone(), j + i.0);
+                    let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, id2);
                     if self.mutex.contains(&(e_id, e2_id)) {
                         let b: f32 = -self.epsilon;
                         tn.add(&ev, &ev2, &b);
@@ -298,7 +289,7 @@ impl SearchSpace {
         &self,
         state: &State,
         new_state: &mut State,
-        action: &str,
+        action: Action,
         events: &Vec<(Timing, Event)>,
     ) -> PyResult<bool> {
         let mut counter = self.counter.lock().unwrap();
@@ -309,7 +300,7 @@ impl SearchSpace {
             let start = self.tn_interpreter.get_action_id(action, true, *counter);
             let end = self.tn_interpreter.get_action_id(action, false, *counter);
             *counter += 1;
-            let duration = self.actions_duration[action].as_ref();
+            let duration = self.actions_duration[action.idx].as_ref();
             let mut lb: f32 = 0.0;
             let mut ub: f32 = 0.0;
             if duration.is_some() {
@@ -331,7 +322,7 @@ impl SearchSpace {
             tn.add(&end, &start, &ub);
             id = *counter;
             for (t, e) in events.iter() {
-                let ev = self.tn_interpreter.get_event_id(&e.action, e.pos, *counter);
+                let ev = self.tn_interpreter.get_event_id(e.action, e.pos, *counter);
                 let b1 = -rational_to_f32(&t.delay);
                 let b2 = rational_to_f32(&t.delay);
                 if t.is_from_start() {
@@ -344,7 +335,7 @@ impl SearchSpace {
                 *counter += 1;
             }
             if events.len() > 1 {
-                new_state.todo.insert(action.to_string(), (1, id + 1));
+                new_state.todo.insert(action, (1, id + 1));
             }
         }
         self.expand_event(state, new_state, &events[0].1, &0, &id)
@@ -398,14 +389,14 @@ impl SearchSpaceTrait for SearchSpace {
         return self
             .actions
             .iter()
-            .map(|action| self.get_successor_state(state, action).transpose())
+            .map(|action| self.get_successor_state(state, *action).transpose())
             .filter(|x| x.is_some())
             .map(|x| x.unwrap());
     }
 
-    fn get_successor_state(&self, state: &State, action: &str) -> PyResult<Option<State>> {
-        if let Some(events) = self.events.get(action) {
-            if let Some((index, id)) = state.todo.get(action) {
+    fn get_successor_state(&self, state: &State, action: Action) -> PyResult<Option<State>> {
+        if let Some(events) = self.events.get(&action) {
+            if let Some((index, id)) = state.todo.get(&action) {
                 if let Some((_, e)) = events.get(*index) {
                     // Check if the event is applicable before creating the new state
                     if !self.is_sat(&e.conditions, state)? {
@@ -416,11 +407,9 @@ impl SearchSpaceTrait for SearchSpace {
                     new_state.g += 1.0;
 
                     if index + 1 >= events.len() {
-                        new_state.todo.remove(action);
+                        new_state.todo.remove(&action);
                     } else {
-                        new_state
-                            .todo
-                            .insert(action.to_string(), (index + 1, id + 1));
+                        new_state.todo.insert(action, (index + 1, id + 1));
                     }
                     if self.expand_event(state, &mut new_state, &e.clone(), index, id)? {
                         return Ok(Some(new_state));
@@ -491,7 +480,7 @@ impl SearchSpaceTrait for SearchSpace {
     fn build_plan(
         &self,
         state: &State,
-    ) -> PyResult<Vec<(Option<BigRational>, String, Option<BigRational>)>> {
+    ) -> PyResult<Vec<(Option<BigRational>, Action, Option<BigRational>)>> {
         let all_path = PersistentList::to_vec(&state.path)
             .into_iter()
             .map(|(a, _, _)| a);
@@ -501,26 +490,26 @@ impl SearchSpaceTrait for SearchSpace {
         }
 
         let mut tn = DeltaSTN::new(mk_rational(0, 1));
-        let mut todo: FxHashMap<String, (usize, u32)> =
+        let mut todo: FxHashMap<Action, (usize, u32)> =
             FxHashMap::with_hasher(FxBuildHasher::default());
         let mut path: Vec<(Event, u32)> = Vec::new();
         let mut counter = 0;
         let mut state = self.initial_state(None)?;
         for action in all_path {
-            state = self.get_successor_state(&state, action)?.unwrap();
+            state = self.get_successor_state(&state, *action)?.unwrap();
             if let Some(events) = self.events.get(action).cloned() {
                 if let Some((index, id)) = todo.get(action).cloned() {
                     if let Some((_, e)) = events.get(index) {
                         if index + 1 >= events.len() {
                             todo.remove(action);
                         } else {
-                            todo.insert(action.to_string(), (index + 1, id + 1));
+                            todo.insert(*action, (index + 1, id + 1));
                         }
-                        let ev = self.tn_interpreter.get_event_id(&e.action, e.pos, id);
+                        let ev = self.tn_interpreter.get_event_id(e.action, e.pos, id);
                         for (e2, id2) in path.iter() {
-                            let e_id = (e.action.to_string(), index);
-                            let e2_id = (e2.action.to_string(), e2.pos);
-                            let ev2 = self.tn_interpreter.get_event_id(&e2.action, e2.pos, *id2);
+                            let e_id = (e.action, index);
+                            let e2_id = (e2.action, e2.pos);
+                            let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, *id2);
                             if self.mutex.contains(&(e_id, e2_id)) {
                                 let b = -self.epsilon_rational.clone();
                                 tn.add(&ev2, &ev, &b);
@@ -531,9 +520,9 @@ impl SearchSpaceTrait for SearchSpace {
                         for (a, i) in todo.iter() {
                             let mut id2 = i.1;
                             for (j, (_, e2)) in self.events[a].iter().skip(i.0).enumerate() {
-                                let e_id = (e.action.to_string(), index);
-                                let e2_id = (a.to_string(), j + i.0);
-                                let ev2 = self.tn_interpreter.get_event_id(&e2.action, e2.pos, id2);
+                                let e_id = (e.action, index);
+                                let e2_id = (a.clone(), j + i.0);
+                                let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, id2);
                                 if self.mutex.contains(&(e_id, e2_id)) {
                                     let b = -self.epsilon_rational.clone();
                                     tn.add(&ev, &ev2, &b);
@@ -546,10 +535,10 @@ impl SearchSpaceTrait for SearchSpace {
                         path.push((e.clone(), id));
                     }
                 } else {
-                    let start = self.tn_interpreter.get_action_id(action, true, counter);
-                    let end = self.tn_interpreter.get_action_id(action, false, counter);
+                    let start = self.tn_interpreter.get_action_id(*action, true, counter);
+                    let end = self.tn_interpreter.get_action_id(*action, false, counter);
                     counter += 1;
-                    let duration = self.actions_duration[action].as_ref();
+                    let duration = self.actions_duration[action.idx].as_ref();
                     let (lb, ub) = match duration {
                         Some(d) => {
                             let mut lb = -get_rational_from_expression_node(&internal_evaluate(
@@ -572,7 +561,7 @@ impl SearchSpaceTrait for SearchSpace {
                     tn.add(&end, &start, &ub);
                     let id = counter;
                     for (t, e) in events.iter() {
-                        let ev = self.tn_interpreter.get_event_id(&e.action, e.pos, counter);
+                        let ev = self.tn_interpreter.get_event_id(e.action, e.pos, counter);
                         let b1 = -t.delay.clone();
                         let b2 = t.delay.clone();
                         if t.is_from_start() {
@@ -585,11 +574,11 @@ impl SearchSpaceTrait for SearchSpace {
                         counter += 1;
                     }
                     let e = events[0].1.clone();
-                    let ev = self.tn_interpreter.get_event_id(&e.action, e.pos, id);
+                    let ev = self.tn_interpreter.get_event_id(e.action, e.pos, id);
                     for (e2, id2) in path.iter() {
-                        let e_id = (e.action.to_string(), 0);
-                        let e2_id = (e2.action.to_string(), e2.pos);
-                        let ev2 = self.tn_interpreter.get_event_id(&e2.action, e2.pos, *id2);
+                        let e_id = (e.action, 0);
+                        let e2_id = (e2.action, e2.pos);
+                        let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, *id2);
                         if self.mutex.contains(&(e_id, e2_id)) {
                             let b = -self.epsilon_rational.clone();
                             tn.add(&ev2, &ev, &b);
@@ -600,9 +589,9 @@ impl SearchSpaceTrait for SearchSpace {
                     for (a, i) in todo.iter() {
                         let mut id2 = i.1;
                         for (j, (_, e2)) in self.events[a].iter().skip(i.0).enumerate() {
-                            let e_id = (e.action.to_string(), 0);
-                            let e2_id = (a.to_string(), j + i.0);
-                            let ev2 = self.tn_interpreter.get_event_id(&e2.action, e2.pos, id2);
+                            let e_id = (e.action, 0);
+                            let e2_id = (a.clone(), j + i.0);
+                            let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, id2);
                             if self.mutex.contains(&(e_id, e2_id)) {
                                 let b = -self.epsilon_rational.clone();
                                 tn.add(&ev, &ev2, &b);
@@ -614,32 +603,33 @@ impl SearchSpaceTrait for SearchSpace {
                     }
                     path.push((e.clone(), id));
                     if events.len() > 1 {
-                        todo.insert(action.to_string(), (1, id + 1));
+                        todo.insert(*action, (1, id + 1));
                     }
                 }
             }
         }
 
         let mut res = Vec::new();
-        let mut start_time: FxHashMap<(String, u32), BigRational> =
+        let mut start_time: FxHashMap<(Action, u32), BigRational> =
             FxHashMap::with_hasher(FxBuildHasher::default());
-        let mut end_time: FxHashMap<(String, u32), BigRational> =
+        let mut end_time: FxHashMap<(Action, u32), BigRational> =
             FxHashMap::with_hasher(FxBuildHasher::default());
         for (a, t) in self.tn_interpreter.get_actions_timings(&tn).iter() {
             if a.1 {
-                start_time.insert((a.0.to_string(), a.2), t.clone());
+                start_time.insert((a.0, a.2), t.clone());
             } else {
-                end_time.insert((a.0.to_string(), a.2), t.clone());
+                end_time.insert((a.0, a.2), t.clone());
             }
         }
-        for (a, st) in start_time.iter() {
-            let et = &end_time[a];
-            let d: Option<BigRational> = if et - st == mk_rational(0, 1) {
+        for (a, st) in start_time {
+            let et = &end_time[&a];
+            let d = et - st.clone();
+            let d: Option<BigRational> = if d == mk_rational(0, 1) {
                 None
             } else {
-                Some((et - st).clone())
+                Some(d)
             };
-            res.push((Some(st.clone()), a.0.to_string(), d));
+            res.push((Some(st), a.0, d));
         }
         res.sort();
         Ok(res)

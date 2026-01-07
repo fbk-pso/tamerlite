@@ -28,6 +28,7 @@ use pyo3::prelude::*;
 use super::heuristics::*;
 use super::search_space::*;
 use super::search_state::*;
+use crate::structures::Action;
 
 #[derive(Debug)]
 struct PrioritizedItem {
@@ -66,10 +67,10 @@ impl Ord for PrioritizedItem {
 pub fn build_plan<S: SearchSpaceTrait>(
     ss: &S,
     state: &State,
-) -> PyResult<Option<Vec<(Option<String>, String, Option<String>)>>> {
+) -> PyResult<Option<Vec<(Option<String>, Action, Option<String>)>>> {
     let plan = ss.build_plan(state)?;
-    let mut res = Vec::new();
-    for (s, a, d) in plan.iter() {
+    let mut res = Vec::with_capacity(plan.len());
+    for (s, a, d) in plan.into_iter() {
         let mut ss = None;
         let mut ds = None;
         if let Some(start) = s {
@@ -86,7 +87,7 @@ pub fn build_plan<S: SearchSpaceTrait>(
                 duration.denom().to_string()
             ));
         }
-        res.push((ss, a.to_string(), ds));
+        res.push((ss, a, ds));
     }
     Ok(Some(res))
 }
@@ -98,7 +99,7 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     timeout: Option<f32>,
     early_termination: bool,
 ) -> PyResult<(
-    Option<Vec<(Option<String>, String, Option<String>)>>,
+    Option<Vec<(Option<String>, Action, Option<String>)>>,
     FxHashMap<String, String>,
 )> {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
@@ -190,7 +191,7 @@ pub fn bfs_search<S: SearchSpaceTrait>(
     timeout: Option<f32>,
     early_termination: bool,
 ) -> PyResult<(
-    Option<Vec<(Option<String>, String, Option<String>)>>,
+    Option<Vec<(Option<String>, Action, Option<String>)>>,
     FxHashMap<String, String>,
 )> {
     basic_search(ss, true, timeout, early_termination)
@@ -201,7 +202,7 @@ pub fn dfs_search<S: SearchSpaceTrait>(
     timeout: Option<f32>,
     early_termination: bool,
 ) -> PyResult<(
-    Option<Vec<(Option<String>, String, Option<String>)>>,
+    Option<Vec<(Option<String>, Action, Option<String>)>>,
     FxHashMap<String, String>,
 )> {
     basic_search(ss, false, timeout, early_termination)
@@ -213,7 +214,7 @@ fn basic_search<S: SearchSpaceTrait>(
     timeout: Option<f32>,
     early_termination: bool,
 ) -> PyResult<(
-    Option<Vec<(Option<String>, String, Option<String>)>>,
+    Option<Vec<(Option<String>, Action, Option<String>)>>,
     FxHashMap<String, String>,
 )> {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
@@ -269,7 +270,7 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     timeout: Option<f32>,
     early_termination: bool,
 ) -> PyResult<(
-    Option<Vec<(Option<String>, String, Option<String>)>>,
+    Option<Vec<(Option<String>, Action, Option<String>)>>,
     FxHashMap<String, String>,
 )> {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
