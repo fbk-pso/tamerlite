@@ -22,7 +22,7 @@ import unified_planning.engines
 import unified_planning.engines.mixins
 from unified_planning.model import ProblemKind, FNode
 from unified_planning.model.state import State
-from typing import IO, Callable, List, Optional, Union
+from typing import IO, Callable, List, Optional, Union, Tuple, Dict
 
 from tamerlite.core import search_space
 from tamerlite.core import wastar_search, astar_search, gbfs_search
@@ -30,7 +30,8 @@ from tamerlite.core import bfs_search, dfs_search, ehc_search
 from tamerlite.core import multiqueue_search
 from tamerlite.core import evaluate, make_fluent_node
 from tamerlite.core import HFF, HAdd, HMax, HMaxNumeric, CustomHeuristic
-from tamerlite.encoder import Encoder
+from tamerlite.core.heuristics import Heuristic
+from tamerlite.encoder import Encoder, PlanType
 
 
 credits = up.engines.Credits(
@@ -145,26 +146,32 @@ class TamerLite(
         return optimality_guarantee == up.engines.OptimalityGuarantee.SATISFICING
 
     def _get_heuristic(
-        self, params, heuristic, encoder, cache_heuristic_in_state=False
-    ):
+        self,
+        params: Optional[SearchParams],
+        heuristic: Optional[Callable[[State], Optional[float]]],
+        encoder: Encoder,
+        cache_heuristic_in_state: bool = False,
+    ) -> Tuple[Heuristic, float]:
         default_heuristic = "hff"
         if params is None:
-            h = "custom" if heuristic else default_heuristic
+            h_name = "custom" if heuristic else default_heuristic
         else:
-            h = (
+            h_name = (
                 "custom"
                 if heuristic and params.heuristic is None
                 else params.heuristic if params.heuristic else default_heuristic
             )
 
-        if h == "custom":
+        assert encoder.goal is not None
+
+        if h_name == "custom":
 
             def rewrite_h(search_state: search_space.State):
-                return heuristic(StateWrapper(encoder, search_state))
+                return heuristic(StateWrapper(encoder, search_state))  # type: ignore[misc]
 
-            h = CustomHeuristic(rewrite_h, cache_heuristic_in_state)
-            w = 1 if params is None or params.weight is None else params.weight
-        elif h == "hff":
+            h = CustomHeuristic(rewrite_h, cache_heuristic_in_state)  # type: ignore[assignment]
+            w = 1.0 if params is None or params.weight is None else params.weight
+        elif h_name == "hff":
             internal_heuristic_cache = (
                 True
                 if params is None or params.internal_heuristic_cache is None
@@ -175,7 +182,7 @@ class TamerLite(
                 for a, e in encoder.events.items()
                 if a in encoder.applicable_actions
             }
-            h = HFF(
+            h = HFF(  # type: ignore[assignment]
                 encoder.fluent_types,
                 encoder.objects,
                 events,
@@ -184,7 +191,7 @@ class TamerLite(
                 cache_value_in_state=cache_heuristic_in_state,
             )
             w = 0.8 if params is None or params.weight is None else params.weight
-        elif h == "hadd":
+        elif h_name == "hadd":
             internal_heuristic_cache = (
                 True
                 if params is None or params.internal_heuristic_cache is None
@@ -195,7 +202,7 @@ class TamerLite(
                 for a, e in encoder.events.items()
                 if a in encoder.applicable_actions
             }
-            h = HAdd(
+            h = HAdd(  # type: ignore[assignment]
                 encoder.fluent_types,
                 encoder.objects,
                 events,
@@ -204,7 +211,7 @@ class TamerLite(
                 cache_value_in_state=cache_heuristic_in_state,
             )
             w = 0.8 if params is None or params.weight is None else params.weight
-        elif h == "hmax":
+        elif h_name == "hmax":
             internal_heuristic_cache = (
                 True
                 if params is None or params.internal_heuristic_cache is None
@@ -215,7 +222,7 @@ class TamerLite(
                 for a, e in encoder.events.items()
                 if a in encoder.applicable_actions
             }
-            h = HMax(
+            h = HMax(  # type: ignore[assignment]
                 encoder.fluent_types,
                 encoder.objects,
                 events,
@@ -224,7 +231,7 @@ class TamerLite(
                 cache_value_in_state=cache_heuristic_in_state,
             )
             w = 0.8 if params is None or params.weight is None else params.weight
-        elif h == "hmax_numeric":
+        elif h_name == "hmax_numeric":
             internal_heuristic_cache = (
                 True
                 if params is None or params.internal_heuristic_cache is None
@@ -235,7 +242,7 @@ class TamerLite(
                 for a, e in encoder.events.items()
                 if a in encoder.applicable_actions
             }
-            h = HMaxNumeric(
+            h = HMaxNumeric(  # type: ignore[assignment]
                 encoder.fluent_types,
                 encoder.objects,
                 events,
@@ -244,15 +251,23 @@ class TamerLite(
                 cache_value_in_state=cache_heuristic_in_state,
             )
             w = 0.8 if params is None or params.weight is None else params.weight
-        elif h == "blind":
-            h = CustomHeuristic(lambda x: 0.0, cache_heuristic_in_state)
-            w = 0
+        elif h_name == "blind":
+            h = CustomHeuristic(lambda x: 0.0, cache_heuristic_in_state)  # type: ignore[assignment]
+            w = 0.0
         else:
             raise NotImplementedError
 
         return h, w
 
-    def _get_search(self, params, heuristic, weight):
+    def _get_search(
+        self, params: Optional[SearchParams], heuristic: Heuristic, weight: float
+    ) -> Tuple[
+        str,
+        Callable[
+            [search_space.SearchSpaceABC, Optional[float], bool],
+            Tuple[Optional[PlanType], Dict[str, str]],
+        ],
+    ]:
         if params is None or params.search is None:
             s = "wastar"
         else:
@@ -265,18 +280,18 @@ class TamerLite(
         elif s == "gbfs":
             search = partial(gbfs_search, heuristic=heuristic)
         elif s == "dfs":
-            search = dfs_search
+            search = partial(dfs_search)
         elif s == "bfs":
-            search = bfs_search
+            search = partial(bfs_search)
         elif s == "ehs":
             search = partial(ehc_search, heuristic=heuristic)
 
-        return s, search
+        return s, search  # type: ignore[return-value]
 
     def _solve(
         self,
         problem: "up.model.AbstractProblem",
-        heuristic: Optional[Callable[["up.model.state.State"], Optional[float]]] = None,
+        heuristic: Optional[Callable[[State], Optional[float]]] = None,
         timeout: Optional[float] = None,
         output_stream: Optional[IO[str]] = None,
     ) -> "up.engines.results.PlanGenerationResult":
@@ -308,14 +323,14 @@ class TamerLite(
             else:
                 h, w = self._get_heuristic(self._params, heuristic, encoder)
                 _, search = self._get_search(self._params, h, w)
-                plan, metrics = search(
+                plan, metrics = search(  # type: ignore
                     encoder.search_space,
                     timeout=timeout,
                     early_termination=early_termination,
                 )
 
-            if plan:
-                plan = encoder.build_plan(plan)
+            if plan is not None:
+                plan = encoder.build_plan(plan)  # type: ignore[arg-type]
                 plan = plan.replace_action_instances(map_back_action_instance)
                 status = up.engines.PlanGenerationResultStatus.SOLVED_SATISFICING
             else:

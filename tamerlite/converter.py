@@ -17,7 +17,7 @@
 
 from typing import List, Dict
 
-from unified_planning.model import FNode
+from unified_planning.model import FNode, AbstractProblem
 from unified_planning.model.walkers import DagWalker, Dnf
 
 from tamerlite.core import Expression
@@ -33,17 +33,17 @@ from tamerlite.core import (
 
 
 class Converter(DagWalker):
-    def __init__(self, problem, fluent_ids: Dict[str, int]):
+    def __init__(self, problem: AbstractProblem, fluent_ids: Dict[str, int]):
         DagWalker.__init__(self)
         self.static_fluents = problem.get_static_fluents()
         self._fluent_ids = fluent_ids
 
-    def convert(self, expression: "FNode") -> Expression:
+    def convert(self, expression: FNode) -> Expression:
         """Converts the given expression."""
         w = Dnf(expression.environment)
         return self.walk(w.get_dnf_expression(expression))
 
-    def walk_and(self, expression: "FNode", args: List[Expression]) -> Expression:
+    def walk_and(self, expression: FNode, args: List[Expression]) -> Expression:
         if len(args) == 0:
             return (True,)
         elif len(args) == 1:
@@ -59,7 +59,7 @@ class Converter(DagWalker):
             res += (make_operator_node("and", tuple(operands)),)
             return res
 
-    def walk_or(self, expression: "FNode", args: List[Expression]) -> Expression:
+    def walk_or(self, expression: FNode, args: List[Expression]) -> Expression:
         if len(args) == 0:
             return (False,)
         elif len(args) == 1:
@@ -75,11 +75,11 @@ class Converter(DagWalker):
             res += (make_operator_node("or", tuple(operands)),)
             return res
 
-    def walk_not(self, expression: "FNode", args: List[Expression]) -> Expression:
+    def walk_not(self, expression: FNode, args: List[Expression]) -> Expression:
         assert len(args) == 1
         return args[0] + (make_operator_node("not", (len(args[0]) - 1,)),)
 
-    def walk_plus(self, expression: "FNode", args: List[Expression]) -> Expression:
+    def walk_plus(self, expression: FNode, args: List[Expression]) -> Expression:
         assert len(args) >= 2
         res = args[0]
         l = len(res) - 1
@@ -91,7 +91,7 @@ class Converter(DagWalker):
         res += (make_operator_node("+", tuple(operands)),)
         return res
 
-    def walk_minus(self, expression: "FNode", args: List[Expression]) -> Expression:
+    def walk_minus(self, expression: FNode, args: List[Expression]) -> Expression:
         assert len(args) == 2
         return (
             args[0]
@@ -103,7 +103,7 @@ class Converter(DagWalker):
             )
         )
 
-    def walk_times(self, expression: "FNode", args: List[Expression]) -> Expression:
+    def walk_times(self, expression: FNode, args: List[Expression]) -> Expression:
         assert len(args) >= 2
         res = args[0]
         l = len(res) - 1
@@ -115,7 +115,7 @@ class Converter(DagWalker):
         res += (make_operator_node("*", tuple(operands)),)
         return res
 
-    def walk_div(self, expression: "FNode", args: List[Expression]) -> Expression:
+    def walk_div(self, expression: FNode, args: List[Expression]) -> Expression:
         assert len(args) == 2
         return (
             args[0]
@@ -127,7 +127,7 @@ class Converter(DagWalker):
             )
         )
 
-    def walk_le(self, expression: "FNode", args: List[Expression]) -> Expression:
+    def walk_le(self, expression: FNode, args: List[Expression]) -> Expression:
         assert len(args) == 2
         return (
             args[0]
@@ -139,7 +139,7 @@ class Converter(DagWalker):
             )
         )
 
-    def walk_lt(self, expression: "FNode", args: List[Expression]) -> Expression:
+    def walk_lt(self, expression: FNode, args: List[Expression]) -> Expression:
         assert len(args) == 2
         return (
             args[0]
@@ -151,7 +151,7 @@ class Converter(DagWalker):
             )
         )
 
-    def walk_equals(self, expression: "FNode", args: List[Expression]) -> Expression:
+    def walk_equals(self, expression: FNode, args: List[Expression]) -> Expression:
         assert len(args) == 2
         if (
             not expression.arg(0).is_fluent_exp()
@@ -168,42 +168,38 @@ class Converter(DagWalker):
             + (make_operator_node("==", (len(a0) - 1, len(a0) + len(a1) - 1)),)
         )
 
-    def walk_fluent_exp(
-        self, expression: "FNode", args: List[Expression]
-    ) -> Expression:
+    def walk_fluent_exp(self, expression: FNode, args: List[Expression]) -> Expression:
         fluent = str(expression)
         return (make_fluent_node(self._fluent_ids[fluent]),)
 
-    def walk_object_exp(
-        self, expression: "FNode", args: List[Expression]
-    ) -> Expression:
+    def walk_object_exp(self, expression: FNode, args: List[Expression]) -> Expression:
         assert len(args) == 0
         return (make_object_node(str(expression)),)
 
     def walk_bool_constant(
-        self, expression: "FNode", args: List[Expression]
+        self, expression: FNode, args: List[Expression]
     ) -> Expression:
         assert len(args) == 0
         return (make_bool_constant_node(expression.is_true()),)
 
     def walk_real_constant(
-        self, expression: "FNode", args: List[Expression]
+        self, expression: FNode, args: List[Expression]
     ) -> Expression:
         assert len(args) == 0
         v = expression.constant_value()
         return (make_rational_constant_node(v.numerator, v.denominator),)
 
     def walk_int_constant(
-        self, expression: "FNode", args: List[Expression]
+        self, expression: FNode, args: List[Expression]
     ) -> Expression:
         assert len(args) == 0
         return (make_int_constant_node(expression.constant_value()),)
 
-    def walk_implies(self, expression: "FNode", args: List[Expression]) -> Expression:
+    def walk_implies(self, expression: FNode, args: List[Expression]) -> Expression:
         raise NotImplementedError
 
-    def walk_iff(self, expression: "FNode", args: List[Expression]) -> Expression:
+    def walk_iff(self, expression: FNode, args: List[Expression]) -> Expression:
         raise NotImplementedError
 
-    def walk_param_exp(self, expression: "FNode", args: List[Expression]) -> Expression:
+    def walk_param_exp(self, expression: FNode, args: List[Expression]) -> Expression:
         raise NotImplementedError

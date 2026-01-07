@@ -395,7 +395,7 @@ impl DeleteRelaxationHeuristic {
         fluent_types: Vec<String>,
         objects: FxHashMap<String, Vec<String>>,
         events: FxHashMap<String, Vec<(Timing, Event)>>,
-        goal: Vec<PyExpressionNode>,
+        goals: Vec<PyExpressionNode>,
         heuristic_kind: HeuristicKind,
         internal_caching: bool,
     ) -> PyResult<Self> {
@@ -487,7 +487,7 @@ impl DeleteRelaxationHeuristic {
         }
         operators.sort_by(|a, b| a.action.cmp(&b.action));
 
-        let expr_goals = goal.into_iter().map(|e| e.v).collect();
+        let expr_goals = goals.into_iter().map(|e| e.v).collect();
         let goals = convert_to_heuristic_expression(&expr_goals, &mut expression_manager);
         extra_goals.push(ExpressionNode::And((0..extra_goals.len()).collect()));
         let extra_goals = convert_to_heuristic_expression(&extra_goals, &mut expression_manager);
@@ -932,7 +932,7 @@ impl HMaxNumeric {
     pub fn new(
         fluent_types: Vec<String>,
         events: FxHashMap<String, Vec<(Timing, Event)>>,
-        goal: Vec<PyExpressionNode>,
+        goals: Vec<PyExpressionNode>,
         internal_caching: bool,
     ) -> PyResult<Self> {
         let mut operators = Vec::new();
@@ -981,7 +981,7 @@ impl HMaxNumeric {
             extra_fluents.insert(a.to_string(), a_extra_fluents);
         }
 
-        let mut goals = split_expression(&goal.into_iter().map(|e| e.v).collect())?;
+        let mut goals = split_expression(&goals.into_iter().map(|e| e.v).collect())?;
         goals.extend(extra_goals);
         let goal_expressions: Vec<Expression> = goals
             .iter()
