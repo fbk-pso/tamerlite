@@ -233,8 +233,8 @@ def test_heuristic_fixed_values():
             "make_treatment_r0_plt0_p0_t0",
         ]
         states = [init_state]
-        for action in path:
-            state = ss.get_successor_state(states[-1], encoder.action_by_name[action])
+        for action_name in path:
+            state = ss.get_successor_state(states[-1], encoder.get_action(action_name))
             states.append(state)
 
         for heuristic_class, heuristic_name in [
@@ -467,8 +467,8 @@ def test_search_space(problems):
             state2 = states["rust"][i]
 
             assert len(state1.path) == len(state2.path)
-            actions1 = list(map(lambda e: encoder.action_names[e[0].idx], state1.path))
-            actions2 = list(map(lambda e: encoder.action_names[e[0].idx], state2.path))
+            actions1 = list(map(lambda e: encoder.get_action_name(e[0]), state1.path))
+            actions2 = list(map(lambda e: encoder.get_action_name(e[0]), state2.path))
             assert actions1 == actions2
 
             assert len(state1.todo) == len(state2.todo)

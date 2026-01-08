@@ -186,6 +186,12 @@ class Encoder:
     def goal(self) -> Optional[Expression]:
         return self._goal
 
+    def get_action(self, name: str) -> Action:
+        return self.action_by_name[name]
+
+    def get_action_name(self, action: Action) -> str:
+        return self.action_names[action.idx]
+
     def build_plan(self, plan: PlanType) -> Plan:
         if self._is_temporal:
             assert all(map(lambda e: e[0] is not None, plan))
@@ -193,7 +199,7 @@ class Encoder:
                 [
                     (
                         Fraction(s),  # type: ignore[arg-type]
-                        self._problem.action(self._action_names[a.idx])(),
+                        self._problem.action(self.get_action_name(a))(),
                         Fraction(d) if d is not None else None,
                     )
                     for s, a, d in plan
@@ -201,7 +207,7 @@ class Encoder:
             )
         else:
             return SequentialPlan(
-                [self._problem.action(self._action_names[a.idx])() for _, a, _ in plan]
+                [self._problem.action(self.get_action_name(a))() for _, a, _ in plan]
             )
 
     def _convert_fluent(self, fluent_exp: FNode) -> str:
@@ -257,7 +263,7 @@ class Encoder:
                         and not self._simplifier.simplify(em.And(lc)).is_false()
                     )
                 if is_applicable:
-                    self._applicable_actions.append(self._action_by_name[a.name])
+                    self._applicable_actions.append(self.get_action(a.name))
 
                 for t, le in a.effects.items():
                     action_events.append((t.delay, t, 4, le))
@@ -298,7 +304,7 @@ class Encoder:
                             "TamerLite does not support ICE from start and from end inside the same action!"
                         )
 
-                self._events[self._action_by_name[a.name]] = []
+                self._events[self.get_action(a.name)] = []
                 pos = 0
                 for d in sorted(from_start):
                     t, lc, lsc, lec, le = from_start[d]
@@ -307,8 +313,8 @@ class Encoder:
                     tsc = tuple([self._convert_expression(sc) for sc in lsc])
                     tec = tuple([self._convert_expression(ec) for ec in lec])
                     te = tuple([self._convert_effect(e) for e in le])
-                    self._events[self._action_by_name[a.name]].append(
-                        (t, Event(self._action_by_name[a.name], pos, c, tsc, tec, te))
+                    self._events[self.get_action(a.name)].append(
+                        (t, Event(self.get_action(a.name), pos, c, tsc, tec, te))
                     )
                     pos += 1
                 for d in sorted(from_end):
@@ -318,18 +324,18 @@ class Encoder:
                     tsc = tuple([self._convert_expression(sc) for sc in lsc])
                     tec = tuple([self._convert_expression(ec) for ec in lec])
                     te = tuple([self._convert_effect(e) for e in le])
-                    self._events[self._action_by_name[a.name]].append(
-                        (t, Event(self._action_by_name[a.name], pos, c, tsc, tec, te))
+                    self._events[self.get_action(a.name)].append(
+                        (t, Event(self.get_action(a.name), pos, c, tsc, tec, te))
                     )
                     pos += 1
             else:
                 t = Timing(True, Fraction(0))
                 te = tuple([self._convert_effect(e) for e in a.effects])
-                self._events[self._action_by_name[a.name]] = [
+                self._events[self.get_action(a.name)] = [
                     (
                         t,
                         Event(
-                            self._action_by_name[a.name],
+                            self.get_action(a.name),
                             0,
                             self._convert_expression(em.And(a.preconditions)),
                             tuple(),
@@ -339,7 +345,7 @@ class Encoder:
                     )
                 ]
                 if not self._simplifier.simplify(em.And(a.preconditions)).is_false():
-                    self._applicable_actions.append(self._action_by_name[a.name])
+                    self._applicable_actions.append(self.get_action(a.name))
 
     def _build_mutex(self):
         self._mutex = set()
