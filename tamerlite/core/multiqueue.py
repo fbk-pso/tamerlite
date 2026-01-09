@@ -22,6 +22,7 @@ from typing import List, Tuple, Dict, Optional
 from fractions import Fraction
 from tamerlite.core.search_space import SearchSpaceABC, State, Action
 from tamerlite.core.heuristics import Heuristic
+from tamerlite.core.search import state_representation
 from abc import ABC, abstractmethod
 
 
@@ -81,6 +82,7 @@ def multiqueue_search(
     heuristics: List[Tuple[Heuristic, float]],
     timeout: Optional[float] = None,
     early_termination: bool = False,
+    weak_equality: bool = False,
 ) -> Tuple[
     Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
     Dict[str, str],
@@ -91,6 +93,7 @@ def multiqueue_search(
         switch_policy=RoundRobinSwitchPolicy(len(heuristics)),
         timeout=timeout,
         early_termination=early_termination,
+        weak_equality=weak_equality,
     )
 
 
@@ -100,15 +103,16 @@ def _multiqueue_search(
     switch_policy: MQSwitchPolicy,
     timeout: Optional[float] = None,
     early_termination: bool = False,
+    weak_equality: bool = False,
 ) -> Tuple[
     Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
     Dict[str, str],
 ]:
     st = time.time()
     opens = []
-    closed_set = set()
-    open_set = set()
     init = ss.initial_state()
+    if not ss.is_temporal or weak_equality:
+        visited_states = {state_representation(init, weak_equality)}
     states_expanded = 0
     if early_termination and ss.goal_reached(init):
         return ss.build_plan(init), {
@@ -116,20 +120,20 @@ def _multiqueue_search(
             "goal_depth": str(init.g),
         }
 
-    item = PrioritizedItem(0, StateContainer(init, False))
+    item = PrioritizedItem(0.0, StateContainer(init, False))
     for i, _ in enumerate(heuristics):
         open: List[PrioritizedItem] = []
         heapq.heappush(open, item)
         opens.append(open)
         switch_policy.notify_push(i, item)
 
-    counter = 0
     while True:
         if timeout is not None and time.time() - st > timeout:
             raise TimeoutError
         if any(len(o) == 0 for o in opens):
             break
-        i = switch_policy.switching_policy(counter)
+
+        i = switch_policy.switching_policy(states_expanded)
         open = opens[i]
         item = heapq.heappop(open)
         switch_policy.notify_pop(i, item)
@@ -138,10 +142,6 @@ def _multiqueue_search(
             continue
         sc.expanded = True
         state = sc.state
-        if not ss.is_temporal:
-            closed_set.add(state)
-            open_set.discard(state)
-        counter += 1
         states_expanded += 1
         if not early_termination and ss.goal_reached(state):
             return ss.build_plan(state), {
@@ -157,18 +157,21 @@ def _multiqueue_search(
                     "expanded_states": str(states_expanded),
                     "goal_depth": str(s.g),
                 }
-            if not ss.is_temporal:
-                if s in closed_set or s in open_set:
-                    continue
-                open_set.add(s)
-            candidate_states.append(s)
+            if not ss.is_temporal or weak_equality:
+                state_repr = state_representation(s, weak_equality)
+                if state_repr not in visited_states:
+                    visited_states.add(state_repr)
+                    candidate_states.append(s)
+            else:
+                candidate_states.append(s)
+
         candidate_containers = [StateContainer(s, False) for s in candidate_states]
         for i, (heuristic, weight) in enumerate(heuristics):
             for j, (succ_state, h) in enumerate(
                 heuristic.eval_gen(candidate_states, ss)
             ):
                 if h is not None:
-                    f = (1 - weight) * succ_state.g + weight * h
+                    f = (1.0 - weight) * succ_state.g + weight * h
                     item = PrioritizedItem(f, candidate_containers[j])
                     heapq.heappush(opens[i], item)
                     switch_policy.notify_push(i, item)

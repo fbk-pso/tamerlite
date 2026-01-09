@@ -68,20 +68,24 @@ class StateWrapper(State):
 
 
 @dataclass(frozen=True)
-class SearchParams:
-    search: Optional[str] = None
+class HeuristicParams:
     heuristic: Optional[str] = None
     internal_heuristic_cache: Optional[bool] = None
     weight: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class SearchParams(HeuristicParams):
+    search: Optional[str] = None
     early_termination: Optional[bool] = None
+    weak_equality: Optional[bool] = None
 
 
 @dataclass(frozen=True)
 class MultiqueueParams:
-    queues: List[SearchParams]
-    early_termination: Optional[bool] = (
-        None  # the parameter early_termination inside queues is ignored
-    )
+    queues: List[HeuristicParams]
+    early_termination: Optional[bool] = None
+    weak_equality: Optional[bool] = None
 
 
 class TamerLite(
@@ -147,7 +151,7 @@ class TamerLite(
 
     def _get_heuristic(
         self,
-        params: Optional[SearchParams],
+        params: Optional[HeuristicParams],
         heuristic: Optional[Callable[[State], Optional[float]]],
         encoder: Encoder,
         cache_heuristic_in_state: bool = False,
@@ -277,12 +281,27 @@ class TamerLite(
         else:
             s = params.search
 
+        weak_equality = (
+            False
+            if params is None or params.weak_equality is None
+            else params.weak_equality
+        )
+
         if s == "wastar":
-            search = partial(wastar_search, heuristic=heuristic, weight=weight)
+            search = partial(
+                wastar_search,
+                heuristic=heuristic,
+                weight=weight,
+                weak_equality=weak_equality,
+            )
         elif s == "astar":
-            search = partial(astar_search, heuristic=heuristic)
+            search = partial(
+                astar_search, heuristic=heuristic, weak_equality=weak_equality
+            )
         elif s == "gbfs":
-            search = partial(gbfs_search, heuristic=heuristic)
+            search = partial(
+                gbfs_search, heuristic=heuristic, weak_equality=weak_equality
+            )
         elif s == "dfs":
             search = partial(dfs_search)
         elif s == "bfs":
@@ -318,11 +337,17 @@ class TamerLite(
                 for p in self._params.queues:
                     h, w = self._get_heuristic(p, heuristic, encoder)
                     heuristics.append((h, w))
+
+                weak_equality = False
+                if self._params is not None and self._params.weak_equality is not None:
+                    weak_equality = self._params.weak_equality
+
                 plan, metrics = multiqueue_search(
                     encoder.search_space,
                     heuristics,
                     timeout,
                     early_termination=early_termination,
+                    weak_equality=weak_equality,
                 )
             else:
                 h, w = self._get_heuristic(self._params, heuristic, encoder)

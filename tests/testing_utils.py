@@ -15,6 +15,7 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 
+from unified_planning.model import Problem
 from tamerlite.core import (
     make_bool_constant_node,
     make_fluent_node,
@@ -34,6 +35,10 @@ def is_strictly_increasing(l: List):
         if l[i] >= l[i + 1]:
             return False
     return True
+
+
+def is_temporal_problem(problem: Problem):
+    return problem.kind.has_continuous_time() or problem.kind.has_discrete_time()
 
 
 def construct_numeric_exp_rec(offset=0, depth=0) -> tuple:
