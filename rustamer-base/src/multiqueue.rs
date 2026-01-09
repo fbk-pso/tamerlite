@@ -236,8 +236,7 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
             }
 
             for (i, (heuristic, weight)) in heuristics.iter().enumerate() {
-                let candidate_states = candidate_containers.iter().map(|sc| sc.state.as_ref());
-                for sh in heuristic.eval_gen(candidate_states, ss)? {
+                for sh in heuristic.eval_gen_container(&candidate_containers, ss)? {
                     let (si, h) = sh?;
                     let g: f64 = candidate_containers[si].state.g;
                     if h.is_some() {

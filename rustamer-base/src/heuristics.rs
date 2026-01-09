@@ -16,9 +16,7 @@
 //
 
 use itertools::Itertools;
-use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::vec::Vec;
 
@@ -74,11 +72,11 @@ pub trait HeuristicTrait {
     /// This method is used in multiqueue search algorithms
     fn eval_gen_container<'a, S: SearchSpaceTrait>(
         &'a self,
-        states: &'a Vec<Rc<RefCell<StateContainer>>>,
+        states: &'a Vec<StateContainer>,
         ss: &'a S,
     ) -> PyResult<Box<dyn Iterator<Item = PyResult<(usize, Option<f64>)>> + 'a>> {
-        return Ok(Box::new(states.iter().enumerate().map(|(i, state)| {
-            let h_value = self.eval(&state.borrow().state, ss)?;
+        return Ok(Box::new(states.iter().enumerate().map(|(i, sc)| {
+            let h_value = self.eval(&sc.state, ss)?;
             Ok((i, h_value))
         })));
     }
