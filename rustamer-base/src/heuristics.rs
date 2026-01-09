@@ -37,13 +37,52 @@ use super::structures::*;
 pub trait HeuristicTrait {
     fn eval<S: SearchSpaceTrait>(&self, state: &State, ss: &S) -> PyResult<Option<f64>>;
 
-    /// Evaluates the heuristic for a given state, returning an iterator over the results.
-    /// This method is used in non-multiqueue search algorithms
+    // /// Evaluates the heuristic for a given state, returning an iterator over the results.
+    // /// This method is used in non-multiqueue search algorithms
+    // fn eval_gen<'a, I, S: SearchSpaceTrait>(
+    //     &'a self,
+    //     states_iter: I,
+    //     ss: &'a S,
+    // ) -> PyResult<Box<dyn Iterator<Item = PyResult<(State, Option<f64>)>> + 'a>>
+    // where
+    //     I: Iterator<Item = PyResult<State>> + 'a,
+    // {
+    //     return Ok(Box::new(states_iter.map(|state| match state {
+    //         Ok(state) => {
+    //             let h_value = self.eval(&state, ss);
+    //             match h_value {
+    //                 Ok(x) => Ok((state, x)),
+    //                 Err(e) => Err(e),
+    //             }
+    //         }
+    //         Err(e) => Err(e),
+    //     })));
+    // }
+
     fn eval_gen<'a, I, S: SearchSpaceTrait>(
         &'a self,
         states_iter: I,
         ss: &'a S,
-    ) -> PyResult<Box<dyn Iterator<Item = PyResult<(State, Option<f64>)>> + 'a>>
+    ) -> PyResult<impl Iterator<Item = PyResult<(usize, Option<f64>)>> + 'a>
+    where
+        I: Iterator<Item = &'a State> + 'a,
+    {
+        return Ok(Box::new(states_iter.enumerate().map(|(i, state)| {
+            let h_value = self.eval(state, ss);
+            match h_value {
+                Ok(x) => Ok((i, x)),
+                Err(e) => Err(e),
+            }
+        })));
+    }
+
+    /// Evaluates the heuristic for a given state, returning an iterator over the results.
+    /// This method is used in non-multiqueue search algorithms
+    fn eval_gen_owned<'a, I, S: SearchSpaceTrait>(
+        &'a self,
+        states_iter: I,
+        ss: &'a S,
+    ) -> PyResult<impl Iterator<Item = PyResult<(State, Option<f64>)>> + 'a>
     where
         I: Iterator<Item = PyResult<State>> + 'a,
     {
