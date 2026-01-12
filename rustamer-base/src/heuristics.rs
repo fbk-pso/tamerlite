@@ -45,10 +45,10 @@ pub trait HeuristicTrait {
     where
         I: Iterator<Item = &'a State> + 'a,
     {
-        return Ok(Box::new(states_iter.enumerate().map(|(i, state)| {
+        return Ok(states_iter.enumerate().map(|(i, state)| {
             let h_value = self.eval(state, ss)?;
             Ok((i, h_value))
-        })));
+        }));
     }
 
     /// Evaluates the heuristic for a given state, returning an iterator over the results.
@@ -61,11 +61,11 @@ pub trait HeuristicTrait {
     where
         I: Iterator<Item = PyResult<State>> + 'a,
     {
-        return Ok(Box::new(states_iter.map(|state| {
+        return Ok(states_iter.map(|state| {
             let state = state?;
             let h_value = self.eval(&state, ss)?;
             Ok((state, h_value))
-        })));
+        }));
     }
 
     /// Evaluates the heuristic for a given state, returning an iterator over the results.
@@ -74,11 +74,11 @@ pub trait HeuristicTrait {
         &'a self,
         states: &'a Vec<StateContainer>,
         ss: &'a S,
-    ) -> PyResult<Box<dyn Iterator<Item = PyResult<(usize, Option<f64>)>> + 'a>> {
-        return Ok(Box::new(states.iter().enumerate().map(|(i, sc)| {
+    ) -> PyResult<impl Iterator<Item = PyResult<(usize, Option<f64>)>> + 'a> {
+        return Ok(states.iter().enumerate().map(|(i, sc)| {
             let h_value = self.eval(&sc.state, ss)?;
             Ok((i, h_value))
-        })));
+        }));
     }
 }
 
