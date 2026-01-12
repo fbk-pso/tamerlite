@@ -393,11 +393,10 @@ def test_search_algorithms(problems):
     for problem in problems:
         heuristic = "hff"
         for search_kind in ["wastar", "astar", "gbfs", "dfs", "bfs", "ehs"]:
-            if testing_utils.is_temporal_problem(problem) and search_kind in [
-                "wastar",
-                "astar",
-                "gbfs",
-            ]:
+            if testing_utils.is_temporal_problem(problem) and search_kind not in (
+                "dfs",
+                "bfs",
+            ):
                 weak_equality_flags = [True, False]
             else:
                 weak_equality_flags = [False]
