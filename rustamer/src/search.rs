@@ -48,17 +48,18 @@ pub fn dfs_search(
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, heuristic, timeout=None, early_termination=false))]
+#[pyo3(signature = (ss, heuristic, timeout=None, early_termination=false, weak_equality=false))]
 pub fn ehc_search(
     ss: &rustamer_base::SearchSpace,
     heuristic: &Heuristic,
     timeout: Option<f32>,
     early_termination: bool,
+    weak_equality: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, Action, Option<String>)>>,
     FxHashMap<String, String>,
 )> {
-    rustamer_base::ehc_search(ss, heuristic, timeout, early_termination)
+    rustamer_base::ehc_search(ss, heuristic, timeout, early_termination, weak_equality)
 }
 
 #[pyfunction]

@@ -99,11 +99,11 @@ def _basic_search(
     st = time.time()
     init = ss.initial_state()
     open: Deque[State] = deque()
-    counter = 0
+    expanded_states = 0
 
     if early_termination and ss.goal_reached(init):
         return ss.build_plan(init), {
-            "expanded_states": str(counter),
+            "expanded_states": str(expanded_states),
             "goal_depth": str(init.g),
         }
     open.append(init)
@@ -115,20 +115,20 @@ def _basic_search(
             state = open.popleft()
         else:
             state = open.pop()
-        counter += 1
+        expanded_states += 1
         if not early_termination and ss.goal_reached(state):
             return ss.build_plan(state), {
-                "expanded_states": str(counter),
+                "expanded_states": str(expanded_states),
                 "goal_depth": str(state.g),
             }
         for succ_state in ss.get_successor_states(state):
             if early_termination and ss.goal_reached(succ_state):
                 return ss.build_plan(succ_state), {
-                    "expanded_states": str(counter),
+                    "expanded_states": str(expanded_states),
                     "goal_depth": str(succ_state.g),
                 }
             open.append(succ_state)
-    return None, {"expanded_states": str(counter)}
+    return None, {"expanded_states": str(expanded_states)}
 
 
 def astar_search(
@@ -170,10 +170,10 @@ def wastar_search(
     init = ss.initial_state()
     if not ss.is_temporal or weak_equality:
         visited_states = {state_representation(init, weak_equality)}
-    counter = 0
+    expanded_states = 0
     if early_termination and ss.goal_reached(init):
         return ss.build_plan(init), {
-            "expanded_states": str(counter),
+            "expanded_states": str(expanded_states),
             "goal_depth": str(init.g),
         }
 
@@ -186,34 +186,35 @@ def wastar_search(
             raise TimeoutError
         item = heapq.heappop(open)
         state = item.state
-        counter += 1
+        expanded_states += 1
         if not early_termination and ss.goal_reached(state):
             return ss.build_plan(state), {
-                "expanded_states": str(counter),
+                "expanded_states": str(expanded_states),
                 "goal_depth": str(state.g),
             }
 
         candidate_states = []
-        for state in ss.get_successor_states(state):
-            if not ss.is_temporal or weak_equality:
-                state_repr = state_representation(state, weak_equality)
-                if state_repr not in visited_states:
-                    visited_states.add(state_repr)
-                    candidate_states.append(state)
-            else:
-                candidate_states.append(state)
-
-        for succ_state, h in heuristic.eval_gen(candidate_states, ss):
+        for succ_state in ss.get_successor_states(state):
             if early_termination and ss.goal_reached(succ_state):
                 return ss.build_plan(succ_state), {
-                    "expanded_states": str(counter),
+                    "expanded_states": str(expanded_states),
                     "goal_depth": str(succ_state.g),
                 }
+
+            if not ss.is_temporal or weak_equality:
+                state_repr = state_representation(succ_state, weak_equality)
+                if state_repr not in visited_states:
+                    visited_states.add(state_repr)
+                    candidate_states.append(succ_state)
+            else:
+                candidate_states.append(succ_state)
+
+        for succ_state, h in heuristic.eval_gen(candidate_states, ss):
             if h is not None:
                 f = (1 - weight) * succ_state.g + weight * h
                 heapq.heappush(open, PrioritizedItem(f, succ_state))
 
-    return None, {"expanded_states": str(counter)}
+    return None, {"expanded_states": str(expanded_states)}
 
 
 def ehc_search(
@@ -221,16 +222,20 @@ def ehc_search(
     heuristic: Heuristic,
     timeout: Optional[float] = None,
     early_termination: bool = False,
+    weak_equality: bool = False,
 ) -> Tuple[
     Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
     Dict[str, str],
 ]:
     st = time.time()
     init = ss.initial_state()
-    counter = 0
+    if weak_equality:
+        visited_states = {state_representation(init, weak_equality)}
+
+    expanded_states = 0
     if early_termination and ss.goal_reached(init):
         return ss.build_plan(init), {
-            "expanded_states": str(counter),
+            "expanded_states": str(expanded_states),
             "goal_depth": str(init.g),
         }
 
@@ -243,21 +248,36 @@ def ehc_search(
         if timeout is not None and time.time() - st > timeout:
             raise TimeoutError
         state = open.popleft()
-        counter += 1
+        expanded_states += 1
         if not early_termination and ss.goal_reached(state):
             return ss.build_plan(state), {
-                "expanded_states": str(counter),
+                "expanded_states": str(expanded_states),
                 "goal_depth": str(state.g),
             }
-        for succ_state, h in heuristic.eval_gen(ss.get_successor_states(state), ss):
+
+        candidate_states = []
+        for succ_state in ss.get_successor_states(state):
             if early_termination and ss.goal_reached(succ_state):
                 return ss.build_plan(succ_state), {
-                    "expanded_states": str(counter),
+                    "expanded_states": str(expanded_states),
                     "goal_depth": str(succ_state.g),
                 }
+
+            if weak_equality:
+                state_repr = state_representation(succ_state, weak_equality)
+                if state_repr not in visited_states:
+                    visited_states.add(state_repr)
+                    candidate_states.append(succ_state)
+            else:
+                candidate_states.append(succ_state)
+
+        for succ_state, h in heuristic.eval_gen(candidate_states, ss):
             if h is not None:
                 if h < best_h:
                     best_h = h
                     open.clear()
-                open.append(succ_state)
-    return None, {"expanded_states": str(counter)}
+                    open.append(succ_state)
+                    break
+                else:
+                    open.append(succ_state)
+    return None, {"expanded_states": str(expanded_states)}
