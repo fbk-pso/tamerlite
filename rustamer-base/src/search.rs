@@ -16,7 +16,8 @@
 //
 
 use std::collections::VecDeque;
-use std::sync::Mutex;
+use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 use std::time::SystemTime;
 use std::{collections::BinaryHeap, vec::Vec};
 
@@ -33,7 +34,7 @@ use super::structures::Action;
 #[derive(Debug)]
 struct PrioritizedItem {
     heuristic: f64,
-    state: State,
+    state: Rc<State>,
 }
 
 impl PartialEq for PrioritizedItem {
@@ -62,6 +63,37 @@ impl Ord for PrioritizedItem {
             std::cmp::Ordering::Less
         }
     }
+}
+
+pub struct WeakEqState {
+    pub state: Rc<State>,
+}
+
+impl PartialEq for WeakEqState {
+    fn eq(&self, other: &Self) -> bool {
+        weak_eq(&self.state, &other.state)
+    }
+}
+
+impl Eq for WeakEqState {}
+
+impl Hash for WeakEqState {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        Hash::hash(&self.state.assignments, state);
+    }
+}
+
+pub fn weak_eq(state1: &State, state2: &State) -> bool {
+    if state1.todo.len() != state2.todo.len() || state1.assignments != state2.assignments {
+        return false;
+    }
+    for (a, (idx, _)) in &state1.todo {
+        let idx_id = state2.todo.get(a);
+        if idx_id.is_none() || *idx != idx_id.unwrap().0 {
+            return false;
+        }
+    }
+    true
 }
 
 pub fn build_plan<S: SearchSpaceTrait>(
@@ -98,18 +130,29 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     weight: f64,
     timeout: Option<f32>,
     early_termination: bool,
+    weak_equality: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, Action, Option<String>)>>,
     FxHashMap<String, String>,
 )> {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
     let start = SystemTime::now();
-    let init = ss.initial_state(None)?;
-    let mut counter = 0;
+    let init = Rc::new(ss.initial_state(None)?);
+    let mut expanded_states = 0;
     if early_termination && ss.goal_reached(&init, None)? {
-        metrics.insert("expanded_states".to_string(), counter.to_string());
+        metrics.insert("expanded_states".to_string(), expanded_states.to_string());
         metrics.insert("goal_depth".to_string(), init.g.to_string());
         return build_plan(ss, &init).map(|plan| (plan, metrics));
+    }
+
+    let mut visited_weak_eq_states = FxHashSet::with_hasher(FxBuildHasher::default());
+    let mut visited_states = FxHashSet::with_hasher(FxBuildHasher::default());
+    if !ss.is_temporal() {
+        visited_states.insert(Rc::clone(&init));
+    } else if weak_equality {
+        visited_weak_eq_states.insert(WeakEqState {
+            state: Rc::clone(&init),
+        });
     }
 
     let init_h = match heuristic.eval(&init, ss)? {
@@ -120,11 +163,6 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         }
     };
     let mut open = BinaryHeap::new();
-    let open_set = Mutex::new(FxHashSet::with_hasher(FxBuildHasher::default()));
-    let mut closed_set = FxHashSet::with_hasher(FxBuildHasher::default());
-    if !ss.is_temporal() {
-        open_set.lock().unwrap().insert(init.full_clone());
-    }
     open.push(PrioritizedItem {
         heuristic: init_h,
         state: init,
@@ -136,53 +174,52 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
             }
         }
         let state = current.state;
-        if !ss.is_temporal() {
-            let opened = open_set.lock().unwrap().take(&state);
-            if let Some(s) = opened {
-                closed_set.insert(s);
-            }
-        }
-        // println!("{:?} {:?}", state.path.iter().map(|(ev, _)| &ev.action).collect::<Vec<&String>>(), current.heuristic);
-        counter += 1;
+        expanded_states += 1;
         if !early_termination && ss.goal_reached(&state, None)? {
-            metrics.insert("expanded_states".to_string(), counter.to_string());
+            metrics.insert("expanded_states".to_string(), expanded_states.to_string());
             metrics.insert("goal_depth".to_string(), state.g.to_string());
             return build_plan(ss, &state).map(|plan| (plan, metrics));
         } else {
-            let successors_iter =
-                ss.get_successor_states_iter(&state)
-                    .filter(|sx: &Result<State, PyErr>| match sx {
-                        Ok(s) => {
-                            ss.is_temporal()
-                                || (!closed_set.contains(s)
-                                    && !open_set.lock().unwrap().contains(s))
-                        }
-                        Err(_) => return true,
-                    });
+            let successors_iter = ss
+                .get_successor_states_iter(&state)
+                .filter_map(|rs| match rs {
+                    Ok(s) => {
+                        let s = Rc::new(s);
+                        let keep = if !ss.is_temporal() {
+                            visited_states.insert(Rc::clone(&s))
+                        } else if weak_equality {
+                            visited_weak_eq_states.insert(WeakEqState {
+                                state: Rc::clone(&s),
+                            })
+                        } else {
+                            true
+                        };
+                        keep.then_some(Ok(s))
+                    }
+                    Err(e) => Some(Err(e)),
+                });
+
             for rs in heuristic.eval_gen(successors_iter, ss)? {
                 let (s, h) = rs?;
                 if early_termination && ss.goal_reached(&s, None)? {
-                    metrics.insert("expanded_states".to_string(), counter.to_string());
+                    metrics.insert("expanded_states".to_string(), expanded_states.to_string());
                     metrics.insert("goal_depth".to_string(), s.g.to_string());
                     return build_plan(ss, &s).map(|plan| (plan, metrics));
                 }
                 match h {
                     Some(v) => {
                         let f = weight * v + (1.0 - weight) * s.g;
-                        if !ss.is_temporal() {
-                            open_set.lock().unwrap().insert(s.full_clone());
-                        }
                         open.push(PrioritizedItem {
                             heuristic: f,
                             state: s,
                         });
                     }
-                    None => continue,
+                    None => {}
                 }
             }
         }
     }
-    metrics.insert("expanded_states".to_string(), counter.to_string());
+    metrics.insert("expanded_states".to_string(), expanded_states.to_string());
     Ok((None, metrics))
 }
 
@@ -221,10 +258,10 @@ fn basic_search<S: SearchSpaceTrait>(
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
     let mut open = VecDeque::new();
-    let mut counter = 0;
+    let mut expanded_states = 0;
 
     if early_termination && ss.goal_reached(&init, None)? {
-        metrics.insert("expanded_states".to_string(), counter.to_string());
+        metrics.insert("expanded_states".to_string(), expanded_states.to_string());
         metrics.insert("goal_depth".to_string(), init.g.to_string());
         return build_plan(ss, &init).map(|plan| (plan, metrics));
     }
@@ -243,16 +280,16 @@ fn basic_search<S: SearchSpaceTrait>(
             open.pop_back().unwrap()
         };
 
-        counter += 1;
+        expanded_states += 1;
         if !early_termination && ss.goal_reached(&state, None)? {
-            metrics.insert("expanded_states".to_string(), counter.to_string());
+            metrics.insert("expanded_states".to_string(), expanded_states.to_string());
             metrics.insert("goal_depth".to_string(), state.g.to_string());
             return build_plan(ss, &state).map(|plan| (plan, metrics));
         } else {
             for rs in ss.get_successor_states_iter(&state) {
                 let s = rs?;
                 if early_termination && ss.goal_reached(&s, None)? {
-                    metrics.insert("expanded_states".to_string(), counter.to_string());
+                    metrics.insert("expanded_states".to_string(), expanded_states.to_string());
                     metrics.insert("goal_depth".to_string(), s.g.to_string());
                     return build_plan(ss, &s).map(|plan| (plan, metrics));
                 }
@@ -260,7 +297,7 @@ fn basic_search<S: SearchSpaceTrait>(
             }
         }
     }
-    metrics.insert("expanded_states".to_string(), counter.to_string());
+    metrics.insert("expanded_states".to_string(), expanded_states.to_string());
     Ok((None, metrics))
 }
 
@@ -269,19 +306,22 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     heuristic: &H,
     timeout: Option<f32>,
     early_termination: bool,
+    weak_equality: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, Action, Option<String>)>>,
     FxHashMap<String, String>,
 )> {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
     let start = SystemTime::now();
-    let init = ss.initial_state(None)?;
-    let mut counter = 0;
+    let init = Rc::new(ss.initial_state(None)?);
+    let mut expanded_states = 0;
+
     if early_termination && ss.goal_reached(&init, None)? {
-        metrics.insert("expanded_states".to_string(), counter.to_string());
+        metrics.insert("expanded_states".to_string(), expanded_states.to_string());
         metrics.insert("goal_depth".to_string(), init.g.to_string());
         return build_plan(ss, &init).map(|plan| (plan, metrics));
     }
+
     let mut best_h = match heuristic.eval(&init, ss)? {
         Some(v) => v,
         None => {
@@ -291,6 +331,8 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     };
     let mut open = VecDeque::new();
     open.push_back(init);
+    let mut closed = FxHashSet::with_hasher(FxBuildHasher::default());
+    let mut closed_weak_eq = FxHashSet::with_hasher(FxBuildHasher::default());
     while let Some(state) = open.pop_front() {
         if let Some(t) = timeout {
             if start.elapsed().unwrap().as_secs_f32() > t {
@@ -298,32 +340,67 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
             }
         }
 
-        counter += 1;
+        expanded_states += 1;
         if !early_termination && ss.goal_reached(&state, None)? {
-            metrics.insert("expanded_states".to_string(), counter.to_string());
+            metrics.insert("expanded_states".to_string(), expanded_states.to_string());
             metrics.insert("goal_depth".to_string(), state.g.to_string());
             return build_plan(ss, &state).map(|plan| (plan, metrics));
         } else {
-            for rs in heuristic.eval_gen(ss.get_successor_states_iter(&state), ss)? {
+            if !ss.is_temporal() {
+                closed.insert(Rc::clone(&state));
+            } else if weak_equality {
+                closed_weak_eq.insert(WeakEqState {
+                    state: Rc::clone(&state),
+                });
+            }
+
+            let successors_iter = ss
+                .get_successor_states_iter(&state)
+                .filter_map(|rs| match rs {
+                    Ok(s) => {
+                        let s = Rc::new(s);
+                        if !ss.is_temporal() {
+                            (!closed.contains(&s)).then_some(Ok(s))
+                        } else if weak_equality {
+                            let weak_eq_state = WeakEqState { state: s };
+                            (!closed_weak_eq.contains(&weak_eq_state))
+                                .then_some(Ok(weak_eq_state.state))
+                        } else {
+                            Some(Ok(s))
+                        }
+                    }
+                    Err(e) => Some(Err(e)),
+                });
+
+            let mut new_best_found = false;
+            for rs in heuristic.eval_gen(successors_iter, ss)? {
                 let (s, h) = rs?;
                 if early_termination && ss.goal_reached(&s, None)? {
-                    metrics.insert("expanded_states".to_string(), counter.to_string());
+                    metrics.insert("expanded_states".to_string(), expanded_states.to_string());
                     metrics.insert("goal_depth".to_string(), s.g.to_string());
                     return build_plan(ss, &s).map(|plan| (plan, metrics));
                 }
                 match h {
                     Some(v) => {
                         if v < best_h {
+                            new_best_found = true;
                             best_h = v;
                             open.clear();
+                            open.push_back(s);
+                            break;
+                        } else {
+                            open.push_back(s);
                         }
-                        open.push_back(s);
                     }
-                    None => continue,
+                    None => {}
                 }
+            }
+            if new_best_found {
+                closed.clear();
+                closed_weak_eq.clear();
             }
         }
     }
-    metrics.insert("expanded_states".to_string(), counter.to_string());
+    metrics.insert("expanded_states".to_string(), expanded_states.to_string());
     Ok((None, metrics))
 }

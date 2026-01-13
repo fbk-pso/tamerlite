@@ -16,7 +16,6 @@
 //
 
 use itertools::Itertools;
-use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -43,36 +42,28 @@ pub trait HeuristicTrait {
         &'a self,
         states_iter: I,
         ss: &'a S,
-    ) -> PyResult<Box<dyn Iterator<Item = PyResult<(State, Option<f64>)>> + 'a>>
+    ) -> PyResult<impl Iterator<Item = PyResult<(Rc<State>, Option<f64>)>> + 'a>
     where
-        I: Iterator<Item = PyResult<State>> + 'a,
+        I: Iterator<Item = PyResult<Rc<State>>> + 'a,
     {
-        return Ok(Box::new(states_iter.map(|state| match state {
-            Ok(state) => {
-                let h_value = self.eval(&state, ss);
-                match h_value {
-                    Ok(x) => Ok((state, x)),
-                    Err(e) => Err(e),
-                }
-            }
-            Err(e) => Err(e),
-        })));
+        return Ok(states_iter.map(|state| {
+            let state = state?;
+            let h_value = self.eval(&state, ss)?;
+            Ok((state, h_value))
+        }));
     }
 
     /// Evaluates the heuristic for a given state, returning an iterator over the results.
     /// This method is used in multiqueue search algorithms
     fn eval_gen_container<'a, S: SearchSpaceTrait>(
         &'a self,
-        states: &'a Vec<Rc<RefCell<StateContainer>>>,
+        states: &'a Vec<StateContainer>,
         ss: &'a S,
-    ) -> PyResult<Box<dyn Iterator<Item = PyResult<(usize, Option<f64>)>> + 'a>> {
-        return Ok(Box::new(states.iter().enumerate().map(|(i, state)| {
-            let h_value = self.eval(&state.borrow().state, ss);
-            match h_value {
-                Ok(x) => Ok((i, x)),
-                Err(e) => Err(e),
-            }
-        })));
+    ) -> PyResult<impl Iterator<Item = PyResult<(usize, Option<f64>)>> + 'a> {
+        return Ok(states.iter().enumerate().map(|(i, sc)| {
+            let h_value = self.eval(&sc.state, ss)?;
+            Ok((i, h_value))
+        }));
     }
 }
 
