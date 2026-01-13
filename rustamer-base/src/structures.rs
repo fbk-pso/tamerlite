@@ -84,10 +84,29 @@ impl Timing {
     }
 }
 
+#[pyclass]
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord)]
+pub struct Action {
+    pub idx: usize,
+}
+
+#[pymethods]
+impl Action {
+    #[new]
+    pub fn new(idx: usize) -> Self {
+        Action { idx }
+    }
+
+    #[getter]
+    pub fn idx(&self) -> usize {
+        self.idx
+    }
+}
+
 #[pyclass(frozen)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Event {
-    pub action: String,
+    pub action: Action,
     pub pos: usize,
     pub conditions: Vec<ExpressionNode>,
     pub start_conditions: Vec<Vec<ExpressionNode>>,
@@ -99,7 +118,7 @@ pub struct Event {
 impl Event {
     #[new]
     fn new(
-        action: String,
+        action: Action,
         pos: usize,
         conditions: Vec<PyExpressionNode>,
         start_conditions: Vec<Vec<PyExpressionNode>>,

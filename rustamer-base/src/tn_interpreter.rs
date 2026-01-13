@@ -22,14 +22,17 @@ use std::vec::Vec;
 
 #[derive(Debug)]
 pub struct TNInterpreter {
-    actions_ids: FxHashMap<(String, bool), u32>,
-    events_ids: FxHashMap<(String, usize), u32>,
-    actions_ids_map_back: FxHashMap<u32, (String, bool)>,
-    events_ids_map_back: FxHashMap<u32, (String, usize)>,
+    actions_ids: FxHashMap<(Action, bool), u32>,
+    events_ids: FxHashMap<(Action, usize), u32>,
+    actions_ids_map_back: FxHashMap<u32, (Action, bool)>,
+    events_ids_map_back: FxHashMap<u32, (Action, usize)>,
 }
 
 impl TNInterpreter {
-    pub fn new(actions: &Vec<String>, events: &FxHashMap<String, Vec<(Timing, Event)>>) -> Self {
+    pub fn new(
+        actions: &Vec<Action>,
+        events: &FxHashMap<Action, Vec<(Timing, Event)>>,
+    ) -> Self {
         let mut actions_ids = FxHashMap::with_hasher(FxBuildHasher::default());
         let mut actions_ids_map_back = FxHashMap::with_hasher(FxBuildHasher::default());
 
@@ -69,8 +72,8 @@ impl TNInterpreter {
         ((x >> 32) as u32, (x & 0xFFFFFFFF) as u32)
     }
 
-    pub fn get_action_id(&self, action: &str, is_start: bool, id: u32) -> u64 {
-        if let Some(aid) = self.actions_ids.get(&(action.to_string(), is_start)) {
+    pub fn get_action_id(&self, action: Action, is_start: bool, id: u32) -> u64 {
+        if let Some(aid) = self.actions_ids.get(&(action, is_start)) {
             // Concatenate the action id and the instance id using the
             // lower and higher parts of the u64 binary representation
             return self.pack_u32(*aid, id);
@@ -79,8 +82,8 @@ impl TNInterpreter {
         //return 0;
     }
 
-    pub fn get_event_id(&self, action: &str, pos: usize, id: u32) -> u64 {
-        if let Some(eid) = self.events_ids.get(&(action.to_string(), pos)) {
+    pub fn get_event_id(&self, action: Action, pos: usize, id: u32) -> u64 {
+        if let Some(eid) = self.events_ids.get(&(action, pos)) {
             return self.pack_u32(*eid, id);
         }
         panic!("Event not found in the TNInterpreter");
@@ -90,7 +93,7 @@ impl TNInterpreter {
     pub fn get_action_timing<Q>(
         &self,
         tn: &DeltaSTN<u64, Q>,
-        action: &str,
+        action: Action,
         is_start: bool,
         id: u32,
     ) -> Option<Q>
@@ -104,7 +107,7 @@ impl TNInterpreter {
     pub fn get_event_timing<Q>(
         &self,
         tn: &DeltaSTN<u64, Q>,
-        action: &str,
+        action: Action,
         pos: usize,
         id: u32,
     ) -> Option<Q>
@@ -115,11 +118,14 @@ impl TNInterpreter {
         tn.get_model_value(&id)
     }
 
-    pub fn get_actions_timings<Q>(&self, tn: &DeltaSTN<u64, Q>) -> Vec<((String, bool, u32), Q)>
+    pub fn get_actions_timings<Q>(
+        &self,
+        tn: &DeltaSTN<u64, Q>,
+    ) -> Vec<((Action, bool, u32), Q)>
     where
         Q: num_traits::Num + std::ops::Neg<Output = Q> + PartialOrd + Clone,
     {
-        let mut res: Vec<((String, bool, u32), Q)> = Vec::new();
+        let mut res: Vec<((Action, bool, u32), Q)> = Vec::new();
         for (id, v) in tn.distances.iter() {
             let (action_id, outer_id) = self.unpack_u64(*id);
             let a = self.actions_ids_map_back.get(&action_id);
@@ -134,7 +140,10 @@ impl TNInterpreter {
         res
     }
 
-    pub fn get_events_timings<Q>(&self, tn: &DeltaSTN<u64, Q>) -> Vec<((String, usize, u32), Q)>
+    pub fn get_events_timings<Q>(
+        &self,
+        tn: &DeltaSTN<u64, Q>,
+    ) -> Vec<((Action, usize, u32), Q)>
     where
         Q: num_traits::Num + std::ops::Neg<Output = Q> + PartialOrd + Clone,
     {

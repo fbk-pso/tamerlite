@@ -18,6 +18,7 @@
 use super::heuristic::Heuristic;
 use pyo3::prelude::*;
 use rustamer_base;
+use rustamer_base::Action;
 use rustc_hash::FxHashMap;
 
 #[pyfunction]
@@ -27,7 +28,7 @@ pub fn bfs_search(
     timeout: Option<f32>,
     early_termination: bool,
 ) -> PyResult<(
-    Option<Vec<(Option<String>, String, Option<String>)>>,
+    Option<Vec<(Option<String>, Action, Option<String>)>>,
     FxHashMap<String, String>,
 )> {
     rustamer_base::bfs_search(ss, timeout, early_termination)
@@ -40,7 +41,7 @@ pub fn dfs_search(
     timeout: Option<f32>,
     early_termination: bool,
 ) -> PyResult<(
-    Option<Vec<(Option<String>, String, Option<String>)>>,
+    Option<Vec<(Option<String>, Action, Option<String>)>>,
     FxHashMap<String, String>,
 )> {
     rustamer_base::dfs_search(ss, timeout, early_termination)
@@ -54,7 +55,7 @@ pub fn ehc_search(
     timeout: Option<f32>,
     early_termination: bool,
 ) -> PyResult<(
-    Option<Vec<(Option<String>, String, Option<String>)>>,
+    Option<Vec<(Option<String>, Action, Option<String>)>>,
     FxHashMap<String, String>,
 )> {
     rustamer_base::ehc_search(ss, heuristic, timeout, early_termination)
@@ -69,7 +70,7 @@ pub fn wastar_search(
     timeout: Option<f32>,
     early_termination: bool,
 ) -> PyResult<(
-    Option<Vec<(Option<String>, String, Option<String>)>>,
+    Option<Vec<(Option<String>, Action, Option<String>)>>,
     FxHashMap<String, String>,
 )> {
     rustamer_base::wastar_search(ss, heuristic, weight, timeout, early_termination)
@@ -83,7 +84,7 @@ pub fn astar_search(
     timeout: Option<f32>,
     early_termination: bool,
 ) -> PyResult<(
-    Option<Vec<(Option<String>, String, Option<String>)>>,
+    Option<Vec<(Option<String>, Action, Option<String>)>>,
     FxHashMap<String, String>,
 )> {
     wastar_search(ss, heuristic, 0.5, timeout, early_termination)
@@ -97,7 +98,7 @@ pub fn gbfs_search(
     timeout: Option<f32>,
     early_termination: bool,
 ) -> PyResult<(
-    Option<Vec<(Option<String>, String, Option<String>)>>,
+    Option<Vec<(Option<String>, Action, Option<String>)>>,
     FxHashMap<String, String>,
 )> {
     wastar_search(ss, heuristic, 1.0, timeout, early_termination)
@@ -111,7 +112,7 @@ pub fn multiqueue_search(
     timeout: Option<f32>,
     early_termination: bool,
 ) -> PyResult<(
-    Option<Vec<(Option<String>, String, Option<String>)>>,
+    Option<Vec<(Option<String>, Action, Option<String>)>>,
     FxHashMap<String, String>,
 )> {
     rustamer_base::multiqueue_search(ss, heuristics, timeout, early_termination)

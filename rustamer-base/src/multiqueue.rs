@@ -29,6 +29,7 @@ use super::heuristics::*;
 use super::search::*;
 use super::search_space::*;
 use super::search_state::*;
+use super::structures::Action;
 
 #[derive(Debug)]
 pub struct StateContainer {
@@ -121,7 +122,7 @@ pub fn multiqueue_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     timeout: Option<f32>,
     early_termination: bool,
 ) -> PyResult<(
-    Option<Vec<(Option<String>, String, Option<String>)>>,
+    Option<Vec<(Option<String>, Action, Option<String>)>>,
     FxHashMap<String, String>,
 )> {
     let mut switch_policy = RoundRobinSwitchPolicy::new(heuristics.len());
@@ -141,7 +142,7 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
     timeout: Option<f32>,
     early_termination: bool,
 ) -> PyResult<(
-    Option<Vec<(Option<String>, String, Option<String>)>>,
+    Option<Vec<(Option<String>, Action, Option<String>)>>,
     FxHashMap<String, String>,
 )> {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());

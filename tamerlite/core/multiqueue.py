@@ -20,7 +20,7 @@ from dataclasses import dataclass
 import time
 from typing import List, Tuple, Dict, Optional
 from fractions import Fraction
-from tamerlite.core.search_space import SearchSpaceABC, State
+from tamerlite.core.search_space import SearchSpaceABC, State, Action
 from tamerlite.core.heuristics import Heuristic
 from abc import ABC, abstractmethod
 
@@ -82,7 +82,8 @@ def multiqueue_search(
     timeout: Optional[float] = None,
     early_termination: bool = False,
 ) -> Tuple[
-    Optional[List[Tuple[Optional[Fraction], str, Optional[Fraction]]]], Dict[str, str]
+    Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
+    Dict[str, str],
 ]:
     return _multiqueue_search(
         ss=ss,
@@ -100,7 +101,8 @@ def _multiqueue_search(
     timeout: Optional[float] = None,
     early_termination: bool = False,
 ) -> Tuple[
-    Optional[List[Tuple[Optional[Fraction], str, Optional[Fraction]]]], Dict[str, str]
+    Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
+    Dict[str, str],
 ]:
     st = time.time()
     opens = []

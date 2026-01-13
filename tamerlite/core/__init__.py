@@ -46,7 +46,7 @@ if not use_rustamer:
     from tamerlite.core.multiqueue import multiqueue_search
     from tamerlite.core.search_space import SearchSpace, get_fluent_value
     from tamerlite.core.heuristics import HFF, HAdd, HMax, HMaxNumeric, CustomHeuristic
-    from tamerlite.core.search_space import Timing, Effect, Event
+    from tamerlite.core.search_space import Timing, Effect, Event, Action
     from tamerlite.core.search_space import Expression, evaluate, get_fluents, simplify
     from tamerlite.core.search_space import (
         make_bool_constant_node,
@@ -72,11 +72,12 @@ else:
         rustamer_lib.dfs_search,
     )
     multiqueue_search = rustamer_lib.multiqueue_search
-    SearchSpace, Timing, Effect, Event = (
+    SearchSpace, Timing, Effect, Event, Action = (
         rustamer_lib.SearchSpace,
         rustamer_lib.Timing,
         rustamer_lib.Effect,
         rustamer_lib.Event,
+        rustamer_lib.Action,
     )
     Expression = List[rustamer_lib.ExpressionNode]
     State = rustamer_lib.State
