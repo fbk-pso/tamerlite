@@ -322,13 +322,6 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         return build_plan(ss, &init).map(|plan| (plan, metrics));
     }
 
-    let mut visited_weak_eq_states = FxHashSet::with_hasher(FxBuildHasher::default());
-    if weak_equality {
-        visited_weak_eq_states.insert(WeakEqState {
-            state: Rc::clone(&init),
-        });
-    }
-
     let mut best_h = match heuristic.eval(&init, ss)? {
         Some(v) => v,
         None => {
@@ -338,6 +331,8 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     };
     let mut open = VecDeque::new();
     open.push_back(init);
+    let mut closed = FxHashSet::with_hasher(FxBuildHasher::default());
+    let mut closed_weak_eq = FxHashSet::with_hasher(FxBuildHasher::default());
     while let Some(state) = open.pop_front() {
         if let Some(t) = timeout {
             if start.elapsed().unwrap().as_secs_f32() > t {
@@ -351,23 +346,33 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
             metrics.insert("goal_depth".to_string(), state.g.to_string());
             return build_plan(ss, &state).map(|plan| (plan, metrics));
         } else {
+            if !ss.is_temporal() {
+                closed.insert(Rc::clone(&state));
+            } else if weak_equality {
+                closed_weak_eq.insert(WeakEqState {
+                    state: Rc::clone(&state),
+                });
+            }
+
             let successors_iter = ss
                 .get_successor_states_iter(&state)
                 .filter_map(|rs| match rs {
                     Ok(s) => {
                         let s = Rc::new(s);
-                        let keep = if weak_equality {
-                            visited_weak_eq_states.insert(WeakEqState {
-                                state: Rc::clone(&s),
-                            })
+                        if !ss.is_temporal() {
+                            (!closed.contains(&s)).then_some(Ok(s))
+                        } else if weak_equality {
+                            let weak_eq_state = WeakEqState { state: s };
+                            (!closed_weak_eq.contains(&weak_eq_state))
+                                .then_some(Ok(weak_eq_state.state))
                         } else {
-                            true
-                        };
-                        keep.then_some(Ok(s))
+                            Some(Ok(s))
+                        }
                     }
                     Err(e) => Some(Err(e)),
                 });
 
+            let mut new_best_found = false;
             for rs in heuristic.eval_gen(successors_iter, ss)? {
                 let (s, h) = rs?;
                 if early_termination && ss.goal_reached(&s, None)? {
@@ -378,6 +383,7 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
                 match h {
                     Some(v) => {
                         if v < best_h {
+                            new_best_found = true;
                             best_h = v;
                             open.clear();
                             open.push_back(s);
@@ -388,6 +394,10 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
                     }
                     None => {}
                 }
+            }
+            if new_best_found {
+                closed.clear();
+                closed_weak_eq.clear();
             }
         }
     }
