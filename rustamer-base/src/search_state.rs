@@ -28,6 +28,7 @@ use std::{
 use super::expressions::*;
 use super::expressions_utils::*;
 use super::stn::DeltaSTN;
+use super::structures::Action;
 use super::utils::*;
 
 #[pyclass(frozen)]
@@ -35,10 +36,10 @@ use super::utils::*;
 pub struct State {
     pub assignments: Vector<ExpressionNode>,
     pub temporal_network: Option<DeltaSTN<u64, f32>>,
-    pub todo: FxHashMap<String, (usize, u32)>,
+    pub todo: FxHashMap<Action, (usize, u32)>,
     pub active_conditions: HashMultiSet<Vec<ExpressionNode>>,
     pub g: f64,
-    pub path: Option<Arc<PersistentList<(String, usize, u32)>>>,
+    pub path: Option<Arc<PersistentList<(Action, usize, u32)>>>,
     pub heuristic_cache: Mutex<FxHashMap<String, Option<f64>>>,
 }
 
@@ -50,12 +51,12 @@ impl State {
     }
 
     #[getter]
-    fn todo(&self) -> FxHashMap<String, (usize, u32)> {
+    fn todo(&self) -> FxHashMap<Action, (usize, u32)> {
         self.todo.clone()
     }
 
     #[getter]
-    fn path(&self) -> Vec<(String, usize, u32)> {
+    fn path(&self) -> Vec<(Action, usize, u32)> {
         PersistentList::to_vec_copy(&self.path)
     }
 

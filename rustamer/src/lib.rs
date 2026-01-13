@@ -32,6 +32,7 @@ fn rustamer(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<rustamer_base::Effect>()?;
     m.add_class::<rustamer_base::Timing>()?;
     m.add_class::<rustamer_base::Event>()?;
+    m.add_class::<rustamer_base::Action>()?;
     m.add_class::<rustamer_base::SearchSpace>()?;
     m.add_class::<rustamer_base::State>()?;
     m.add_class::<Heuristic>()?;

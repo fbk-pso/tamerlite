@@ -19,7 +19,7 @@ from collections import deque
 import heapq
 import time
 from dataclasses import dataclass
-from tamerlite.core.search_space import SearchSpaceABC, State
+from tamerlite.core.search_space import SearchSpaceABC, State, Action
 from tamerlite.core.heuristics import Heuristic
 from typing import Tuple, List, Dict, Deque, Optional
 from fractions import Fraction
@@ -41,7 +41,8 @@ class PrioritizedItem:
 def bfs_search(
     ss: SearchSpaceABC, timeout: Optional[float] = None, early_termination: bool = False
 ) -> Tuple[
-    Optional[List[Tuple[Optional[Fraction], str, Optional[Fraction]]]], Dict[str, str]
+    Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
+    Dict[str, str],
 ]:
     return _basic_search(ss, True, timeout, early_termination)
 
@@ -49,7 +50,8 @@ def bfs_search(
 def dfs_search(
     ss: SearchSpaceABC, timeout: Optional[float] = None, early_termination: bool = False
 ) -> Tuple[
-    Optional[List[Tuple[Optional[Fraction], str, Optional[Fraction]]]], Dict[str, str]
+    Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
+    Dict[str, str],
 ]:
     return _basic_search(ss, False, timeout, early_termination)
 
@@ -60,7 +62,8 @@ def _basic_search(
     timeout: Optional[float] = None,
     early_termination: bool = False,
 ) -> Tuple[
-    Optional[List[Tuple[Optional[Fraction], str, Optional[Fraction]]]], Dict[str, str]
+    Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
+    Dict[str, str],
 ]:
     st = time.time()
     init = ss.initial_state()
@@ -103,7 +106,8 @@ def astar_search(
     timeout: Optional[float] = None,
     early_termination: bool = False,
 ) -> Tuple[
-    Optional[List[Tuple[Optional[Fraction], str, Optional[Fraction]]]], Dict[str, str]
+    Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
+    Dict[str, str],
 ]:
     return wastar_search(ss, heuristic, 0.5, timeout, early_termination)
 
@@ -114,7 +118,8 @@ def gbfs_search(
     timeout: Optional[float] = None,
     early_termination: bool = False,
 ) -> Tuple[
-    Optional[List[Tuple[Optional[Fraction], str, Optional[Fraction]]]], Dict[str, str]
+    Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
+    Dict[str, str],
 ]:
     return wastar_search(ss, heuristic, 1, timeout, early_termination)
 
@@ -126,7 +131,8 @@ def wastar_search(
     timeout: Optional[float] = None,
     early_termination: bool = False,
 ) -> Tuple[
-    Optional[List[Tuple[Optional[Fraction], str, Optional[Fraction]]]], Dict[str, str]
+    Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
+    Dict[str, str],
 ]:
     st = time.time()
     open: List[PrioritizedItem] = []
@@ -184,7 +190,8 @@ def ehc_search(
     timeout: Optional[float] = None,
     early_termination: bool = False,
 ) -> Tuple[
-    Optional[List[Tuple[Optional[Fraction], str, Optional[Fraction]]]], Dict[str, str]
+    Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
+    Dict[str, str],
 ]:
     st = time.time()
     init = ss.initial_state()

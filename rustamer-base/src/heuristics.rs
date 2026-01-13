@@ -120,7 +120,7 @@ impl Clone for CustomHeuristic {
 
 #[derive(Debug, Clone, PartialEq)]
 struct Operator {
-    action: String,
+    action: Action,
     conditions: HeuristicExpression,
     effects: Vec<Expression>,
     cost: f64,
@@ -151,7 +151,7 @@ struct HeuristicExpression {
 
 #[derive(Debug, Clone, PartialEq)]
 struct OperatorHmax {
-    action: String,
+    action: Action,
     conditions: Vec<Vec<ExpressionNode>>,
     condition_expressions: Vec<Expression>,
     effects: Vec<Effect>,
@@ -376,31 +376,32 @@ fn extract_sub_expression(expr: &Vec<ExpressionNode>, idx: usize) -> Vec<Express
 
 #[derive(Clone, Debug)]
 pub struct DeleteRelaxationHeuristic {
-    events: FxHashMap<String, usize>,
+    actions: Vec<Action>,
+    events: FxHashMap<Action, usize>,
     goals: HeuristicExpression,
-    extra_fluents: FxHashMap<String, Vec<Expression>>,
+    extra_fluents: FxHashMap<Action, Vec<Expression>>,
     extra_goals: HeuristicExpression,
     operators: Vec<Operator>,
     precondition_of: FxHashMap<Expression, Vec<OperatorID>>,
     empty_pre_operators: FxHashSet<OperatorID>,
     numeric_conds: FxHashSet<Expression>,
     heuristic_kind: HeuristicKind,
-    ordered_actions: Vec<String>,
     internal_caching: Arc<Mutex<Option<FxHashMap<CacheKey, Option<f64>>>>>,
     expression_manager: Arc<Mutex<ExpressionManager>>,
 }
 
 impl DeleteRelaxationHeuristic {
     pub fn new(
+        actions: Vec<Action>,
         fluent_types: Vec<String>,
         objects: FxHashMap<String, Vec<String>>,
-        events: FxHashMap<String, Vec<(Timing, Event)>>,
+        events: FxHashMap<Action, Vec<(Timing, Event)>>,
         goals: Vec<PyExpressionNode>,
         heuristic_kind: HeuristicKind,
         internal_caching: bool,
     ) -> PyResult<Self> {
         let mut operators = Vec::with_capacity(events.iter().map(|(_, e)| e.len()).sum());
-        let mut extra_fluents: FxHashMap<String, Vec<Expression>> =
+        let mut extra_fluents: FxHashMap<Action, Vec<Expression>> =
             FxHashMap::with_capacity_and_hasher(events.len(), FxBuildHasher::default());
         let mut extra_goals = Vec::with_capacity(events.len() + 1);
         let mut expression_manager = ExpressionManager::new();
@@ -475,7 +476,7 @@ impl DeleteRelaxationHeuristic {
                     build_operator_condition(&e.conditions, cond.clone(), &mut expression_manager)
                 {
                     operators.push(Operator {
-                        action: a.to_string(),
+                        action: *a,
                         conditions,
                         effects,
                         cost: 1.0,
@@ -483,7 +484,7 @@ impl DeleteRelaxationHeuristic {
                 }
                 cond = ExpressionNode::Fluent(f);
             }
-            extra_fluents.insert(a.to_string(), a_extra_fluents);
+            extra_fluents.insert(*a, a_extra_fluents);
         }
         operators.sort_by(|a, b| a.action.cmp(&b.action));
 
@@ -528,12 +529,9 @@ impl DeleteRelaxationHeuristic {
             }
         }
 
-        let events_len: FxHashMap<String, usize> = events
-            .iter()
-            .map(|(a, ev)| (a.to_string(), ev.len()))
-            .collect();
+        let events_len: FxHashMap<Action, usize> =
+            events.into_iter().map(|(a, ev)| (a, ev.len())).collect();
 
-        let ordered_actions: Vec<String> = events.keys().map(|action| action.clone()).collect();
         let internal_caching = if internal_caching {
             Some(FxHashMap::with_hasher(FxBuildHasher::default()))
         } else {
@@ -541,6 +539,7 @@ impl DeleteRelaxationHeuristic {
         };
 
         let res = DeleteRelaxationHeuristic {
+            actions,
             events: events_len,
             goals,
             extra_fluents,
@@ -550,7 +549,6 @@ impl DeleteRelaxationHeuristic {
             empty_pre_operators,
             numeric_conds,
             heuristic_kind,
-            ordered_actions,
             internal_caching: Arc::new(Mutex::new(internal_caching)),
             expression_manager: Arc::new(Mutex::new(expression_manager)),
         };
@@ -562,7 +560,7 @@ impl DeleteRelaxationHeuristic {
         if let Some(internal_caching) = internal_caching.as_mut() {
             let values: Vec<ExpressionNode> = state.assignments.iter().cloned().collect();
             let todo_values: Vec<usize> = self
-                .ordered_actions
+                .actions
                 .iter()
                 .map(|action| state.todo.get(action).map(|(j, _)| *j).unwrap_or(0))
                 .collect();
@@ -917,21 +915,22 @@ impl<'a> FluentAssignments<'a> {
 
 #[derive(Clone, Debug)]
 pub struct HMaxNumeric {
+    actions: Vec<Action>,
     goals: Vec<Vec<ExpressionNode>>,
     goal_expressions: Vec<Expression>,
-    extra_fluents: FxHashMap<String, Vec<Vec<ExpressionNode>>>,
+    extra_fluents: FxHashMap<Action, Vec<Vec<ExpressionNode>>>,
     num_fluents: usize,
     operators: Vec<OperatorHmax>,
     operator_conditions_fluents: Vec<FxHashSet<usize>>,
     operator_effects_fluents: Vec<FxHashSet<usize>>,
-    ordered_actions: Vec<String>,
     internal_caching: Arc<Mutex<Option<FxHashMap<CacheKey, Option<f64>>>>>,
 }
 
 impl HMaxNumeric {
     pub fn new(
+        actions: Vec<Action>,
         fluent_types: Vec<String>,
-        events: FxHashMap<String, Vec<(Timing, Event)>>,
+        events: FxHashMap<Action, Vec<(Timing, Event)>>,
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
     ) -> PyResult<Self> {
@@ -969,7 +968,7 @@ impl HMaxNumeric {
                     .collect();
                 if !conditions.contains(&vec![ExpressionNode::Bool(false)]) {
                     operators.push(OperatorHmax {
-                        action: a.to_string(),
+                        action: *a,
                         conditions,
                         condition_expressions,
                         effects,
@@ -978,7 +977,7 @@ impl HMaxNumeric {
                 }
                 cond = vec![ExpressionNode::Fluent(f)];
             }
-            extra_fluents.insert(a.to_string(), a_extra_fluents);
+            extra_fluents.insert(*a, a_extra_fluents);
         }
 
         let mut goals = split_expression(&goals.into_iter().map(|e| e.v).collect())?;
@@ -1014,7 +1013,6 @@ impl HMaxNumeric {
             operator_effects_fluents.push(effects_fluents);
         }
 
-        let ordered_actions: Vec<String> = events.keys().map(|action| action.clone()).collect();
         let internal_caching = if internal_caching {
             Some(FxHashMap::with_hasher(FxBuildHasher::default()))
         } else {
@@ -1022,6 +1020,7 @@ impl HMaxNumeric {
         };
 
         let res = HMaxNumeric {
+            actions,
             goals,
             goal_expressions,
             extra_fluents,
@@ -1029,7 +1028,6 @@ impl HMaxNumeric {
             operators,
             operator_conditions_fluents,
             operator_effects_fluents,
-            ordered_actions,
             internal_caching: Arc::new(Mutex::new(internal_caching)),
         };
         Ok(res)
@@ -1127,7 +1125,7 @@ impl HMaxNumeric {
         if let Some(internal_caching) = internal_caching.as_mut() {
             let values: Vec<ExpressionNode> = state.assignments.iter().cloned().collect();
             let todo_values: Vec<usize> = self
-                .ordered_actions
+                .actions
                 .iter()
                 .map(|action| state.todo.get(action).map(|(j, _)| *j).unwrap_or(0))
                 .collect();
@@ -1155,7 +1153,7 @@ impl HMaxNumeric {
             assignments[f] = FxHashSet::from_iter([v.clone()]);
         }
         // add extra fluents to assignments
-        for action in &self.ordered_actions {
+        for action in &self.actions {
             let r = state.todo.get(action);
             let idx = match r {
                 Some((j, _)) => j - 1,
