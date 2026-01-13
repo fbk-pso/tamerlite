@@ -29,31 +29,30 @@ use super::heuristics::*;
 use super::search::*;
 use super::search_space::*;
 use super::search_state::*;
-use super::structures::Action;
+use super::Action;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StateContainer {
-    pub state: State,
-    pub expanded: bool,
+    pub state: Rc<State>,
+    pub expanded: Rc<RefCell<bool>>,
 }
 
 impl StateContainer {
-    fn set_expanded(&mut self, expanded: bool) -> () {
-        self.expanded = expanded;
+    fn set_expanded(&self, expanded: bool) -> () {
+        *self.expanded.borrow_mut() = expanded;
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct PrioritizedItem {
     pub heuristic: f64,
-    pub state_container: Rc<RefCell<StateContainer>>,
+    pub state_container: StateContainer,
 }
 
 impl PartialEq for PrioritizedItem {
     fn eq(&self, other: &Self) -> bool {
         self.heuristic == other.heuristic
-            && self.state_container.borrow().state.todo.len()
-                == other.state_container.borrow().state.todo.len()
+            && self.state_container.state.todo.len() == other.state_container.state.todo.len()
     }
 }
 
@@ -71,9 +70,7 @@ impl Ord for PrioritizedItem {
             std::cmp::Ordering::Greater
         } else if self.heuristic > other.heuristic {
             std::cmp::Ordering::Less
-        } else if self.state_container.borrow().state.todo.len()
-            < other.state_container.borrow().state.todo.len()
-        {
+        } else if self.state_container.state.todo.len() < other.state_container.state.todo.len() {
             std::cmp::Ordering::Greater
         } else {
             std::cmp::Ordering::Less
@@ -121,6 +118,7 @@ pub fn multiqueue_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     heuristics: Vec<(H, f64)>,
     timeout: Option<f32>,
     early_termination: bool,
+    weak_equality: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, Action, Option<String>)>>,
     FxHashMap<String, String>,
@@ -132,6 +130,7 @@ pub fn multiqueue_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         &mut switch_policy,
         timeout,
         early_termination,
+        weak_equality,
     )
 }
 
@@ -141,35 +140,40 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
     switch_policy: &mut T,
     timeout: Option<f32>,
     early_termination: bool,
+    weak_equality: bool,
 ) -> PyResult<(
     Option<Vec<(Option<String>, Action, Option<String>)>>,
     FxHashMap<String, String>,
 )> {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
     let start = SystemTime::now();
-    let init = ss.initial_state(None)?;
-    let mut states_expanded = 0;
+    let init = Rc::new(ss.initial_state(None)?);
+    let mut expanded_states = 0;
     if early_termination && ss.goal_reached(&init, None)? {
-        metrics.insert("expanded_states".to_string(), states_expanded.to_string());
+        metrics.insert("expanded_states".to_string(), expanded_states.to_string());
         metrics.insert("goal_depth".to_string(), init.g.to_string());
         return build_plan(ss, &init).map(|plan| (plan, metrics));
     }
 
-    let mut open_set: FxHashSet<State> = FxHashSet::with_hasher(FxBuildHasher::default());
-    let mut closed_set: FxHashSet<State> = FxHashSet::with_hasher(FxBuildHasher::default());
-    if !ss.is_temporal() {
-        open_set.insert(init.full_clone());
-    }
-
     let item = PrioritizedItem {
         heuristic: 0.0,
-        state_container: Rc::new(RefCell::new(StateContainer {
+        state_container: StateContainer {
             state: init,
-            expanded: false,
-        })),
+            expanded: Rc::new(RefCell::new(false)),
+        },
     };
 
-    let mut opens = Vec::new();
+    let mut visited_weak_eq_states = FxHashSet::with_hasher(FxBuildHasher::default());
+    let mut visited_states = FxHashSet::with_hasher(FxBuildHasher::default());
+    if !ss.is_temporal() {
+        visited_states.insert(Rc::clone(&item.state_container.state));
+    } else if weak_equality {
+        visited_weak_eq_states.insert(WeakEqState {
+            state: Rc::clone(&item.state_container.state),
+        });
+    }
+
+    let mut opens = Vec::with_capacity(heuristics.len());
     for (i, _) in heuristics.iter().enumerate() {
         let mut open = BinaryHeap::new();
         open.push(item.clone());
@@ -177,7 +181,7 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
         switch_policy.notify_push(i, &item);
     }
 
-    let mut counter = 0;
+    let mut i = 0;
     loop {
         if let Some(t) = timeout {
             if start.elapsed().unwrap().as_secs_f32() > t {
@@ -185,77 +189,71 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
             }
         }
         // If one of the queues is empty, then all the others are (logically) empty too
-        if opens.iter().any(|o| o.is_empty()) {
+        if opens[i].is_empty() {
             break;
         }
-        let i = switch_policy.switching_policy(counter);
-        let open = &mut opens[i];
-        if let Some(current) = open.pop() {
-            switch_policy.notify_pop(i, &current);
-            let mut candidate_containers: Vec<Rc<RefCell<StateContainer>>> = Vec::new();
-            {
-                let sc = &mut (*(current.state_container)).borrow_mut();
-                if sc.expanded {
-                    continue;
-                }
-                sc.set_expanded(true);
-                let state = &sc.state;
-                if !ss.is_temporal() {
-                    let opened = open_set.take(state);
-                    if let Some(s) = opened {
-                        closed_set.insert(s);
-                    }
-                }
-                states_expanded += 1;
-                counter += 1;
-                if !early_termination && ss.goal_reached(&state, None)? {
-                    metrics.insert("expanded_states".to_string(), states_expanded.to_string());
-                    metrics.insert("goal_depth".to_string(), state.g.to_string());
-                    return build_plan(ss, &state).map(|plan| (plan, metrics));
-                }
 
-                for rs in ss.get_successor_states_iter(&state) {
-                    let s = rs?;
-                    if early_termination && ss.goal_reached(&s, None)? {
-                        metrics.insert("expanded_states".to_string(), states_expanded.to_string());
-                        metrics.insert("goal_depth".to_string(), s.g.to_string());
-                        return build_plan(ss, &s).map(|plan| (plan, metrics));
-                    }
+        i = switch_policy.switching_policy(expanded_states);
+        if let Some(current) = opens[i].pop() {
+            switch_policy.notify_pop(i, &current);
+            if *current.state_container.expanded.borrow() {
+                continue;
+            }
+            current.state_container.set_expanded(true);
+            let state = &current.state_container.state;
+            expanded_states += 1;
+            if !early_termination && ss.goal_reached(&state, None)? {
+                metrics.insert("expanded_states".to_string(), expanded_states.to_string());
+                metrics.insert("goal_depth".to_string(), state.g.to_string());
+                return build_plan(ss, &state).map(|plan| (plan, metrics));
+            }
+
+            let mut candidate_containers: Vec<StateContainer> = Vec::new();
+            for rs in ss.get_successor_states_iter(&state) {
+                let s = rs?;
+                if early_termination && ss.goal_reached(&s, None)? {
+                    metrics.insert("expanded_states".to_string(), expanded_states.to_string());
+                    metrics.insert("goal_depth".to_string(), s.g.to_string());
+                    return build_plan(ss, &s).map(|plan| (plan, metrics));
+                }
+                let s = Rc::new(s);
+                let keep = if !ss.is_temporal() {
+                    visited_states.insert(Rc::clone(&s))
+                } else if weak_equality {
+                    visited_weak_eq_states.insert(WeakEqState {
+                        state: Rc::clone(&s),
+                    })
+                } else {
+                    true
+                };
+                if keep {
                     let sc = StateContainer {
                         state: s,
-                        expanded: false,
+                        expanded: Rc::new(RefCell::new(false)),
                     };
-                    if !ss.is_temporal() {
-                        if closed_set.contains(&sc.state) || open_set.contains(&sc.state) {
-                            continue;
-                        }
-                        open_set.insert(sc.state.full_clone());
-                    }
-                    candidate_containers.push(Rc::new(RefCell::new(sc)));
+                    candidate_containers.push(sc);
                 }
             }
+
             for (i, (heuristic, weight)) in heuristics.iter().enumerate() {
                 for sh in heuristic.eval_gen_container(&candidate_containers, ss)? {
                     let (si, h) = sh?;
-                    let g: f64 = candidate_containers[si].borrow().state.g;
-                    match h {
-                        Some(v) => {
-                            let f = *weight * v + (1.0 - *weight) * g;
-                            let sc = candidate_containers[si].clone();
+                    let g: f64 = candidate_containers[si].state.g;
+                    if h.is_some() {
+                        let f = *weight * h.unwrap() + (1.0 - *weight) * g;
+                        let sc = candidate_containers[si].clone();
 
-                            let item = PrioritizedItem {
-                                heuristic: f,
-                                state_container: sc,
-                            };
-                            switch_policy.notify_push(i, &item);
-                            opens[i].push(item);
-                        }
-                        None => continue,
+                        let item = PrioritizedItem {
+                            heuristic: f,
+                            state_container: sc,
+                        };
+                        switch_policy.notify_push(i, &item);
+                        opens[i].push(item);
                     }
                 }
             }
         }
     }
-    metrics.insert("expanded_states".to_string(), states_expanded.to_string());
+    metrics.insert("expanded_states".to_string(), expanded_states.to_string());
     Ok((None, metrics))
 }

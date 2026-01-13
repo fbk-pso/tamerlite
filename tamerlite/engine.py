@@ -17,6 +17,7 @@
 
 from dataclasses import dataclass
 from functools import partial
+import time
 import unified_planning as up
 import unified_planning.engines
 import unified_planning.engines.mixins
@@ -68,20 +69,24 @@ class StateWrapper(State):
 
 
 @dataclass(frozen=True)
-class SearchParams:
-    search: Optional[str] = None
+class HeuristicParams:
     heuristic: Optional[str] = None
     internal_heuristic_cache: Optional[bool] = None
     weight: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class SearchParams(HeuristicParams):
+    search: Optional[str] = None
     early_termination: Optional[bool] = None
+    weak_equality: Optional[bool] = None
 
 
 @dataclass(frozen=True)
 class MultiqueueParams:
-    queues: List[SearchParams]
-    early_termination: Optional[bool] = (
-        None  # the parameter early_termination inside queues is ignored
-    )
+    queues: List[HeuristicParams]
+    early_termination: Optional[bool] = None
+    weak_equality: Optional[bool] = None
 
 
 class TamerLite(
@@ -147,7 +152,7 @@ class TamerLite(
 
     def _get_heuristic(
         self,
-        params: Optional[SearchParams],
+        params: Optional[HeuristicParams],
         heuristic: Optional[Callable[[State], Optional[float]]],
         encoder: Encoder,
         cache_heuristic_in_state: bool = False,
@@ -171,95 +176,41 @@ class TamerLite(
 
             h = CustomHeuristic(rewrite_h, cache_heuristic_in_state)  # type: ignore[assignment]
             w = 1.0 if params is None or params.weight is None else params.weight
-        elif h_name == "hff":
-            internal_heuristic_cache = (
-                True
-                if params is None or params.internal_heuristic_cache is None
-                else params.internal_heuristic_cache
-            )
-            events = {
-                a: e
-                for a, e in encoder.events.items()
-                if a in encoder.applicable_actions
-            }
-            h = HFF(  # type: ignore[assignment]
-                encoder.actions,
-                encoder.fluent_types,
-                encoder.objects,
-                events,
-                encoder.goal,
-                internal_caching=internal_heuristic_cache,
-                cache_value_in_state=cache_heuristic_in_state,
-            )
-            w = 0.8 if params is None or params.weight is None else params.weight
-        elif h_name == "hadd":
-            internal_heuristic_cache = (
-                True
-                if params is None or params.internal_heuristic_cache is None
-                else params.internal_heuristic_cache
-            )
-            events = {
-                a: e
-                for a, e in encoder.events.items()
-                if a in encoder.applicable_actions
-            }
-            h = HAdd(  # type: ignore[assignment]
-                encoder.actions,
-                encoder.fluent_types,
-                encoder.objects,
-                events,
-                encoder.goal,
-                internal_caching=internal_heuristic_cache,
-                cache_value_in_state=cache_heuristic_in_state,
-            )
-            w = 0.8 if params is None or params.weight is None else params.weight
-        elif h_name == "hmax":
-            internal_heuristic_cache = (
-                True
-                if params is None or params.internal_heuristic_cache is None
-                else params.internal_heuristic_cache
-            )
-            events = {
-                a: e
-                for a, e in encoder.events.items()
-                if a in encoder.applicable_actions
-            }
-            h = HMax(  # type: ignore[assignment]
-                encoder.actions,
-                encoder.fluent_types,
-                encoder.objects,
-                events,
-                encoder.goal,
-                internal_caching=internal_heuristic_cache,
-                cache_value_in_state=cache_heuristic_in_state,
-            )
-            w = 0.8 if params is None or params.weight is None else params.weight
-        elif h_name == "hmax_numeric":
-            internal_heuristic_cache = (
-                True
-                if params is None or params.internal_heuristic_cache is None
-                else params.internal_heuristic_cache
-            )
-            events = {
-                a: e
-                for a, e in encoder.events.items()
-                if a in encoder.applicable_actions
-            }
-            h = HMaxNumeric(  # type: ignore[assignment]
-                encoder.actions,
-                encoder.fluent_types,
-                encoder.objects,
-                events,
-                encoder.goal,
-                internal_caching=internal_heuristic_cache,
-                cache_value_in_state=cache_heuristic_in_state,
-            )
-            w = 0.8 if params is None or params.weight is None else params.weight
+
         elif h_name == "blind":
             h = CustomHeuristic(lambda x: 0.0, cache_heuristic_in_state)  # type: ignore[assignment]
             w = 0.0
+
         else:
-            raise NotImplementedError
+            hh_map = {
+                "hff": HFF,
+                "hadd": HAdd,
+                "hmax": HMax,
+                "hmax_numeric": HMaxNumeric,
+            }
+            if h_name not in hh_map:
+                raise NotImplementedError
+
+            internal_heuristic_cache = (
+                True
+                if params is None or params.internal_heuristic_cache is None
+                else params.internal_heuristic_cache
+            )
+            events = {
+                a: e
+                for a, e in encoder.events.items()
+                if a in encoder.applicable_actions
+            }
+            h = hh_map[h_name](  # type: ignore[assignment]
+                encoder.actions,
+                encoder.fluent_types,
+                encoder.objects,
+                events,
+                encoder.goal,
+                internal_caching=internal_heuristic_cache,
+                cache_value_in_state=cache_heuristic_in_state,
+            )
+            w = 0.8 if params is None or params.weight is None else params.weight
 
         return h, w
 
@@ -313,25 +264,63 @@ class TamerLite(
             if self._params is not None and self._params.early_termination is not None:
                 early_termination = self._params.early_termination
 
+            weak_equality = False
+            if self._params is not None and self._params.weak_equality is not None:
+                weak_equality = self._params.weak_equality
+
             if isinstance(self._params, MultiqueueParams):
                 heuristics = []
                 for p in self._params.queues:
                     h, w = self._get_heuristic(p, heuristic, encoder)
                     heuristics.append((h, w))
+
+                start = time.time()
                 plan, metrics = multiqueue_search(
                     encoder.search_space,
                     heuristics,
                     timeout,
                     early_termination=early_termination,
+                    weak_equality=weak_equality,
                 )
+                if weak_equality and plan is None:
+                    updated_timeout = timeout
+                    if updated_timeout is not None:
+                        updated_timeout -= start
+                    plan, metrics = multiqueue_search(
+                        encoder.search_space,
+                        heuristics,
+                        updated_timeout,
+                        early_termination=early_termination,
+                        weak_equality=False,
+                    )
             else:
                 h, w = self._get_heuristic(self._params, heuristic, encoder)
-                _, search = self._get_search(self._params, h, w)
-                plan, metrics = search(  # type: ignore
-                    encoder.search_space,
-                    timeout=timeout,
-                    early_termination=early_termination,
-                )
+                search_name, search = self._get_search(self._params, h, w)
+
+                if weak_equality and search_name not in ("dfs", "bfs"):
+                    start = time.time()
+                    plan, metrics = search(  # type: ignore
+                        encoder.search_space,
+                        timeout=timeout,
+                        early_termination=early_termination,
+                        weak_equality=True,
+                    )
+                    if plan is None:
+                        updated_timeout = timeout
+                        if updated_timeout is not None:
+                            updated_timeout -= start
+                        plan, metrics = search(  # type: ignore
+                            encoder.search_space,
+                            timeout=updated_timeout,
+                            early_termination=early_termination,
+                            weak_equality=False,
+                        )
+                else:
+                    plan, metrics = search(  # type: ignore
+                        encoder.search_space,
+                        timeout=timeout,
+                        early_termination=early_termination,
+                    )
 
             if plan is not None:
                 plan = encoder.build_plan(plan)  # type: ignore[arg-type]
