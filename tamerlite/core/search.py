@@ -229,9 +229,6 @@ def ehc_search(
 ]:
     st = time.time()
     init = ss.initial_state()
-    if weak_equality:
-        visited_states = {state_representation(init, weak_equality)}
-
     expanded_states = 0
     if early_termination and ss.goal_reached(init):
         return ss.build_plan(init), {
@@ -244,11 +241,16 @@ def ehc_search(
     best_h = heuristic.eval(init, ss)
     if best_h is None:
         return None, {"expanded_states": str(0)}
+
+    closed = set()
     while len(open) > 0:
         if timeout is not None and time.time() - st > timeout:
             raise TimeoutError
         state = open.popleft()
         expanded_states += 1
+        if not ss.is_temporal or weak_equality:
+            closed.add(state_representation(state, weak_equality))
+
         if not early_termination and ss.goal_reached(state):
             return ss.build_plan(state), {
                 "expanded_states": str(expanded_states),
@@ -263,10 +265,9 @@ def ehc_search(
                     "goal_depth": str(succ_state.g),
                 }
 
-            if weak_equality:
+            if not ss.is_temporal or weak_equality:
                 state_repr = state_representation(succ_state, weak_equality)
-                if state_repr not in visited_states:
-                    visited_states.add(state_repr)
+                if state_repr not in closed:
                     candidate_states.append(succ_state)
             else:
                 candidate_states.append(succ_state)
@@ -275,6 +276,7 @@ def ehc_search(
             if h is not None:
                 if h < best_h:
                     best_h = h
+                    closed.clear()
                     open.clear()
                     open.append(succ_state)
                     break
