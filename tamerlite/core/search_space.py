@@ -251,10 +251,12 @@ def evaluate(exp: Expression, state: State) -> Union[bool, int, Fraction, str]:
 
 
 def simplify(
-    exp: Expression, assignments: Dict[int, Union[bool, int, Fraction, str]]
+    exp: Expression,
+    assignments: Optional[Dict[int, Union[bool, int, Fraction, str]]] = None,
 ) -> Expression:
     """This function simplifies the given expression using the given assignments"""
 
+    # TODO: simplify (a + 1) + (b + 1)
     # We iterate over the expression elements and we store the simplified value in the res vector
     res: List[ExpressionNode] = []
     for e in exp:
@@ -266,11 +268,10 @@ def simplify(
             else:
                 res.append(e)
         elif isinstance(e, FluentNode):
-            v = assignments.get(e.fluent, None)
-            if v is None:
+            if assignments is None or e.fluent not in assignments:
                 res.append(e)
             else:
-                res.append(v)
+                res.append(assignments[e.fluent])
         elif isinstance(e, str):
             res.append(e)
         else:
