@@ -15,7 +15,7 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Iterable, List, Dict, Tuple, Union, Optional, Set, Iterator
 import math
@@ -29,13 +29,13 @@ from tamerlite.core.search_space import (
     Event,
     Effect,
     SearchSpaceABC,
-    ExpressionNode,
     Expression,
     FluentNode,
     State,
     Timing,
     evaluate,
     simplify,
+    shift_expression,
 )
 from tamerlite.core.search_space import OperatorNode as Op, split_expression
 
@@ -61,13 +61,14 @@ HeuristicExpression = Tuple[HeuristicExpressionNode, ...]
 
 @dataclass(eq=True, frozen=True)
 class Operator:
-    action: Action
-    conditions: HeuristicExpression
-    effects: Tuple[Tuple[int, Union[bool, str]], ...]
-    constant_increase_effects: Dict[int, Union[int, Fraction]]
-    constant_assign_effects: Dict[int, Union[int, Fraction]]
-    complex_numeric_effects: Dict[int, Expression]
-    cost: float
+    id: int
+    action: Action = field(compare=False)
+    conditions: HeuristicExpression = field(compare=False)
+    effects: Tuple[Tuple[int, Union[bool, str]], ...] = field(compare=False)
+    constant_increase_effects: Dict[int, Union[int, Fraction]] = field(compare=False)
+    constant_assign_effects: Dict[int, Union[int, Fraction]] = field(compare=False)
+    complex_numeric_effects: Dict[int, Expression] = field(compare=False)
+    cost: float = field(compare=False)
 
 
 @dataclass(eq=True, frozen=True)
@@ -202,6 +203,7 @@ class DeleteRelaxationHeuristic(Heuristic):
                 if is_applicable:
                     self._operators.append(
                         Operator(
+                            len(self._operators),
                             a,
                             conditions,
                             tuple(effects),
@@ -225,9 +227,9 @@ class DeleteRelaxationHeuristic(Heuristic):
         ] = {}
         self._complex_numeric_conds: Set[Expression] = set()
         self._empty_pre_operators: List[Operator] = []
-        for idx, o in enumerate(self._operators):
+        for o in self._operators:
             if len(o.conditions) == 0:
-                self._empty_pre_operators.append(idx)
+                self._empty_pre_operators.append(o)
             else:
                 for node in o.conditions:
                     if isinstance(node, LeafNode):
@@ -236,20 +238,20 @@ class DeleteRelaxationHeuristic(Heuristic):
 
                         if node.expression not in self._precondition_of:
                             self._precondition_of[node.expression] = []
-                        self._precondition_of[node.expression].append(idx)
+                        self._precondition_of[node.expression].append(o)
 
         for node in self._goals:
             if isinstance(node, LeafNode):
                 if self._is_numeric_leaf_expression(node.expression):
                     self._update_numeric_conditions(node.expression)
 
-        self._achieved_conditions: Dict[int, Set[Expression]] = {}
-        for idx, o in enumerate(self._operators):
+        self._achieved_conditions: List[List[Expression]] = [
+            [] for _ in self._operators
+        ]
+        for o in self._operators:
             for c in self._simple_numeric_conds:
                 if self._achieves(o, c):
-                    if idx not in self._achieved_conditions:
-                        self._achieved_conditions[idx] = set()
-                    self._achieved_conditions[idx].add(c)
+                    self._achieved_conditions[o.id].append(c)
 
         self._internal_caching: Optional[
             Dict[Tuple[Union[bool, int, Fraction, str, None], ...], Optional[float]]
@@ -376,16 +378,7 @@ class DeleteRelaxationHeuristic(Heuristic):
         while isinstance(exp[i], Op):
             i = min(exp[i].operands)  # type: ignore[union-attr]
 
-        offset = i
-        res: List[ExpressionNode] = []
-        for j in range(i, idx + 1):
-            e = exp[j]
-            if isinstance(e, Op):
-                res.append(Op(e.kind, tuple([o - offset for o in e.operands])))
-            else:
-                res.append(e)
-
-        return tuple(res)
+        return shift_expression(exp[i : idx + 1], -i)
 
     def _update_numeric_effects(
         self,
@@ -480,7 +473,6 @@ class DeleteRelaxationHeuristic(Heuristic):
     def _to_linear_polynomial(
         self, exp: Expression
     ) -> Dict[Optional[int], Union[int, Fraction]]:
-        # TODO: handle str objects
         res: List[Dict[Optional[int], Union[int, Fraction]]] = []
         for node in exp:
             if isinstance(node, (int, Fraction)):
@@ -489,15 +481,11 @@ class DeleteRelaxationHeuristic(Heuristic):
             elif isinstance(node, FluentNode):
                 res.append({node.fluent: 1})
 
-            elif isinstance(node, Op):
+            elif isinstance(node, Op) and node.kind in ("-", "+", "/", "*"):
                 operands = [res.pop() for _ in node.operands]
 
                 def is_constant(polynomial: Dict[int, float]):
-                    if len(polynomial) > 1:
-                        return False
-                    if None in polynomial:
-                        return True
-                    return False
+                    return len(polynomial) == 1 and None in polynomial
 
                 if node.kind == "-":
                     result = operands[1]
@@ -531,7 +519,12 @@ class DeleteRelaxationHeuristic(Heuristic):
                         else:
                             polynomial = operand
 
-                    result = {f: w * const_multiplier for f, w in polynomial.items()}
+                    if polynomial is None:
+                        result = {None: const_multiplier}
+                    else:
+                        for f in polynomial:
+                            polynomial[f] *= const_multiplier
+                        result = polynomial
 
                 res.append(result)
 
@@ -587,7 +580,7 @@ class DeleteRelaxationHeuristic(Heuristic):
 
         lp = list(costs.keys())
         reached_by: Dict[Expression, Tuple[Operator, List[Expression]]] = {}
-        operator_condition_cost = [None] * len(self._operators)
+        operator_cost = {}
         while len(lp) > 0:
             lo = list(self._empty_pre_operators)
             for p in lp:
@@ -595,14 +588,12 @@ class DeleteRelaxationHeuristic(Heuristic):
                     lo.extend(self._precondition_of[p])
             lp = []
             new_costs: Dict[Expression, float] = {}
-            for operator_idx in set(lo):
-                o = self._operators[operator_idx]
+            for o in set(lo):
                 c, l = self._cost(o.conditions, costs)
-                if c is not None and (
-                    operator_condition_cost[operator_idx] is None
-                    or operator_condition_cost[operator_idx] > c
-                ):
-                    operator_condition_cost[operator_idx] = c
+                if c is not None and (o not in operator_cost or operator_cost[o] > c):
+                    operator_cost[o] = c
+
+                    achieved_expressions = []
                     for f, e in o.effects:
                         if e == True:
                             k: Expression = (FluentNode(f),)
@@ -610,54 +601,37 @@ class DeleteRelaxationHeuristic(Heuristic):
                             k = (FluentNode(f), Op("not", (0,)))
                         else:
                             k = (FluentNode(f), e, Op("==", (0, 1)))
-                        new_cost_k = new_costs.get(k, None)
-                        cost_k = costs.get(k, None)
-                        if (new_cost_k is not None and new_cost_k > c + o.cost) or (
-                            new_cost_k is None
-                            and (cost_k is None or cost_k > c + o.cost)
-                        ):
+                        achieved_expressions.append((k, 1))
+
+                    for simple_cond in self._achieved_conditions[o.id]:
+                        if costs.get(simple_cond, None) == 0.0:
+                            # condition satisfied in state
+                            continue
+
+                        rep = self._repetitions(o, simple_cond, state)
+                        assert rep is not None
+                        achieved_expressions.append((simple_cond, rep))
+
+                    for exp, rep in achieved_expressions:
+                        if exp in new_costs:
+                            prev_cost_exp = new_costs[exp]
+                        elif exp in costs:
+                            prev_cost_exp = costs[exp]
+                        else:
+                            prev_cost_exp = None
+
+                        cost_exp = float(rep) * o.cost + c
+                        if prev_cost_exp is None or cost_exp < prev_cost_exp:
                             if self._heuristic_kind == HeuristicKind.HFF:
-                                reached_by[k] = (o, l)
-                            new_costs[k] = c + o.cost
-                            lp.append(k)
+                                reached_by[exp] = (o, l)
+                            new_costs[exp] = cost_exp
+                            lp.append(exp)
                         elif (
-                            self._heuristic_kind == HeuristicKind.HFF
-                            and (
-                                (new_cost_k is not None and new_cost_k == c + o.cost)
-                                or (new_cost_k is None and cost_k == c + o.cost)
-                            )
-                            and o.action > reached_by[k][0].action
+                            prev_cost_exp == cost_exp
+                            and self._heuristic_kind == HeuristicKind.HFF
+                            and o.action > reached_by[exp][0].action
                         ):
-                            reached_by[k] = (o, l)
-
-                    if operator_idx in self._achieved_conditions:
-                        for simple_cond in self._achieved_conditions[operator_idx]:
-                            if costs.get(simple_cond, None) == 0.0:
-                                # condition satisfied in state
-                                continue
-
-                            rep = self._repetitions(o, simple_cond, state)
-                            assert rep is not None
-                            new_cost_simple_cond = float(rep) * o.cost + c
-                            if (
-                                simple_cond not in costs
-                                or new_cost_simple_cond < costs[simple_cond]
-                            ) and (
-                                simple_cond not in new_costs
-                                or new_cost_simple_cond < new_costs[simple_cond]
-                            ):
-                                if self._heuristic_kind == HeuristicKind.HFF:
-                                    reached_by[simple_cond] = (o, l)
-                                new_costs[simple_cond] = new_cost_simple_cond
-                                lp.append(simple_cond)
-                            elif (
-                                self._heuristic_kind == HeuristicKind.HFF
-                                and new_cost_simple_cond
-                                == new_costs.get(simple_cond, None)
-                                and o.action > reached_by[k][0].action
-                            ):
-                                # FIXME
-                                reached_by[simple_cond] = (o, l)
+                            reached_by[exp] = (o, l)
 
             costs.update(new_costs)
 
@@ -705,18 +679,18 @@ class DeleteRelaxationHeuristic(Heuristic):
 
     def _achieves(self, operator: Operator, simple_condition: Expression) -> bool:
         fluents, weights = self._simple_numeric_conds[simple_condition]
-        N = 0.0
+        n = 0.0
         for f, w in zip(fluents, weights):
-            if f in operator.constant_assign_effects:
-                # TODO
-                return True
-            if f in operator.complex_numeric_effects:
+            if (
+                f in operator.constant_assign_effects
+                or f in operator.complex_numeric_effects
+            ):
                 return True
             if f in operator.constant_increase_effects:
                 k = operator.constant_increase_effects[f]
-                N += w * k
+                n += w * k
 
-        return N < 0.0
+        return n < 0.0
 
     def _repetitions(
         self, operator: Operator, simple_condition: Expression, state: State
@@ -731,10 +705,10 @@ class DeleteRelaxationHeuristic(Heuristic):
             return 0
 
         for f, w in zip(fluents, weights):
-            if f in operator.constant_assign_effects:
-                # TODO
-                return 1
-            if f in operator.complex_numeric_effects:
+            if (
+                f in operator.constant_assign_effects
+                or f in operator.complex_numeric_effects
+            ):
                 return 1
 
         N = 0.0
