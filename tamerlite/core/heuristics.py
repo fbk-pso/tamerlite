@@ -472,7 +472,7 @@ class DeleteRelaxationHeuristic(Heuristic):
         else:
             complex_numeric_effects[effect.fluent] = eff_value
 
-    def _is_numeric_leaf_expression(self, exp: LeafNode) -> bool:
+    def _is_numeric_leaf_expression(self, node: LeafNode) -> bool:
         """
         Determine if a leaf expression represents a numeric expression.
         A leaf expression is assumed to contain no AND or OR nodes.
@@ -484,9 +484,26 @@ class DeleteRelaxationHeuristic(Heuristic):
             bool: True if the expression is numeric, False otherwise.
         """
 
-        for e in exp.expression:
-            if isinstance(e, Op) and e.kind != "not":
-                return True
+        exp = node.expression
+        if isinstance(exp[-1], bool):  # boolean constant
+            return False
+        elif isinstance(exp[-1], FluentNode):  # boolean fluent expression
+            return False
+        elif (
+            isinstance(exp[-1], Op) and exp[-1].kind == "not"
+        ):  # not of a boolean fluent expression
+            i = exp[-1].operands[0]
+            if isinstance(exp[i], FluentNode):
+                return False
+        elif (
+            isinstance(exp[-1], Op) and exp[-1].kind == "=="
+        ):  # equals between a fluent and an object
+            i1 = exp[-1].operands[0]
+            i2 = exp[-1].operands[1]
+            if isinstance(exp[i1], FluentNode) and isinstance(exp[i2], str):
+                return False
+
+        return True
 
     def _update_numeric_conditions(self, numeric_condition: LeafNode):
         fluents_weights = self._extract_fluents_weights_simple_numeric_condition(
