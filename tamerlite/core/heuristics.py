@@ -235,7 +235,9 @@ class DeleteRelaxationHeuristic(Heuristic):
             else:
                 for node in o.conditions:
                     if isinstance(node, LeafNode):
-                        if self._is_numeric_leaf_expression(node):
+                        if self._is_numeric_leaf_expression(
+                            node
+                        ) or self._is_fluent_not_equals_object_expression(node):
                             self._update_numeric_conditions(node)
 
                         if node.expression not in self._precondition_of:
@@ -244,7 +246,9 @@ class DeleteRelaxationHeuristic(Heuristic):
 
         for node in self._goals:
             if isinstance(node, LeafNode):
-                if self._is_numeric_leaf_expression(node):
+                if self._is_numeric_leaf_expression(
+                    node
+                ) or self._is_fluent_not_equals_object_expression(node):
                     self._update_numeric_conditions(node)
 
         self._achieved_conditions: List[List[Expression]] = [
@@ -273,7 +277,7 @@ class DeleteRelaxationHeuristic(Heuristic):
     ) -> HeuristicExpression:
         new_condition = []
         for node in condition:
-            if isinstance(node, LeafNode):
+            if isinstance(node, LeafNode) and self._is_numeric_leaf_expression(node):
                 nodes = self._simplify_numeric_leaf_node(node)
                 new_condition.extend(nodes)
             else:
@@ -281,53 +285,51 @@ class DeleteRelaxationHeuristic(Heuristic):
 
         return new_condition
 
-    def _simplify_numeric_leaf_node(
-        self, node: LeafNode
-    ) -> List[Union[AndNode, OrNode, LeafNode]]:
+    def _simplify_numeric_leaf_node(self, node: LeafNode) -> HeuristicExpression:
         def inverted_operands(exp: Expression, op: Op):
-            rhs_start = op.operands[0] + 1
-            lhs = exp[:rhs_start]
-            rhs = exp[rhs_start:-1]
-            return shift_expression(lhs, len(rhs)), shift_expression(rhs, -len(lhs))
+            op2_start = op.operands[0] + 1
+            op1 = exp[:op2_start]
+            op2 = exp[op2_start:-1]
+            return shift_expression(op2, -len(op1)), shift_expression(op1, len(op2))
 
         if isinstance(node.expression[-1], Op):
             exp = node.expression
             if exp[-1].kind == "==":
                 exp1 = exp[:-1] + (Op("<=", exp[-1].operands),)
-                lhs, rhs = inverted_operands(exp, exp[-1])
-                exp2 = lhs + rhs + (Op("<=", (len(lhs) - 1, len(lhs) + len(rhs) - 1)),)
-                return [LeafNode(exp1), LeafNode(exp2), AndNode(2)]
+                op1, op2 = inverted_operands(exp, exp[-1])
+                exp2 = op1 + op2 + (Op("<=", (len(op1) - 1, len(op1) + len(op2) - 1)),)
+                return (LeafNode(exp1), LeafNode(exp2), AndNode(2))
             elif exp[-1].kind == "not":
                 negated = exp[exp[-1].operands[0]]
                 if isinstance(negated, Op):
                     if negated.kind == "==":
                         exp1 = exp[:-2] + (Op("<", negated.operands),)
-                        lhs, rhs = inverted_operands(exp, negated)
+                        op1, op2 = inverted_operands(exp, negated)
                         exp2 = (
-                            lhs
-                            + rhs
-                            + (Op("<", (len(lhs) - 1, len(lhs) + len(rhs) - 1)),)
+                            op1
+                            + op2
+                            + (Op("<", (len(op1) - 1, len(op1) + len(op2) - 1)),)
                         )
-                        return [LeafNode(exp1), LeafNode(exp2), OrNode(2)]
+                        return (LeafNode(exp1), LeafNode(exp2), OrNode(2))
                     elif negated.kind == "<":
-                        lhs, rhs = inverted_operands(exp, negated)
-                        return [
+                        op1, op2 = inverted_operands(exp, negated)
+                        return (
                             (
-                                lhs
-                                + rhs
-                                + (Op("<=", (len(lhs) - 1, len(lhs) + len(rhs) - 1)),)
-                            )
-                        ]
+                                op1
+                                + op2
+                                + (Op("<=", (len(op1) - 1, len(op1) + len(op2) - 1)),)
+                            ),
+                        )
                     elif negated.kind == "<=":
-                        lhs, rhs = inverted_operands(exp, negated)
-                        return [
+                        op1, op2 = inverted_operands(exp, negated)
+                        return (
                             (
-                                lhs
-                                + rhs
-                                + (Op("<", (len(lhs) - 1, len(lhs) + len(rhs) - 1)),)
-                            )
-                        ]
-        return [node]
+                                op1
+                                + op2
+                                + (Op("<", (len(op1) - 1, len(op1) + len(op2) - 1)),)
+                            ),
+                        )
+        return (node,)
 
     def _build_operator_condition(
         self, condition: Expression, extra_fluent: FluentNode
@@ -443,7 +445,7 @@ class DeleteRelaxationHeuristic(Heuristic):
         # find the start index of the sub-expression
         i = idx
         while isinstance(exp[i], Op):
-            i = min(exp[i].operands)  # type: ignore[union-attr]
+            i = exp[i].operands[0]  # type: ignore[union-attr]
 
         return shift_expression(exp[i : idx + 1], -i)
 
@@ -472,38 +474,49 @@ class DeleteRelaxationHeuristic(Heuristic):
         else:
             complex_numeric_effects[effect.fluent] = eff_value
 
+    def _is_fluent_not_equals_object_expression(self, node: LeafNode) -> bool:
+        exp = node.expression
+        if len(exp) != 4:
+            return False
+
+        if (
+            isinstance(exp[-1], Op)
+            and exp[-1].kind == "not"
+            and isinstance(exp[-2], Op)
+            and exp[-2].kind == "=="
+        ):
+            if isinstance(exp[0], FluentNode) and isinstance(exp[1], str):
+                return True
+
+        return False
+
     def _is_numeric_leaf_expression(self, node: LeafNode) -> bool:
         """
         Determine if a leaf expression represents a numeric expression.
         A leaf expression is assumed to contain no AND or OR nodes.
 
         Args:
-            exp (Expression): The leaf expression to check.
+            node (LeafNode): The leaf node to check.
 
         Returns:
             bool: True if the expression is numeric, False otherwise.
         """
 
         exp = node.expression
-        if isinstance(exp[-1], bool):  # boolean constant
-            return False
-        elif isinstance(exp[-1], FluentNode):  # boolean fluent expression
-            return False
-        elif (
-            isinstance(exp[-1], Op) and exp[-1].kind == "not"
-        ):  # not of a boolean fluent expression
-            i = exp[-1].operands[0]
-            if isinstance(exp[i], FluentNode):
-                return False
-        elif (
-            isinstance(exp[-1], Op) and exp[-1].kind == "=="
-        ):  # equals between a fluent and an object
-            i1 = exp[-1].operands[0]
-            i2 = exp[-1].operands[1]
-            if isinstance(exp[i1], FluentNode) and isinstance(exp[i2], str):
-                return False
+        if isinstance(exp[-1], Op):
+            i = -1
+            if exp[-1].kind == "not":
+                i = exp[-1].operands[0]
 
-        return True
+            if isinstance(exp[i], Op):
+                if exp[i].kind != "==":
+                    return True
+
+                op1, op2 = exp[i].operands
+                if not isinstance(exp[op1], str) and not isinstance(exp[op2], str):
+                    return True
+
+        return False
 
     def _update_numeric_conditions(self, numeric_condition: LeafNode):
         fluents_weights = self._extract_fluents_weights_simple_numeric_condition(
@@ -690,14 +703,14 @@ class DeleteRelaxationHeuristic(Heuristic):
                             if self._heuristic_kind == HeuristicKind.HFF:
                                 reached_by[exp] = (o, l)
                             new_costs[exp] = cost_exp
-                            lp.append(exp)
                         elif (
                             prev_cost_exp == cost_exp
                             and self._heuristic_kind == HeuristicKind.HFF
-                            and o.action > reached_by[exp][0].action
+                            and o.id > reached_by[exp][0].id
                         ):
                             reached_by[exp] = (o, l)
 
+            lp = list(new_costs.keys())
             costs.update(new_costs)
 
         h, _ = self._cost(self._goals, costs)
@@ -776,16 +789,16 @@ class DeleteRelaxationHeuristic(Heuristic):
             ):
                 return 1
 
-        N = 0.0
+        n = 0.0
         for f, w in zip(fluents, weights):
             if f in operator.constant_increase_effects:
                 k = operator.constant_increase_effects[f]
-                N += w * k
+                n += w * k
 
-        if N >= 0.0:
+        if n >= 0.0:
             return None
 
-        return math.ceil(-v / N)
+        return math.ceil(-v / n)
 
     def _cost(
         self, exp: HeuristicExpression, costs: Dict[Expression, float]
