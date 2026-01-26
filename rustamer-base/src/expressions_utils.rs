@@ -70,20 +70,28 @@ pub fn do_shift(
     })
 }
 
-#[pyfunction]
-pub fn shift_expression(
+#[pyfunction(name = "shift_expression")]
+pub fn py_shift_expression(
     exp: Vec<PyExpressionNode>,
     offset: usize,
 ) -> PyResult<Vec<PyExpressionNode>> {
-    let shifted: Vec<ExpressionNode> = exp
-        .iter()
-        .map(|e| do_shift(&e.v, offset, false))
-        .collect::<Result<_, _>>()
+    let exp: Vec<ExpressionNode> = exp.into_iter().map(|e| e.v).collect();
+    let shifted = shift_expression(&exp, offset, false)
         .map_err(|e| PyException::new_err(format!("{:?}", e)))?;
     Ok(shifted
         .into_iter()
         .map(|v| PyExpressionNode { v })
         .collect())
+}
+
+pub fn shift_expression(
+    exp: &[ExpressionNode],
+    offset: usize,
+    is_negative: bool,
+) -> Result<Vec<ExpressionNode>, ArithmeticError> {
+    exp.iter()
+        .map(|e| do_shift(&e, offset, is_negative))
+        .collect::<Result<_, _>>()
 }
 
 pub fn split_expression(exp: &Vec<ExpressionNode>) -> PyResult<Vec<Vec<ExpressionNode>>> {

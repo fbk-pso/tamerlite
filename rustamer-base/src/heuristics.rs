@@ -23,6 +23,7 @@ use std::vec::Vec;
 
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
+use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
@@ -32,6 +33,7 @@ use super::multiqueue::StateContainer;
 use super::search_space::SearchSpaceTrait;
 use super::search_state::State;
 use super::structures::*;
+use super::utils::*;
 
 pub trait HeuristicTrait {
     fn eval<S: SearchSpaceTrait>(&self, state: &State, ss: &S) -> PyResult<Option<f64>>;
@@ -109,21 +111,40 @@ impl Clone for CustomHeuristic {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 struct Operator {
+    id: OperatorID,
     action: Action,
     conditions: HeuristicExpression,
     effects: Vec<Expression>,
+    constant_increase_effects: FxHashMap<usize, f64>,
+    constant_assign_effects: FxHashMap<usize, f64>,
+    complex_numeric_effects: FxHashMap<usize, Expression>,
     cost: f64,
+}
+
+impl PartialEq for Operator {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
 }
 
 impl Eq for Operator {}
 
 impl Hash for Operator {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.action.hash(state);
-        self.conditions.hash(state);
-        self.effects.hash(state);
+        self.id.hash(state);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct OperatorID {
+    id: usize,
+}
+
+impl OperatorID {
+    fn new(id: usize) -> OperatorID {
+        OperatorID { id }
     }
 }
 
@@ -159,17 +180,6 @@ impl Hash for OperatorHmax {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct OperatorID {
-    id: usize,
-}
-
-impl OperatorID {
-    fn new(id: usize) -> OperatorID {
-        OperatorID { id }
-    }
-}
-
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 struct CacheKey {
     values: Vec<ExpressionNode>,
@@ -196,10 +206,10 @@ fn build_operator_condition(
     condition: &Vec<ExpressionNode>,
     extra_fluent: ExpressionNode,
     expression_manager: &mut ExpressionManager,
-) -> Option<HeuristicExpression> {
+) -> Result<Option<HeuristicExpression>, ArithmeticError> {
     // If the condition is explicitly False, the operator is not applicable
     let conditions = if condition == &vec![ExpressionNode::Bool(false)] {
-        return None;
+        return Ok(None);
 
     // If the condition is empty or trivially True, the condition become the extra_fluent
     } else if condition.is_empty() || condition == &vec![ExpressionNode::Bool(true)] {
@@ -227,10 +237,9 @@ fn build_operator_condition(
         condition
     };
 
-    Some(convert_to_heuristic_expression(
-        &conditions,
-        expression_manager,
-    ))
+    let condition = convert_to_heuristic_expression(&conditions, expression_manager)?;
+    let condition = simplify_numeric_condition(&condition, expression_manager)?;
+    Ok(Some(condition))
 }
 
 /// Convert an expression into a `HeuristicExpression`.
@@ -253,7 +262,7 @@ fn build_operator_condition(
 fn convert_to_heuristic_expression(
     expr: &Vec<ExpressionNode>,
     expression_manager: &mut ExpressionManager,
-) -> HeuristicExpression {
+) -> Result<HeuristicExpression, ArithmeticError> {
     let mut contains_or_node = false;
     let mut result = Vec::new();
     let mut stack = vec![(expr.len() - 1, false)];
@@ -289,15 +298,222 @@ fn convert_to_heuristic_expression(
                 }
             }
             _ => result.push(HeuristicExpressionNode::Leaf(
-                expression_manager.put(&extract_sub_expression(&expr, idx)),
+                expression_manager.put(&extract_sub_expression(&expr, idx)?),
             )),
         }
     }
 
-    HeuristicExpression {
+    Ok(HeuristicExpression {
         expression: result,
         contains_or_node,
+    })
+}
+
+fn simplify_numeric_condition(
+    condition: &HeuristicExpression,
+    expression_manager: &mut ExpressionManager,
+) -> Result<HeuristicExpression, ArithmeticError> {
+    let mut new_condition = Vec::with_capacity(condition.expression.len());
+    let mut contains_or_node = condition.contains_or_node;
+    for node in &condition.expression {
+        if let HeuristicExpressionNode::Leaf(expr) = node {
+            if is_numeric_leaf_expression(expression_manager.force_get(expr)) {
+                let simplified_expr = simplify_numeric_leaf_node(expr, expression_manager)?;
+                if let Some(mut simplified_expr) = simplified_expr {
+                    contains_or_node |= simplified_expr.contains_or_node;
+                    new_condition.append(&mut simplified_expr.expression);
+                    continue;
+                }
+            }
+        }
+        new_condition.push(node.clone())
     }
+
+    Ok(HeuristicExpression {
+        expression: new_condition,
+        contains_or_node,
+    })
+}
+
+fn simplify_numeric_leaf_node(
+    expr: &Expression,
+    expression_manager: &mut ExpressionManager,
+) -> Result<Option<HeuristicExpression>, ArithmeticError> {
+    let expr = expression_manager.force_get(expr).clone();
+    if let Some(node) = expr.last() {
+        let new_expr = match node {
+            ExpressionNode::Equals(op1, op2) => {
+                let mut expr1 = expr.clone();
+                expr1
+                    .last_mut()
+                    .map(|last| *last = ExpressionNode::LE(*op1, *op2));
+                let expr1 = expression_manager.put(&expr1);
+
+                let expr2 =
+                    invert_operands(&expr, *op1, *op2, ExpressionNode::LE, expression_manager)?;
+
+                Some(HeuristicExpression {
+                    expression: vec![
+                        HeuristicExpressionNode::Leaf(expr1),
+                        HeuristicExpressionNode::Leaf(expr2),
+                        HeuristicExpressionNode::And(2),
+                    ],
+                    contains_or_node: false,
+                })
+            }
+            ExpressionNode::Not(op) => {
+                let negated = &expr[*op];
+                match negated {
+                    ExpressionNode::Equals(op1, op2) => {
+                        let mut expr1 = expr[0..expr.len() - 2].to_vec();
+                        expr1.push(ExpressionNode::LT(*op1, *op2));
+                        let expr1 = expression_manager.put(&expr1);
+
+                        let expr2 = invert_operands(
+                            &expr,
+                            *op1,
+                            *op2,
+                            ExpressionNode::LT,
+                            expression_manager,
+                        )?;
+
+                        Some(HeuristicExpression {
+                            expression: vec![
+                                HeuristicExpressionNode::Leaf(expr1),
+                                HeuristicExpressionNode::Leaf(expr2),
+                                HeuristicExpressionNode::Or(2),
+                            ],
+                            contains_or_node: true,
+                        })
+                    }
+                    ExpressionNode::LT(op1, op2) => {
+                        let expr1 = invert_operands(
+                            &expr,
+                            *op1,
+                            *op2,
+                            ExpressionNode::LE,
+                            expression_manager,
+                        )?;
+
+                        Some(HeuristicExpression {
+                            expression: vec![HeuristicExpressionNode::Leaf(expr1)],
+                            contains_or_node: false,
+                        })
+                    }
+                    ExpressionNode::LE(op1, op2) => {
+                        let expr1 = invert_operands(
+                            &expr,
+                            *op1,
+                            *op2,
+                            ExpressionNode::LT,
+                            expression_manager,
+                        )?;
+
+                        Some(HeuristicExpression {
+                            expression: vec![HeuristicExpressionNode::Leaf(expr1)],
+                            contains_or_node: false,
+                        })
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some(new_expr) = new_expr {
+            if let Some(HeuristicExpressionNode::Leaf(expr)) = &new_expr.expression.get(0) {
+                let expr = expression_manager.force_get(expr);
+                let (op1, op2) = match expr.last() {
+                    Some(ExpressionNode::LT(op1, op2)) | Some(ExpressionNode::LE(op1, op2)) => {
+                        (op1, op2)
+                    }
+                    _ => return Ok(None),
+                };
+                let mut polynomial_expr = expr.clone();
+                polynomial_expr.pop();
+                polynomial_expr.push(ExpressionNode::Minus(*op1, *op2));
+                if to_linear_polynomial(&polynomial_expr).is_some() {
+                    return Ok(Some(new_expr));
+                }
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn invert_operands<F>(
+    expr: &Vec<ExpressionNode>,
+    op1: usize,
+    op2: usize,
+    expression_node_type: F,
+    expression_manager: &mut ExpressionManager,
+) -> Result<Expression, ArithmeticError>
+where
+    F: FnOnce(usize, usize) -> ExpressionNode,
+{
+    let (mut op1_expr, mut op2_expr) = inverted_operands(&expr, op1, op2)?;
+    let op1 = op1_expr.len() - 1;
+    let op2 = op1_expr.len() + op2_expr.len() - 1;
+    let mut new_expr = Vec::with_capacity(op1_expr.len() + op2_expr.len() + 1);
+    new_expr.append(&mut op1_expr);
+    new_expr.append(&mut op2_expr);
+    new_expr.push(expression_node_type(op1, op2));
+    let expr1 = expression_manager.put(&new_expr);
+    Ok(expr1)
+}
+
+fn inverted_operands(
+    expr: &Vec<ExpressionNode>,
+    op1: usize,
+    op2: usize,
+) -> Result<(Vec<ExpressionNode>, Vec<ExpressionNode>), ArithmeticError> {
+    let op1_expr = expr[0..op1 + 1].to_vec();
+    let op2_expr = expr[op1 + 1..op2 + 1].to_vec();
+    Ok((
+        shift_expression(&op2_expr, op1_expr.len(), true)?,
+        shift_expression(&op1_expr, op2_expr.len(), false)?,
+    ))
+}
+
+fn update_numeric_effects(
+    effect: &Effect,
+    expression_manager: &mut ExpressionManager,
+    constant_increase_effects: &mut FxHashMap<usize, f64>,
+    constant_assign_effects: &mut FxHashMap<usize, f64>,
+    complex_numeric_effects: &mut FxHashMap<usize, Expression>,
+) {
+    if effect.value.len() == 1 {
+        let v = match &effect.value[0] {
+            ExpressionNode::Int(v) => Some(integer_to_f64(&v)),
+            ExpressionNode::Rational(v) => Some(rational_to_f64(&v)),
+            _ => None,
+        };
+        if let Some(v) = v {
+            constant_assign_effects.insert(effect.fluent, v);
+            return;
+        }
+    }
+
+    let polynomial = to_linear_polynomial(&effect.value);
+    if polynomial.is_some() {
+        let mut polynomial = polynomial.unwrap();
+        let k = polynomial.remove(&None).unwrap_or(0.0);
+        if polynomial.len() == 1 && matches!(polynomial.get(&Some(effect.fluent)), Some(1.0)) {
+            constant_increase_effects.insert(effect.fluent, k);
+        } else {
+            complex_numeric_effects.insert(effect.fluent, expression_manager.put(&effect.value));
+        }
+    } else {
+        complex_numeric_effects.insert(effect.fluent, expression_manager.put(&effect.value));
+    }
+}
+
+fn is_fluent_not_equals_object_expression(expr: &Vec<ExpressionNode>) -> bool {
+    expr.len() == 4
+        && matches!(expr[0], ExpressionNode::Fluent(_))
+        && matches!(expr[1], ExpressionNode::Object(_))
+        && matches!(expr[2], ExpressionNode::Equals(_, _))
+        && matches!(expr[3], ExpressionNode::Not(_))
 }
 
 /// Determine if a leaf expression represents a numeric expression.
@@ -311,19 +527,200 @@ fn convert_to_heuristic_expression(
 ///
 /// Returns `true` if the leaf expression is numeric, `false` otherwise.
 fn is_numeric_leaf_expression(expr: &Vec<ExpressionNode>) -> bool {
-    match expr.last() {
-        Some(ExpressionNode::Bool(_) | ExpressionNode::Fluent(_)) => false,
-        Some(ExpressionNode::Not(i)) => match expr[*i] {
-            ExpressionNode::Fluent(_) => false,
-            _ => true,
-        },
-        Some(ExpressionNode::Equals(i1, i2)) => {
-            !(matches!(expr[*i1], ExpressionNode::Fluent(_))
-                && matches!(expr[*i2], ExpressionNode::Object(_)))
+    let idx = match expr.last() {
+        Some(ExpressionNode::Not(op)) => *op,
+        _ => expr.len() - 1,
+    };
+    match expr[idx] {
+        ExpressionNode::Equals(op1, op2) => {
+            !matches!(expr[op1], ExpressionNode::Object(_))
+                && !matches!(expr[op2], ExpressionNode::Object(_))
         }
-        Some(_) => true,
-        None => false,
+        ExpressionNode::LE(_, _)
+        | ExpressionNode::LT(_, _)
+        | ExpressionNode::Plus(_)
+        | ExpressionNode::Minus(_, _)
+        | ExpressionNode::Times(_)
+        | ExpressionNode::Div(_, _) => true,
+        _ => false,
     }
+}
+
+fn update_numeric_conditions(
+    numeric_condition: &Expression,
+    expression_manager: &ExpressionManager,
+    simple_numeric_conds: &mut FxHashMap<Expression, (Vec<usize>, Vec<f64>)>,
+    complex_numeric_conds: &mut FxHashSet<Expression>,
+    epsilon: f64,
+) {
+    let fluents_weights = extract_fluents_weights_simple_numeric_condition(
+        numeric_condition,
+        expression_manager,
+        epsilon,
+    );
+    if let Some(fluents_weights) = fluents_weights {
+        simple_numeric_conds.insert(*numeric_condition, fluents_weights);
+    } else {
+        complex_numeric_conds.insert(*numeric_condition);
+    }
+}
+
+fn extract_fluents_weights_simple_numeric_condition(
+    expr: &Expression,
+    expression_manager: &ExpressionManager,
+    epsilon: f64,
+) -> Option<(Vec<usize>, Vec<f64>)> {
+    let expr = expression_manager.force_get(expr);
+    let root_node = expr.last()?;
+    let (op1, op2) = match root_node {
+        ExpressionNode::LT(op1, op2) | ExpressionNode::LE(op1, op2) => (op1, op2),
+        _ => return None,
+    };
+
+    let mut polynomial_expr = expr.clone();
+    polynomial_expr.pop();
+    polynomial_expr.push(ExpressionNode::Minus(*op1, *op2));
+    let mut polynomial = to_linear_polynomial(&polynomial_expr)?;
+
+    let mut k = polynomial.remove(&None).unwrap_or(0.0);
+    if matches!(root_node, ExpressionNode::LT(_, _)) {
+        k += epsilon;
+    }
+
+    let mut fluents_weights: (Vec<_>, Vec<_>) =
+        polynomial.iter().map(|(f, w)| (f.unwrap(), *w)).unzip();
+    fluents_weights.1.push(k);
+    Some(fluents_weights)
+}
+
+fn to_linear_polynomial(expr: &Vec<ExpressionNode>) -> Option<FxHashMap<Option<usize>, f64>> {
+    let mut res = Vec::new();
+    for node in expr {
+        match node {
+            ExpressionNode::Int(v) => {
+                let mut p = FxHashMap::with_hasher(FxBuildHasher::default());
+                p.insert(None, integer_to_f64(v));
+                res.push(p);
+            }
+            ExpressionNode::Rational(v) => {
+                let mut p = FxHashMap::with_hasher(FxBuildHasher::default());
+                p.insert(None, rational_to_f64(v));
+                res.push(p);
+            }
+            ExpressionNode::Fluent(f) => {
+                let mut p = FxHashMap::with_hasher(FxBuildHasher::default());
+                p.insert(Some(*f), 1.0);
+                res.push(p);
+            }
+            ExpressionNode::Minus(_, _) => {
+                let p2 = res.pop().unwrap();
+                let p1 = res.last_mut().unwrap();
+                for (f, w) in p2 {
+                    *p1.entry(f).or_insert(0.0) -= w;
+                }
+            }
+            ExpressionNode::Plus(operands) => {
+                let mut p = res.pop().unwrap();
+                for _ in 1..operands.len() {
+                    for (f, w) in res.pop().unwrap() {
+                        *p.entry(f).or_insert(0.0) += w;
+                    }
+                }
+                res.push(p);
+            }
+            ExpressionNode::Div(_, _) => {
+                let divisor = res.pop().unwrap();
+                let dividend = res.last_mut().unwrap();
+                if !is_constant(&divisor) {
+                    return None;
+                }
+                for (f, w) in divisor {
+                    *dividend.entry(f).or_insert(0.0) /= w;
+                }
+            }
+            ExpressionNode::Times(operands) => {
+                let mut const_multiplier = 1.0;
+                let mut polynomial = None;
+                for _ in 0..operands.len() {
+                    let operand = res.pop().unwrap();
+                    if is_constant(&operand) {
+                        const_multiplier *= operand.get(&None).unwrap();
+                    } else if polynomial.is_some() {
+                        return None;
+                    } else {
+                        polynomial = Some(operand);
+                    }
+                }
+
+                res.push(polynomial.unwrap_or_else(|| {
+                    let mut p = FxHashMap::with_hasher(FxBuildHasher::default());
+                    p.insert(None, const_multiplier);
+                    p
+                }))
+            }
+            _ => return None,
+        }
+    }
+
+    Some(res.pop().unwrap())
+}
+
+fn is_constant(polynomial: &FxHashMap<Option<usize>, f64>) -> bool {
+    polynomial.len() == 1 && polynomial.contains_key(&None)
+}
+
+fn achieves(operator: &Operator, fluents: &Vec<usize>, weights: &Vec<f64>) -> bool {
+    let mut n = 0.0;
+    for (f, w) in fluents.iter().zip(weights) {
+        if operator.constant_assign_effects.contains_key(f)
+            || operator.complex_numeric_effects.contains_key(f)
+        {
+            return true;
+        }
+        if let Some(k) = operator.constant_increase_effects.get(f) {
+            n += w * k;
+        }
+    }
+    n < 0.0
+}
+
+fn repetitions(
+    operator: &Operator,
+    fluents: &Vec<usize>,
+    weights: &Vec<f64>,
+    state: &State,
+) -> PyResult<Option<f64>> {
+    let mut v = *weights.last().unwrap();
+    for (f, w) in fluents.iter().zip(weights) {
+        let f_value = rational_to_f64(&get_rational_from_expression_node(state.get_value(*f))?);
+        v += *w * f_value;
+    }
+
+    if v <= 0.0 {
+        // condition satisfied in state
+        return Ok(Some(0.0));
+    }
+
+    for f in fluents {
+        if operator.constant_assign_effects.contains_key(f)
+            || operator.complex_numeric_effects.contains_key(f)
+        {
+            return Ok(Some(1.0));
+        }
+    }
+
+    let mut n = 0.0;
+    for (f, w) in fluents.iter().zip(weights) {
+        if let Some(k) = operator.constant_increase_effects.get(f) {
+            n += w * k;
+        }
+    }
+
+    if n >= 0.0 {
+        return Ok(None);
+    }
+
+    Ok(Some((-v / n).ceil()))
 }
 
 /// Extract the sub-expression from a given expression rooted at a specified index.
@@ -337,9 +734,13 @@ fn is_numeric_leaf_expression(expr: &Vec<ExpressionNode>) -> bool {
 ///
 /// # Returns
 ///
-/// Returns a `Vec<ExpressionNode>` representing the extracted sub-expression,
-/// with all operand indices re-indexed relative to the start of the sub-expression.
-fn extract_sub_expression(expr: &Vec<ExpressionNode>, idx: usize) -> Vec<ExpressionNode> {
+/// Returns a `Result` containing a `Vec<ExpressionNode>` representing the extracted
+/// sub-expression with all operand indices re-indexed relative to the start of
+/// the sub-expression, or an `ArithmeticError` if extraction fails.
+fn extract_sub_expression(
+    expr: &Vec<ExpressionNode>,
+    idx: usize,
+) -> Result<Vec<ExpressionNode>, ArithmeticError> {
     // find the start index of the sub-expression
     let mut i = idx;
     loop {
@@ -359,10 +760,7 @@ fn extract_sub_expression(expr: &Vec<ExpressionNode>, idx: usize) -> Vec<Express
         };
     }
 
-    (i..(idx + 1))
-        .map(|j| do_shift(&expr[j], i, true))
-        .collect::<Result<Vec<ExpressionNode>, _>>()
-        .unwrap()
+    shift_expression(&expr[i..(idx + 1)], i, true)
 }
 
 #[derive(Clone, Debug)]
@@ -375,7 +773,9 @@ pub struct DeleteRelaxationHeuristic {
     operators: Vec<Operator>,
     precondition_of: FxHashMap<Expression, Vec<OperatorID>>,
     empty_pre_operators: FxHashSet<OperatorID>,
-    numeric_conds: FxHashSet<Expression>,
+    simple_numeric_conds: FxHashMap<Expression, (Vec<usize>, Vec<f64>)>,
+    complex_numeric_conds: FxHashSet<Expression>,
+    achieved_conditions: Vec<Vec<Expression>>,
     heuristic_kind: HeuristicKind,
     internal_caching: Arc<Mutex<Option<FxHashMap<CacheKey, Option<f64>>>>>,
     expression_manager: Arc<Mutex<ExpressionManager>>,
@@ -397,14 +797,24 @@ impl DeleteRelaxationHeuristic {
         let mut extra_goals = Vec::with_capacity(events.len() + 1);
         let mut expression_manager = ExpressionManager::new();
         let mut num_fluents = fluent_types.len();
+        let epsilon = 0.000001;
 
-        for (a, le) in events.iter() {
+        for a in &actions {
+            let Some(le) = events.get(a) else {
+                continue;
+            };
             let mut a_extra_fluents: Vec<Expression> = Vec::new();
             let f_cond = num_fluents + le.len() - 1;
             let mut cond = ExpressionNode::Fluent(f_cond);
             extra_goals.push(cond.clone());
             for (_, e) in le.iter() {
                 let mut effects: Vec<Expression> = Vec::new();
+                let mut constant_increase_effects: FxHashMap<usize, f64> =
+                    FxHashMap::with_hasher(FxBuildHasher::default());
+                let mut constant_assign_effects: FxHashMap<usize, f64> =
+                    FxHashMap::with_hasher(FxBuildHasher::default());
+                let mut complex_numeric_effects: FxHashMap<usize, Expression> =
+                    FxHashMap::with_hasher(FxBuildHasher::default());
                 let f = num_fluents;
                 num_fluents += 1;
                 a_extra_fluents.push(expression_manager.put(&vec![ExpressionNode::Fluent(f)]));
@@ -444,7 +854,20 @@ impl DeleteRelaxationHeuristic {
                                 make_operator("not".to_string(), vec![0])?,
                             ]));
                         }
-                    } else if t != "real" && t != "int" {
+                    } else if t == "real" || t == "int" {
+                        assert!(
+                            !constant_increase_effects.contains_key(&eff.fluent)
+                                && !constant_assign_effects.contains_key(&eff.fluent)
+                                && !complex_numeric_effects.contains_key(&eff.fluent)
+                        );
+                        update_numeric_effects(
+                            eff,
+                            &mut expression_manager,
+                            &mut constant_increase_effects,
+                            &mut constant_assign_effects,
+                            &mut complex_numeric_effects,
+                        );
+                    } else {
                         if eff.value.len() == 1 && matches!(eff.value[0], ExpressionNode::Object(_))
                         {
                             effects.push(expression_manager.put(&vec![
@@ -463,13 +886,19 @@ impl DeleteRelaxationHeuristic {
                         }
                     }
                 }
+
                 if let Some(conditions) =
                     build_operator_condition(&e.conditions, cond.clone(), &mut expression_manager)
+                        .map_err(|e| PyException::new_err(format!("{:?}", e)))?
                 {
                     operators.push(Operator {
+                        id: OperatorID::new(operators.len()),
                         action: *a,
                         conditions,
                         effects,
+                        constant_increase_effects,
+                        constant_assign_effects,
+                        complex_numeric_effects,
                         cost: 1.0,
                     });
                 }
@@ -480,42 +909,71 @@ impl DeleteRelaxationHeuristic {
         operators.sort_by(|a, b| a.action.cmp(&b.action));
 
         let expr_goals = goals.into_iter().map(|e| e.v).collect();
-        let goals = convert_to_heuristic_expression(&expr_goals, &mut expression_manager);
+        let goals = convert_to_heuristic_expression(&expr_goals, &mut expression_manager)
+            .map_err(|e| PyException::new_err(format!("{:?}", e)))?;
+        let goals = simplify_numeric_condition(&goals, &mut expression_manager)
+            .map_err(|e| PyException::new_err(format!("{:?}", e)))?;
         extra_goals.push(ExpressionNode::And((0..extra_goals.len()).collect()));
-        let extra_goals = convert_to_heuristic_expression(&extra_goals, &mut expression_manager);
+        let extra_goals = convert_to_heuristic_expression(&extra_goals, &mut expression_manager)
+            .map_err(|e| PyException::new_err(format!("{:?}", e)))?;
 
         let mut precondition_of: FxHashMap<Expression, Vec<OperatorID>> =
             FxHashMap::with_hasher(FxBuildHasher::default());
-        let mut numeric_conds: FxHashSet<Expression> =
+        let mut simple_numeric_conds: FxHashMap<Expression, (Vec<usize>, Vec<f64>)> =
+            FxHashMap::with_hasher(FxBuildHasher::default());
+        let mut complex_numeric_conds: FxHashSet<Expression> =
             FxHashSet::with_hasher(FxBuildHasher::default());
         let mut empty_pre_operators: FxHashSet<OperatorID> =
             FxHashSet::with_hasher(FxBuildHasher::default());
-        for (idx_o, o) in operators.iter().enumerate() {
+        for o in &operators {
             if o.conditions.expression.is_empty() {
-                empty_pre_operators.insert(OperatorID::new(idx_o));
+                empty_pre_operators.insert(o.id);
             } else {
                 for node in &o.conditions.expression {
                     if let HeuristicExpressionNode::Leaf(e) = node {
-                        if is_numeric_leaf_expression(expression_manager.force_get(e)) {
-                            numeric_conds.insert(*e);
-                        } else {
-                            if !precondition_of.contains_key(e) {
-                                precondition_of.insert(*e, vec![OperatorID::new(idx_o)]);
-                            } else {
-                                precondition_of
-                                    .get_mut(e)
-                                    .unwrap()
-                                    .push(OperatorID::new(idx_o));
-                            }
+                        let expr = expression_manager.force_get(e);
+                        if is_numeric_leaf_expression(expr)
+                            || is_fluent_not_equals_object_expression(expr)
+                        {
+                            update_numeric_conditions(
+                                e,
+                                &expression_manager,
+                                &mut simple_numeric_conds,
+                                &mut complex_numeric_conds,
+                                epsilon,
+                            );
                         }
+
+                        precondition_of
+                            .entry(*e)
+                            .or_insert_with(Vec::new)
+                            .push(o.id);
                     }
                 }
             }
         }
+
         for node in goals.expression.iter() {
             if let HeuristicExpressionNode::Leaf(e) = node {
-                if is_numeric_leaf_expression(expression_manager.force_get(e)) {
-                    numeric_conds.insert(*e);
+                let expr = expression_manager.force_get(e);
+                if is_numeric_leaf_expression(expr) || is_fluent_not_equals_object_expression(expr)
+                {
+                    update_numeric_conditions(
+                        e,
+                        &expression_manager,
+                        &mut simple_numeric_conds,
+                        &mut complex_numeric_conds,
+                        epsilon,
+                    );
+                }
+            }
+        }
+
+        let mut achieved_conditions: Vec<Vec<Expression>> = vec![Vec::new(); operators.len()];
+        for o in &operators {
+            for (c, (fluents, weights)) in &simple_numeric_conds {
+                if achieves(o, fluents, weights) {
+                    achieved_conditions[o.id.id].push(*c);
                 }
             }
         }
@@ -538,7 +996,9 @@ impl DeleteRelaxationHeuristic {
             operators,
             precondition_of,
             empty_pre_operators,
-            numeric_conds,
+            simple_numeric_conds,
+            complex_numeric_conds,
+            achieved_conditions,
             heuristic_kind,
             internal_caching: Arc::new(Mutex::new(internal_caching)),
             expression_manager: Arc::new(Mutex::new(expression_manager)),
@@ -576,7 +1036,10 @@ impl DeleteRelaxationHeuristic {
     fn _eval(&self, state: &State) -> PyResult<Option<f64>> {
         let mut expression_manager = self.expression_manager.lock().unwrap();
         let mut costs: FxHashMap<Expression, f64> = FxHashMap::with_capacity_and_hasher(
-            state.assignments.len() + self.numeric_conds.len() + self.events.len(),
+            state.assignments.len()
+                + self.simple_numeric_conds.len()
+                + self.complex_numeric_conds.len()
+                + self.events.len(),
             FxBuildHasher::default(),
         );
 
@@ -604,7 +1067,15 @@ impl DeleteRelaxationHeuristic {
             costs.insert(k, 0.0);
         }
 
-        for c in self.numeric_conds.iter() {
+        for c in self.simple_numeric_conds.keys() {
+            if internal_evaluate(expression_manager.force_get(c), state)?
+                == ExpressionNode::Bool(true)
+            {
+                costs.insert(*c, 0.0);
+            }
+        }
+
+        for c in &self.complex_numeric_conds {
             if internal_evaluate(expression_manager.force_get(c), state)?
                 == ExpressionNode::Bool(true)
             {
@@ -626,6 +1097,7 @@ impl DeleteRelaxationHeuristic {
         let mut lo: FxHashSet<OperatorID> = FxHashSet::with_hasher(FxBuildHasher::default());
         let mut reached_by: FxHashMap<Expression, OperatorID> =
             FxHashMap::with_hasher(FxBuildHasher::default());
+        let mut operator_cost = vec![None; self.operators.len()];
         let mut new_costs = FxHashMap::with_hasher(FxBuildHasher::default());
         while lp.len() > 0 {
             lo.extend(&self.empty_pre_operators);
@@ -634,31 +1106,46 @@ impl DeleteRelaxationHeuristic {
                     lo.extend(po);
                 }
             }
-            lp.clear();
             for oid in lo.drain() {
                 let o: &Operator = &self.operators[oid.id];
-                if let Some(c) = self.cost(&o.conditions, &costs) {
-                    for k in o.effects.iter() {
-                        let new_cost_k = new_costs.get(k);
-                        let cost_k = costs.get(k);
-                        if (new_cost_k.is_some() && *new_cost_k.unwrap() > c + o.cost)
-                            || (new_cost_k.is_none() && cost_k.is_none())
-                            || (new_cost_k.is_none() && *cost_k.unwrap() > c + o.cost)
-                        {
+                let c = self.cost(&o.conditions, &costs);
+                let op_cost = operator_cost[oid.id];
+                if c.is_some() && (op_cost.is_none() || op_cost > c) {
+                    operator_cost[oid.id] = c;
+                    let c = c.unwrap();
+
+                    let mut achieved_expressions: Vec<_> =
+                        o.effects.iter().map(|k| (k, 1.0)).collect();
+
+                    for simple_cond in &self.achieved_conditions[oid.id] {
+                        if costs.get(simple_cond) == Some(&0.0) {
+                            // condition satisfied in state
+                            continue;
+                        }
+
+                        let (fluents, weights) = &self.simple_numeric_conds[simple_cond];
+                        let rep = repetitions(o, fluents, weights, state)?.unwrap();
+                        achieved_expressions.push((simple_cond, rep));
+                    }
+
+                    for (expr, rep) in achieved_expressions {
+                        let cost = rep * o.cost + c;
+                        let prev_cost = new_costs.get(expr).or_else(|| costs.get(expr)).copied();
+                        if prev_cost.is_none() || cost < prev_cost.unwrap() {
                             if matches!(self.heuristic_kind, HeuristicKind::HFF) {
-                                reached_by.insert(*k, oid);
+                                reached_by.insert(*expr, oid);
                             }
-                            new_costs.insert(*k, c + o.cost);
-                        } else if matches!(self.heuristic_kind, HeuristicKind::HFF)
-                            && ((new_cost_k.is_some() && *new_cost_k.unwrap() == c + o.cost)
-                                || (new_cost_k.is_none() && *cost_k.unwrap() == c + o.cost))
-                            && oid.id > reached_by[k].id
+                            new_costs.insert(*expr, cost);
+                        } else if prev_cost == Some(cost)
+                            && matches!(self.heuristic_kind, HeuristicKind::HFF)
+                            && oid.id > reached_by[expr].id
                         {
-                            reached_by.insert(*k, oid);
+                            reached_by.insert(*expr, oid);
                         }
                     }
                 }
             }
+            lp.clear();
             lp.extend(new_costs.keys());
             costs.extend(new_costs.drain());
         }

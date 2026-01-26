@@ -43,7 +43,7 @@ fn rustamer(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rustamer_base::make_rational_constant_node, &m)?)?;
     m.add_function(wrap_pyfunction!(rustamer_base::make_object_node, &m)?)?;
     m.add_function(wrap_pyfunction!(rustamer_base::make_fluent_node, &m)?)?;
-    m.add_function(wrap_pyfunction!(rustamer_base::shift_expression, &m)?)?;
+    m.add_function(wrap_pyfunction!(rustamer_base::py_shift_expression, &m)?)?;
     m.add_function(wrap_pyfunction!(dfs_search, &m)?)?;
     m.add_function(wrap_pyfunction!(bfs_search, &m)?)?;
     m.add_function(wrap_pyfunction!(multiqueue_search, &m)?)?;
