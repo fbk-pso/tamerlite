@@ -34,7 +34,6 @@ from tamerlite.core.search_space import (
     State,
     Timing,
     evaluate,
-    simplify,
     shift_expression,
 )
 from tamerlite.core.search_space import OperatorNode as Op, split_expression
@@ -218,7 +217,7 @@ class DeleteRelaxationHeuristic(Heuristic):
                     )
                 cond = FluentNode(f)
         self._goals = self._simplify_numeric_condition(
-            self._convert_to_heuristic_expression(simplify(goals))
+            self._convert_to_heuristic_expression(goals)
         )
         extra_goals: Expression = tuple(
             FluentNode(fe[-1]) for fe in self._extra_fluents.values()
@@ -371,8 +370,6 @@ class DeleteRelaxationHeuristic(Heuristic):
                 - The second element is the resulting `HeuristicExpression`.
         """
 
-        condition = simplify(condition)
-
         # If the condition is explicitly False, the operator is not applicable
         if condition == (False,):
             return False, tuple()
@@ -475,15 +472,14 @@ class DeleteRelaxationHeuristic(Heuristic):
         constant_assign_effects: Dict[int, Union[int, Fraction]],
         complex_numeric_effects: Dict[int, Expression],
     ):
-        eff_value = simplify(effect.value)
-        if len(eff_value) == 1 and isinstance(eff_value[0], (int, Fraction)):
-            constant_assign_effects[effect.fluent] = eff_value[0]
+        if len(effect.value) == 1 and isinstance(effect.value[0], (int, Fraction)):
+            constant_assign_effects[effect.fluent] = effect.value[0]
             return
 
         try:
-            polynomial = self._to_linear_polynomial(eff_value)
+            polynomial = self._to_linear_polynomial(effect.value)
         except ValueError:
-            complex_numeric_effects[effect.fluent] = eff_value
+            complex_numeric_effects[effect.fluent] = effect.value
             return
 
         assert effect.fluent in polynomial
@@ -491,15 +487,13 @@ class DeleteRelaxationHeuristic(Heuristic):
         if len(polynomial) == 1 and polynomial[effect.fluent] == 1:
             constant_increase_effects[effect.fluent] = k
         else:
-            complex_numeric_effects[effect.fluent] = eff_value
+            complex_numeric_effects[effect.fluent] = effect.value
 
     def _is_fluent_not_equals_object_expression(self, node: LeafNode) -> bool:
         exp = node.expression
-        if len(exp) != 4:
-            return False
-
         return (
-            isinstance(exp[0], FluentNode)
+            len(exp) == 4
+            and isinstance(exp[0], FluentNode)
             and isinstance(exp[1], str)
             and isinstance(exp[2], Op)
             and exp[2].kind == "=="
