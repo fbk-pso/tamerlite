@@ -157,7 +157,10 @@ class DeleteRelaxationHeuristic(Heuristic):
         self._num_fluents = len(self._fluent_types)
         self._epsilon = 0.000001
 
-        for a, le in events.items():
+        for a in actions:
+            if a not in events:
+                continue
+            le = events[a]
             self._extra_fluents[a] = []
             f_cond = self._num_fluents + len(le) - 1
             cond = FluentNode(f_cond)
@@ -279,26 +282,33 @@ class DeleteRelaxationHeuristic(Heuristic):
         for node in condition:
             if isinstance(node, LeafNode) and self._is_numeric_leaf_expression(node):
                 nodes = self._simplify_numeric_leaf_node(node)
-                new_condition.extend(nodes)
+                if nodes is None:
+                    new_condition.append(node)
+                else:
+                    new_condition.extend(nodes)
             else:
                 new_condition.append(node)
 
         return new_condition
 
-    def _simplify_numeric_leaf_node(self, node: LeafNode) -> HeuristicExpression:
+    def _simplify_numeric_leaf_node(
+        self, node: LeafNode
+    ) -> Optional[HeuristicExpression]:
+
         def inverted_operands(exp: Expression, op: Op):
             op2_start = op.operands[0] + 1
             op1 = exp[:op2_start]
             op2 = exp[op2_start:-1]
             return shift_expression(op2, -len(op1)), shift_expression(op1, len(op2))
 
+        nodes = None
         if isinstance(node.expression[-1], Op):
             exp = node.expression
             if exp[-1].kind == "==":
                 exp1 = exp[:-1] + (Op("<=", exp[-1].operands),)
                 op1, op2 = inverted_operands(exp, exp[-1])
                 exp2 = op1 + op2 + (Op("<=", (len(op1) - 1, len(op1) + len(op2) - 1)),)
-                return (LeafNode(exp1), LeafNode(exp2), AndNode(2))
+                nodes = (LeafNode(exp1), LeafNode(exp2), AndNode(2))
             elif exp[-1].kind == "not":
                 negated = exp[exp[-1].operands[0]]
                 if isinstance(negated, Op):
@@ -310,11 +320,11 @@ class DeleteRelaxationHeuristic(Heuristic):
                             + op2
                             + (Op("<", (len(op1) - 1, len(op1) + len(op2) - 1)),)
                         )
-                        return (LeafNode(exp1), LeafNode(exp2), OrNode(2))
+                        nodes = (LeafNode(exp1), LeafNode(exp2), OrNode(2))
                     elif negated.kind == "<":
                         op1, op2 = inverted_operands(exp, negated)
-                        return (
-                            (
+                        nodes = (
+                            LeafNode(
                                 op1
                                 + op2
                                 + (Op("<=", (len(op1) - 1, len(op1) + len(op2) - 1)),)
@@ -322,14 +332,23 @@ class DeleteRelaxationHeuristic(Heuristic):
                         )
                     elif negated.kind == "<=":
                         op1, op2 = inverted_operands(exp, negated)
-                        return (
-                            (
+                        nodes = (
+                            LeafNode(
                                 op1
                                 + op2
                                 + (Op("<", (len(op1) - 1, len(op1) + len(op2) - 1)),)
                             ),
                         )
-        return (node,)
+
+        if nodes is not None:
+            exp = nodes[0].expression
+            polynomial_exp = exp[:-1] + (Op("-", exp[-1].operands),)
+            try:
+                self._to_linear_polynomial(polynomial_exp)
+            except ValueError:
+                return None
+
+        return nodes
 
     def _build_operator_condition(
         self, condition: Expression, extra_fluent: FluentNode
@@ -479,16 +498,14 @@ class DeleteRelaxationHeuristic(Heuristic):
         if len(exp) != 4:
             return False
 
-        if (
-            isinstance(exp[-1], Op)
-            and exp[-1].kind == "not"
-            and isinstance(exp[-2], Op)
-            and exp[-2].kind == "=="
-        ):
-            if isinstance(exp[0], FluentNode) and isinstance(exp[1], str):
-                return True
-
-        return False
+        return (
+            isinstance(exp[0], FluentNode)
+            and isinstance(exp[1], str)
+            and isinstance(exp[2], Op)
+            and exp[2].kind == "=="
+            and isinstance(exp[3], Op)
+            and exp[3].kind == "not"
+        )
 
     def _is_numeric_leaf_expression(self, node: LeafNode) -> bool:
         """
@@ -782,7 +799,7 @@ class DeleteRelaxationHeuristic(Heuristic):
             # condition satisfied in state
             return 0
 
-        for f, w in zip(fluents, weights):
+        for f in fluents:
             if (
                 f in operator.constant_assign_effects
                 or f in operator.complex_numeric_effects
