@@ -226,9 +226,7 @@ class DeleteRelaxationHeuristic(Heuristic):
         self._extra_goals = self._convert_to_heuristic_expression(extra_goals)
 
         self._precondition_of: Dict[Expression, List[Operator]] = {}
-        self._simple_numeric_conds: Dict[
-            Expression, Tuple[Tuple[int, ...], Tuple[float, ...]]
-        ] = {}
+        self._simple_numeric_conds: Dict[Expression, Tuple[List[int], List[float]]] = {}
         self._complex_numeric_conds: Set[Expression] = set()
         self._empty_pre_operators: List[Operator] = []
         for o in self._operators:
@@ -277,7 +275,7 @@ class DeleteRelaxationHeuristic(Heuristic):
     def _simplify_numeric_condition(
         self, condition: HeuristicExpression
     ) -> HeuristicExpression:
-        new_condition = []
+        new_condition: List[HeuristicExpressionNode] = []
         for node in condition:
             if isinstance(node, LeafNode) and self._is_numeric_leaf_expression(node):
                 nodes = self._simplify_numeric_leaf_node(node)
@@ -288,7 +286,7 @@ class DeleteRelaxationHeuristic(Heuristic):
             else:
                 new_condition.append(node)
 
-        return new_condition
+        return tuple(new_condition)
 
     def _simplify_numeric_leaf_node(
         self, node: LeafNode
@@ -300,9 +298,9 @@ class DeleteRelaxationHeuristic(Heuristic):
             op2 = exp[op2_start:-1]
             return shift_expression(op2, -len(op1)), shift_expression(op1, len(op2))
 
-        nodes = None
-        if isinstance(node.expression[-1], Op):
-            exp = node.expression
+        nodes: Optional[HeuristicExpression] = None
+        exp = node.expression
+        if isinstance(exp[-1], Op):
             if exp[-1].kind == "==":
                 exp1 = exp[:-1] + (Op("<=", exp[-1].operands),)
                 op1, op2 = inverted_operands(exp, exp[-1])
@@ -340,8 +338,8 @@ class DeleteRelaxationHeuristic(Heuristic):
                         )
 
         if nodes is not None:
-            exp = nodes[0].expression
-            polynomial_exp = exp[:-1] + (Op("-", exp[-1].operands),)
+            exp = nodes[0].expression  # type: ignore[union-attr]
+            polynomial_exp = exp[:-1] + (Op("-", exp[-1].operands),)  # type: ignore
             try:
                 self._to_linear_polynomial(polynomial_exp)
             except ValueError:
@@ -520,10 +518,11 @@ class DeleteRelaxationHeuristic(Heuristic):
                 i = exp[-1].operands[0]
 
             if isinstance(exp[i], Op):
-                if exp[i].kind != "==":
+                exp_node: Op = exp[i]  # type: ignore[assignment]
+                if exp_node.kind != "==":
                     return True
 
-                op1, op2 = exp[i].operands
+                op1, op2 = exp_node.operands
                 if not isinstance(exp[op1], str) and not isinstance(exp[op2], str):
                     return True
 
@@ -551,12 +550,12 @@ class DeleteRelaxationHeuristic(Heuristic):
         except ValueError:
             return None
 
-        k = polynomial.pop(None, 0)
+        k = float(polynomial.pop(None, 0))
         if exp[-1].kind == "<":
             k += self._epsilon
 
-        fluents = list(polynomial.keys())
-        weights = [float(polynomial[f]) for f in fluents] + [k]
+        fluents: List[int] = list(polynomial.keys())  # type: ignore[arg-type]
+        weights: List[float] = [float(polynomial[f]) for f in fluents] + [k]
         return fluents, weights
 
     def _to_linear_polynomial(
@@ -573,7 +572,7 @@ class DeleteRelaxationHeuristic(Heuristic):
             elif isinstance(node, Op) and node.kind in ("-", "+", "/", "*"):
                 operands = [res.pop() for _ in node.operands]
 
-                def is_constant(polynomial: Dict[int, float]):
+                def is_constant(polynomial: Dict[Optional[int], Union[int, Fraction]]):
                     return len(polynomial) == 1 and None in polynomial
 
                 if node.kind == "-":
@@ -598,7 +597,7 @@ class DeleteRelaxationHeuristic(Heuristic):
                     }
 
                 elif node.kind == "*":
-                    const_multiplier = 1
+                    const_multiplier: Fraction = Fraction(1)
                     polynomial = None
                     for operand in operands:
                         if is_constant(operand):
@@ -669,7 +668,7 @@ class DeleteRelaxationHeuristic(Heuristic):
 
         lp = list(costs.keys())
         reached_by: Dict[Expression, Tuple[Operator, List[Expression]]] = {}
-        operator_cost = {}
+        operator_cost: Dict[Operator, float] = {}
         while len(lp) > 0:
             lo = list(self._empty_pre_operators)
             for p in lp:
@@ -787,7 +786,7 @@ class DeleteRelaxationHeuristic(Heuristic):
         fluents, weights = self._simple_numeric_conds[simple_condition]
         v = weights[-1]
         for f, w in zip(fluents, weights):
-            v += w * state.get_value(f)
+            v += w * state.get_value(f)  # type: ignore[operator]
 
         if v <= 0.0:
             # condition satisfied in state
