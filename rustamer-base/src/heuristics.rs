@@ -605,16 +605,16 @@ fn update_numeric_conditions(
     numeric_condition: &Expression,
     expression_manager: &ExpressionManager,
     simple_numeric_conds: &mut FxHashMap<Expression, (Vec<usize>, Vec<f64>)>,
+    lt_simple_numeric_conds: &mut FxHashSet<Expression>,
     complex_numeric_conds: &mut FxHashSet<Expression>,
-    epsilon: f64,
 ) {
-    let fluents_weights = extract_fluents_weights_simple_numeric_condition(
-        numeric_condition,
-        expression_manager,
-        epsilon,
-    );
-    if let Some(fluents_weights) = fluents_weights {
-        simple_numeric_conds.insert(*numeric_condition, fluents_weights);
+    let fluents_weights =
+        extract_fluents_weights_simple_numeric_condition(numeric_condition, expression_manager);
+    if let Some((fluents, weights, is_lt)) = fluents_weights {
+        simple_numeric_conds.insert(*numeric_condition, (fluents, weights));
+        if is_lt {
+            lt_simple_numeric_conds.insert(*numeric_condition);
+        }
     } else {
         complex_numeric_conds.insert(*numeric_condition);
     }
@@ -623,8 +623,7 @@ fn update_numeric_conditions(
 fn extract_fluents_weights_simple_numeric_condition(
     expr: &Expression,
     expression_manager: &ExpressionManager,
-    epsilon: f64,
-) -> Option<(Vec<usize>, Vec<f64>)> {
+) -> Option<(Vec<usize>, Vec<f64>, bool)> {
     let expr = expression_manager.force_get(expr);
     let root_node = expr.last()?;
     let (op1, op2) = match root_node {
@@ -637,15 +636,15 @@ fn extract_fluents_weights_simple_numeric_condition(
     polynomial_expr.push(ExpressionNode::Minus(*op1, *op2));
     let mut polynomial = to_linear_polynomial(&polynomial_expr)?;
 
-    let mut k = polynomial.remove(&None).unwrap_or(0.0);
-    if matches!(root_node, ExpressionNode::LT(_, _)) {
-        k += epsilon;
-    }
-
-    let mut fluents_weights: (Vec<_>, Vec<_>) =
+    let k = polynomial.remove(&None).unwrap_or(0.0);
+    let (fluents, mut weights): (Vec<_>, Vec<_>) =
         polynomial.iter().map(|(f, w)| (f.unwrap(), *w)).unzip();
-    fluents_weights.1.push(k);
-    Some(fluents_weights)
+    weights.push(k);
+    Some((
+        fluents,
+        weights,
+        matches!(root_node, ExpressionNode::LT(_, _)),
+    ))
 }
 
 fn to_linear_polynomial(expr: &Vec<ExpressionNode>) -> Option<FxHashMap<Option<usize>, f64>> {
@@ -724,8 +723,13 @@ fn is_constant(polynomial: &FxHashMap<Option<usize>, f64>) -> bool {
     polynomial.len() == 1 && polynomial.contains_key(&None)
 }
 
-fn achieves(operator: &Operator, fluents: &Vec<usize>, weights: &Vec<f64>) -> bool {
-    let mut n = 0.0;
+fn achieves(
+    operator: &Operator,
+    fluents: &Vec<usize>,
+    weights: &Vec<f64>,
+    max_net_effect: &mut f64,
+) -> bool {
+    let mut net_effect = 0.0;
     for (f, w) in fluents.iter().zip(weights) {
         if operator.constant_assign_effects.contains_key(f)
             || operator.complex_numeric_effects.contains_key(f)
@@ -733,10 +737,13 @@ fn achieves(operator: &Operator, fluents: &Vec<usize>, weights: &Vec<f64>) -> bo
             return true;
         }
         if let Some(k) = operator.constant_increase_effects.get(f) {
-            n += w * k;
+            net_effect += w * k;
         }
     }
-    n < 0.0
+    if net_effect < 0.0 && net_effect > *max_net_effect {
+        *max_net_effect = net_effect;
+    }
+    net_effect < 0.0
 }
 
 fn repetitions(
@@ -852,7 +859,6 @@ impl DeleteRelaxationHeuristic {
         let mut extra_goals = Vec::with_capacity(events.len() + 1);
         let mut expression_manager = ExpressionManager::new();
         let mut num_fluents = fluent_types.len();
-        let epsilon = 0.000001;
         let map_to_python_exception = |e| PyException::new_err(format!("{:?}", e));
 
         for a in &actions {
@@ -982,6 +988,8 @@ impl DeleteRelaxationHeuristic {
             FxHashMap::with_hasher(FxBuildHasher::default());
         let mut simple_numeric_conds: FxHashMap<Expression, (Vec<usize>, Vec<f64>)> =
             FxHashMap::with_hasher(FxBuildHasher::default());
+        let mut lt_simple_numeric_conds: FxHashSet<Expression> =
+            FxHashSet::with_hasher(FxBuildHasher::default());
         let mut complex_numeric_conds: FxHashSet<Expression> =
             FxHashSet::with_hasher(FxBuildHasher::default());
         let mut empty_pre_operators: FxHashSet<OperatorID> =
@@ -998,8 +1006,8 @@ impl DeleteRelaxationHeuristic {
                                 e,
                                 &expression_manager,
                                 &mut simple_numeric_conds,
+                                &mut lt_simple_numeric_conds,
                                 &mut complex_numeric_conds,
-                                epsilon,
                             );
                         }
 
@@ -1020,19 +1028,29 @@ impl DeleteRelaxationHeuristic {
                         e,
                         &expression_manager,
                         &mut simple_numeric_conds,
+                        &mut lt_simple_numeric_conds,
                         &mut complex_numeric_conds,
-                        epsilon,
                     );
                 }
             }
         }
 
+        let mut max_net_effect = f64::MIN;
         let mut achieved_simple_numeric_conds: Vec<Vec<Expression>> =
             vec![Vec::new(); operators.len()];
         for o in &operators {
             for (c, (fluents, weights)) in &simple_numeric_conds {
-                if achieves(o, fluents, weights) {
+                if achieves(o, fluents, weights, &mut max_net_effect) {
                     achieved_simple_numeric_conds[o.id.id].push(*c);
+                }
+            }
+        }
+
+        let epsilon = -max_net_effect / 2.0;
+        for simple_cond in lt_simple_numeric_conds {
+            if let Some((_, weights)) = simple_numeric_conds.get_mut(&simple_cond) {
+                if let Some(k) = weights.last_mut() {
+                    *k += epsilon;
                 }
             }
         }
