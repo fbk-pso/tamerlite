@@ -1176,6 +1176,7 @@ impl DeleteRelaxationHeuristic {
             FxHashMap::with_hasher(FxBuildHasher::default());
         let mut operator_cost = vec![None; self.operators.len()];
         let mut new_costs = FxHashMap::with_hasher(FxBuildHasher::default());
+        let mut poss = FxHashMap::with_hasher(FxBuildHasher::default());
         while lp.len() > 0 {
             lo.extend(&self.empty_pre_operators);
             for p in lp.iter() {
@@ -1192,7 +1193,7 @@ impl DeleteRelaxationHeuristic {
                     let c = c.unwrap();
 
                     let mut achieved_expressions: Vec<_> =
-                        o.effects.iter().map(|k| (k, 1.0)).collect();
+                        o.effects.iter().map(|k| (k, o.cost + c)).collect();
 
                     for simple_cond in &self.achieved_simple_numeric_conds[oid.id] {
                         if costs.get(simple_cond) == Some(&0.0) {
@@ -1202,18 +1203,38 @@ impl DeleteRelaxationHeuristic {
 
                         let (fluents, weights) = &self.simple_numeric_conds[simple_cond];
                         let rep = repetitions(o, fluents, weights, state)?.unwrap();
-                        achieved_expressions.push((simple_cond, rep));
+
+                        let expr_cost = if matches!(self.heuristic_kind, HeuristicKind::HMAX) {
+                            poss.entry(simple_cond)
+                                .or_insert_with(|| FxHashSet::with_hasher(FxBuildHasher::default()))
+                                .insert(o.id);
+
+                            let min_operator_cost = poss
+                                .get(simple_cond)
+                                .unwrap()
+                                .iter()
+                                .map(|oid| {
+                                    self.cost(&self.operators[oid.id].conditions, &costs)
+                                        .unwrap()
+                                })
+                                .reduce(f64::min);
+                            rep * o.cost + min_operator_cost.unwrap()
+                        } else {
+                            rep * o.cost + c
+                        };
+
+                        achieved_expressions.push((simple_cond, expr_cost));
                     }
 
-                    for (expr, rep) in achieved_expressions {
-                        let cost = rep * o.cost + c;
-                        let prev_cost = new_costs.get(expr).or_else(|| costs.get(expr)).copied();
-                        if prev_cost.is_none() || cost < prev_cost.unwrap() {
+                    for (expr, expr_cost) in achieved_expressions {
+                        let prev_expr_cost =
+                            new_costs.get(expr).or_else(|| costs.get(expr)).copied();
+                        if prev_expr_cost.is_none() || expr_cost < prev_expr_cost.unwrap() {
                             if matches!(self.heuristic_kind, HeuristicKind::HFF) {
                                 reached_by.insert(*expr, oid);
                             }
-                            new_costs.insert(*expr, cost);
-                        } else if prev_cost == Some(cost)
+                            new_costs.insert(*expr, expr_cost);
+                        } else if prev_expr_cost == Some(expr_cost)
                             && matches!(self.heuristic_kind, HeuristicKind::HFF)
                             && oid.id > reached_by[expr].id
                         {
