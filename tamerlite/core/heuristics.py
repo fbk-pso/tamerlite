@@ -154,7 +154,6 @@ class DeleteRelaxationHeuristic(Heuristic):
         self._operators: List[Operator] = []
         self._extra_fluents: Dict[Action, List[int]] = {}
         self._num_fluents = len(self._fluent_types)
-        self._epsilon = 0.000001
 
         for a in actions:
             if a not in events:
@@ -227,6 +226,7 @@ class DeleteRelaxationHeuristic(Heuristic):
 
         self._precondition_of: Dict[Expression, List[Operator]] = {}
         self._simple_numeric_conds: Dict[Expression, Tuple[List[int], List[float]]] = {}
+        self._lt_simple_numeric_conds: Set[Expression] = set()
         self._complex_numeric_conds: Set[Expression] = set()
         self._empty_pre_operators: List[Operator] = []
         for o in self._operators:
@@ -247,6 +247,7 @@ class DeleteRelaxationHeuristic(Heuristic):
                 if self._is_numeric_leaf_expression(node):
                     self._update_numeric_conditions(node)
 
+        self._max_net_effect = float("-inf")
         self._achieved_simple_numeric_conds: List[List[Expression]] = [
             [] for _ in self._operators
         ]
@@ -254,6 +255,11 @@ class DeleteRelaxationHeuristic(Heuristic):
             for c in self._simple_numeric_conds:
                 if self._achieves(o, c):
                     self._achieved_simple_numeric_conds[o.id].append(c)
+
+        epsilon = -self._max_net_effect / 2
+        for simple_cond in self._lt_simple_numeric_conds:
+            _, weights = self._simple_numeric_conds[simple_cond]
+            weights[-1] += epsilon
 
         self._internal_caching: Optional[
             Dict[Tuple[Union[bool, int, Fraction, str, None], ...], Optional[float]]
@@ -546,11 +552,17 @@ class DeleteRelaxationHeuristic(Heuristic):
         if fluents_weights is None:
             self._complex_numeric_conds.add(numeric_condition.expression)
         else:
-            self._simple_numeric_conds[numeric_condition.expression] = fluents_weights
+            fluents, weights, is_lt = fluents_weights
+            self._simple_numeric_conds[numeric_condition.expression] = (
+                fluents,
+                weights,
+            )
+            if is_lt:
+                self._lt_simple_numeric_conds.add(numeric_condition.expression)
 
     def _extract_fluents_weights_simple_numeric_condition(
         self, node: LeafNode
-    ) -> Optional[Tuple[List[int], List[float]]]:
+    ) -> Optional[Tuple[List[int], List[float], bool]]:
         exp = node.expression
         if not (isinstance(exp[-1], Op) and exp[-1].kind in ("<", "<=")):
             return None
@@ -562,12 +574,9 @@ class DeleteRelaxationHeuristic(Heuristic):
             return None
 
         k = float(polynomial.pop(None, 0))
-        if exp[-1].kind == "<":
-            k += self._epsilon
-
         fluents: List[int] = list(polynomial.keys())  # type: ignore[arg-type]
         weights: List[float] = [float(polynomial[f]) for f in fluents] + [k]
-        return fluents, weights
+        return fluents, weights, exp[-1].kind == "<"
 
     def _to_linear_polynomial(
         self, exp: Expression
@@ -778,7 +787,7 @@ class DeleteRelaxationHeuristic(Heuristic):
 
     def _achieves(self, operator: Operator, simple_condition: Expression) -> bool:
         fluents, weights = self._simple_numeric_conds[simple_condition]
-        n = 0.0
+        net_effect = 0.0
         for f, w in zip(fluents, weights):
             if (
                 f in operator.constant_assign_effects
@@ -787,9 +796,12 @@ class DeleteRelaxationHeuristic(Heuristic):
                 return True
             if f in operator.constant_increase_effects:
                 k = operator.constant_increase_effects[f]
-                n += w * k
+                net_effect += w * k
 
-        return n < 0.0
+        if net_effect < 0.0 and net_effect > self._max_net_effect:
+            self._max_net_effect = net_effect
+
+        return net_effect < 0.0
 
     def _repetitions(
         self, operator: Operator, simple_condition: Expression, state: State
