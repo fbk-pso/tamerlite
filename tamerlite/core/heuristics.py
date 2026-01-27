@@ -689,6 +689,7 @@ class DeleteRelaxationHeuristic(Heuristic):
         lp = list(costs.keys())
         reached_by: Dict[Expression, Tuple[Operator, List[Expression]]] = {}
         operator_cost: Dict[Operator, float] = {}
+        poss: Dict[Expression, Set[Operator]] = {}
         while len(lp) > 0:
             lo = list(self._empty_pre_operators)
             for p in lp:
@@ -709,7 +710,7 @@ class DeleteRelaxationHeuristic(Heuristic):
                             k = (FluentNode(f), Op("not", (0,)))
                         else:
                             k = (FluentNode(f), e, Op("==", (0, 1)))
-                        achieved_expressions.append((k, 1))
+                        achieved_expressions.append((k, o.cost + c))
 
                     for simple_cond in self._achieved_simple_numeric_conds[o.id]:
                         if costs.get(simple_cond, None) == 0.0:
@@ -718,23 +719,34 @@ class DeleteRelaxationHeuristic(Heuristic):
 
                         rep = self._repetitions(o, simple_cond, state)
                         assert rep is not None
-                        achieved_expressions.append((simple_cond, rep))
 
-                    for exp, rep in achieved_expressions:
-                        if exp in new_costs:
-                            prev_cost_exp = new_costs[exp]
-                        elif exp in costs:
-                            prev_cost_exp = costs[exp]
+                        if self._heuristic_kind == HeuristicKind.HMAX:
+                            if simple_cond not in poss:
+                                poss[simple_cond] = set()
+                            poss[simple_cond].add(o)
+
+                            exp_cost = float(rep) * o.cost + min(  # type: ignore[operator,type-var]
+                                self._cost(o.conditions, costs)[0]
+                                for o in poss[simple_cond]
+                            )
                         else:
-                            prev_cost_exp = None
+                            exp_cost = float(rep) * o.cost + c
+                        achieved_expressions.append((simple_cond, exp_cost))
 
-                        cost_exp = float(rep) * o.cost + c
-                        if prev_cost_exp is None or cost_exp < prev_cost_exp:
+                    for exp, exp_cost in achieved_expressions:
+                        if exp in new_costs:
+                            prev_exp_cost = new_costs[exp]
+                        elif exp in costs:
+                            prev_exp_cost = costs[exp]
+                        else:
+                            prev_exp_cost = None
+
+                        if prev_exp_cost is None or exp_cost < prev_exp_cost:
                             if self._heuristic_kind == HeuristicKind.HFF:
                                 reached_by[exp] = (o, l)
-                            new_costs[exp] = cost_exp
+                            new_costs[exp] = exp_cost
                         elif (
-                            prev_cost_exp == cost_exp
+                            prev_exp_cost == exp_cost
                             and self._heuristic_kind == HeuristicKind.HFF
                             and o.id > reached_by[exp][0].id
                         ):
