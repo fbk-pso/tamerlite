@@ -216,7 +216,7 @@ class DeleteRelaxationHeuristic(Heuristic):
                         )
                     )
                 cond = FluentNode(f)
-        self._goals = self._simplify_numeric_condition(
+        self._goals = self._simplify_condition(
             self._convert_to_heuristic_expression(goals)
         )
         extra_goals: Expression = tuple(
@@ -235,9 +235,7 @@ class DeleteRelaxationHeuristic(Heuristic):
             else:
                 for node in o.conditions:
                     if isinstance(node, LeafNode):
-                        if self._is_numeric_leaf_expression(
-                            node
-                        ) or self._is_fluent_not_equals_object_expression(node):
+                        if self._is_numeric_leaf_expression(node):
                             self._update_numeric_conditions(node)
 
                         if node.expression not in self._precondition_of:
@@ -246,18 +244,16 @@ class DeleteRelaxationHeuristic(Heuristic):
 
         for node in self._goals:
             if isinstance(node, LeafNode):
-                if self._is_numeric_leaf_expression(
-                    node
-                ) or self._is_fluent_not_equals_object_expression(node):
+                if self._is_numeric_leaf_expression(node):
                     self._update_numeric_conditions(node)
 
-        self._achieved_conditions: List[List[Expression]] = [
+        self._achieved_simple_numeric_conds: List[List[Expression]] = [
             [] for _ in self._operators
         ]
         for o in self._operators:
             for c in self._simple_numeric_conds:
                 if self._achieves(o, c):
-                    self._achieved_conditions[o.id].append(c)
+                    self._achieved_simple_numeric_conds[o.id].append(c)
 
         self._internal_caching: Optional[
             Dict[Tuple[Union[bool, int, Fraction, str, None], ...], Optional[float]]
@@ -272,19 +268,22 @@ class DeleteRelaxationHeuristic(Heuristic):
         if self._heuristic_kind == HeuristicKind.HMAX:
             return "hmax"
 
-    def _simplify_numeric_condition(
+    def _simplify_condition(
         self, condition: HeuristicExpression
     ) -> HeuristicExpression:
         new_condition: List[HeuristicExpressionNode] = []
         for node in condition:
-            if isinstance(node, LeafNode) and self._is_numeric_leaf_expression(node):
-                nodes = self._simplify_numeric_leaf_node(node)
-                if nodes is None:
-                    new_condition.append(node)
+            new_nodes = None
+            if isinstance(node, LeafNode):
+                if self._is_numeric_leaf_expression(node):
+                    new_nodes = self._simplify_numeric_leaf_node(node)
                 else:
-                    new_condition.extend(nodes)
-            else:
+                    new_nodes = self._simplify_fluent_not_equals_object_expression(node)
+
+            if new_nodes is None:
                 new_condition.append(node)
+            else:
+                new_condition.extend(new_nodes)
 
         return tuple(new_condition)
 
@@ -347,6 +346,30 @@ class DeleteRelaxationHeuristic(Heuristic):
 
         return nodes
 
+    def _simplify_fluent_not_equals_object_expression(
+        self, node: LeafNode
+    ) -> Optional[HeuristicExpression]:
+        exp = node.expression
+        if (
+            len(exp) == 4
+            and isinstance(exp[0], FluentNode)
+            and isinstance(exp[1], str)
+            and isinstance(exp[2], Op)
+            and exp[2].kind == "=="
+            and isinstance(exp[3], Op)
+            and exp[3].kind == "not"
+        ):
+            nodes: List[HeuristicExpressionNode] = []
+            for obj in self._objects[self._fluent_types[exp[0].fluent]]:
+                if obj != exp[1]:
+                    nodes.append(LeafNode((exp[0], obj, Op("==", (0, 1)))))
+            if len(nodes) == 0:
+                return (LeafNode((False,)),)
+            if len(nodes) > 1:
+                nodes.append(OrNode(len(nodes)))
+            return tuple(nodes)
+        return None
+
     def _build_operator_condition(
         self, condition: Expression, extra_fluent: FluentNode
     ) -> Tuple[bool, HeuristicExpression]:
@@ -388,7 +411,7 @@ class DeleteRelaxationHeuristic(Heuristic):
                 Op("and", (len(condition) - 1, len(condition))),
             )
 
-        return True, self._simplify_numeric_condition(
+        return True, self._simplify_condition(
             self._convert_to_heuristic_expression(condition)
         )
 
@@ -486,18 +509,6 @@ class DeleteRelaxationHeuristic(Heuristic):
             constant_increase_effects[effect.fluent] = k
         else:
             complex_numeric_effects[effect.fluent] = effect.value
-
-    def _is_fluent_not_equals_object_expression(self, node: LeafNode) -> bool:
-        exp = node.expression
-        return (
-            len(exp) == 4
-            and isinstance(exp[0], FluentNode)
-            and isinstance(exp[1], str)
-            and isinstance(exp[2], Op)
-            and exp[2].kind == "=="
-            and isinstance(exp[3], Op)
-            and exp[3].kind == "not"
-        )
 
     def _is_numeric_leaf_expression(self, node: LeafNode) -> bool:
         """
@@ -691,7 +702,7 @@ class DeleteRelaxationHeuristic(Heuristic):
                             k = (FluentNode(f), e, Op("==", (0, 1)))
                         achieved_expressions.append((k, 1))
 
-                    for simple_cond in self._achieved_conditions[o.id]:
+                    for simple_cond in self._achieved_simple_numeric_conds[o.id]:
                         if costs.get(simple_cond, None) == 0.0:
                             # condition satisfied in state
                             continue
