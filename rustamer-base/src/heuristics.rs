@@ -205,6 +205,8 @@ struct CacheKey {
 fn build_operator_condition(
     condition: &Vec<ExpressionNode>,
     extra_fluent: ExpressionNode,
+    objects: &FxHashMap<String, Vec<String>>,
+    fluent_types: &Vec<String>,
     expression_manager: &mut ExpressionManager,
 ) -> Result<Option<HeuristicExpression>, ArithmeticError> {
     // If the condition is explicitly False, the operator is not applicable
@@ -238,7 +240,7 @@ fn build_operator_condition(
     };
 
     let condition = convert_to_heuristic_expression(&conditions, expression_manager)?;
-    let condition = simplify_numeric_condition(&condition, expression_manager)?;
+    let condition = simplify_condition(&condition, objects, fluent_types, expression_manager)?;
     Ok(Some(condition))
 }
 
@@ -309,21 +311,31 @@ fn convert_to_heuristic_expression(
     })
 }
 
-fn simplify_numeric_condition(
+fn simplify_condition(
     condition: &HeuristicExpression,
+    objects: &FxHashMap<String, Vec<String>>,
+    fluent_types: &Vec<String>,
     expression_manager: &mut ExpressionManager,
 ) -> Result<HeuristicExpression, ArithmeticError> {
     let mut new_condition = Vec::with_capacity(condition.expression.len());
     let mut contains_or_node = condition.contains_or_node;
     for node in &condition.expression {
         if let HeuristicExpressionNode::Leaf(expr) = node {
-            if is_numeric_leaf_expression(expression_manager.force_get(expr)) {
-                let simplified_expr = simplify_numeric_leaf_node(expr, expression_manager)?;
-                if let Some(mut simplified_expr) = simplified_expr {
-                    contains_or_node |= simplified_expr.contains_or_node;
-                    new_condition.append(&mut simplified_expr.expression);
-                    continue;
-                }
+            let simplified_expr = if is_numeric_leaf_expression(expression_manager.force_get(expr))
+            {
+                simplify_numeric_leaf_node(expr, expression_manager)?
+            } else {
+                simplify_fluent_not_equals_object_expression(
+                    expr,
+                    objects,
+                    fluent_types,
+                    expression_manager,
+                )
+            };
+            if let Some(mut simplified_expr) = simplified_expr {
+                contains_or_node |= simplified_expr.contains_or_node;
+                new_condition.append(&mut simplified_expr.expression);
+                continue;
             }
         }
         new_condition.push(node.clone())
@@ -475,6 +487,57 @@ fn inverted_operands(
     ))
 }
 
+fn simplify_fluent_not_equals_object_expression(
+    expr: &Expression,
+    objects: &FxHashMap<String, Vec<String>>,
+    fluent_types: &Vec<String>,
+    expression_manager: &mut ExpressionManager,
+) -> Option<HeuristicExpression> {
+    let expr = expression_manager.force_get(expr).clone();
+    let [ExpressionNode::Fluent(f), ExpressionNode::Object(o), ExpressionNode::Equals(_, _), ExpressionNode::Not(_)] =
+        expr.as_slice()
+    else {
+        return None;
+    };
+
+    let t = fluent_types.get(*f)?;
+    let objs = objects.get(t)?;
+
+    let mut nodes: Vec<_> = objs
+        .iter()
+        .filter(|obj| *obj != o)
+        .map(|obj| {
+            let leaf_expr = expression_manager.put(&vec![
+                ExpressionNode::Fluent(*f),
+                ExpressionNode::Object(obj.clone()),
+                ExpressionNode::Equals(0, 1),
+            ]);
+            HeuristicExpressionNode::Leaf(leaf_expr)
+        })
+        .collect();
+
+    let res = if nodes.is_empty() {
+        let false_expr = vec![ExpressionNode::Bool(false)];
+        let false_expr = expression_manager.put(&false_expr);
+        HeuristicExpression {
+            expression: vec![HeuristicExpressionNode::Leaf(false_expr)],
+            contains_or_node: false,
+        }
+    } else if nodes.len() > 1 {
+        nodes.push(HeuristicExpressionNode::Or(nodes.len()));
+        HeuristicExpression {
+            expression: nodes,
+            contains_or_node: true,
+        }
+    } else {
+        HeuristicExpression {
+            expression: nodes,
+            contains_or_node: false,
+        }
+    };
+    Some(res)
+}
+
 fn update_numeric_effects(
     effect: &Effect,
     expression_manager: &mut ExpressionManager,
@@ -506,14 +569,6 @@ fn update_numeric_effects(
     } else {
         complex_numeric_effects.insert(effect.fluent, expression_manager.put(&effect.value));
     }
-}
-
-fn is_fluent_not_equals_object_expression(expr: &Vec<ExpressionNode>) -> bool {
-    expr.len() == 4
-        && matches!(expr[0], ExpressionNode::Fluent(_))
-        && matches!(expr[1], ExpressionNode::Object(_))
-        && matches!(expr[2], ExpressionNode::Equals(_, _))
-        && matches!(expr[3], ExpressionNode::Not(_))
 }
 
 /// Determine if a leaf expression represents a numeric expression.
@@ -775,7 +830,7 @@ pub struct DeleteRelaxationHeuristic {
     empty_pre_operators: FxHashSet<OperatorID>,
     simple_numeric_conds: FxHashMap<Expression, (Vec<usize>, Vec<f64>)>,
     complex_numeric_conds: FxHashSet<Expression>,
-    achieved_conditions: Vec<Vec<Expression>>,
+    achieved_simple_numeric_conds: Vec<Vec<Expression>>,
     heuristic_kind: HeuristicKind,
     internal_caching: Arc<Mutex<Option<FxHashMap<CacheKey, Option<f64>>>>>,
     expression_manager: Arc<Mutex<ExpressionManager>>,
@@ -798,6 +853,7 @@ impl DeleteRelaxationHeuristic {
         let mut expression_manager = ExpressionManager::new();
         let mut num_fluents = fluent_types.len();
         let epsilon = 0.000001;
+        let map_to_python_exception = |e| PyException::new_err(format!("{:?}", e));
 
         for a in &actions {
             let Some(le) = events.get(a) else {
@@ -887,9 +943,14 @@ impl DeleteRelaxationHeuristic {
                     }
                 }
 
-                if let Some(conditions) =
-                    build_operator_condition(&e.conditions, cond.clone(), &mut expression_manager)
-                        .map_err(|e| PyException::new_err(format!("{:?}", e)))?
+                if let Some(conditions) = build_operator_condition(
+                    &e.conditions,
+                    cond.clone(),
+                    &objects,
+                    &fluent_types,
+                    &mut expression_manager,
+                )
+                .map_err(map_to_python_exception)?
                 {
                     operators.push(Operator {
                         id: OperatorID::new(operators.len()),
@@ -910,12 +971,12 @@ impl DeleteRelaxationHeuristic {
 
         let expr_goals = goals.into_iter().map(|e| e.v).collect();
         let goals = convert_to_heuristic_expression(&expr_goals, &mut expression_manager)
-            .map_err(|e| PyException::new_err(format!("{:?}", e)))?;
-        let goals = simplify_numeric_condition(&goals, &mut expression_manager)
-            .map_err(|e| PyException::new_err(format!("{:?}", e)))?;
+            .map_err(map_to_python_exception)?;
+        let goals = simplify_condition(&goals, &objects, &fluent_types, &mut expression_manager)
+            .map_err(map_to_python_exception)?;
         extra_goals.push(ExpressionNode::And((0..extra_goals.len()).collect()));
         let extra_goals = convert_to_heuristic_expression(&extra_goals, &mut expression_manager)
-            .map_err(|e| PyException::new_err(format!("{:?}", e)))?;
+            .map_err(map_to_python_exception)?;
 
         let mut precondition_of: FxHashMap<Expression, Vec<OperatorID>> =
             FxHashMap::with_hasher(FxBuildHasher::default());
@@ -932,9 +993,7 @@ impl DeleteRelaxationHeuristic {
                 for node in &o.conditions.expression {
                     if let HeuristicExpressionNode::Leaf(e) = node {
                         let expr = expression_manager.force_get(e);
-                        if is_numeric_leaf_expression(expr)
-                            || is_fluent_not_equals_object_expression(expr)
-                        {
+                        if is_numeric_leaf_expression(expr) {
                             update_numeric_conditions(
                                 e,
                                 &expression_manager,
@@ -956,8 +1015,7 @@ impl DeleteRelaxationHeuristic {
         for node in goals.expression.iter() {
             if let HeuristicExpressionNode::Leaf(e) = node {
                 let expr = expression_manager.force_get(e);
-                if is_numeric_leaf_expression(expr) || is_fluent_not_equals_object_expression(expr)
-                {
+                if is_numeric_leaf_expression(expr) {
                     update_numeric_conditions(
                         e,
                         &expression_manager,
@@ -969,11 +1027,12 @@ impl DeleteRelaxationHeuristic {
             }
         }
 
-        let mut achieved_conditions: Vec<Vec<Expression>> = vec![Vec::new(); operators.len()];
+        let mut achieved_simple_numeric_conds: Vec<Vec<Expression>> =
+            vec![Vec::new(); operators.len()];
         for o in &operators {
             for (c, (fluents, weights)) in &simple_numeric_conds {
                 if achieves(o, fluents, weights) {
-                    achieved_conditions[o.id.id].push(*c);
+                    achieved_simple_numeric_conds[o.id.id].push(*c);
                 }
             }
         }
@@ -998,7 +1057,7 @@ impl DeleteRelaxationHeuristic {
             empty_pre_operators,
             simple_numeric_conds,
             complex_numeric_conds,
-            achieved_conditions,
+            achieved_simple_numeric_conds,
             heuristic_kind,
             internal_caching: Arc::new(Mutex::new(internal_caching)),
             expression_manager: Arc::new(Mutex::new(expression_manager)),
@@ -1117,7 +1176,7 @@ impl DeleteRelaxationHeuristic {
                     let mut achieved_expressions: Vec<_> =
                         o.effects.iter().map(|k| (k, 1.0)).collect();
 
-                    for simple_cond in &self.achieved_conditions[oid.id] {
+                    for simple_cond in &self.achieved_simple_numeric_conds[oid.id] {
                         if costs.get(simple_cond) == Some(&0.0) {
                             // condition satisfied in state
                             continue;
