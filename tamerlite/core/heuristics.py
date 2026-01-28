@@ -279,6 +279,26 @@ class DeleteRelaxationHeuristic(Heuristic):
     def _simplify_condition(
         self, condition: HeuristicExpression
     ) -> HeuristicExpression:
+        """Simplify leaf expressions in a condition.
+
+        Each `LeafNode` in the condition is rewritten when possible.
+        The following simplifications are applied:
+
+        - Simple numeric leaf expressions containing logical negation (`not`) or equality
+        (`==`) are simplified, unless numeric reasoning is disabled.
+        - Fluent-object inequality expressions (`fluent != object`) are
+        rewritten into an equivalent form.
+
+        Non-leaf nodes or leaf nodes that do not match any simplification rule
+        are left unchanged.
+
+        Args:
+            condition: A heuristic expression.
+
+        Returns:
+            A new heuristic expression with simplified leaf nodes.
+        """
+
         new_condition: List[HeuristicExpressionNode] = []
         for node in condition:
             new_nodes = None
@@ -301,6 +321,23 @@ class DeleteRelaxationHeuristic(Heuristic):
     def _simplify_numeric_leaf_node(
         self, node: LeafNode
     ) -> Optional[HeuristicExpression]:
+        """Simplify a simple numeric leaf node expression.
+
+        This method rewrites numeric leaf expressions containing logical negation (`not`)
+        or equality (`==`) into simpler equivalent expressions suitable for heuristic
+        evaluation. Specifically, it transforms:
+
+        - `a == b` into `a <= b and b <= a`.
+        - `not(a == b)` into `a < b or b < a`
+        - `not(a < b)` into `b <= a`
+        - `not(a <= b)` into `b < a`
+
+        Args:
+            node: A `LeafNode` containing a numeric expression.
+
+        Returns:
+            A new `HeuristicExpression` if simplification is possible; otherwise, `None`.
+        """
 
         def inverted_operands(exp: Expression, op: Op):
             op2_start = op.operands[0] + 1
@@ -348,6 +385,7 @@ class DeleteRelaxationHeuristic(Heuristic):
                         )
 
         if nodes is not None:
+            # Check whether the leaf node represents a simple numeric expression
             exp = nodes[0].expression  # type: ignore[union-attr]
             polynomial_exp = exp[:-1] + (Op("-", exp[-1].operands),)  # type: ignore
             try:
@@ -360,6 +398,23 @@ class DeleteRelaxationHeuristic(Heuristic):
     def _simplify_fluent_not_equals_object_expression(
         self, node: LeafNode
     ) -> Optional[HeuristicExpression]:
+        """Simplify a leaf expression of the form `fluent != object`.
+
+        This method rewrites inequality expressions between a fluent and a specific
+        object into an equivalent disjunction of equalities:
+
+            `fluent != objX` into `fluent == obj1 or fluent == obj2 or ...`
+
+        where `obj1, obj2, ...` are all objects of the fluent's type except `objX`.
+
+        Args:
+            node: A `LeafNode` potentially representing a `fluent != object` expression.
+
+        Returns:
+            A new `HeuristicExpression` representing the disjunction of equality
+            expressions if simplification is possible; otherwise, `None`.
+        """
+
         exp = node.expression
         if (
             len(exp) == 4
@@ -504,6 +559,26 @@ class DeleteRelaxationHeuristic(Heuristic):
         constant_assign_effects: Dict[int, Union[int, Fraction]],
         complex_numeric_effects: Dict[int, Expression],
     ):
+        """Processes a numeric effect and categorizes it into one of three
+        types:
+
+        1. **Constant assignment:** If the effect is a single numeric value, it is
+        stored in `constant_assign_effects`.
+        2. **Constant increase:** If the effect represents a linear increase of a
+        fluent by a constant amount, it is stored in `constant_increase_effects`.
+        3. **Complex numeric effect:** If the effect is non-linear or cannot be
+        simplified to a constant increase, it is stored in `complex_numeric_effects`.
+
+        Args:
+            effect: The numeric effect to process.
+            constant_increase_effects: Mapping from fluent to constant increase
+                values, updated if the effect is a simple increase.
+            constant_assign_effects: Mapping from fluent to constant assignment
+                values, updated if the effect is a constant numeric assignment.
+            complex_numeric_effects: Mapping from fluent to expressions for
+                effects that are complex.
+        """
+
         if len(effect.value) == 1 and isinstance(effect.value[0], (int, Fraction)):
             constant_assign_effects[effect.fluent] = effect.value[0]
             return
@@ -551,6 +626,18 @@ class DeleteRelaxationHeuristic(Heuristic):
         return False
 
     def _update_numeric_conditions(self, numeric_condition: LeafNode):
+        """Processes a numeric condition represented as a `LeafNode` and
+        classifies it as either **simple** or **complex**:
+
+        - If numeric reasoning is disabled, the condition is always treated as complex.
+        - If the condition can be represented as a simple linear numeric expression,
+        it is stored in `_simple_numeric_conds` along with its fluents and weights.
+        - Conditions that cannot be simplified are stored in `_complex_numeric_conds`.
+
+        Args:
+            numeric_condition: A `LeafNode` representing a numeric condition.
+        """
+
         if self._disable_numeric_reasoning:
             self._complex_numeric_conds.add(numeric_condition.expression)
             return
@@ -572,6 +659,25 @@ class DeleteRelaxationHeuristic(Heuristic):
     def _extract_fluents_weights_simple_numeric_condition(
         self, node: LeafNode
     ) -> Optional[Tuple[List[int], List[float], bool]]:
+        """Extracts fluents and weights from a simple numeric condition.
+
+        This method attempts to interpret a numeric condition of the form
+        `linear-expression < constant` or `linear-expression <= constant` as a
+        linear polynomial and extract its components:
+
+        - `fluents`: List of fluents appearing in the expression.
+        - `weights`: Corresponding coefficients of the fluents, with the constant
+        term appended as the last element.
+        - `is_lt`: True if the original operator was `<`, False if `<=`.
+
+        Args:
+            node: A `LeafNode` representing a condition.
+
+        Returns:
+            A tuple `(fluents, weights, is_lt)` if the condition is a simple linear
+            numeric condition; otherwise, `None`.
+        """
+
         exp = node.expression
         if not (isinstance(exp[-1], Op) and exp[-1].kind in ("<", "<=")):
             return None
@@ -590,6 +696,30 @@ class DeleteRelaxationHeuristic(Heuristic):
     def _to_linear_polynomial(
         self, exp: Expression
     ) -> Dict[Optional[int], Union[int, Fraction]]:
+        """Converts an expression into a linear polynomial representation.
+
+        This method attempts to represent a numeric expression as a linear
+        polynomial of the form:
+
+            w1 * f1 + w2 * f2 + ... + k
+
+        where `fi` are fluents, `wi` are their coefficients, and `k` is a constant
+        term.
+
+        Supported operations in the expression are `+`, `-`, `*`, and `/`, provided
+        they maintain linearity. If the expression is non-linear (e.g., product of
+        two fluents, division by a fluent), a `ValueError` is raised.
+
+        Args:
+            exp: The numeric expression.
+
+        Returns:
+            A dictionary mapping fluents to coefficients and `None` to the constant term.
+
+        Raises:
+            ValueError: If the expression is non-linear or contains unsupported operations.
+        """
+
         res: List[Dict[Optional[int], Union[int, Fraction]]] = []
         for node in exp:
             if isinstance(node, (int, Fraction)):
@@ -667,6 +797,19 @@ class DeleteRelaxationHeuristic(Heuristic):
         return res
 
     def _eval_core(self, state: State) -> Optional[float]:
+        """Compute the heuristic value for a given state.
+
+        This method evaluates the state using the selected delete-relaxation heuristic,
+        which can be one of `hmax`, `hadd`, or `hff`. The returned value estimates
+        the cost to reach the goal from the given state.
+
+        Args:
+            state: The state to evaluate.
+
+        Returns:
+            The heuristic value as a float if computable; otherwise, `None`.
+        """
+
         costs: Dict[Expression, float] = {}
         for f, v in enumerate(state.assignments):
             if v == True:
@@ -807,6 +950,23 @@ class DeleteRelaxationHeuristic(Heuristic):
         return float(res)
 
     def _achieves(self, operator: Operator, simple_condition: Expression) -> bool:
+        """Check whether an operator achieves a given simple numeric condition.
+
+        The check considers:
+        - If the operator has a constant assignment or complex effect on any of the
+        condition's fluents, the condition is considered achieved.
+        - Otherwise, it computes the net effect of the operator on the
+        condition. If the net effect is negative, the condition is potentially
+        achieved.
+
+        Args:
+            operator: The operator whose effects are being evaluated.
+            simple_condition: A simple numeric condition expression.
+
+        Returns:
+            True if the operator achieves the condition; otherwise, False.
+        """
+
         fluents, weights = self._simple_numeric_conds[simple_condition]
         net_effect = 0.0
         for f, w in zip(fluents, weights):
@@ -827,6 +987,28 @@ class DeleteRelaxationHeuristic(Heuristic):
     def _repetitions(
         self, operator: Operator, simple_condition: Expression, state: State
     ) -> Optional[int]:
+        """Estimate how many applications of an operator are needed to satisfy a simple numeric condition.
+
+        This method computes the minimum number of times `operator` must be applied
+        to a given `state` for the `simple_condition` to become satisfied.
+
+        The computation follows these rules:
+        - If the operator has a constant assignment or complex effect on any fluent
+        in the condition, return 1, assuming one application is sufficient.
+        - Otherwise, compute the net effect of the operator on the condition and
+        return the minimum number of repetitions needed.
+
+        Args:
+            operator: The operator whose effects are being evaluated.
+            simple_condition: A simple numeric condition expression.
+            state: The state on which the condition is evaluated.
+
+        Returns:
+            The minimum number of operator applications required to satisfy the
+            condition, 0 if already satisfied, 1 if a constant/complex effect applies,
+            or `None` if the condition cannot be satisfied.
+        """
+
         fluents, weights = self._simple_numeric_conds[simple_condition]
         v = weights[-1]
         for f, w in zip(fluents, weights):
@@ -843,16 +1025,16 @@ class DeleteRelaxationHeuristic(Heuristic):
             ):
                 return 1
 
-        n = 0.0
+        net_effect = 0.0
         for f, w in zip(fluents, weights):
             if f in operator.constant_increase_effects:
                 k = operator.constant_increase_effects[f]
-                n += w * k
+                net_effect += w * k
 
-        if n >= 0.0:
+        if net_effect >= 0.0:
             return None
 
-        return math.ceil(-v / n)
+        return math.ceil(-v / net_effect)
 
     def _cost(
         self, exp: HeuristicExpression, costs: Dict[Expression, float]
