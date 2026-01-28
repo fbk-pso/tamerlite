@@ -318,6 +318,35 @@ fn convert_to_heuristic_expression(
     })
 }
 
+/// Simplifies leaf expressions in a condition.
+///
+/// Each leaf node in the condition is rewritten when possible. The following
+/// simplifications are applied:
+///
+/// - Simple numeric leaf expressions containing logical negation (`not`) or
+///   equality (`==`) are simplified, unless numeric reasoning is disabled.
+/// - Fluent-object inequality expressions (`fluent != object`) are rewritten
+///   into an equivalent form.
+///
+/// Non-leaf nodes or leaf nodes that do not match any simplification rule are
+/// left unchanged.
+///
+/// # Arguments
+///
+/// * `condition` - The expression to simplify.
+/// * `objects` - Mapping from type names to their objects, used for fluent-object inequalities.
+/// * `fluent_types` - List of fluent type names.
+/// * `disable_numeric_reasoning` - If true, numeric simplifications are skipped.
+/// * `expression_manager` - A mutable reference to the `ExpressionManager`.
+///
+/// # Returns
+///
+/// Returns a new `HeuristicExpression` with simplified leaf nodes.
+///
+/// # Errors
+///
+/// Returns an `ArithmeticError` if a numeric simplification fails due to
+/// an arithmetic error.
 fn simplify_condition(
     condition: &HeuristicExpression,
     objects: &FxHashMap<String, Vec<String>>,
@@ -356,6 +385,31 @@ fn simplify_condition(
     })
 }
 
+/// Simplifies a simple numeric expression.
+///
+/// This function rewrites numeric expressions containing logical negation (`not`)
+/// or equality (`==`) into simpler equivalent expressions suitable for heuristic
+/// evaluation. Specifically, it transforms:
+///
+/// - `a == b` into `a <= b and b <= a`.
+/// - `not(a == b)` into `a < b or b < a`
+/// - `not(a < b)` into `b <= a`
+/// - `not(a <= b)` into `b < a`
+///
+/// # Arguments
+///
+/// * `expr` - The numeric expression to simplify.
+/// * `expression_manager` - A mutable reference to the `ExpressionManager`.
+///
+/// # Returns
+///
+/// Returns `Ok(Some(HeuristicExpression))` if simplification is possible,
+/// `Ok(None)` if the expression cannot be simplified.
+///
+/// # Errors
+///
+/// Returns an `ArithmeticError` if a numeric simplification fails due to
+/// an arithmetic error.
 fn simplify_numeric_leaf_node(
     expr: &Expression,
     expression_manager: &mut ExpressionManager,
@@ -496,6 +550,27 @@ fn inverted_operands(
     ))
 }
 
+/// Simplifies a leaf expression of the form `fluent != object`.
+///
+/// This function rewrites inequality expressions between a fluent and a specific
+/// object into an equivalent disjunction of equalities:
+///
+/// `fluent != objX` into `fluent == obj1 or fluent == obj2 or ...`
+///
+/// where `obj1, obj2, ...` are all objects of the fluent's type except `objX`.
+///
+/// # Arguments
+///
+/// * `expr` - The expression to simplify.
+/// * `objects` - Mapping from type names to their available objects.
+/// * `fluent_types` - List of fluent type names.
+/// * `expression_manager` - A mutable reference to the `ExpressionManager`.
+///
+/// # Returns
+///
+/// Returns `Some(HeuristicExpression)` representing the disjunction of equality
+/// expressions if simplification is possible, or `None` if the expression is not
+/// of the form `fluent != object`.
 fn simplify_fluent_not_equals_object_expression(
     expr: &Expression,
     objects: &FxHashMap<String, Vec<String>>,
@@ -547,6 +622,25 @@ fn simplify_fluent_not_equals_object_expression(
     Some(res)
 }
 
+/// Processes a numeric effect and categorizes it into one of three types:
+///
+/// 1. **Constant assignment:** If the effect is a single numeric value, it is
+///    stored in `constant_assign_effects`.
+/// 2. **Constant increase:** If the effect represents a linear increase of a
+///    fluent by a constant amount, it is stored in `constant_increase_effects`.
+/// 3. **Complex numeric effect:** If the effect is non-linear or cannot be
+///    simplified to a constant increase, it is stored in `complex_numeric_effects`.
+///
+/// # Arguments
+///
+/// * `effect` - The numeric effect to process.
+/// * `expression_manager` - A mutable reference to the `ExpressionManager`.
+/// * `constant_increase_effects` - Mutable mapping from fluents to constant
+///   increase values; updated if the effect is a simple increase.
+/// * `constant_assign_effects` - Mutable mapping from fluents to constant
+///   assignment values; updated if the effect is a constant numeric assignment.
+/// * `complex_numeric_effects` - Mutable mapping from fluents to expressions
+///   for effects that are complex.
 fn update_numeric_effects(
     effect: &Effect,
     expression_manager: &mut ExpressionManager,
@@ -610,6 +704,24 @@ fn is_numeric_leaf_expression(expr: &Vec<ExpressionNode>) -> bool {
     }
 }
 
+/// Processes a numeric condition and classifies it as simple or complex:
+///
+/// - If numeric reasoning is disabled, the condition is always treated as complex.
+/// - If the condition can be represented as a simple linear numeric expression,
+///   it is stored in `simple_numeric_conds` along with its fluents and weights.
+/// - Conditions that cannot be simplified are stored in `complex_numeric_conds`.
+///
+/// # Arguments
+///
+/// * `numeric_condition` - The numeric condition to process.
+/// * `expression_manager` - A mutable reference to the `ExpressionManager`.
+/// * `simple_numeric_conds` - Mutable mapping from expressions to tuples of fluents
+///   and weights for simple numeric conditions.
+/// * `lt_simple_numeric_conds` - Mutable set of expressions that are simple numeric
+///   conditions that have the `<` operator.
+/// * `complex_numeric_conds` - Mutable set of expressions that are complex and
+///   cannot be simplified.
+/// * `disable_numeric_reasoning` - If true, numeric simplifications are skipped.
 fn update_numeric_conditions(
     numeric_condition: &Expression,
     expression_manager: &ExpressionManager,
@@ -635,6 +747,26 @@ fn update_numeric_conditions(
     }
 }
 
+/// Extracts fluents and weights from a simple numeric condition.
+///
+/// This function attempts to interpret a numeric condition of the form
+/// `linear_expression < constant` or `linear_expression <= constant` as a
+/// linear polynomial and extract its components:
+///
+/// - `fluents`: A vector of fluents appearing in the expression.
+/// - `weights`: Corresponding coefficients of the fluents, with the constant
+///   term appended as the last element.
+/// - `is_lt`: `true` if the original operator was `<`, `false` if `<=`.
+///
+/// # Arguments
+///
+/// * `expr` - The expression to analyze.
+/// * `expression_manager` - A mutable reference to the `ExpressionManager`.
+///
+/// # Returns
+///
+/// Returns `Some((fluents, weights, is_lt))` if the condition is a simple linear
+/// numeric condition; otherwise, returns `None`.
 fn extract_fluents_weights_simple_numeric_condition(
     expr: &Expression,
     expression_manager: &ExpressionManager,
@@ -662,6 +794,28 @@ fn extract_fluents_weights_simple_numeric_condition(
     ))
 }
 
+/// Converts an expression into a linear polynomial representation.
+///
+/// This function attempts to represent a numeric expression as a linear polynomial of the form:
+///
+/// ```text
+/// w1 * f1 + w2 * f2 + ... + k
+/// ```
+///
+/// where `fi` are fluents, `wi` are their coefficients, and `k` is a constant term.
+///
+/// Supported operations are `+`, `-`, `*`, and `/`, provided they maintain linearity.
+/// If the expression is non-linear (e.g., a product of two fluents or division by a fluent),
+/// the function returns `None`.
+///
+/// # Arguments
+///
+/// * `expr` - A vector of `ExpressionNode` representing the numeric expression.
+///
+/// # Returns
+///
+/// Returns `Some(FxHashMap<Option<usize>, f64>)` mapping fluents to coefficients,
+/// with `None` representing the constant term. Returns `None` if the expression is non-linear.
 fn to_linear_polynomial(expr: &Vec<ExpressionNode>) -> Option<FxHashMap<Option<usize>, f64>> {
     let mut res = Vec::new();
     for node in expr {
@@ -738,6 +892,29 @@ fn is_constant(polynomial: &FxHashMap<Option<usize>, f64>) -> bool {
     polynomial.len() == 1 && polynomial.contains_key(&None)
 }
 
+/// Checks whether an operator achieves a given simple numeric condition.
+///
+/// The check considers:
+/// - If the operator has a constant assignment or complex effect on any of the
+///   fluents, the condition is considered achieved.
+/// - Otherwise, the net effect of the operator on the condition is
+///   computed. If the net effect is negative, the condition is considered
+///   potentially achieved.
+///
+/// The `max_net_effect` is updated if the current net effect is the largest
+/// negative effect seen so far.
+///
+/// # Arguments
+///
+/// * `operator` - The operator whose effects are being evaluated.
+/// * `fluents` - Vector of fluents involved in the condition.
+/// * `weights` - Corresponding weights for each fluent in the condition.
+/// * `max_net_effect` - Mutable reference to the maximum negative net effect
+///   seen so far; updated if current net effect is larger.
+///
+/// # Returns
+///
+/// Returns `true` if the operator achieves the condition, otherwise `false`.
 fn achieves(
     operator: &Operator,
     fluents: &Vec<usize>,
@@ -761,6 +938,31 @@ fn achieves(
     net_effect < 0.0
 }
 
+/// Estimates the number of applications of an operator needed to satisfy a simple numeric condition.
+///
+/// This function computes the minimum number of times `operator` must be applied
+/// to a given `state` for the numeric condition represented by `fluents` and `weights`
+/// to become satisfied.
+///
+/// The computation follows these rules:
+/// - If the condition is already satisfied in the state, returns 0.
+/// - If the operator has a constant assignment or complex effect on any fluent
+///   in the condition, returns 1, assuming one application is sufficient.
+/// - Otherwise, computes the net effect of the operator on the condition and
+///   return the minimum number of repetitions needed.
+///
+/// # Arguments
+///
+/// * `operator` - The operator whose effects are being evaluated.
+/// * `fluents` - Vector of fluents involved in the condition.
+/// * `weights` - Corresponding weights for each fluent, with the constant term last.
+/// * `state` - The state on which the condition is evaluated.
+///
+/// # Returns
+///
+/// Returns `Ok(Some(value))` with the minimum number of applications needed to satisfy
+/// the condition, `Ok(Some(0.0))` if already satisfied, `Ok(Some(1.0))` if a constant/complex
+/// effect applies, or `Ok(None)` if the condition cannot be satisfied.
 fn repetitions(
     operator: &Operator,
     fluents: &Vec<usize>,
@@ -786,18 +988,18 @@ fn repetitions(
         }
     }
 
-    let mut n = 0.0;
+    let mut net_effect = 0.0;
     for (f, w) in fluents.iter().zip(weights) {
         if let Some(k) = operator.constant_increase_effects.get(f) {
-            n += w * k;
+            net_effect += w * k;
         }
     }
 
-    if n >= 0.0 {
+    if net_effect >= 0.0 {
         return Ok(None);
     }
 
-    Ok(Some((-v / n).ceil()))
+    Ok(Some((-v / net_effect).ceil()))
 }
 
 /// Extract the sub-expression from a given expression rooted at a specified index.
@@ -1135,6 +1337,20 @@ impl DeleteRelaxationHeuristic {
         }
     }
 
+    /// Computes the heuristic value for a given state.
+    ///
+    /// This method evaluates the state using the selected delete-relaxation heuristic,
+    /// which can be one of `hmax`, `hadd`, or `hff`. The returned value estimates
+    /// the cost to reach the goal from the given state.
+    ///
+    /// # Arguments
+    ///
+    /// * `state` - The state to evaluate.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(Some(value))` with the heuristic value as a floating-point number
+    /// if it can be computed, or `Ok(None)` if the heuristic cannot be evaluated.
     fn _eval(&self, state: &State) -> PyResult<Option<f64>> {
         let mut expression_manager = self.expression_manager.lock().unwrap();
         let mut costs: FxHashMap<Expression, f64> = FxHashMap::with_capacity_and_hasher(
