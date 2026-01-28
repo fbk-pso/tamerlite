@@ -207,6 +207,7 @@ fn build_operator_condition(
     extra_fluent: ExpressionNode,
     objects: &FxHashMap<String, Vec<String>>,
     fluent_types: &Vec<String>,
+    disable_numeric_reasoning: bool,
     expression_manager: &mut ExpressionManager,
 ) -> Result<Option<HeuristicExpression>, ArithmeticError> {
     // If the condition is explicitly False, the operator is not applicable
@@ -240,7 +241,13 @@ fn build_operator_condition(
     };
 
     let condition = convert_to_heuristic_expression(&conditions, expression_manager)?;
-    let condition = simplify_condition(&condition, objects, fluent_types, expression_manager)?;
+    let condition = simplify_condition(
+        &condition,
+        objects,
+        fluent_types,
+        disable_numeric_reasoning,
+        expression_manager,
+    )?;
     Ok(Some(condition))
 }
 
@@ -315,13 +322,15 @@ fn simplify_condition(
     condition: &HeuristicExpression,
     objects: &FxHashMap<String, Vec<String>>,
     fluent_types: &Vec<String>,
+    disable_numeric_reasoning: bool,
     expression_manager: &mut ExpressionManager,
 ) -> Result<HeuristicExpression, ArithmeticError> {
     let mut new_condition = Vec::with_capacity(condition.expression.len());
     let mut contains_or_node = condition.contains_or_node;
     for node in &condition.expression {
         if let HeuristicExpressionNode::Leaf(expr) = node {
-            let simplified_expr = if is_numeric_leaf_expression(expression_manager.force_get(expr))
+            let simplified_expr = if !disable_numeric_reasoning
+                && is_numeric_leaf_expression(expression_manager.force_get(expr))
             {
                 simplify_numeric_leaf_node(expr, expression_manager)?
             } else {
@@ -607,7 +616,13 @@ fn update_numeric_conditions(
     simple_numeric_conds: &mut FxHashMap<Expression, (Vec<usize>, Vec<f64>)>,
     lt_simple_numeric_conds: &mut FxHashSet<Expression>,
     complex_numeric_conds: &mut FxHashSet<Expression>,
+    disable_numeric_reasoning: bool,
 ) {
+    if disable_numeric_reasoning {
+        complex_numeric_conds.insert(*numeric_condition);
+        return;
+    }
+
     let fluents_weights =
         extract_fluents_weights_simple_numeric_condition(numeric_condition, expression_manager);
     if let Some((fluents, weights, is_lt)) = fluents_weights {
@@ -852,6 +867,7 @@ impl DeleteRelaxationHeuristic {
         goals: Vec<PyExpressionNode>,
         heuristic_kind: HeuristicKind,
         internal_caching: bool,
+        disable_numeric_reasoning: bool,
     ) -> PyResult<Self> {
         let mut operators = Vec::with_capacity(events.iter().map(|(_, e)| e.len()).sum());
         let mut extra_fluents: FxHashMap<Action, Vec<Expression>> =
@@ -954,6 +970,7 @@ impl DeleteRelaxationHeuristic {
                     cond.clone(),
                     &objects,
                     &fluent_types,
+                    disable_numeric_reasoning,
                     &mut expression_manager,
                 )
                 .map_err(map_to_python_exception)?
@@ -978,8 +995,14 @@ impl DeleteRelaxationHeuristic {
         let expr_goals = goals.into_iter().map(|e| e.v).collect();
         let goals = convert_to_heuristic_expression(&expr_goals, &mut expression_manager)
             .map_err(map_to_python_exception)?;
-        let goals = simplify_condition(&goals, &objects, &fluent_types, &mut expression_manager)
-            .map_err(map_to_python_exception)?;
+        let goals = simplify_condition(
+            &goals,
+            &objects,
+            &fluent_types,
+            disable_numeric_reasoning,
+            &mut expression_manager,
+        )
+        .map_err(map_to_python_exception)?;
         extra_goals.push(ExpressionNode::And((0..extra_goals.len()).collect()));
         let extra_goals = convert_to_heuristic_expression(&extra_goals, &mut expression_manager)
             .map_err(map_to_python_exception)?;
@@ -1008,6 +1031,7 @@ impl DeleteRelaxationHeuristic {
                                 &mut simple_numeric_conds,
                                 &mut lt_simple_numeric_conds,
                                 &mut complex_numeric_conds,
+                                disable_numeric_reasoning,
                             );
                         }
 
@@ -1030,6 +1054,7 @@ impl DeleteRelaxationHeuristic {
                         &mut simple_numeric_conds,
                         &mut lt_simple_numeric_conds,
                         &mut complex_numeric_conds,
+                        disable_numeric_reasoning,
                     );
                 }
             }

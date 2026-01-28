@@ -144,6 +144,7 @@ class DeleteRelaxationHeuristic(Heuristic):
         heuristic_kind: HeuristicKind,
         internal_caching: bool,
         cache_value_in_state: bool,
+        disable_numeric_reasoning: bool = False,
     ):
         super().__init__(cache_value_in_state)
         self._heuristic_kind = heuristic_kind
@@ -154,6 +155,7 @@ class DeleteRelaxationHeuristic(Heuristic):
         self._operators: List[Operator] = []
         self._extra_fluents: Dict[Action, List[int]] = {}
         self._num_fluents = len(self._fluent_types)
+        self._disable_numeric_reasoning = disable_numeric_reasoning
 
         for a in actions:
             if a not in events:
@@ -281,7 +283,10 @@ class DeleteRelaxationHeuristic(Heuristic):
         for node in condition:
             new_nodes = None
             if isinstance(node, LeafNode):
-                if self._is_numeric_leaf_expression(node):
+                if (
+                    not self._disable_numeric_reasoning
+                    and self._is_numeric_leaf_expression(node)
+                ):
                     new_nodes = self._simplify_numeric_leaf_node(node)
                 else:
                     new_nodes = self._simplify_fluent_not_equals_object_expression(node)
@@ -546,6 +551,10 @@ class DeleteRelaxationHeuristic(Heuristic):
         return False
 
     def _update_numeric_conditions(self, numeric_condition: LeafNode):
+        if self._disable_numeric_reasoning:
+            self._complex_numeric_conds.add(numeric_condition.expression)
+            return
+
         fluents_weights = self._extract_fluents_weights_simple_numeric_condition(
             numeric_condition
         )
