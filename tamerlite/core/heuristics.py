@@ -340,10 +340,12 @@ class DeleteRelaxationHeuristic(Heuristic):
         """
 
         def inverted_operands(exp: Expression, op: Op):
-            op2_start = op.operands[0] + 1
-            op1 = exp[:op2_start]
-            op2 = exp[op2_start:-1]
-            return shift_expression(op2, -len(op1)), shift_expression(op1, len(op2))
+            op1, op2 = op.operands
+            op1_exp = exp[: op1 + 1]
+            op2_exp = exp[op1 + 1 : op2 + 1]
+            return shift_expression(op2_exp, -len(op1_exp)), shift_expression(
+                op1_exp, len(op2_exp)
+            )
 
         nodes: Optional[HeuristicExpression] = None
         exp = node.expression
