@@ -460,6 +460,7 @@ class SearchSpace(SearchSpaceABC):
         events: Dict[Action, List[Tuple[Timing, Event]]],
         actions: List[Action],
         mutex: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
+        precedence: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
         initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
         goal: Optional[Expression] = None,
         epsilon: Optional[Fraction] = None,
@@ -468,6 +469,7 @@ class SearchSpace(SearchSpaceABC):
         self._events = events
         self._actions = actions
         self._mutex = mutex
+        self._precedence = precedence
         self._initial_state = initial_state
         self._goal = goal
         self._epsilon = Fraction(1, 100) if epsilon is None else epsilon
@@ -679,6 +681,8 @@ class SearchSpace(SearchSpaceABC):
                     if ((e.action, e.pos), (e2.action, e2.pos)) in self._mutex:
                         b = -self._epsilon
                         tn.add((e2.action, e2.pos, id2), (e.action, e.pos, id), b)
+                    elif ((e2.action, e2.pos), (e.action, e.pos)) in self._precedence:
+                        tn.add((e2.action, e2.pos, id2), (e.action, e.pos, id), 0)
 
                 for a, i in todo.items():
                     id2 = i[1]
@@ -735,6 +739,8 @@ class SearchSpace(SearchSpaceABC):
                     if ((e.action, e.pos), (e2.action, e2.pos)) in self._mutex:
                         b = -self._epsilon
                         tn.add(ev2, ev, b)
+                    elif ((e2.action, e2.pos), (e.action, e.pos)) in self._precedence:
+                        tn.add(ev2, ev, 0)
 
                 for a, i in todo.items():
                     id2 = i[1]
