@@ -66,6 +66,7 @@ pub struct SearchSpace {
     events: FxHashMap<Action, Vec<(Timing, Event)>>,
     actions: Vec<Action>,
     mutex: FxHashSet<((Action, usize), (Action, usize))>,
+    precedence: FxHashSet<((Action, usize), (Action, usize))>,
     initial_state: Option<Vec<ExpressionNode>>,
     goal: Option<Vec<ExpressionNode>>,
     tn_interpreter: TNInterpreter,
@@ -78,12 +79,13 @@ pub struct SearchSpace {
 #[pymethods]
 impl SearchSpace {
     #[new]
-    #[pyo3(signature = (actions_duration, events, actions, mutex, initial_state=None, goal=None, epsilon=None))]
+    #[pyo3(signature = (actions_duration, events, actions, mutex, precedence, initial_state=None, goal=None, epsilon=None))]
     fn new(
         actions_duration: Vec<Option<(Vec<PyExpressionNode>, Vec<PyExpressionNode>, bool, bool)>>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         actions: Vec<Action>,
         mutex: FxHashSet<((Action, usize), (Action, usize))>,
+        precedence: FxHashSet<((Action, usize), (Action, usize))>,
         initial_state: Option<Vec<PyExpressionNode>>,
         goal: Option<Vec<PyExpressionNode>>,
         #[pyo3(from_py_with = get_option_big_rational)] epsilon: Option<BigRational>,
@@ -112,6 +114,7 @@ impl SearchSpace {
             events: events,
             actions: actions,
             mutex: mutex,
+            precedence: precedence,
             initial_state: initial_state
                 .map(|inner_map| inner_map.into_iter().map(|v| v.v).collect()),
             goal: goal.map(|inner_vec| inner_vec.into_iter().map(|e| e.v).collect()),
@@ -511,6 +514,8 @@ impl SearchSpaceTrait for SearchSpace {
                             if self.mutex.contains(&(e_id, e2_id)) {
                                 let b = -self.epsilon_rational.clone();
                                 tn.add(&ev2, &ev, &b);
+                            } else if self.precedence.contains(&(e2_id, e_id)) {
+                                tn.add(&ev2, &ev, &mk_rational(0, 1));
                             } else {
                                 // tn.add(&ev2, &ev, &mk_rational(0, 1));
                             }
@@ -580,6 +585,8 @@ impl SearchSpaceTrait for SearchSpace {
                         if self.mutex.contains(&(e_id, e2_id)) {
                             let b = -self.epsilon_rational.clone();
                             tn.add(&ev2, &ev, &b);
+                        } else if self.precedence.contains(&(e2_id, e_id)) {
+                            tn.add(&ev2, &ev, &mk_rational(0, 1));
                         } else {
                             // tn.add(&ev2, &ev, &mk_rational(0, 1));
                         }
