@@ -228,3 +228,48 @@ def get_problem_logistics(nRob, nPall, nPos, nTreatment) -> Problem:
             )
 
     return problem
+
+
+def get_problem_numeric() -> Problem:
+    problem = Problem("NumericProblem")
+
+    p = Fluent("p", BoolType())
+    a = Fluent("a", IntType())
+    b = Fluent("b", IntType())
+    x = Fluent("x", RealType())
+    y = Fluent("y", RealType())
+
+    problem.add_fluent(p, default_initial_value=False)
+    problem.add_fluent(a, default_initial_value=0)
+    problem.add_fluent(b, default_initial_value=0)
+    problem.add_fluent(x, default_initial_value=2.5)
+    problem.add_fluent(y, default_initial_value=3.5)
+
+    action1 = InstantaneousAction("action1")
+    action1.add_precondition(Not(p))
+    action1.add_effect(p, True)
+
+    action2 = InstantaneousAction("action2")
+    action2.add_precondition(p)
+    action2.add_precondition(Equals(a, 0))
+    action2.add_effect(a, 1)
+    action2.add_increase_effect(b, 1)
+    action2.add_increase_effect(y, Times(x, y))
+
+    action3 = InstantaneousAction("action3")
+    action3.add_precondition(Not(Equals(a, 0)))
+    action3.add_precondition(GT(x, 1))
+    action3.add_precondition(GT(Times(x, y), 10))
+    action3.add_precondition(GT(y, 10))
+    action3.add_decrease_effect(x, 0.5)
+
+    action4 = InstantaneousAction("action4")
+    action4.add_precondition(Equals(a, 1))
+    action4.add_effect(a, 0)
+
+    problem.add_actions([action1, action2, action3, action4])
+
+    problem.add_goal(GT(b, 2))
+    problem.add_goal(LT(x, 1.5))
+
+    return problem
