@@ -24,7 +24,16 @@ import up_test_cases.builtin
 
 import tamerlite
 from tamerlite.core.heuristics import Heuristic
-from tamerlite.core import HFF, HAdd, HMax, HMaxNumeric, CustomHeuristic
+from tamerlite.core import (
+    HFF,
+    HAdd,
+    HMax,
+    HFFNoNumbers,
+    HAddNoNumbers,
+    HMaxNoNumbers,
+    HMaxExplicit,
+    CustomHeuristic,
+)
 from tamerlite.core import simplify
 from tamerlite.core.search_space import SearchSpaceABC
 from tamerlite.encoder import Encoder
@@ -174,7 +183,15 @@ def test_heuristics(problems):
             weak_equality_flags = [False]
 
         search_kind = "wastar"
-        for heuristic in ["hff", "hadd", "hmax", "hmax_numeric"]:
+        for heuristic in [
+            "hff",
+            "hadd",
+            "hmax",
+            "hff_no_numbers",
+            "hadd_no_numbers",
+            "hmax_no_numbers",
+            "hmax_explicit",
+        ]:
             for weak_equality in weak_equality_flags:
                 results = []
                 for disable_rustamer in [True, False]:
@@ -220,7 +237,7 @@ def test_heuristic_fixed_values():
         (
             problems_generator.get_problem_logistics(1, 1, 2, 1),
             {
-                "hmax_numeric": [4, 4, 3, 3, 2, 1, 0],
+                "hmax_explicit": [4, 4, 3, 3, 2, 1, 0],
                 "hmax": [4, 4, 3, 3, 2, 1, 0],
                 "hadd": [9, 8, 5, 8, 4, 1, 0],
                 "hff": [6, 6, 4, 3, 2, 1, 0],
@@ -237,7 +254,7 @@ def test_heuristic_fixed_values():
         (
             problems_generator.get_problem_numeric(),
             {
-                "hmax_numeric": [5, 4, 3, 3, 3, 2],
+                "hmax_explicit": [5, 4, 3, 3, 3, 2],
                 "hmax": [5, 4, 3, 3, 3, 2],
                 "hadd": [12, 9, 6, 5, 4, 4],
                 "hff": [3, 2, 3, 3, 3, 2],
@@ -248,7 +265,7 @@ def test_heuristic_fixed_values():
     for problem, values, path in problems:
         for disable_rustamer in [False]:
             reload_tamerlite(disable_rustamer)
-            from tamerlite.core import HFF, HAdd, HMax, HMaxNumeric
+            from tamerlite.core import HFF, HAdd, HMax, HMaxExplicit
 
             with problem.environment.factory.Compiler(
                 compilation_kind="GROUNDING", problem_kind=problem.kind
@@ -270,7 +287,7 @@ def test_heuristic_fixed_values():
                 (HFF, "hff"),
                 (HAdd, "hadd"),
                 (HMax, "hmax"),
-                (HMaxNumeric, "hmax_numeric"),
+                (HMaxExplicit, "hmax_explicit"),
             ]:
                 for internal_caching in [True, False]:
                     heuristic: Heuristic = heuristic_class(
@@ -296,7 +313,15 @@ def test_heuristic_values(problems, data_regression):
         values = {}
         for disable_rustamer in [True, False]:
             reload_tamerlite(disable_rustamer)
-            from tamerlite.core import HFF, HAdd, HMax, HMaxNumeric
+            from tamerlite.core import (
+                HFF,
+                HAdd,
+                HMax,
+                HFFNoNumbers,
+                HAddNoNumbers,
+                HMaxNoNumbers,
+                HMaxExplicit,
+            )
 
             with problem.environment.factory.Compiler(
                 compilation_kind="GROUNDING", problem_kind=problem.kind
@@ -314,7 +339,10 @@ def test_heuristic_values(problems, data_regression):
                 (HFF, "hff"),
                 (HAdd, "hadd"),
                 (HMax, "hmax"),
-                (HMaxNumeric, "hmax_numeric"),
+                (HFFNoNumbers, "hff_no_numbers"),
+                (HAddNoNumbers, "hadd_no_numbers"),
+                (HMaxNoNumbers, "hmax_no_numbers"),
+                (HMaxExplicit, "hmax_explicit"),
             ]:
                 for internal_caching in [True, False]:
                     if skip(
