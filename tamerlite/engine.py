@@ -30,7 +30,7 @@ from tamerlite.core import wastar_search, astar_search, gbfs_search
 from tamerlite.core import bfs_search, dfs_search, ehc_search
 from tamerlite.core import multiqueue_search
 from tamerlite.core import evaluate, make_fluent_node
-from tamerlite.core import HFF, HAdd, HMax, HMaxNumeric, CustomHeuristic
+from tamerlite.core import HFF, HAdd, HMax, HMaxExplicit, CustomHeuristic
 from tamerlite.core.heuristics import Heuristic
 from tamerlite.encoder import Encoder, PlanType
 
@@ -186,7 +186,10 @@ class TamerLite(
                 "hff": HFF,
                 "hadd": HAdd,
                 "hmax": HMax,
-                "hmax_numeric": HMaxNumeric,
+                "hmax_explicit": HMaxExplicit,
+                "hff_no_numbers": HFF,
+                "hadd_no_numbers": HAdd,
+                "hmax_no_numbers": HMax,
             }
             if h_name not in hh_map:
                 raise NotImplementedError
