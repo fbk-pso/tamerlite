@@ -45,7 +45,16 @@ if not use_rustamer:
     from tamerlite.core.search import bfs_search, dfs_search, ehc_search
     from tamerlite.core.multiqueue import multiqueue_search
     from tamerlite.core.search_space import SearchSpace, get_fluent_value
-    from tamerlite.core.heuristics import HFF, HAdd, HMax, HMaxNumeric, CustomHeuristic
+    from tamerlite.core.heuristics import (
+        HFF,
+        HAdd,
+        HMax,
+        HFFNoNumbers,
+        HAddNoNumbers,
+        HMaxNoNumbers,
+        HMaxExplicit,
+        CustomHeuristic,
+    )
     from tamerlite.core.search_space import Timing, Effect, Event, Action
     from tamerlite.core.search_space import Expression, evaluate, get_fluents, simplify
     from tamerlite.core.search_space import (
@@ -102,11 +111,23 @@ else:
         rustamer_lib.simplify,
     )
 
-    HFF, HAdd, HMax, HMaxNumeric, CustomHeuristic = (
+    (
+        HFF,
+        HAdd,
+        HMax,
+        HFFNoNumbers,
+        HAddNoNumbers,
+        HMaxNoNumbers,
+        HMaxExplicit,
+        CustomHeuristic,
+    ) = (
         rustamer_lib.Heuristic.hff,
         rustamer_lib.Heuristic.hadd,
         rustamer_lib.Heuristic.hmax,
-        rustamer_lib.Heuristic.hmax_numeric,
+        rustamer_lib.Heuristic.hff_no_numbers,
+        rustamer_lib.Heuristic.hadd_no_numbers,
+        rustamer_lib.Heuristic.hmax_no_numbers,
+        rustamer_lib.Heuristic.hmax_explicit,
         rustamer_lib.Heuristic.custom,
     )
 

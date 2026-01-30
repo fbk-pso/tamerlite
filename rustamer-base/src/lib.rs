@@ -60,7 +60,7 @@ pub use expressions_utils::{
 };
 pub use heuristics::{
     DeleteRelaxationHeuristic,
-    HMaxNumeric,
+    HMaxExplicit,
     CustomHeuristic,
     HeuristicKind,
     HeuristicTrait,

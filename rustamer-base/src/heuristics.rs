@@ -1058,6 +1058,7 @@ pub struct DeleteRelaxationHeuristic {
     heuristic_kind: HeuristicKind,
     internal_caching: Arc<Mutex<Option<FxHashMap<CacheKey, Option<f64>>>>>,
     expression_manager: Arc<Mutex<ExpressionManager>>,
+    disable_numeric_reasoning: bool,
 }
 
 impl DeleteRelaxationHeuristic {
@@ -1306,6 +1307,7 @@ impl DeleteRelaxationHeuristic {
             heuristic_kind,
             internal_caching: Arc::new(Mutex::new(internal_caching)),
             expression_manager: Arc::new(Mutex::new(expression_manager)),
+            disable_numeric_reasoning,
         };
         Ok(res)
     }
@@ -1704,11 +1706,15 @@ impl DeleteRelaxationHeuristic {
     }
 
     pub fn name(&self) -> String {
-        match self.heuristic_kind {
-            HeuristicKind::HFF => String::from("hff"),
-            HeuristicKind::HADD => String::from("hadd"),
-            HeuristicKind::HMAX => String::from("hmax"),
+        let mut name = String::from(match self.heuristic_kind {
+            HeuristicKind::HFF => "hff",
+            HeuristicKind::HADD => "hadd",
+            HeuristicKind::HMAX => "hmax",
+        });
+        if self.disable_numeric_reasoning {
+            name.push_str("_no_numbers");
         }
+        name
     }
 }
 
@@ -1731,7 +1737,7 @@ impl<'a> FluentAssignments<'a> {
 }
 
 #[derive(Clone, Debug)]
-pub struct HMaxNumeric {
+pub struct HMaxExplicit {
     actions: Vec<Action>,
     goals: Vec<Vec<ExpressionNode>>,
     goal_expressions: Vec<Expression>,
@@ -1743,7 +1749,7 @@ pub struct HMaxNumeric {
     internal_caching: Arc<Mutex<Option<FxHashMap<CacheKey, Option<f64>>>>>,
 }
 
-impl HMaxNumeric {
+impl HMaxExplicit {
     pub fn new(
         actions: Vec<Action>,
         fluent_types: Vec<String>,
@@ -1836,7 +1842,7 @@ impl HMaxNumeric {
             None
         };
 
-        let res = HMaxNumeric {
+        let res = HMaxExplicit {
             actions,
             goals,
             goal_expressions,
@@ -2064,6 +2070,6 @@ impl HMaxNumeric {
     }
 
     pub fn name(&self) -> String {
-        String::from("hmax_numeric")
+        String::from("hmax_explicit")
     }
 }
