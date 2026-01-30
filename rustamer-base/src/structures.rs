@@ -167,6 +167,19 @@ impl Event {
             .collect()
     }
 
+    #[getter]
+    fn end_conditions(&self) -> Vec<Vec<PyExpressionNode>> {
+        self.end_conditions
+            .iter()
+            .map(|inner_vec| {
+                inner_vec
+                    .iter()
+                    .map(|v| PyExpressionNode { v: v.clone() })
+                    .collect()
+            })
+            .collect()
+    }
+
     fn __repr__(&self) -> String {
         format!("{:?}", self)
     }
