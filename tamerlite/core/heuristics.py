@@ -1113,6 +1113,7 @@ def HFF(
     goals: Expression,
     internal_caching: bool,
     cache_value_in_state: bool,
+    disable_numeric_reasoning: bool = False,
 ) -> DeleteRelaxationHeuristic:
     return DeleteRelaxationHeuristic(
         actions,
@@ -1123,7 +1124,7 @@ def HFF(
         HeuristicKind.HFF,
         internal_caching,
         cache_value_in_state,
-        False,
+        disable_numeric_reasoning,
     )
 
 
@@ -1135,6 +1136,7 @@ def HAdd(
     goals: Expression,
     internal_caching: bool,
     cache_value_in_state: bool,
+    disable_numeric_reasoning: bool = False,
 ) -> DeleteRelaxationHeuristic:
     return DeleteRelaxationHeuristic(
         actions,
@@ -1145,7 +1147,7 @@ def HAdd(
         HeuristicKind.HADD,
         internal_caching,
         cache_value_in_state,
-        False,
+        disable_numeric_reasoning,
     )
 
 
@@ -1157,6 +1159,7 @@ def HMax(
     goals: Expression,
     internal_caching: bool,
     cache_value_in_state: bool,
+    disable_numeric_reasoning: bool = False,
 ) -> DeleteRelaxationHeuristic:
     return DeleteRelaxationHeuristic(
         actions,
@@ -1167,73 +1170,7 @@ def HMax(
         HeuristicKind.HMAX,
         internal_caching,
         cache_value_in_state,
-        False,
-    )
-
-
-def HFFNoNumbers(
-    actions: List[Action],
-    fluent_types: List[str],
-    objects: Dict[str, List[str]],
-    events: Dict[Action, List[Tuple[Timing, Event]]],
-    goals: Expression,
-    internal_caching: bool,
-    cache_value_in_state: bool,
-) -> DeleteRelaxationHeuristic:
-    return DeleteRelaxationHeuristic(
-        actions,
-        fluent_types,
-        objects,
-        events,
-        goals,
-        HeuristicKind.HFF,
-        internal_caching,
-        cache_value_in_state,
-        True,
-    )
-
-
-def HAddNoNumbers(
-    actions: List[Action],
-    fluent_types: List[str],
-    objects: Dict[str, List[str]],
-    events: Dict[Action, List[Tuple[Timing, Event]]],
-    goals: Expression,
-    internal_caching: bool,
-    cache_value_in_state: bool,
-) -> DeleteRelaxationHeuristic:
-    return DeleteRelaxationHeuristic(
-        actions,
-        fluent_types,
-        objects,
-        events,
-        goals,
-        HeuristicKind.HADD,
-        internal_caching,
-        cache_value_in_state,
-        True,
-    )
-
-
-def HMaxNoNumbers(
-    actions: List[Action],
-    fluent_types: List[str],
-    objects: Dict[str, List[str]],
-    events: Dict[Action, List[Tuple[Timing, Event]]],
-    goals: Expression,
-    internal_caching: bool,
-    cache_value_in_state: bool,
-) -> DeleteRelaxationHeuristic:
-    return DeleteRelaxationHeuristic(
-        actions,
-        fluent_types,
-        objects,
-        events,
-        goals,
-        HeuristicKind.HMAX,
-        internal_caching,
-        cache_value_in_state,
-        True,
+        disable_numeric_reasoning,
     )
 
 

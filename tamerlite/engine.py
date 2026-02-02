@@ -187,9 +187,9 @@ class TamerLite(
                 "hadd": HAdd,
                 "hmax": HMax,
                 "hmax_explicit": HMaxExplicit,
-                "hff_no_numbers": HFF,
-                "hadd_no_numbers": HAdd,
-                "hmax_no_numbers": HMax,
+                "hff_no_numbers": partial(HFF, disable_numeric_reasoning=True),
+                "hadd_no_numbers": partial(HAdd, disable_numeric_reasoning=True),
+                "hmax_no_numbers": partial(HMax, disable_numeric_reasoning=True),
             }
             if h_name not in hh_map:
                 raise NotImplementedError
@@ -204,7 +204,7 @@ class TamerLite(
                 for a, e in encoder.events.items()
                 if a in encoder.applicable_actions
             }
-            h = hh_map[h_name](  # type: ignore[assignment]
+            h = hh_map[h_name](  # type: ignore
                 encoder.actions,
                 encoder.fluent_types,
                 encoder.objects,

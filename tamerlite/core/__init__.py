@@ -49,9 +49,6 @@ if not use_rustamer:
         HFF,
         HAdd,
         HMax,
-        HFFNoNumbers,
-        HAddNoNumbers,
-        HMaxNoNumbers,
         HMaxExplicit,
         CustomHeuristic,
     )
@@ -115,18 +112,12 @@ else:
         HFF,
         HAdd,
         HMax,
-        HFFNoNumbers,
-        HAddNoNumbers,
-        HMaxNoNumbers,
         HMaxExplicit,
         CustomHeuristic,
     ) = (
         rustamer_lib.Heuristic.hff,
         rustamer_lib.Heuristic.hadd,
         rustamer_lib.Heuristic.hmax,
-        rustamer_lib.Heuristic.hff_no_numbers,
-        rustamer_lib.Heuristic.hadd_no_numbers,
-        rustamer_lib.Heuristic.hmax_no_numbers,
         rustamer_lib.Heuristic.hmax_explicit,
         rustamer_lib.Heuristic.custom,
     )

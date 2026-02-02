@@ -42,6 +42,7 @@ impl Heuristic {
     }
 
     #[staticmethod]
+    #[pyo3(signature = (actions, fluent_types, objects, events, goals, internal_caching, cache_value_in_state, disable_numeric_reasoning=false))]
     pub fn hff(
         actions: Vec<Action>,
         fluent_types: Vec<String>,
@@ -50,6 +51,7 @@ impl Heuristic {
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
         cache_value_in_state: bool,
+        disable_numeric_reasoning: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: Some(DeleteRelaxationHeuristic::new(
@@ -60,7 +62,7 @@ impl Heuristic {
                 goals,
                 HeuristicKind::HFF,
                 internal_caching,
-                false,
+                disable_numeric_reasoning,
             )?),
             hmax_explicit: None,
             hcustom: None,
@@ -69,6 +71,7 @@ impl Heuristic {
     }
 
     #[staticmethod]
+    #[pyo3(signature = (actions, fluent_types, objects, events, goals, internal_caching, cache_value_in_state, disable_numeric_reasoning=false))]
     pub fn hadd(
         actions: Vec<Action>,
         fluent_types: Vec<String>,
@@ -77,6 +80,7 @@ impl Heuristic {
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
         cache_value_in_state: bool,
+        disable_numeric_reasoning: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: Some(DeleteRelaxationHeuristic::new(
@@ -87,7 +91,7 @@ impl Heuristic {
                 goals,
                 HeuristicKind::HADD,
                 internal_caching,
-                false,
+                disable_numeric_reasoning,
             )?),
             hmax_explicit: None,
             hcustom: None,
@@ -96,6 +100,7 @@ impl Heuristic {
     }
 
     #[staticmethod]
+    #[pyo3(signature = (actions, fluent_types, objects, events, goals, internal_caching, cache_value_in_state, disable_numeric_reasoning=false))]
     pub fn hmax(
         actions: Vec<Action>,
         fluent_types: Vec<String>,
@@ -104,6 +109,7 @@ impl Heuristic {
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
         cache_value_in_state: bool,
+        disable_numeric_reasoning: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: Some(DeleteRelaxationHeuristic::new(
@@ -114,88 +120,7 @@ impl Heuristic {
                 goals,
                 HeuristicKind::HMAX,
                 internal_caching,
-                false,
-            )?),
-            hmax_explicit: None,
-            hcustom: None,
-            cache_value_in_state: cache_value_in_state,
-        })
-    }
-
-    #[staticmethod]
-    pub fn hff_no_numbers(
-        actions: Vec<Action>,
-        fluent_types: Vec<String>,
-        objects: FxHashMap<String, Vec<String>>,
-        events: FxHashMap<Action, Vec<(Timing, Event)>>,
-        goals: Vec<PyExpressionNode>,
-        internal_caching: bool,
-        cache_value_in_state: bool,
-    ) -> PyResult<Self> {
-        Ok(Heuristic {
-            hdr: Some(DeleteRelaxationHeuristic::new(
-                actions,
-                fluent_types,
-                objects,
-                events,
-                goals,
-                HeuristicKind::HFF,
-                internal_caching,
-                true,
-            )?),
-            hmax_explicit: None,
-            hcustom: None,
-            cache_value_in_state: cache_value_in_state,
-        })
-    }
-
-    #[staticmethod]
-    pub fn hadd_no_numbers(
-        actions: Vec<Action>,
-        fluent_types: Vec<String>,
-        objects: FxHashMap<String, Vec<String>>,
-        events: FxHashMap<Action, Vec<(Timing, Event)>>,
-        goals: Vec<PyExpressionNode>,
-        internal_caching: bool,
-        cache_value_in_state: bool,
-    ) -> PyResult<Self> {
-        Ok(Heuristic {
-            hdr: Some(DeleteRelaxationHeuristic::new(
-                actions,
-                fluent_types,
-                objects,
-                events,
-                goals,
-                HeuristicKind::HADD,
-                internal_caching,
-                true,
-            )?),
-            hmax_explicit: None,
-            hcustom: None,
-            cache_value_in_state: cache_value_in_state,
-        })
-    }
-
-    #[staticmethod]
-    pub fn hmax_no_numbers(
-        actions: Vec<Action>,
-        fluent_types: Vec<String>,
-        objects: FxHashMap<String, Vec<String>>,
-        events: FxHashMap<Action, Vec<(Timing, Event)>>,
-        goals: Vec<PyExpressionNode>,
-        internal_caching: bool,
-        cache_value_in_state: bool,
-    ) -> PyResult<Self> {
-        Ok(Heuristic {
-            hdr: Some(DeleteRelaxationHeuristic::new(
-                actions,
-                fluent_types,
-                objects,
-                events,
-                goals,
-                HeuristicKind::HMAX,
-                internal_caching,
-                true,
+                disable_numeric_reasoning,
             )?),
             hmax_explicit: None,
             hcustom: None,
