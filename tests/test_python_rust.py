@@ -24,16 +24,7 @@ import up_test_cases.builtin
 
 import tamerlite
 from tamerlite.core.heuristics import Heuristic
-from tamerlite.core import (
-    HFF,
-    HAdd,
-    HMax,
-    HFFNoNumbers,
-    HAddNoNumbers,
-    HMaxNoNumbers,
-    HMaxExplicit,
-    CustomHeuristic,
-)
+from tamerlite.core import HFF, HAdd, HMax, HMaxExplicit, CustomHeuristic
 from tamerlite.core import simplify
 from tamerlite.core.search_space import SearchSpaceABC
 from tamerlite.encoder import Encoder
@@ -46,6 +37,7 @@ import pytest
 import importlib
 import os
 import types
+from functools import partial
 
 env = get_environment()
 env.factory.add_engine("tamerlite", "tamerlite.engine", "TamerLite")
@@ -313,15 +305,7 @@ def test_heuristic_values(problems, data_regression):
         values = {}
         for disable_rustamer in [True, False]:
             reload_tamerlite(disable_rustamer)
-            from tamerlite.core import (
-                HFF,
-                HAdd,
-                HMax,
-                HFFNoNumbers,
-                HAddNoNumbers,
-                HMaxNoNumbers,
-                HMaxExplicit,
-            )
+            from tamerlite.core import HFF, HAdd, HMax, HMaxExplicit
 
             with problem.environment.factory.Compiler(
                 compilation_kind="GROUNDING", problem_kind=problem.kind
@@ -339,9 +323,9 @@ def test_heuristic_values(problems, data_regression):
                 (HFF, "hff"),
                 (HAdd, "hadd"),
                 (HMax, "hmax"),
-                (HFFNoNumbers, "hff_no_numbers"),
-                (HAddNoNumbers, "hadd_no_numbers"),
-                (HMaxNoNumbers, "hmax_no_numbers"),
+                (partial(HFF, disable_numeric_reasoning=True), "hff_no_numbers"),
+                (partial(HAdd, disable_numeric_reasoning=True), "hadd_no_numbers"),
+                (partial(HMax, disable_numeric_reasoning=True), "hmax_no_numbers"),
                 (HMaxExplicit, "hmax_explicit"),
             ]:
                 for internal_caching in [True, False]:
