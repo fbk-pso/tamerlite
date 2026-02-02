@@ -21,6 +21,8 @@ from fractions import Fraction
 from typing import List, Tuple, Dict, Iterator, Optional, Union, Set
 from abc import ABC, abstractmethod
 
+from tamerlite.core.simultaneity_utils import get_all_simultaneity_actions_groups, get_simultaneity_actions_groups
+
 
 @dataclass(eq=True, frozen=True)
 class OperatorNode:
@@ -475,6 +477,22 @@ class SearchSpace(SearchSpaceABC):
         self._epsilon = Fraction(1, 100) if epsilon is None else epsilon
         self._is_temporal = any(v is not None for v in actions_duration)
         self._counter = 0
+        self._simultaneity = "NO"
+        self._simultaneity_action_groups = []
+
+    @property
+    def simultaneity(self) -> str:
+        return self._simultaneity
+
+    @simultaneity.setter
+    def simultaneity(self, value: str):
+        self._simultaneity = value
+        if value == "NO":
+            self._simultaneity_action_groups = []
+        elif value == "ALL":
+            self._simultaneity_action_groups = get_all_simultaneity_actions_groups(self._actions, self._mutex)
+        else:
+            self._simultaneity_action_groups = get_simultaneity_actions_groups(self._actions, self._mutex)
 
     @property
     def is_temporal(self) -> bool:
@@ -511,9 +529,61 @@ class SearchSpace(SearchSpaceABC):
             new_state = self._open_action(state, new_state, action, events)
         return new_state
 
+    def get_successor_state_from_simultaneity_actions_group(self, state: State, actions: List[Tuple[Action, int]]) -> Optional[State]:
+        for c in state.active_conditions:
+            if not evaluate(c, state):
+                return None
+
+        previous_state = state.clone()
+        for action, i in actions:
+            index, _ = state.todo.get(action, (0, 0))
+            if i != index:
+                return None
+            _, e = self._events[action][index]
+            for c in e.end_conditions:
+                previous_state.active_conditions.remove(c)
+
+        overall_conditions = []
+        last_ev = None
+        for action, i in actions:
+            events = self._events[action]
+            new_state = previous_state.clone()
+            new_state.g = new_state.g + 1
+            if i == 0:
+                new_state = self._open_action(previous_state, new_state, action, events, False)
+            else:
+                index, id = state.todo[action]
+                assert index == i
+                _, e = events[index]
+                if index + 1 >= len(events):
+                    new_state.todo.pop(action)
+                else:
+                    new_state.todo[action] = index + 1, id + 1
+                new_state = self._expand_event(previous_state, new_state, e, index, id, False)
+            if new_state is None:
+                return None
+            if last_ev is not None:
+                new_state.temporal_network.insert_interval(last_ev, new_state.path[-1], left_bound=0, right_bound=0)
+                if not new_state.temporal_network.check_stn():
+                    return None
+            overall_conditions.extend(list(events[i][1].start_conditions))
+            last_ev = new_state.path[-1]
+            previous_state = new_state
+
+        for c in overall_conditions:
+            if not evaluate(c, new_state):
+                return None
+            new_state.active_conditions.add(c)
+
+        return new_state
+
     def get_successor_states(self, state: State) -> Iterator[State]:
         for action in self._actions:
             new_state = self.get_successor_state(state, action)
+            if new_state:
+                yield new_state
+        for action_group in self._simultaneity_action_groups:
+            new_state = self.get_successor_state_from_simultaneity_actions_group(state, action_group)
             if new_state:
                 yield new_state
 
@@ -545,31 +615,41 @@ class SearchSpace(SearchSpaceABC):
         return res
 
     def _expand_event(
-        self, state: State, new_state: State, e: Event, index: int, id: int
+        self,
+        state: State,
+        new_state: State,
+        e: Event,
+        index: int,
+        id: int,
+        use_durative_conditions: bool = True
     ) -> Optional[State]:
         new_state.path.append((e.action, e.pos, id))
         # check conditions
         if not evaluate(e.conditions, state):
             return None
         # check active conditions
-        for c in new_state.active_conditions:
-            if not evaluate(c, state):
-                return None
+        if use_durative_conditions:
+            for c in new_state.active_conditions:
+                if not evaluate(c, state):
+                    return None
         # remove end conditions
-        for c in e.end_conditions:
-            new_state.active_conditions.remove(c)
+        if use_durative_conditions:
+            for c in e.end_conditions:
+                new_state.active_conditions.remove(c)
         # insert start conditions
-        for c in e.start_conditions:
-            new_state.active_conditions.add(c)
+        if use_durative_conditions:
+            for c in e.start_conditions:
+                new_state.active_conditions.add(c)
         # apply effects
         for eff in e.effects:
             f = eff.fluent
             v = evaluate(eff.value, state)
             new_state.assignments[f] = v
         # check active conditions
-        for c in new_state.active_conditions:
-            if not evaluate(c, new_state):
-                return None
+        if use_durative_conditions:
+            for c in new_state.active_conditions:
+                if not evaluate(c, new_state):
+                    return None
         if self._is_temporal:
             # update TN
             assert new_state.temporal_network is not None
@@ -610,6 +690,7 @@ class SearchSpace(SearchSpaceABC):
         new_state: State,
         action: Action,
         events: List[Tuple[Timing, Event]],
+        use_durative_conditions: bool = True
     ) -> Optional[State]:
         if self._is_temporal:
             assert new_state.temporal_network is not None
@@ -649,13 +730,16 @@ class SearchSpace(SearchSpaceABC):
                 new_state.todo[action] = 1, id + 1
         else:
             id = self._counter
-        return self._expand_event(state, new_state, events[0][1], 0, id)
+        return self._expand_event(state, new_state, events[0][1], 0, id, use_durative_conditions)
 
     def build_plan(
         self, state: State
     ) -> List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]:
         if not self.is_temporal:
             return [(None, e[0], None) for e in state.path]
+
+        if len(self._simultaneity_action_groups) > 0:
+            return self._build_plan_from_stn(state.temporal_network)
 
         all_path = state.path
         tn = DeltaSimpleTemporalNetwork()
@@ -756,6 +840,9 @@ class SearchSpace(SearchSpaceABC):
                 if len(action_events) > 1:
                     todo[action] = (1, id + 1)
 
+        return self._build_plan_from_stn(tn)
+
+    def _build_plan_from_stn(self, tn: DeltaSimpleTemporalNetwork) -> List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]:
         res: List[Tuple[Optional[Fraction], Action, Optional[Fraction]]] = []
         start_time: Dict[Tuple[Action, int], Fraction] = {}
         end_time: Dict[Tuple[Action, int], Fraction] = {}
