@@ -114,6 +114,7 @@ class Encoder:
             self._actions,
             self._mutex,
             self._precedence,
+            self._sim_set,
             initial_state,  # type: ignore[arg-type]
             self._goal,
             problem.epsilon,
@@ -352,17 +353,33 @@ class Encoder:
     def _build_mutex(self):
         self._mutex = set()
         self._precedence = set()
+        self._sim_set = set()
         ev = {}
         ev_list = []
+        durative_conds = []
+        f_to_actions = {}
         for a, le in self._events.items():
             for i, (_, e1) in enumerate(le):
                 a_p = set(get_fluents(e1.conditions))
                 a_p.update(x for e in e1.effects for x in get_fluents(e.value))
                 a_e = set(e.fluent for e in e1.effects)
+                for f in a_e:
+                    f_to_actions.setdefault(f, []).append((a, i))
                 a_sc = {f for c in e1.start_conditions for f in get_fluents(c)}
                 a_ec = {f for c in e1.end_conditions for f in get_fluents(c)}
+                if len(a_sc) > 0:
+                    durative_conds.append((a, a_sc))
                 ev[(a, i)] = (a_p, a_e, a_sc, a_ec)
                 ev_list.append((a, i))
+        for a, fs in durative_conds:
+            s = {
+                (b, i)
+                for f in fs
+                for (b, i) in f_to_actions.get(f, [])
+                if a != b
+            }
+            if len(s) >= 2:
+                self._sim_set.add(frozenset(s))
         for a1, i1 in ev_list:
             for a2, i2 in ev_list:
                 if a1 == a2:
