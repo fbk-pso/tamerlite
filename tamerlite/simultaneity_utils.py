@@ -1,10 +1,12 @@
 from itertools import combinations
-from typing import Dict, List, Set, Tuple, Any, Iterator
+from typing import Dict, List, Set, Tuple, Any
+from tamerlite.core import Action
 
-Action = Any
 
-def build_compatibility_graph(actions: List[Tuple[Action, int]],
-                              mutex: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]]):
+def build_compatibility_graph(
+    actions: List[Tuple[Action, int]],
+    mutex: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
+) -> Dict[Tuple[Action, int], Set[Tuple[Action, int]]]:
     mutex_set = set(mutex) | {(b, a) for (a, b) in mutex}
     graph = {a: set() for a in actions}
 
@@ -15,8 +17,10 @@ def build_compatibility_graph(actions: List[Tuple[Action, int]],
     return graph
 
 
-def find_valid_subsets(actions: List[Tuple[Action, int]],
-                       mutex: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]]):
+def find_valid_subsets(
+    actions: List[Tuple[Action, int]],
+    mutex: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
+) -> List[Set[Tuple[Action, int]]]:
 
     graph = build_compatibility_graph(actions, mutex)
     results = []
@@ -35,24 +39,27 @@ def find_valid_subsets(actions: List[Tuple[Action, int]],
     return results
 
 
-def get_all_simultaneity_actions_groups(actions: List[Action], mutex: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]]) -> List[Set[Tuple[Action, int]]]:
-    results = find_valid_subsets([(a, t) for a in actions for t in (0, 1)], mutex)
+def get_all_simultaneity_actions_groups(
+    actions: List[Tuple[Action, int]],
+    mutex: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
+) -> List[Set[Tuple[Action, int]]]:
+    return find_valid_subsets(actions, mutex)
 
-    print(f"Found {len(results)} subsets")
 
-    return results
-
-
-def build_graph(actions: List[Tuple[Action, int]],
-                arcs: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]]):
-    graph: Dict[Tuple[Action, int], Set[Tuple[Action, int]]] = {a: set() for a in actions}
+def build_graph(
+    actions: List[Tuple[Action, int]],
+    arcs: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
+) -> Dict[Tuple[Action, int], Set[Tuple[Action, int]]]:
+    graph = {a: set() for a in actions}
     for u, v in arcs:
         graph[u].add(v)
     return graph
 
 
-def build_mutex_map(actions: List[Tuple[Action, int]],
-                    mutex: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]]):
+def build_mutex_map(
+    actions: List[Tuple[Action, int]],
+    mutex: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
+) -> Dict[Tuple[Action, int], Set[Tuple[Action, int]]]:
     m = {a: set() for a in actions}
     for a, b in mutex:
         m[a].add(b)
@@ -60,9 +67,11 @@ def build_mutex_map(actions: List[Tuple[Action, int]],
     return m
 
 
-def find_mutex_free_cycles(actions: List[Tuple[Action, int]],
-                           mutex: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
-                           arcs: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]]):
+def find_mutex_free_cycles(
+    actions: List[Tuple[Action, int]],
+    mutex: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
+    arcs: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
+) -> List[Set[Tuple[Action, int]]]:
 
     graph = build_graph(actions, arcs)
     mutex_map = build_mutex_map(actions, mutex)
@@ -103,11 +112,11 @@ def find_mutex_free_cycles(actions: List[Tuple[Action, int]],
 
 
 def get_simultaneity_actions_groups(
-        actions: List[Action],
-        mutex: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
-        precedence: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
-        sim_set: Set[Set[Tuple[Action, int]]]
-    ) -> List[Set[Tuple[Action, int]]]:
+    actions: List[Tuple[Action, int]],
+    mutex: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
+    precedence: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
+    sim_set: Set[Set[Tuple[Action, int]]],
+) -> List[Set[Tuple[Action, int]]]:
     unique_subsets = set()
 
     for s in sim_set:
@@ -115,9 +124,7 @@ def get_simultaneity_actions_groups(
         for subset in subsets:
             unique_subsets.add(frozenset(subset))
 
-    for s in find_mutex_free_cycles([(a, t) for a in actions for t in (0, 1)], mutex, precedence):
+    for s in find_mutex_free_cycles(actions, mutex, precedence):
         unique_subsets.add(frozenset(s))
-
-    print(f"Found {len(unique_subsets)} subsets")
 
     return [set(s) for s in unique_subsets]
