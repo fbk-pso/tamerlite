@@ -56,6 +56,7 @@ if not use_rustamer:
         make_operator_node,
         make_rational_constant_node,
         shift_expression,
+        contains_operator,
     )
 else:
     from fractions import Fraction

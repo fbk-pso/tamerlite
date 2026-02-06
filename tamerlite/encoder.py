@@ -29,6 +29,8 @@ from tamerlite.core import (
     Action,
     SearchSpace,
     get_fluents,
+    contains_operator,
+    make_bool_constant_node,
 )
 from tamerlite.core.search_space import SearchSpaceABC
 from tamerlite.converter import Converter
@@ -114,6 +116,7 @@ class Encoder:
             self._actions,
             self._mutex,
             self._precedence,
+            self._sim_arcs,
             self._sim_set,
             initial_state,  # type: ignore[arg-type]
             self._goal,
@@ -353,6 +356,7 @@ class Encoder:
     def _build_mutex(self):
         self._mutex = set()
         self._precedence = set()
+        self._sim_arcs = set()
         self._sim_set = set()
         ev = {}
         ev_list = []
@@ -363,13 +367,16 @@ class Encoder:
                 a_p = set(get_fluents(e1.conditions))
                 a_p.update(x for e in e1.effects for x in get_fluents(e.value))
                 a_e = set(e.fluent for e in e1.effects)
+                a_e_pos = set(e.fluent for e in e1.effects if e.value == (make_bool_constant_node(True), ))
+                a_e_neg = set(e.fluent for e in e1.effects if e.value == (make_bool_constant_node(False), ))
                 for f in a_e:
                     f_to_actions.setdefault(f, []).append((a, i))
                 a_sc = {f for c in e1.start_conditions for f in get_fluents(c)}
                 a_ec = {f for c in e1.end_conditions for f in get_fluents(c)}
-                if len(a_sc) > 0:
+                if len(a_sc) > 0 and any(contains_operator("or", c) for c in e1.start_conditions):
                     durative_conds.append((a, a_sc))
-                ev[(a, i)] = (a_p, a_e, a_sc, a_ec)
+                sdc = not any(contains_operator("or", c) or contains_operator("not", c) for c in e1.start_conditions + e1.end_conditions)
+                ev[(a, i)] = (a_p, a_e, a_sc, a_ec, a_e_pos, a_e_neg, sdc)
                 ev_list.append((a, i))
         for a, fs in durative_conds:
             s = {
@@ -386,8 +393,8 @@ class Encoder:
                     # Since we do not allow self-overlapping, events of the same action are always mutex
                     self._mutex.add(((a1, i1), (a2, i2)))
                 else:
-                    (a_p, a_e, _, a_ec) = ev[(a1, i1)]
-                    (b_p, b_e, b_sc, _) = ev[(a2, i2)]
+                    (a_p, a_e, _, a_ec, a_e_pos, _, a_sdc) = ev[(a1, i1)]
+                    (b_p, b_e, b_sc, _, _, b_e_neg, b_sdc) = ev[(a2, i2)]
                     if (
                         not a_p.isdisjoint(b_e)
                         or not b_p.isdisjoint(a_e)
@@ -396,5 +403,9 @@ class Encoder:
                         self._mutex.add(((a1, i1), (a2, i2)))
                     if not a_e.isdisjoint(b_sc):
                         self._precedence.add(((a1, i1), (a2, i2)))
+                        if not b_sdc or not a_e_pos.isdisjoint(b_sc):
+                            self._sim_arcs.add(((a1, i1), (a2, i2)))
                     if not b_e.isdisjoint(a_ec):
                         self._precedence.add(((a1, i1), (a2, i2)))
+                        if not a_sdc or not b_e_neg.isdisjoint(a_ec):
+                            self._sim_arcs.add(((a1, i1), (a2, i2)))

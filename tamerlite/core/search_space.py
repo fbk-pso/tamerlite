@@ -63,6 +63,13 @@ def make_fluent_node(fluent: int) -> ExpressionNode:
     return FluentNode(fluent)
 
 
+def contains_operator(kind: str, exp: Expression) -> bool:
+    for e in exp:
+        if isinstance(e, OperatorNode) and e.kind == kind:
+            return True
+    return False
+
+
 def shift_expression(exp: Expression, offset: int) -> Expression:
     res: List[ExpressionNode] = []
     for e in exp:
@@ -463,6 +470,7 @@ class SearchSpace(SearchSpaceABC):
         actions: List[Action],
         mutex: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
         precedence: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
+        sim_arcs: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
         sim_set: Set[Set[Tuple[Action, int]]],
         initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
         goal: Optional[Expression] = None,
@@ -473,6 +481,7 @@ class SearchSpace(SearchSpaceABC):
         self._actions = actions
         self._mutex = mutex
         self._precedence = precedence
+        self._sim_arcs = sim_arcs
         self._sim_set = sim_set
         self._initial_state = initial_state
         self._goal = goal
@@ -494,7 +503,7 @@ class SearchSpace(SearchSpaceABC):
         elif value == "ALL":
             self._simultaneity_action_groups = get_all_simultaneity_actions_groups(self._actions, self._mutex)
         else:
-            self._simultaneity_action_groups = get_simultaneity_actions_groups(self._actions, self._mutex, self._precedence, self._sim_set)
+            self._simultaneity_action_groups = get_simultaneity_actions_groups(self._actions, self._mutex, self._sim_arcs, self._sim_set)
 
     @property
     def is_temporal(self) -> bool:
