@@ -34,6 +34,10 @@ from tamerlite.core import (
 )
 from tamerlite.core.search_space import SearchSpaceABC
 from tamerlite.converter import Converter
+from tamerlite.simultaneity_utils import (
+    get_all_simultaneity_actions_groups,
+    get_simultaneity_actions_groups,
+)
 
 
 PlanType = List[
@@ -48,8 +52,9 @@ class Encoder:
     in the search space.
     """
 
-    def __init__(self, problem: Problem, full: bool = True):
+    def __init__(self, problem: Problem, full: bool = True, simultaneity: str = "NO"):
         self._problem = problem
+        self._simultaneity = simultaneity
         if full:
             self._simplifier = up.model.walkers.Simplifier(problem.environment, problem)
         else:
@@ -116,8 +121,7 @@ class Encoder:
             self._actions,
             self._mutex,
             self._precedence,
-            self._sim_arcs,
-            self._sim_set,
+            self._simultaneity_groups,
             initial_state,  # type: ignore[arg-type]
             self._goal,
             problem.epsilon,
@@ -356,8 +360,6 @@ class Encoder:
     def _build_mutex(self):
         self._mutex = set()
         self._precedence = set()
-        self._sim_arcs = set()
-        self._sim_set = set()
         ev = {}
         ev_list = []
         durative_conds = []
@@ -367,26 +369,36 @@ class Encoder:
                 a_p = set(get_fluents(e1.conditions))
                 a_p.update(x for e in e1.effects for x in get_fluents(e.value))
                 a_e = set(e.fluent for e in e1.effects)
-                a_e_pos = set(e.fluent for e in e1.effects if e.value == (make_bool_constant_node(True), ))
-                a_e_neg = set(e.fluent for e in e1.effects if e.value == (make_bool_constant_node(False), ))
+                a_e_pos = set(
+                    e.fluent
+                    for e in e1.effects
+                    if e.value == (make_bool_constant_node(True),)
+                )
+                a_e_neg = set(
+                    e.fluent
+                    for e in e1.effects
+                    if e.value == (make_bool_constant_node(False),)
+                )
                 for f in a_e:
                     f_to_actions.setdefault(f, []).append((a, i))
                 a_sc = {f for c in e1.start_conditions for f in get_fluents(c)}
                 a_ec = {f for c in e1.end_conditions for f in get_fluents(c)}
-                if len(a_sc) > 0 and any(contains_operator("or", c) for c in e1.start_conditions):
+                if len(a_sc) > 0 and any(
+                    contains_operator("or", c) for c in e1.start_conditions
+                ):
                     durative_conds.append((a, a_sc))
-                sdc = not any(contains_operator("or", c) or contains_operator("not", c) for c in e1.start_conditions + e1.end_conditions)
+                sdc = not any(
+                    contains_operator("or", c) or contains_operator("not", c)
+                    for c in e1.start_conditions + e1.end_conditions
+                )
                 ev[(a, i)] = (a_p, a_e, a_sc, a_ec, a_e_pos, a_e_neg, sdc)
                 ev_list.append((a, i))
+        sim_set = set()
         for a, fs in durative_conds:
-            s = {
-                (b, i)
-                for f in fs
-                for (b, i) in f_to_actions.get(f, [])
-                if a != b
-            }
+            s = {(b, i) for f in fs for (b, i) in f_to_actions.get(f, []) if a != b}
             if len(s) >= 2:
-                self._sim_set.add(frozenset(s))
+                sim_set.add(frozenset(s))
+        sim_arcs = set()
         for a1, i1 in ev_list:
             for a2, i2 in ev_list:
                 if a1 == a2:
@@ -404,8 +416,18 @@ class Encoder:
                     if not a_e.isdisjoint(b_sc):
                         self._precedence.add(((a1, i1), (a2, i2)))
                         if not b_sdc or not a_e_pos.isdisjoint(b_sc):
-                            self._sim_arcs.add(((a1, i1), (a2, i2)))
+                            sim_arcs.add(((a1, i1), (a2, i2)))
                     if not b_e.isdisjoint(a_ec):
                         self._precedence.add(((a1, i1), (a2, i2)))
                         if not a_sdc or not b_e_neg.isdisjoint(a_ec):
-                            self._sim_arcs.add(((a1, i1), (a2, i2)))
+                            sim_arcs.add(((a1, i1), (a2, i2)))
+        if self._simultaneity == "NO":
+            self._simultaneity_groups = []
+        elif self._simultaneity == "ALL":
+            self._simultaneity_groups = get_all_simultaneity_actions_groups(
+                ev_list, self._mutex
+            )
+        else:
+            self._simultaneity_groups = get_simultaneity_actions_groups(
+                ev_list, self._mutex, sim_arcs, sim_set
+            )

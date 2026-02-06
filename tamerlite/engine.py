@@ -93,8 +93,13 @@ class TamerLite(
     unified_planning.engines.Engine,
     unified_planning.engines.mixins.OneshotPlannerMixin,
 ):
-
-    def __init__(self, search: Optional[Union[SearchParams, MultiqueueParams]] = None, heuristic: Optional[str] = None, weight: Optional[float] = None, simultaneity: str = "NO"):
+    def __init__(
+        self,
+        search: Optional[Union[SearchParams, MultiqueueParams]] = None,
+        heuristic: Optional[str] = None,
+        weight: Optional[float] = None,
+        simultaneity: str = "NO",
+    ):
         unified_planning.engines.Engine.__init__(self)
         up.engines.mixins.OneshotPlannerMixin.__init__(self)
         self._params = search
@@ -261,8 +266,7 @@ class TamerLite(
                 compilation_res = compiler.compile(problem)
                 map_back_action_instance = compilation_res.map_back_action_instance
             new_problem = compilation_res.problem
-            encoder = Encoder(new_problem)
-            encoder.search_space.simultaneity = self._simultaneity
+            encoder = Encoder(new_problem, simultaneity=self._simultaneity)
 
             early_termination = False
             if self._params is not None and self._params.early_termination is not None:
