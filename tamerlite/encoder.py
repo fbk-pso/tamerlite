@@ -257,7 +257,8 @@ class Encoder:
                             action_events.append((l.delay, l, 1, lc))
                         action_events.append((l.delay, l, 2, [em.And(lc)]))
                         # upper: end conditions
-                        action_events.append((u.delay, u, 1, lc))
+                        if not i.is_right_open():
+                            action_events.append((u.delay, u, 1, lc))
                         action_events.append((u.delay, u, 3, [em.And(lc)]))
                     is_applicable = (
                         is_applicable
@@ -359,7 +360,8 @@ class Encoder:
                 a_p.update(x for e in e1.effects for x in get_fluents(e.value))
                 a_e = set(e.fluent for e in e1.effects)
                 a_sc = {f for c in e1.start_conditions for f in get_fluents(c)}
-                ev[(a, i)] = (a_p, a_e, a_sc)
+                a_ec = {f for c in e1.end_conditions for f in get_fluents(c)}
+                ev[(a, i)] = (a_p, a_e, a_sc, a_ec)
                 ev_list.append((a, i))
         for a1, i1 in ev_list:
             for a2, i2 in ev_list:
@@ -367,8 +369,8 @@ class Encoder:
                     # Since we do not allow self-overlapping, events of the same action are always mutex
                     self._mutex.add(((a1, i1), (a2, i2)))
                 else:
-                    (a_p, a_e, _) = ev[(a1, i1)]
-                    (b_p, b_e, b_sc) = ev[(a2, i2)]
+                    (a_p, a_e, _, a_ec) = ev[(a1, i1)]
+                    (b_p, b_e, b_sc, _) = ev[(a2, i2)]
                     if (
                         not a_p.isdisjoint(b_e)
                         or not b_p.isdisjoint(a_e)
@@ -376,4 +378,6 @@ class Encoder:
                     ):
                         self._mutex.add(((a1, i1), (a2, i2)))
                     if not a_e.isdisjoint(b_sc):
+                        self._precedence.add(((a1, i1), (a2, i2)))
+                    if not b_e.isdisjoint(a_ec):
                         self._precedence.add(((a1, i1), (a2, i2)))

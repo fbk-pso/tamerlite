@@ -551,13 +551,13 @@ class SearchSpace(SearchSpaceABC):
         # check conditions
         if not evaluate(e.conditions, state):
             return None
-        # remove end conditions
-        for c in e.end_conditions:
-            new_state.active_conditions.remove(c)
         # check active conditions
         for c in new_state.active_conditions:
             if not evaluate(c, state):
                 return None
+        # remove end conditions
+        for c in e.end_conditions:
+            new_state.active_conditions.remove(c)
         # insert start conditions
         for c in e.start_conditions:
             new_state.active_conditions.add(c)
