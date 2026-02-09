@@ -169,6 +169,7 @@ pub struct SearchSpace {
     >,
     mutex: MutexChecker,
     precedence: PrecedenceChecker,
+    previous_equivalent_actions: Vec<FxHashSet<Action>>,
     initial_state: Option<Vec<ExpressionNode>>,
     goal: Option<Vec<ExpressionNode>>,
     tn_interpreter: TNInterpreter,
@@ -181,11 +182,12 @@ pub struct SearchSpace {
 #[pymethods]
 impl SearchSpace {
     #[new]
-    #[pyo3(signature = (actions_duration, events, actions, initial_state=None, goal=None, epsilon=None))]
+    #[pyo3(signature = (actions_duration, events, actions, previous_equivalent_actions, initial_state=None, goal=None, epsilon=None))]
     fn new(
         actions_duration: Vec<Option<(Vec<PyExpressionNode>, Vec<PyExpressionNode>, bool, bool)>>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         actions: Vec<Action>,
+        previous_equivalent_actions: Vec<FxHashSet<Action>>,
         initial_state: Option<Vec<PyExpressionNode>>,
         goal: Option<Vec<PyExpressionNode>>,
         #[pyo3(from_py_with = get_option_big_rational)] epsilon: Option<BigRational>,
@@ -237,6 +239,7 @@ impl SearchSpace {
             event_fluents: event_fluents,
             mutex: MutexChecker::new(),
             precedence: PrecedenceChecker::new(),
+            previous_equivalent_actions: previous_equivalent_actions,
             initial_state: initial_state
                 .map(|inner_map| inner_map.into_iter().map(|v| v.v).collect()),
             goal: goal.map(|inner_vec| inner_vec.into_iter().map(|e| e.v).collect()),
@@ -417,6 +420,17 @@ impl SearchSpace {
         action: Action,
         events: &Vec<(Timing, Event)>,
     ) -> PyResult<bool> {
+        if let Some(previous_equivalent_actions) = self.previous_equivalent_actions.get(action.idx)
+        {
+            if !previous_equivalent_actions.is_empty()
+                && !PersistentList::to_vec(&state.path)
+                    .iter()
+                    .any(|(a, _, _)| previous_equivalent_actions.contains(a))
+            {
+                return Ok(false);
+            }
+        }
+
         let mut counter = self.counter.lock().unwrap();
         let mut id = counter.clone();
         if self.is_temporal {

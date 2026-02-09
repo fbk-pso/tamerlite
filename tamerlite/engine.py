@@ -261,7 +261,7 @@ class TamerLite(
                 compilation_res = compiler.compile(problem)
                 map_back_action_instance = compilation_res.map_back_action_instance
             new_problem = compilation_res.problem
-            encoder = Encoder(new_problem)
+            encoder = Encoder(new_problem, problem, map_back_action_instance)
 
             early_termination = False
             if self._params is not None and self._params.early_termination is not None:
