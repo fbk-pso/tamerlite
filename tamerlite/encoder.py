@@ -202,17 +202,18 @@ class Encoder:
                 objects[obj.type] = []
             objects[obj.type].append(obj)
 
-        checked = set()
         groups = []
         for type, objs in objects.items():
+            grouped = [False] * len(objs)
             for i, obj1 in enumerate(objs):
-                if obj1 in checked:
+                if grouped[i]:
                     continue
 
-                checked.add(obj1)
+                grouped[i] = True
                 groups.append([obj1])
-                for obj2 in objs[i + 1 :]:
-                    if obj2 in checked:
+                for j in range(i + 1, len(objs)):
+                    obj2 = objs[j]
+                    if grouped[j]:
                         continue
 
                     if self._are_equivalent_objects(
@@ -223,7 +224,7 @@ class Encoder:
                         goal_obj_to_fluent_map,
                         goal_exp_is_conjunction,
                     ):
-                        checked.add(obj2)
+                        grouped[j] = True
                         groups[-1].append(obj2)
 
         return groups
@@ -365,10 +366,28 @@ class Encoder:
         obj2: Object,
         typename: Type,
         domain_objects: Set[Object],
-        goal_obj_to_fluent_map: Dict[Object, Set[Tuple[Fluent, Tuple[Object], bool]]],
+        goal_obj_to_fluent_map: Dict[Object, Set[Tuple[Fluent, Tuple[Object], Any]]],
         goal_exp_is_conjunction: bool,
     ) -> bool:
         if obj1 in domain_objects or obj2 in domain_objects:
+            return False
+
+        if goal_exp_is_conjunction:
+            if len(goal_obj_to_fluent_map[obj1]) != len(goal_obj_to_fluent_map[obj2]):
+                return False
+
+            for fluent, objs1, v in goal_obj_to_fluent_map[obj1]:
+                objs2 = list(objs1)
+                for i, obj in enumerate(objs1):
+                    if obj == obj1:
+                        objs2[i] = obj2
+                if (fluent, tuple(objs2), v) not in goal_obj_to_fluent_map[obj2]:
+                    return False
+
+        elif not (
+            len(goal_obj_to_fluent_map[obj1]) == 0
+            and len(goal_obj_to_fluent_map[obj2]) == 0
+        ):
             return False
 
         for fluent in self._problem.fluents:
@@ -378,43 +397,20 @@ class Encoder:
             ):
                 continue
 
-            domains = [list(self._problem.objects(p.type)) for p in fluent.signature]
+            domains = [tuple(self._problem.objects(p.type)) for p in fluent.signature]
             for i, p in enumerate(fluent.signature):
                 if p.type.is_user_type() and typename.is_subtype(p.type):
                     tmp_domain = domains[i]
-                    values: List[List[Optional[FNode]]] = [[], []]
-                    for j, obj in enumerate([obj1, obj2]):
-                        domains[i] = [obj]
-                        for params in itertools.product(*domains):
-                            values[j].append(
-                                self._problem.initial_value(fluent(*params))
-                            )
+                    domains[i] = (obj1,)
+                    for params1 in itertools.product(*domains):
+                        params2 = params1[:i] + (obj2,) + params1[i + 1 :]
+                        v1 = self._problem.initial_value(fluent(*params1))
+                        v2 = self._problem.initial_value(fluent(*params2))
+                        if v1 != v2:
+                            return False
                     domains[i] = tmp_domain
-                    if values[0] != values[1]:
-                        return False
 
-        if goal_exp_is_conjunction:
-            if len(goal_obj_to_fluent_map[obj1]) != len(goal_obj_to_fluent_map[obj2]):
-                return False
-
-            for fluent, objs1, is_true in goal_obj_to_fluent_map[obj1]:
-                objs2 = list(objs1)
-                for i, obj in enumerate(objs1):
-                    if obj == obj1:
-                        objs2[i] = obj2
-                if (fluent, tuple(objs2), is_true) not in goal_obj_to_fluent_map[obj2]:
-                    return False
-
-            return True
-
-        elif (
-            len(goal_obj_to_fluent_map[obj1]) == 0
-            and len(goal_obj_to_fluent_map[obj2]) == 0
-        ):
-            return True
-
-        else:
-            return False
+        return True
 
     def goals(self, goals: List[FNode]) -> Expression:
         return self._convert_expression(
