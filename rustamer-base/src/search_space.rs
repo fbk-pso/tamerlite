@@ -206,11 +206,6 @@ impl SearchSpace {
 
         // check conditions is done before calling this method
 
-        // remove end conditions
-        for c in e.end_conditions.iter() {
-            new_state.active_conditions.remove(&c);
-        }
-
         // check active conditions
         for c in new_state.active_conditions.iter() {
             let sat = match internal_evaluate(&c, state)? {
@@ -224,6 +219,11 @@ impl SearchSpace {
             if !sat {
                 return Ok(false);
             }
+        }
+
+        // remove end conditions
+        for c in e.end_conditions.iter() {
+            new_state.active_conditions.remove(&c);
         }
 
         // insert start conditions
