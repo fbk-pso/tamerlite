@@ -264,7 +264,8 @@ def test_heuristic_fixed_values():
             ) as compiler:
                 compilation_res = compiler.compile(problem)
             new_problem = compilation_res.problem
-            encoder = Encoder(new_problem)
+            map_back_action_instance = compilation_res.map_back_action_instance
+            encoder = Encoder(new_problem, problem, map_back_action_instance)
             ss: SearchSpaceABC = encoder.search_space
             init_state = ss.initial_state()
 
@@ -312,7 +313,8 @@ def test_heuristic_values(problems, data_regression):
             ) as compiler:
                 compilation_res = compiler.compile(problem)
             new_problem = compilation_res.problem
-            encoder = Encoder(new_problem)
+            map_back_action_instance = compilation_res.map_back_action_instance
+            encoder = Encoder(new_problem, problem, map_back_action_instance)
             ss: SearchSpaceABC = encoder.search_space
             init_state = ss.initial_state()
 
@@ -524,7 +526,8 @@ def test_search_space(problems):
             ) as compiler:
                 compilation_res = compiler.compile(problem)
             new_problem = compilation_res.problem
-            encoder = Encoder(new_problem)
+            map_back_action_instance = compilation_res.map_back_action_instance
+            encoder = Encoder(new_problem, problem, map_back_action_instance)
             ss: SearchSpaceABC = encoder.search_space
 
             init_state = ss.initial_state()
