@@ -511,6 +511,9 @@ class SearchSpace(SearchSpaceABC):
         actions_duration: List[Optional[Tuple[Expression, Expression, bool, bool]]],
         events: Dict[Action, List[Tuple[Timing, Event]]],
         actions: List[Action],
+        mutex: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
+        precedence: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
+        previous_equivalent_actions: List[Set[Action]],
         initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
         goal: Optional[Expression] = None,
         epsilon: Optional[Fraction] = None,
@@ -518,6 +521,7 @@ class SearchSpace(SearchSpaceABC):
         self._actions_duration = actions_duration
         self._events = events
         self._actions = actions
+        self._previous_equivalent_actions = previous_equivalent_actions
         self._initial_state = initial_state
         self._goal = goal
         self._epsilon = Fraction(1, 100) if epsilon is None else epsilon
@@ -674,6 +678,15 @@ class SearchSpace(SearchSpaceABC):
         action: Action,
         events: List[Tuple[Timing, Event]],
     ) -> Optional[State]:
+        if len(self._previous_equivalent_actions[action.idx]) > 0:
+            prev_action_found = False
+            for a, _, _ in state.path:
+                if a in self._previous_equivalent_actions[action.idx]:
+                    prev_action_found = True
+                    break
+            if not prev_action_found:
+                return None
+
         if self._is_temporal:
             assert new_state.temporal_network is not None
             start = (action, True, self._counter)
