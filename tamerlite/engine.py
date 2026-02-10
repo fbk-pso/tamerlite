@@ -98,7 +98,7 @@ class TamerLite(
         search: Optional[Union[SearchParams, MultiqueueParams]] = None,
         heuristic: Optional[str] = None,
         weight: Optional[float] = None,
-        simultaneity: str = "NO",
+        simultaneity: str = "SINGULAR",
     ):
         unified_planning.engines.Engine.__init__(self)
         up.engines.mixins.OneshotPlannerMixin.__init__(self)

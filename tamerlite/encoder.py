@@ -383,14 +383,21 @@ class Encoder:
                     f_to_actions.setdefault(f, []).append((a, i))
                 a_sc = {f for c in e1.start_conditions for f in get_fluents(c)}
                 a_ec = {f for c in e1.end_conditions for f in get_fluents(c)}
-                if len(a_sc) > 0 and any(
-                    contains_operator("or", c) for c in e1.start_conditions
+                if len(a_sc) > 0 and (
+                    self._simultaneity == "PRUNED"
+                    or (
+                        self._simultaneity == "PRUNED_REFINED"
+                        and any(contains_operator("or", c) for c in e1.start_conditions)
+                    )
                 ):
                     durative_conds.append((a, a_sc))
-                sdc = not any(
-                    contains_operator("or", c) or contains_operator("not", c)
-                    for c in e1.start_conditions + e1.end_conditions
-                )
+                if self._simultaneity in ["PRUNED", "SINGULAR", "EXHAUSTIVE"]:
+                    sdc = False
+                else:
+                    sdc = not any(
+                        contains_operator("or", c) or contains_operator("not", c)
+                        for c in e1.start_conditions + e1.end_conditions
+                    )
                 ev[(a, i)] = (a_p, a_e, a_sc, a_ec, a_e_pos, a_e_neg, sdc)
                 ev_list.append((a, i))
         sim_set = set()
@@ -421,13 +428,16 @@ class Encoder:
                         self._precedence.add(((a1, i1), (a2, i2)))
                         if not a_sdc or not b_e_neg.isdisjoint(a_ec):
                             sim_arcs.add(((a1, i1), (a2, i2)))
-        if self._simultaneity == "NO":
+        if self._simultaneity == "SINGULAR":
             self._simultaneity_groups = []
-        elif self._simultaneity == "ALL":
+        elif self._simultaneity == "EXHAUSTIVE":
             self._simultaneity_groups = get_all_simultaneity_actions_groups(
                 ev_list, self._mutex
             )
         else:
+            assert (
+                self._simultaneity == "PRUNED" or self._simultaneity == "PRUNED_REFINED"
+            )
             self._simultaneity_groups = get_simultaneity_actions_groups(
                 ev_list, self._mutex, sim_arcs, sim_set
             )
