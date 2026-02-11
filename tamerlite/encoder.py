@@ -149,6 +149,19 @@ class Encoder:
     def _compute_obj_to_prev_actions_map(
         self,
     ) -> Tuple[List[List[str]], Dict[str, Set[Action]]]:
+        """
+        This method produces two outputs:
+            1. A list of lists of object names, where each inner list corresponds
+                to the objects used as parameters for the action.
+            2. A dictionary mapping each object name to the set of actions that
+                include the previous equivalent object as a parameter.
+
+        Returns:
+            Tuple[List[List[str]], Dict[str, Set[Action]]]:
+                - List of object lists for each action.
+                - Mapping from object names to the set of actions.
+        """
+
         equivalent_objects = self._compute_equivalent_objects()
         prev_equivalent_object = {}
         for group in equivalent_objects:
@@ -177,6 +190,14 @@ class Encoder:
         return action_objects, obj_to_prev_actions_map
 
     def _compute_equivalent_objects(self) -> List[List[Object]]:
+        """
+        Compute groups of equivalent objects in the problem.
+
+        Returns:
+            List[List[Object]]: A list of equivalence classes, where each inner
+            list contains objects that are equivalent to each other.
+        """
+
         domain_objects = self._extract_domain_objects()
         goal_obj_to_fluent_map, goal_exp_is_conjunction = (
             self._extract_goal_obj_to_fluent_map()
@@ -216,6 +237,13 @@ class Encoder:
         return groups
 
     def _extract_domain_objects(self) -> Set[Object]:
+        """
+        Extract all objects that appear in the problem's domain.
+
+        Returns:
+            Set[Object]: A set of all objects that appear in the domain.
+        """
+
         domain_objects: Set[Object] = set()
         for a in self._lifted_problem.actions:
             if isinstance(a, up.model.InstantaneousAction):
@@ -252,6 +280,15 @@ class Encoder:
     def _extract_goal_obj_to_fluent_map(
         self,
     ) -> Tuple[Dict[Object, Set[Tuple[Fluent, Tuple[Object], Any]]], bool]:
+        """
+        Build a mapping from objects to goal fluents they appear in.
+
+        Returns:
+            Tuple[Dict[Object, Set[Tuple[Fluent, Tuple[Object], Any]]], bool]:
+                - A dictionary mapping each object to the set of associated fluents.
+                - A boolean indicating whether the goal expression is a conjunction.
+        """
+
         obj_to_fluent_map: Dict[Object, Set[Tuple[Fluent, Tuple[Object], Any]]] = {
             obj: set() for obj in self._problem.all_objects
         }
@@ -281,9 +318,8 @@ class Encoder:
 
                 return True
 
-        goal_exp = self._problem.environment.expression_manager.And(self._problem.goals)
         is_conjunction = True
-        stack: List[FNode] = [goal_exp]
+        stack: List[FNode] = list(self._problem.goals)
         while len(stack) > 0:
             exp = stack.pop()
             if exp.is_fluent_exp():
@@ -327,6 +363,21 @@ class Encoder:
         goal_obj_to_fluent_map: Dict[Object, Set[Tuple[Fluent, Tuple[Object], Any]]],
         goal_exp_is_conjunction: bool,
     ) -> bool:
+        """
+        Determine whether two objects are equivalent in the problem.
+
+        Args:
+            obj1 (Object): The first object to compare.
+            obj2 (Object): The second object to compare.
+            goal_obj_to_fluent_map (Dict[Object, Set[Tuple[Fluent, Tuple[Object], Any]]]):
+                Mapping from objects to the goal fluents they appear in.
+            goal_exp_is_conjunction (bool):
+                Flag indicating whether the goal expression is a conjunction.
+
+        Returns:
+            bool: True if the objects are equivalent; False otherwise.
+        """
+
         if goal_exp_is_conjunction:
             if len(goal_obj_to_fluent_map[obj1]) != len(goal_obj_to_fluent_map[obj2]):
                 # the two objects appear in a different number of goal fluents
