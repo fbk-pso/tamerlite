@@ -108,17 +108,20 @@ class Encoder:
 
         initial_state = None
         self._goal = None
+        action_objects = None
+        obj_to_prev_actions_map = None
         if full:
             initial_state = self.initial_state(problem.initial_values)
             self._goal = self.goals(problem.goals)
-            self._previous_equivalent_actions = (
-                self._compute_previous_equivalent_actions()
+            action_objects, obj_to_prev_actions_map = (
+                self._compute_obj_to_prev_actions_map()
             )
         self._search_space = SearchSpace(
             actions_duration,
             self._events,
             self._actions,
-            self._previous_equivalent_actions,
+            action_objects,
+            obj_to_prev_actions_map,
             initial_state,  # type: ignore[arg-type]
             self._goal,
             problem.epsilon,
@@ -143,57 +146,40 @@ class Encoder:
             initial_state.append(initial_state_values[f])
         return initial_state  # type: ignore[return-value]
 
-    def _compute_previous_equivalent_actions(self) -> List[Set[Action]]:
+    def _compute_obj_to_prev_actions_map(
+        self,
+    ) -> Tuple[List[List[str]], Dict[str, Set[Action]]]:
         equivalent_objects = self._compute_equivalent_objects()
         prev_equivalent_object = {}
         for group in equivalent_objects:
             for i, obj in enumerate(group):
                 prev_equivalent_object[obj] = None if i == 0 else group[i - 1]
 
-        ground_action_map = {}
-        for ground_action in self._problem.actions:
-            ai = self._map_back_action_instance(
-                self._problem.action(ground_action.name)()
-            )
+        obj_to_actions_map: Dict[Object, Set[Action]] = {}
+        action_objects: List[List[str]] = [[]] * len(self.actions)
+        for action in self._problem.actions:
+            ai = self._map_back_action_instance(action())
             assert ai is not None
-            action_objects = tuple(
-                p.object() for p in ai.actual_parameters if p.is_object_exp()
-            )
-            if len(action_objects) == len(ai.actual_parameters):
-                ground_action_map[(ai.action.name, action_objects)] = ground_action
+            objects = [p.object() for p in ai.actual_parameters if p.is_object_exp()]
+            action_objects[self.action_by_name[action.name].idx] = [
+                obj.name for obj in objects
+            ]
+            for obj in objects:
+                if obj not in obj_to_actions_map:
+                    obj_to_actions_map[obj] = set()
+                obj_to_actions_map[obj].add(self._action_by_name[action.name])
 
-        prev_actions: List[Set[Action]] = []
-        for action_name in self.action_names:
-            prev_actions.append(set())
-            ai = self._map_back_action_instance(self._problem.action(action_name)())
-            assert ai is not None
-            action_objects = tuple(
-                p.object() for p in ai.actual_parameters if p.is_object_exp()
-            )
-            if len(action_objects) < len(ai.actual_parameters):
-                # skip actions with non-object parameters
-                continue
+        obj_to_prev_actions_map = {}
+        for obj, prev_obj in prev_equivalent_object.items():
+            if prev_obj is not None and prev_obj in obj_to_actions_map:
+                obj_to_prev_actions_map[obj.name] = obj_to_actions_map[prev_obj]
 
-            for i, obj in enumerate(action_objects):
-                prev_obj = prev_equivalent_object[obj]
-                if prev_obj is None:
-                    continue
-
-                prev_action_objects = list(action_objects)
-                prev_action_objects[i] = prev_obj
-                prev_action = (ai.action.name, tuple(prev_action_objects))
-                if prev_action not in ground_action_map:
-                    continue
-
-                prev_ground_action = ground_action_map[prev_action]
-                prev_actions[-1].add(self._action_by_name[prev_ground_action.name])
-
-        return prev_actions
+        return action_objects, obj_to_prev_actions_map
 
     def _compute_equivalent_objects(self) -> List[List[Object]]:
         domain_objects = self._extract_domain_objects()
         goal_obj_to_fluent_map, goal_exp_is_conjunction = (
-            self._extract_goal_fluents_map()
+            self._extract_goal_obj_to_fluent_map()
         )
 
         objects: Dict[Type, List[Object]] = {}
@@ -211,18 +197,18 @@ class Encoder:
 
                 grouped[i] = True
                 groups.append([obj1])
+
+                if obj1 in domain_objects:
+                    # treat all domain objects as non-equivalent objects
+                    continue
+
                 for j in range(i + 1, len(objs)):
                     obj2 = objs[j]
                     if grouped[j]:
                         continue
 
                     if self._are_equivalent_objects(
-                        obj1,
-                        obj2,
-                        type,
-                        domain_objects,
-                        goal_obj_to_fluent_map,
-                        goal_exp_is_conjunction,
+                        obj1, obj2, goal_obj_to_fluent_map, goal_exp_is_conjunction
                     ):
                         grouped[j] = True
                         groups[-1].append(obj2)
@@ -260,25 +246,10 @@ class Encoder:
             exp = stack.pop()
             if exp.is_object_exp():
                 yield exp.object()
-
-            elif (
-                exp.is_fluent_exp()
-                or exp.is_and()
-                or exp.is_or()
-                or exp.is_not()
-                or exp.is_implies()
-                or exp.is_iff()
-                or exp.is_plus()
-                or exp.is_minus()
-                or exp.is_times()
-                or exp.is_div()
-                or exp.is_le()
-                or exp.is_lt()
-                or exp.is_equals()
-            ):
+            else:
                 stack.extend(exp.args)
 
-    def _extract_goal_fluents_map(
+    def _extract_goal_obj_to_fluent_map(
         self,
     ) -> Tuple[Dict[Object, Set[Tuple[Fluent, Tuple[Object], Any]]], bool]:
         obj_to_fluent_map: Dict[Object, Set[Tuple[Fluent, Tuple[Object], Any]]] = {
@@ -343,18 +314,7 @@ class Encoder:
             elif exp.is_and():
                 stack.extend(exp.args)
 
-            elif (
-                exp.is_or()
-                or exp.is_not()
-                or exp.is_implies()
-                or exp.is_iff()
-                or exp.is_plus()
-                or exp.is_minus()
-                or exp.is_times()
-                or exp.is_div()
-                or exp.is_le()
-                or exp.is_lt()
-            ):
+            else:
                 is_conjunction = False
                 stack.extend(exp.args)
 
@@ -364,18 +324,15 @@ class Encoder:
         self,
         obj1: Object,
         obj2: Object,
-        typename: Type,
-        domain_objects: Set[Object],
         goal_obj_to_fluent_map: Dict[Object, Set[Tuple[Fluent, Tuple[Object], Any]]],
         goal_exp_is_conjunction: bool,
     ) -> bool:
-        if obj1 in domain_objects or obj2 in domain_objects:
-            return False
-
         if goal_exp_is_conjunction:
             if len(goal_obj_to_fluent_map[obj1]) != len(goal_obj_to_fluent_map[obj2]):
+                # the two objects appear in a different number of goal fluents
                 return False
 
+            # for each goal fluent involving obj1, ensure the corresponding fluent exists for obj2
             for fluent, objs1, v in goal_obj_to_fluent_map[obj1]:
                 objs2 = list(objs1)
                 for i, obj in enumerate(objs1):
@@ -388,27 +345,35 @@ class Encoder:
             len(goal_obj_to_fluent_map[obj1]) == 0
             and len(goal_obj_to_fluent_map[obj2]) == 0
         ):
+            # the goal is not a conjunction and at least one of the objects appears in it
             return False
 
-        for fluent in self._problem.fluents:
-            if fluent.arity == 0 or all(
-                not (p.type.is_user_type() and typename.is_subtype(p.type))
-                for p in fluent.signature
-            ):
+        # For each fluent with an explicit initial value, swap obj1 and obj2 in its
+        # arguments and verify that the resulting fluent has the same initial value
+        obj1_exp = self._problem.environment.expression_manager.ObjectExp(obj1)
+        obj2_exp = self._problem.environment.expression_manager.ObjectExp(obj2)
+        for fluent_exp, value_exp in self._problem.explicit_initial_values.items():
+            fluent = fluent_exp.fluent()
+            if fluent.arity == 0:
                 continue
 
-            domains = [tuple(self._problem.objects(p.type)) for p in fluent.signature]
-            for i, p in enumerate(fluent.signature):
-                if p.type.is_user_type() and typename.is_subtype(p.type):
-                    tmp_domain = domains[i]
-                    domains[i] = (obj1,)
-                    for params1 in itertools.product(*domains):
-                        params2 = params1[:i] + (obj2,) + params1[i + 1 :]
-                        v1 = self._problem.initial_value(fluent(*params1))
-                        v2 = self._problem.initial_value(fluent(*params2))
-                        if v1 != v2:
-                            return False
-                    domains[i] = tmp_domain
+            new_args = list(fluent_exp.args)
+            args_changed = False
+            for i, arg in enumerate(new_args):
+                if arg.is_object_exp():
+                    if arg == obj1_exp:
+                        new_args[i] = obj2_exp
+                        args_changed = True
+                    elif arg == obj2_exp:
+                        new_args[i] = obj1_exp
+                        args_changed = True
+
+            if args_changed:
+                new_fluent_exp = self._problem.environment.expression_manager.FluentExp(
+                    fluent, new_args
+                )
+                if self._problem.initial_value(new_fluent_exp) != value_exp:
+                    return False
 
         return True
 

@@ -513,7 +513,8 @@ class SearchSpace(SearchSpaceABC):
         actions: List[Action],
         mutex: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
         precedence: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
-        previous_equivalent_actions: List[Set[Action]],
+        action_objects: Optional[List[List[str]]],
+        obj_to_prev_actions_map: Optional[Dict[str, Set[Action]]],
         initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
         goal: Optional[Expression] = None,
         epsilon: Optional[Fraction] = None,
@@ -521,7 +522,8 @@ class SearchSpace(SearchSpaceABC):
         self._actions_duration = actions_duration
         self._events = events
         self._actions = actions
-        self._previous_equivalent_actions = previous_equivalent_actions
+        self._action_objects = action_objects
+        self._obj_to_prev_actions_map = obj_to_prev_actions_map
         self._initial_state = initial_state
         self._goal = goal
         self._epsilon = Fraction(1, 100) if epsilon is None else epsilon
@@ -678,14 +680,21 @@ class SearchSpace(SearchSpaceABC):
         action: Action,
         events: List[Tuple[Timing, Event]],
     ) -> Optional[State]:
-        if len(self._previous_equivalent_actions[action.idx]) > 0:
-            prev_action_found = False
-            for a, _, _ in state.path:
-                if a in self._previous_equivalent_actions[action.idx]:
-                    prev_action_found = True
-                    break
-            if not prev_action_found:
-                return None
+        if (
+            self._action_objects is not None
+            and self._obj_to_prev_actions_map is not None
+        ):
+            for obj in self._action_objects[action.idx]:
+                if (
+                    obj not in self._obj_to_prev_actions_map
+                    or action in self._obj_to_prev_actions_map[obj]
+                ):
+                    continue
+
+                if not any(
+                    a in self._obj_to_prev_actions_map[obj] for a, _, _ in state.path
+                ):
+                    return None
 
         if self._is_temporal:
             assert new_state.temporal_network is not None
