@@ -363,7 +363,7 @@ class Encoder:
         ev = {}
         ev_list = []
         durative_conds = []
-        f_to_actions = {}
+        f_to_actions: Dict[int, List[Tuple[Action, int]]] = {}
         for a, le in self._events.items():
             for i, (_, e1) in enumerate(le):
                 a_p = set(get_fluents(e1.conditions))
