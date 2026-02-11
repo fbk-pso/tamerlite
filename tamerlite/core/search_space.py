@@ -559,6 +559,7 @@ class SearchSpace(SearchSpaceABC):
             if new_state is None:
                 return None
             if last_ev is not None:
+                assert new_state.temporal_network is not None
                 new_state.temporal_network.insert_interval(
                     last_ev, new_state.path[-1], left_bound=0, right_bound=0
                 )

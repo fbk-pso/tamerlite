@@ -8,7 +8,9 @@ def build_compatibility_graph(
     mutex: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
 ) -> Dict[Tuple[Action, int], Set[Tuple[Action, int]]]:
     mutex_set = set(mutex) | {(b, a) for (a, b) in mutex}
-    graph = {a: set() for a in actions}
+    graph: Dict[Tuple[Action, int], Set[Tuple[Action, int]]] = {
+        a: set() for a in actions
+    }
 
     for a, b in combinations(actions, 2):
         if (a, b) not in mutex_set:
@@ -50,7 +52,9 @@ def build_graph(
     actions: List[Tuple[Action, int]],
     arcs: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
 ) -> Dict[Tuple[Action, int], Set[Tuple[Action, int]]]:
-    graph = {a: set() for a in actions}
+    graph: Dict[Tuple[Action, int], Set[Tuple[Action, int]]] = {
+        a: set() for a in actions
+    }
     for u, v in arcs:
         graph[u].add(v)
     return graph
@@ -60,7 +64,7 @@ def build_mutex_map(
     actions: List[Tuple[Action, int]],
     mutex: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
 ) -> Dict[Tuple[Action, int], Set[Tuple[Action, int]]]:
-    m = {a: set() for a in actions}
+    m: Dict[Tuple[Action, int], Set[Tuple[Action, int]]] = {a: set() for a in actions}
     for a, b in mutex:
         m[a].add(b)
         m[b].add(a)
@@ -115,7 +119,7 @@ def get_simultaneity_actions_groups(
     actions: List[Tuple[Action, int]],
     mutex: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
     precedence: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
-    sim_set: Set[Set[Tuple[Action, int]]],
+    sim_set: Set[frozenset[Tuple[Action, int]]],
 ) -> List[Set[Tuple[Action, int]]]:
     unique_subsets = set()
 
@@ -124,7 +128,7 @@ def get_simultaneity_actions_groups(
         for subset in subsets:
             unique_subsets.add(frozenset(subset))
 
-    for s in find_mutex_free_cycles(actions, mutex, precedence):
-        unique_subsets.add(frozenset(s))
+    for c in find_mutex_free_cycles(actions, mutex, precedence):
+        unique_subsets.add(frozenset(c))
 
     return [set(s) for s in unique_subsets]
