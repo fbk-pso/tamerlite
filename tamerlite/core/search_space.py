@@ -192,7 +192,10 @@ class State:
 
 class MutexChecker:
     def __init__(
-        self, event_fluents: List[List[Tuple[Set[int], Set[int], Set[int], Set[int]]]]
+        self,
+        event_fluents: List[
+            List[Tuple[Set[int], Set[int], Set[int], Set[int], Set[int]]]
+        ],
     ):
         self._event_fluents = event_fluents
         self._mutex: Dict[Tuple[Tuple[Action, int], Tuple[Action, int]], bool] = {}
@@ -206,8 +209,8 @@ class MutexChecker:
 
         are_mutex = self._mutex.get(events_pair, None)
         if are_mutex is None:
-            (_, a_e, a_pe, _) = self._event_fluents[a1.idx][i1]
-            (b_p, b_e, _, _) = self._event_fluents[a2.idx][i2]
+            (_, a_e, a_pe, _, _) = self._event_fluents[a1.idx][i1]
+            (b_p, b_e, _, _, _) = self._event_fluents[a2.idx][i2]
             are_mutex = not (b_p.isdisjoint(a_e) and a_pe.isdisjoint(b_e))
             self._mutex[events_pair] = are_mutex
         return are_mutex
@@ -215,7 +218,10 @@ class MutexChecker:
 
 class PrecedenceChecker:
     def __init__(
-        self, event_fluents: List[List[Tuple[Set[int], Set[int], Set[int], Set[int]]]]
+        self,
+        event_fluents: List[
+            List[Tuple[Set[int], Set[int], Set[int], Set[int], Set[int]]]
+        ],
     ):
         self._event_fluents = event_fluents
         self._precedence: Dict[Tuple[Tuple[Action, int], Tuple[Action, int]], bool] = {}
@@ -229,9 +235,9 @@ class PrecedenceChecker:
 
         res = self._precedence.get(events_pair, None)
         if res is None:
-            (_, a_e, _, _) = self._event_fluents[a1.idx][i1]
-            (_, _, _, b_sc) = self._event_fluents[a2.idx][i2]
-            res = not a_e.isdisjoint(b_sc)
+            (_, a_e, _, _, a_ec) = self._event_fluents[a1.idx][i1]
+            (_, b_e, _, b_sc, _) = self._event_fluents[a2.idx][i2]
+            res = not (a_e.isdisjoint(b_sc) and b_e.isdisjoint(a_ec))
             self._precedence[events_pair] = res
         return res
 
@@ -518,9 +524,9 @@ class SearchSpace(SearchSpaceABC):
         self._is_temporal = any(v is not None for v in actions_duration)
         self._counter = 0
 
-        event_fluents: List[List[Tuple[Set[int], Set[int], Set[int], Set[int]]]] = [
-            [] for _ in actions
-        ]
+        event_fluents: List[
+            List[Tuple[Set[int], Set[int], Set[int], Set[int], Set[int]]]
+        ] = [[] for _ in actions]
         for a, le in self._events.items():
             for _, e in le:
                 a_p = set(get_fluents(e.conditions))
@@ -528,7 +534,8 @@ class SearchSpace(SearchSpaceABC):
                 a_e = set(eff.fluent for eff in e.effects)
                 a_pe = a_p.union(a_e)
                 a_sc = {f for c in e.start_conditions for f in get_fluents(c)}
-                event_fluents[a.idx].append((a_p, a_e, a_pe, a_sc))
+                a_ec = {f for c in e.end_conditions for f in get_fluents(c)}
+                event_fluents[a.idx].append((a_p, a_e, a_pe, a_sc, a_ec))
         self._mutex = MutexChecker(event_fluents)
         self._precedence = PrecedenceChecker(event_fluents)
 
