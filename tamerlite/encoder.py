@@ -49,6 +49,7 @@ class Encoder:
         problem: Problem,
         lifted_problem: Problem,
         map_back_action_instance: Callable[[ActionInstance], Optional[ActionInstance]],
+        symmetry_breaking: bool,
         full: bool = True,
     ):
         self._problem = problem
@@ -113,9 +114,10 @@ class Encoder:
         if full:
             initial_state = self.initial_state(problem.initial_values)
             self._goal = self.goals(problem.goals)
-            action_objects, obj_to_prev_actions_map = (
-                self._compute_obj_to_prev_actions_map()
-            )
+            if symmetry_breaking:
+                action_objects, obj_to_prev_actions_map = (
+                    self._compute_obj_to_prev_actions_map()
+                )
         self._search_space = SearchSpace(
             actions_duration,
             self._events,

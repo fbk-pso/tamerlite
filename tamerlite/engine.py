@@ -80,6 +80,7 @@ class SearchParams(HeuristicParams):
     search: Optional[str] = None
     early_termination: Optional[bool] = None
     weak_equality: Optional[bool] = None
+    symmetry_breaking: Optional[bool] = None
 
 
 @dataclass(frozen=True)
@@ -87,6 +88,7 @@ class MultiqueueParams:
     queues: List[HeuristicParams]
     early_termination: Optional[bool] = None
     weak_equality: Optional[bool] = None
+    symmetry_breaking: Optional[bool] = None
 
 
 class TamerLite(
@@ -261,7 +263,13 @@ class TamerLite(
                 compilation_res = compiler.compile(problem)
                 map_back_action_instance = compilation_res.map_back_action_instance
             new_problem = compilation_res.problem
-            encoder = Encoder(new_problem, problem, map_back_action_instance)
+
+            symmetry_breaking = True
+            if self._params is not None and self._params.symmetry_breaking is not None:
+                symmetry_breaking = self._params.symmetry_breaking
+            encoder = Encoder(
+                new_problem, problem, map_back_action_instance, symmetry_breaking
+            )
 
             early_termination = False
             if self._params is not None and self._params.early_termination is not None:
