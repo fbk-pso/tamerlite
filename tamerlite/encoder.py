@@ -99,7 +99,6 @@ class Encoder:
                 actions_duration_map[a.name] = None
         actions_duration = [actions_duration_map[a] for a in self._action_names]
         self._build_events()
-        self._build_mutex()
 
         initial_state = None
         self._goal = None
@@ -112,8 +111,6 @@ class Encoder:
             actions_duration,
             self._events,
             self._actions,
-            self._mutex,
-            self._precedence,
             initial_state,  # type: ignore[arg-type]
             self._goal,
             problem.epsilon,
@@ -348,36 +345,3 @@ class Encoder:
                 ]
                 if not self._simplifier.simplify(em.And(a.preconditions)).is_false():
                     self._applicable_actions.append(self.get_action(a.name))
-
-    def _build_mutex(self):
-        self._mutex = set()
-        self._precedence = set()
-        ev = {}
-        ev_list = []
-        for a, le in self._events.items():
-            for i, (_, e1) in enumerate(le):
-                a_p = set(get_fluents(e1.conditions))
-                a_p.update(x for e in e1.effects for x in get_fluents(e.value))
-                a_e = set(e.fluent for e in e1.effects)
-                a_sc = {f for c in e1.start_conditions for f in get_fluents(c)}
-                a_ec = {f for c in e1.end_conditions for f in get_fluents(c)}
-                ev[(a, i)] = (a_p, a_e, a_sc, a_ec)
-                ev_list.append((a, i))
-        for a1, i1 in ev_list:
-            for a2, i2 in ev_list:
-                if a1 == a2:
-                    # Since we do not allow self-overlapping, events of the same action are always mutex
-                    self._mutex.add(((a1, i1), (a2, i2)))
-                else:
-                    (a_p, a_e, _, a_ec) = ev[(a1, i1)]
-                    (b_p, b_e, b_sc, _) = ev[(a2, i2)]
-                    if (
-                        not a_p.isdisjoint(b_e)
-                        or not b_p.isdisjoint(a_e)
-                        or not a_e.isdisjoint(b_e)
-                    ):
-                        self._mutex.add(((a1, i1), (a2, i2)))
-                    if not a_e.isdisjoint(b_sc):
-                        self._precedence.add(((a1, i1), (a2, i2)))
-                    if not b_e.isdisjoint(a_ec):
-                        self._precedence.add(((a1, i1), (a2, i2)))

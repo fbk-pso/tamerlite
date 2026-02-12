@@ -190,6 +190,52 @@ class State:
         )
 
 
+class MutexChecker:
+    def __init__(
+        self, event_fluents: List[List[Tuple[Set[int], Set[int], Set[int], Set[int]]]]
+    ):
+        self._event_fluents = event_fluents
+        self._mutex: Dict[Tuple[Tuple[Action, int], Tuple[Action, int]], bool] = {}
+
+    def __contains__(
+        self, events_pair: Tuple[Tuple[Action, int], Tuple[Action, int]]
+    ) -> bool:
+        (a1, i1), (a2, i2) = events_pair
+        if a1 == a2:
+            return True
+
+        are_mutex = self._mutex.get(events_pair, None)
+        if are_mutex is None:
+            (_, a_e, a_pe, _) = self._event_fluents[a1.idx][i1]
+            (b_p, b_e, _, _) = self._event_fluents[a2.idx][i2]
+            are_mutex = not (b_p.isdisjoint(a_e) and a_pe.isdisjoint(b_e))
+            self._mutex[events_pair] = are_mutex
+        return are_mutex
+
+
+class PrecedenceChecker:
+    def __init__(
+        self, event_fluents: List[List[Tuple[Set[int], Set[int], Set[int], Set[int]]]]
+    ):
+        self._event_fluents = event_fluents
+        self._precedence: Dict[Tuple[Tuple[Action, int], Tuple[Action, int]], bool] = {}
+
+    def __contains__(
+        self, events_pair: Tuple[Tuple[Action, int], Tuple[Action, int]]
+    ) -> bool:
+        (a1, i1), (a2, i2) = events_pair
+        if a1 == a2:
+            return False
+
+        res = self._precedence.get(events_pair, None)
+        if res is None:
+            (_, a_e, _, _) = self._event_fluents[a1.idx][i1]
+            (_, _, _, b_sc) = self._event_fluents[a2.idx][i2]
+            res = not a_e.isdisjoint(b_sc)
+            self._precedence[events_pair] = res
+        return res
+
+
 def get_fluent_value(fluent: int, state: State) -> Union[bool, int, Fraction, str]:
     return state.assignments[fluent]
 
@@ -459,8 +505,6 @@ class SearchSpace(SearchSpaceABC):
         actions_duration: List[Optional[Tuple[Expression, Expression, bool, bool]]],
         events: Dict[Action, List[Tuple[Timing, Event]]],
         actions: List[Action],
-        mutex: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
-        precedence: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
         initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
         goal: Optional[Expression] = None,
         epsilon: Optional[Fraction] = None,
@@ -468,13 +512,25 @@ class SearchSpace(SearchSpaceABC):
         self._actions_duration = actions_duration
         self._events = events
         self._actions = actions
-        self._mutex = mutex
-        self._precedence = precedence
         self._initial_state = initial_state
         self._goal = goal
         self._epsilon = Fraction(1, 100) if epsilon is None else epsilon
         self._is_temporal = any(v is not None for v in actions_duration)
         self._counter = 0
+
+        event_fluents: List[List[Tuple[Set[int], Set[int], Set[int], Set[int]]]] = [
+            [] for _ in actions
+        ]
+        for a, le in self._events.items():
+            for _, e in le:
+                a_p = set(get_fluents(e.conditions))
+                a_p.update(x for eff in e.effects for x in get_fluents(eff.value))
+                a_e = set(eff.fluent for eff in e.effects)
+                a_pe = a_p.union(a_e)
+                a_sc = {f for c in e.start_conditions for f in get_fluents(c)}
+                event_fluents[a.idx].append((a_p, a_e, a_pe, a_sc))
+        self._mutex = MutexChecker(event_fluents)
+        self._precedence = PrecedenceChecker(event_fluents)
 
     @property
     def is_temporal(self) -> bool:

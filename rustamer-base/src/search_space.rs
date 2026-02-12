@@ -59,14 +59,113 @@ pub trait SearchSpaceTrait {
     ) -> PyResult<Vec<(Option<BigRational>, Action, Option<BigRational>)>>;
 }
 
+#[derive(Debug)]
+struct MutexChecker {
+    mutex: Mutex<FxHashMap<((Action, usize), (Action, usize)), bool>>,
+}
+
+impl MutexChecker {
+    fn new() -> Self {
+        MutexChecker {
+            mutex: Mutex::new(FxHashMap::with_hasher(FxBuildHasher::default())),
+        }
+    }
+
+    fn check(
+        &self,
+        events_pair: &((Action, usize), (Action, usize)),
+        event_fluents: &Vec<
+            Vec<(
+                FxHashSet<usize>,
+                FxHashSet<usize>,
+                FxHashSet<usize>,
+                FxHashSet<usize>,
+            )>,
+        >,
+    ) -> bool {
+        let ((a1, i1), (a2, i2)) = events_pair;
+        if a1 == a2 {
+            return true;
+        }
+
+        let mut mutex = self.mutex.lock().unwrap();
+        if let Some(are_mutex) = mutex.get(&events_pair) {
+            return *are_mutex;
+        }
+
+        let (_, a_e, a_pe, _) = &event_fluents[a1.idx][*i1];
+        let (b_p, b_e, _, _) = &event_fluents[a2.idx][*i2];
+        let are_mutex = !(b_p.is_disjoint(a_e) && a_pe.is_disjoint(b_e));
+        mutex.insert(*events_pair, are_mutex);
+        are_mutex
+    }
+}
+
+#[derive(Debug)]
+struct PrecedenceChecker {
+    precedence: Mutex<FxHashMap<((Action, usize), (Action, usize)), bool>>,
+}
+
+impl PrecedenceChecker {
+    fn new() -> Self {
+        PrecedenceChecker {
+            precedence: Mutex::new(FxHashMap::with_hasher(FxBuildHasher::default())),
+        }
+    }
+
+    fn check(
+        &self,
+        events_pair: &((Action, usize), (Action, usize)),
+        event_fluents: &Vec<
+            Vec<(
+                FxHashSet<usize>,
+                FxHashSet<usize>,
+                FxHashSet<usize>,
+                FxHashSet<usize>,
+            )>,
+        >,
+    ) -> bool {
+        let ((a1, i1), (a2, i2)) = events_pair;
+        if a1 == a2 {
+            return true;
+        }
+
+        let mut precedence = self.precedence.lock().unwrap();
+        if let Some(res) = precedence.get(&events_pair) {
+            return *res;
+        }
+
+        let (_, a_e, _, _) = &event_fluents[a1.idx][*i1];
+        let (_, _, _, b_sc) = &event_fluents[a2.idx][*i2];
+        let res = !a_e.is_disjoint(b_sc);
+        precedence.insert(*events_pair, res);
+        res
+    }
+}
+
+fn get_fluents<'a>(expr: &'a Vec<ExpressionNode>) -> impl Iterator<Item = usize> + 'a {
+    expr.iter().filter_map(|node| match node {
+        ExpressionNode::Fluent(fluent) => Some(*fluent),
+        _ => None,
+    })
+}
+
 #[pyclass(name = "SearchSpace", frozen)]
 #[derive(Debug)]
 pub struct SearchSpace {
     actions_duration: Vec<Option<(Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool)>>,
     events: FxHashMap<Action, Vec<(Timing, Event)>>,
     actions: Vec<Action>,
-    mutex: FxHashSet<((Action, usize), (Action, usize))>,
-    precedence: FxHashSet<((Action, usize), (Action, usize))>,
+    event_fluents: Vec<
+        Vec<(
+            FxHashSet<usize>,
+            FxHashSet<usize>,
+            FxHashSet<usize>,
+            FxHashSet<usize>,
+        )>,
+    >,
+    mutex: MutexChecker,
+    precedence: PrecedenceChecker,
     initial_state: Option<Vec<ExpressionNode>>,
     goal: Option<Vec<ExpressionNode>>,
     tn_interpreter: TNInterpreter,
@@ -79,13 +178,11 @@ pub struct SearchSpace {
 #[pymethods]
 impl SearchSpace {
     #[new]
-    #[pyo3(signature = (actions_duration, events, actions, mutex, precedence, initial_state=None, goal=None, epsilon=None))]
+    #[pyo3(signature = (actions_duration, events, actions, initial_state=None, goal=None, epsilon=None))]
     fn new(
         actions_duration: Vec<Option<(Vec<PyExpressionNode>, Vec<PyExpressionNode>, bool, bool)>>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         actions: Vec<Action>,
-        mutex: FxHashSet<((Action, usize), (Action, usize))>,
-        precedence: FxHashSet<((Action, usize), (Action, usize))>,
         initial_state: Option<Vec<PyExpressionNode>>,
         goal: Option<Vec<PyExpressionNode>>,
         #[pyo3(from_py_with = get_option_big_rational)] epsilon: Option<BigRational>,
@@ -107,14 +204,31 @@ impl SearchSpace {
             })
             .collect();
 
+        let mut event_fluents = vec![Vec::new(); actions.len()];
+        for (a, le) in &events {
+            for (_, e) in le {
+                let mut a_p: FxHashSet<usize> = get_fluents(&e.conditions).collect();
+                a_p.extend(e.effects.iter().flat_map(|eff| get_fluents(&eff.value)));
+                let a_e: FxHashSet<usize> = e.effects.iter().map(|eff| eff.fluent).collect();
+                let a_pe: FxHashSet<usize> = a_p.union(&a_e).copied().collect();
+                let a_sc: FxHashSet<usize> = e
+                    .start_conditions
+                    .iter()
+                    .flat_map(|c| get_fluents(c))
+                    .collect();
+                event_fluents[a.idx].push((a_p, a_e, a_pe, a_sc));
+            }
+        }
+
         let tn_interpreter = TNInterpreter::new(&actions, &events);
 
         let res = SearchSpace {
             actions_duration: converted_actions_duration,
             events: events,
             actions: actions,
-            mutex: mutex,
-            precedence: precedence,
+            event_fluents: event_fluents,
+            mutex: MutexChecker::new(),
+            precedence: PrecedenceChecker::new(),
             initial_state: initial_state
                 .map(|inner_map| inner_map.into_iter().map(|v| v.v).collect()),
             goal: goal.map(|inner_vec| inner_vec.into_iter().map(|e| e.v).collect()),
@@ -259,7 +373,7 @@ impl SearchSpace {
                 let ev2 = self.tn_interpreter.get_event_id(e2.0, e2.1, e2.2);
                 let e_id = (e.action, *index);
                 let e2_id = (e2.0, e2.1);
-                if self.mutex.contains(&(e_id, e2_id)) {
+                if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
                     let b: f32 = -self.epsilon;
                     tn.add(&ev2, &ev, &b);
                 } else {
@@ -272,7 +386,7 @@ impl SearchSpace {
                     let e_id = (e.action, *index);
                     let e2_id = (a.clone(), j + i.0);
                     let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, id2);
-                    if self.mutex.contains(&(e_id, e2_id)) {
+                    if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
                         let b: f32 = -self.epsilon;
                         tn.add(&ev, &ev2, &b);
                     } else {
@@ -511,10 +625,10 @@ impl SearchSpaceTrait for SearchSpace {
                             let e_id = (e.action, index);
                             let e2_id = (e2.action, e2.pos);
                             let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, *id2);
-                            if self.mutex.contains(&(e_id, e2_id)) {
+                            if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
                                 let b = -self.epsilon_rational.clone();
                                 tn.add(&ev2, &ev, &b);
-                            } else if self.precedence.contains(&(e2_id, e_id)) {
+                            } else if self.precedence.check(&(e2_id, e_id), &self.event_fluents) {
                                 tn.add(&ev2, &ev, &mk_rational(0, 1));
                             } else {
                                 // tn.add(&ev2, &ev, &mk_rational(0, 1));
@@ -526,7 +640,7 @@ impl SearchSpaceTrait for SearchSpace {
                                 let e_id = (e.action, index);
                                 let e2_id = (a.clone(), j + i.0);
                                 let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, id2);
-                                if self.mutex.contains(&(e_id, e2_id)) {
+                                if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
                                     let b = -self.epsilon_rational.clone();
                                     tn.add(&ev, &ev2, &b);
                                 } else {
@@ -582,10 +696,10 @@ impl SearchSpaceTrait for SearchSpace {
                         let e_id = (e.action, 0);
                         let e2_id = (e2.action, e2.pos);
                         let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, *id2);
-                        if self.mutex.contains(&(e_id, e2_id)) {
+                        if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
                             let b = -self.epsilon_rational.clone();
                             tn.add(&ev2, &ev, &b);
-                        } else if self.precedence.contains(&(e2_id, e_id)) {
+                        } else if self.precedence.check(&(e2_id, e_id), &self.event_fluents) {
                             tn.add(&ev2, &ev, &mk_rational(0, 1));
                         } else {
                             // tn.add(&ev2, &ev, &mk_rational(0, 1));
@@ -597,7 +711,7 @@ impl SearchSpaceTrait for SearchSpace {
                             let e_id = (e.action, 0);
                             let e2_id = (a.clone(), j + i.0);
                             let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, id2);
-                            if self.mutex.contains(&(e_id, e2_id)) {
+                            if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
                                 let b = -self.epsilon_rational.clone();
                                 tn.add(&ev, &ev2, &b);
                             } else {
