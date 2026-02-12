@@ -24,7 +24,7 @@ import up_test_cases.builtin
 
 import tamerlite
 from tamerlite.core.heuristics import Heuristic
-from tamerlite.core import HFF, HAdd, HMax, HMaxNumeric, CustomHeuristic
+from tamerlite.core import HFF, HAdd, HMax, HMaxExplicit, CustomHeuristic
 from tamerlite.core import simplify
 from tamerlite.core.search_space import SearchSpaceABC
 from tamerlite.encoder import Encoder
@@ -37,6 +37,7 @@ import pytest
 import importlib
 import os
 import types
+from functools import partial
 
 env = get_environment()
 env.factory.add_engine("tamerlite", "tamerlite.engine", "TamerLite")
@@ -44,7 +45,10 @@ env.factory.add_engine("tamerlite", "tamerlite.engine", "TamerLite")
 
 @pytest.fixture
 def problems():
-    test_problems = [problems_generator.get_problem_logistics(1, 1, 4, 2)]
+    test_problems = [
+        problems_generator.get_problem_logistics(1, 1, 4, 2),
+        problems_generator.get_problem_numeric(),
+    ]
 
     up_example_problems = list(
         unified_planning.test.examples.get_example_problems().values()
@@ -125,6 +129,7 @@ def skip(problem, search, heuristic, disable_rustamer, internal_heuristic_cache)
         or (problem.name == "robot_fluent_of_user_type_with_int_id" and search == "dfs")
         or (problem.name == "depots_p01" and search in ["dfs", "bfs"])
         or (problem.name == "RoboLogistics" and search == "dfs")
+        or (problem.name == "NumericProblem" and search == "dfs")
     )
 
 
@@ -170,7 +175,15 @@ def test_heuristics(problems):
             weak_equality_flags = [False]
 
         search_kind = "wastar"
-        for heuristic in ["hff", "hadd", "hmax", "hmax_numeric"]:
+        for heuristic in [
+            "hff",
+            "hadd",
+            "hmax",
+            "hff_no_numbers",
+            "hadd_no_numbers",
+            "hmax_no_numbers",
+            "hmax_explicit",
+        ]:
             for weak_equality in weak_equality_flags:
                 results = []
                 for disable_rustamer in [True, False]:
@@ -212,61 +225,78 @@ def test_heuristics(problems):
 
 
 def test_heuristic_fixed_values():
-    problem = problems_generator.get_problem_logistics(1, 1, 2, 1)
-    values = {
-        "hmax_numeric": [4, 4, 3, 3, 2, 1, 0],
-        "hmax": [4, 4, 3, 3, 2, 1, 0],
-        "hadd": [9, 8, 5, 8, 4, 1, 0],
-        "hff": [6, 6, 4, 3, 2, 1, 0],
-    }
-    for disable_rustamer in [True, False]:
-        reload_tamerlite(disable_rustamer)
-        from tamerlite.core import HFF, HAdd, HMax, HMaxNumeric
+    problems = [
+        (
+            problems_generator.get_problem_logistics(1, 1, 2, 1),
+            {
+                "hmax_explicit": [4, 4, 3, 3, 2, 1, 0],
+                "hmax": [4, 4, 3, 3, 2, 1, 0],
+                "hadd": [9, 8, 5, 8, 4, 1, 0],
+                "hff": [6, 6, 4, 3, 2, 1, 0],
+            },
+            [
+                "load_at_depot_r0_plt0_p1",
+                "move_r0_p1_p0",
+                "make_treatment_r0_plt0_p0_t0",
+                "make_treatment_r0_plt0_p0_t0",
+                "load_r0_plt0_p0_t0",
+                "make_treatment_r0_plt0_p0_t0",
+            ],
+        ),
+        (
+            problems_generator.get_problem_numeric(),
+            {
+                "hmax_explicit": [5, 4, 3, 3, 3, 2],
+                "hmax": [5, 4, 3, 3, 3, 2],
+                "hadd": [12, 9, 6, 5, 4, 4],
+                "hff": [3, 2, 3, 3, 3, 2],
+            },
+            ["action1", "action2", "action3", "action3", "action4"],
+        ),
+    ]
+    for problem, values, path in problems:
+        for disable_rustamer in [False]:
+            reload_tamerlite(disable_rustamer)
+            from tamerlite.core import HFF, HAdd, HMax, HMaxExplicit
 
-        with problem.environment.factory.Compiler(
-            compilation_kind="GROUNDING", problem_kind=problem.kind
-        ) as compiler:
-            compilation_res = compiler.compile(problem)
-        new_problem = compilation_res.problem
-        encoder = Encoder(new_problem)
-        ss: SearchSpaceABC = encoder.search_space
-        init_state = ss.initial_state()
+            with problem.environment.factory.Compiler(
+                compilation_kind="GROUNDING", problem_kind=problem.kind
+            ) as compiler:
+                compilation_res = compiler.compile(problem)
+            new_problem = compilation_res.problem
+            encoder = Encoder(new_problem)
+            ss: SearchSpaceABC = encoder.search_space
+            init_state = ss.initial_state()
 
-        path = [
-            "load_at_depot_r0_plt0_p1",
-            "move_r0_p1_p0",
-            "make_treatment_r0_plt0_p0_t0",
-            "make_treatment_r0_plt0_p0_t0",
-            "load_r0_plt0_p0_t0",
-            "make_treatment_r0_plt0_p0_t0",
-        ]
-        states = [init_state]
-        for action_name in path:
-            state = ss.get_successor_state(states[-1], encoder.get_action(action_name))
-            states.append(state)
-
-        for heuristic_class, heuristic_name in [
-            (HFF, "hff"),
-            (HAdd, "hadd"),
-            (HMax, "hmax"),
-            (HMaxNumeric, "hmax_numeric"),
-        ]:
-            for internal_caching in [True, False]:
-                heuristic: Heuristic = heuristic_class(
-                    encoder.actions,
-                    encoder.fluent_types,
-                    encoder.objects,
-                    encoder.events,
-                    encoder.goal,
-                    internal_caching=internal_caching,
-                    cache_value_in_state=False,
+            states = [init_state]
+            for action_name in path:
+                state = ss.get_successor_state(
+                    states[-1], encoder.get_action(action_name)
                 )
+                states.append(state)
 
-                for i, state in enumerate(states):
-                    h_val = heuristic.eval(state, ss)
-                    if h_val is not None:
-                        h_val = int(h_val)
-                    assert values[heuristic_name][i] == h_val
+            for heuristic_class, heuristic_name in [
+                (HFF, "hff"),
+                (HAdd, "hadd"),
+                (HMax, "hmax"),
+                (HMaxExplicit, "hmax_explicit"),
+            ]:
+                for internal_caching in [True, False]:
+                    heuristic: Heuristic = heuristic_class(
+                        encoder.actions,
+                        encoder.fluent_types,
+                        encoder.objects,
+                        encoder.events,
+                        encoder.goal,
+                        internal_caching=internal_caching,
+                        cache_value_in_state=False,
+                    )
+
+                    for i, state in enumerate(states):
+                        h_val = heuristic.eval(state, ss)
+                        if h_val is not None:
+                            h_val = int(h_val)
+                        assert values[heuristic_name][i] == h_val
 
 
 def test_heuristic_values(problems, data_regression):
@@ -275,7 +305,7 @@ def test_heuristic_values(problems, data_regression):
         values = {}
         for disable_rustamer in [True, False]:
             reload_tamerlite(disable_rustamer)
-            from tamerlite.core import HFF, HAdd, HMax, HMaxNumeric
+            from tamerlite.core import HFF, HAdd, HMax, HMaxExplicit
 
             with problem.environment.factory.Compiler(
                 compilation_kind="GROUNDING", problem_kind=problem.kind
@@ -293,7 +323,10 @@ def test_heuristic_values(problems, data_regression):
                 (HFF, "hff"),
                 (HAdd, "hadd"),
                 (HMax, "hmax"),
-                (HMaxNumeric, "hmax_numeric"),
+                (partial(HFF, disable_numeric_reasoning=True), "hff_no_numbers"),
+                (partial(HAdd, disable_numeric_reasoning=True), "hadd_no_numbers"),
+                (partial(HMax, disable_numeric_reasoning=True), "hmax_no_numbers"),
+                (HMaxExplicit, "hmax_explicit"),
             ]:
                 for internal_caching in [True, False]:
                     if skip(

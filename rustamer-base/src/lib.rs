@@ -54,13 +54,13 @@ pub use expressions::{
 };
 pub use expressions_utils::{
     evaluate,
-    shift_expression,
+    py_shift_expression,
     simplify,
     FluentValueTrait
 };
 pub use heuristics::{
     DeleteRelaxationHeuristic,
-    HMaxNumeric,
+    HMaxExplicit,
     CustomHeuristic,
     HeuristicKind,
     HeuristicTrait,

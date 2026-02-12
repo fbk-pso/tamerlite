@@ -18,7 +18,7 @@
 from typing import List, Dict
 
 from unified_planning.model import FNode, AbstractProblem
-from unified_planning.model.walkers import DagWalker, Dnf
+from unified_planning.model.walkers import DagWalker, Nnf
 
 from tamerlite.core import Expression
 from tamerlite.core import (
@@ -40,8 +40,8 @@ class Converter(DagWalker):
 
     def convert(self, expression: FNode) -> Expression:
         """Converts the given expression."""
-        w = Dnf(expression.environment)
-        return self.walk(w.get_dnf_expression(expression))
+        w = Nnf(expression.environment)
+        return self.walk(w.get_nnf_expression(expression))
 
     def walk_and(self, expression: FNode, args: List[Expression]) -> Expression:
         if len(args) == 0:

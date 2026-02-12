@@ -64,8 +64,16 @@ pub fn rational_to_f32(n: &BigRational) -> f32 {
     n.to_f32().unwrap()
 }
 
+pub fn rational_to_f64(n: &BigRational) -> f64 {
+    n.to_f64().unwrap()
+}
+
 pub fn integer_to_i32(n: &BigInt) -> i32 {
     n.to_i32().unwrap()
+}
+
+pub fn integer_to_f64(n: &BigInt) -> f64 {
+    n.to_f64().unwrap()
 }
 
 #[derive(Debug)]
