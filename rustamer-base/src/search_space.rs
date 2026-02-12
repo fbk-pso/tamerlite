@@ -80,6 +80,7 @@ impl MutexChecker {
                 FxHashSet<usize>,
                 FxHashSet<usize>,
                 FxHashSet<usize>,
+                FxHashSet<usize>,
             )>,
         >,
     ) -> bool {
@@ -93,8 +94,8 @@ impl MutexChecker {
             return *are_mutex;
         }
 
-        let (_, a_e, a_pe, _) = &event_fluents[a1.idx][*i1];
-        let (b_p, b_e, _, _) = &event_fluents[a2.idx][*i2];
+        let (_, a_e, a_pe, _, _) = &event_fluents[a1.idx][*i1];
+        let (b_p, b_e, _, _, _) = &event_fluents[a2.idx][*i2];
         let are_mutex = !(b_p.is_disjoint(a_e) && a_pe.is_disjoint(b_e));
         mutex.insert(*events_pair, are_mutex);
         are_mutex
@@ -122,6 +123,7 @@ impl PrecedenceChecker {
                 FxHashSet<usize>,
                 FxHashSet<usize>,
                 FxHashSet<usize>,
+                FxHashSet<usize>,
             )>,
         >,
     ) -> bool {
@@ -135,9 +137,9 @@ impl PrecedenceChecker {
             return *res;
         }
 
-        let (_, a_e, _, _) = &event_fluents[a1.idx][*i1];
-        let (_, _, _, b_sc) = &event_fluents[a2.idx][*i2];
-        let res = !a_e.is_disjoint(b_sc);
+        let (_, a_e, _, _, a_ec) = &event_fluents[a1.idx][*i1];
+        let (_, b_e, _, b_sc, _) = &event_fluents[a2.idx][*i2];
+        let res = !(a_e.is_disjoint(b_sc) && b_e.is_disjoint(a_ec));
         precedence.insert(*events_pair, res);
         res
     }
@@ -158,6 +160,7 @@ pub struct SearchSpace {
     actions: Vec<Action>,
     event_fluents: Vec<
         Vec<(
+            FxHashSet<usize>,
             FxHashSet<usize>,
             FxHashSet<usize>,
             FxHashSet<usize>,
@@ -216,7 +219,12 @@ impl SearchSpace {
                     .iter()
                     .flat_map(|c| get_fluents(c))
                     .collect();
-                event_fluents[a.idx].push((a_p, a_e, a_pe, a_sc));
+                let a_ec: FxHashSet<usize> = e
+                    .end_conditions
+                    .iter()
+                    .flat_map(|c| get_fluents(c))
+                    .collect();
+                event_fluents[a.idx].push((a_p, a_e, a_pe, a_sc, a_ec));
             }
         }
 
