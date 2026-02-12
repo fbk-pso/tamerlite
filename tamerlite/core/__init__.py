@@ -53,7 +53,7 @@ if not use_rustamer:
         CustomHeuristic,
     )
     from tamerlite.core.search_space import Timing, Effect, Event, Action
-    from tamerlite.core.search_space import Expression, evaluate, get_fluents, simplify
+    from tamerlite.core.search_space import Expression, evaluate, simplify
     from tamerlite.core.search_space import (
         make_bool_constant_node,
         make_fluent_node,
@@ -121,12 +121,6 @@ else:
         rustamer_lib.Heuristic.hmax_explicit,
         rustamer_lib.Heuristic.custom,
     )
-
-    def get_fluents(exp: Expression) -> Iterator[int]:
-        for e in exp:
-            f = e.fluent
-            if f is not None:
-                yield f
 
     def get_fluent_value(fluent: int, state: State) -> Union[bool, int, Fraction, str]:
         exp = state.get_py_value(fluent)
