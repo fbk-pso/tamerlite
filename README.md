@@ -68,7 +68,7 @@ Defines parameters for a single search strategy.
 | Field                      | Type              | Description                                                                 |
 |----------------------------|-------------------|-----------------------------------------------------------------------------|
 | `search`                   | `Optional[str]`   | The search algorithm to use. Supported values: `"astar"`, `"wastar"`, `"gbfs"`, `"bfs"`, `"dfs"`, `"ehs"`. Default: `"wastar"`. |
-| `heuristic`                | `Optional[str]`   | The heuristic function to use. Supported values: `"hff"`, `"hadd"`, `"hmax"`, `"hmax_numeric"`, `"blind"`, `"custom"`. Default: `"hff"`. |
+| `heuristic`                | `Optional[str]`   | The heuristic function to use. Supported values: `"hff"`, `"hadd"`, `"hmax"`, `"hmax_explicit"`, `"blind"`, `"custom"`. Default: `"hff"`. |
 | `weight`                   | `Optional[float]` | A numeric value between 0 and 1 used by weighted search variants like `wastar`. Default: `0.8`. |
 | `internal_heuristic_cache` | `Optional[bool]`  | Enables internal caching within the heuristic if set to `True`. Default: `True`. |
 
@@ -103,7 +103,7 @@ Or using multiple queues:
 ```python
 multi_params = MultiqueueParams(queues=[
    SearchParams(heuristic="hadd", weight=0.8),
-   SearchParams(heuristic="hmax_numeric", weight=0.5)
+   SearchParams(heuristic="hmax", weight=0.5)
 ])
 
 with OneshotPlanner(name="tamerlite", params={"search": multi_params}) as planner:

@@ -24,7 +24,7 @@ use std::vec::Vec;
 #[derive(Clone)]
 pub struct Heuristic {
     hdr: Option<DeleteRelaxationHeuristic>,
-    hmax: Option<HMaxNumeric>,
+    hmax_explicit: Option<HMaxExplicit>,
     hcustom: Option<CustomHeuristic>,
     cache_value_in_state: bool,
 }
@@ -35,13 +35,14 @@ impl Heuristic {
     pub fn custom(callable: Py<PyAny>, cache_value_in_state: bool) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: None,
-            hmax: None,
+            hmax_explicit: None,
             hcustom: Some(CustomHeuristic::new(callable)?),
             cache_value_in_state: cache_value_in_state,
         })
     }
 
     #[staticmethod]
+    #[pyo3(signature = (actions, fluent_types, objects, events, goals, internal_caching, cache_value_in_state, disable_numeric_reasoning=false))]
     pub fn hff(
         actions: Vec<Action>,
         fluent_types: Vec<String>,
@@ -50,6 +51,7 @@ impl Heuristic {
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
         cache_value_in_state: bool,
+        disable_numeric_reasoning: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: Some(DeleteRelaxationHeuristic::new(
@@ -60,14 +62,16 @@ impl Heuristic {
                 goals,
                 HeuristicKind::HFF,
                 internal_caching,
+                disable_numeric_reasoning,
             )?),
-            hmax: None,
+            hmax_explicit: None,
             hcustom: None,
             cache_value_in_state: cache_value_in_state,
         })
     }
 
     #[staticmethod]
+    #[pyo3(signature = (actions, fluent_types, objects, events, goals, internal_caching, cache_value_in_state, disable_numeric_reasoning=false))]
     pub fn hadd(
         actions: Vec<Action>,
         fluent_types: Vec<String>,
@@ -76,6 +80,7 @@ impl Heuristic {
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
         cache_value_in_state: bool,
+        disable_numeric_reasoning: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: Some(DeleteRelaxationHeuristic::new(
@@ -86,14 +91,16 @@ impl Heuristic {
                 goals,
                 HeuristicKind::HADD,
                 internal_caching,
+                disable_numeric_reasoning,
             )?),
-            hmax: None,
+            hmax_explicit: None,
             hcustom: None,
             cache_value_in_state: cache_value_in_state,
         })
     }
 
     #[staticmethod]
+    #[pyo3(signature = (actions, fluent_types, objects, events, goals, internal_caching, cache_value_in_state, disable_numeric_reasoning=false))]
     pub fn hmax(
         actions: Vec<Action>,
         fluent_types: Vec<String>,
@@ -102,6 +109,7 @@ impl Heuristic {
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
         cache_value_in_state: bool,
+        disable_numeric_reasoning: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: Some(DeleteRelaxationHeuristic::new(
@@ -112,15 +120,16 @@ impl Heuristic {
                 goals,
                 HeuristicKind::HMAX,
                 internal_caching,
+                disable_numeric_reasoning,
             )?),
-            hmax: None,
+            hmax_explicit: None,
             hcustom: None,
             cache_value_in_state: cache_value_in_state,
         })
     }
 
     #[staticmethod]
-    pub fn hmax_numeric(
+    pub fn hmax_explicit(
         actions: Vec<Action>,
         fluent_types: Vec<String>,
         _objects: FxHashMap<String, Vec<String>>,
@@ -131,7 +140,7 @@ impl Heuristic {
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: None,
-            hmax: Some(HMaxNumeric::new(
+            hmax_explicit: Some(HMaxExplicit::new(
                 actions,
                 fluent_types,
                 events,
@@ -148,8 +157,8 @@ impl Heuristic {
         if self.hdr.is_some() {
             let h = self.hdr.as_ref().unwrap();
             h.name()
-        } else if self.hmax.is_some() {
-            let h = self.hmax.as_ref().unwrap();
+        } else if self.hmax_explicit.is_some() {
+            let h = self.hmax_explicit.as_ref().unwrap();
             h.name()
         } else if self.hcustom.is_some() {
             let h = self.hcustom.as_ref().unwrap();
@@ -177,8 +186,8 @@ impl HeuristicTrait for Heuristic {
             if self.hdr.is_some() {
                 let h = self.hdr.as_ref().unwrap();
                 h.eval(state)
-            } else if self.hmax.is_some() {
-                let h = self.hmax.as_ref().unwrap();
+            } else if self.hmax_explicit.is_some() {
+                let h = self.hmax_explicit.as_ref().unwrap();
                 h.eval(state)
             } else if self.hcustom.is_some() {
                 let h = self.hcustom.as_ref().unwrap();

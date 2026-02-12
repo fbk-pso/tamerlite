@@ -15,9 +15,10 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Iterable, List, Dict, Tuple, Union, Optional, Set, Iterator
+import math
 from fractions import Fraction
 from collections import defaultdict
 import itertools
@@ -26,13 +27,14 @@ from abc import ABC, abstractmethod
 from tamerlite.core.search_space import (
     Action,
     Event,
+    Effect,
     SearchSpaceABC,
-    ExpressionNode,
     Expression,
     FluentNode,
     State,
     Timing,
     evaluate,
+    shift_expression,
 )
 from tamerlite.core.search_space import OperatorNode as Op, split_expression
 
@@ -58,10 +60,14 @@ HeuristicExpression = Tuple[HeuristicExpressionNode, ...]
 
 @dataclass(eq=True, frozen=True)
 class Operator:
-    action: Action
-    conditions: HeuristicExpression
-    effects: Tuple[Tuple[int, Union[bool, str]], ...]
-    cost: float
+    id: int
+    action: Action = field(compare=False)
+    conditions: HeuristicExpression = field(compare=False)
+    effects: Tuple[Tuple[int, Union[bool, str]], ...] = field(compare=False)
+    constant_increase_effects: Dict[int, Union[int, Fraction]] = field(compare=False)
+    constant_assign_effects: Dict[int, Union[int, Fraction]] = field(compare=False)
+    complex_numeric_effects: Dict[int, Expression] = field(compare=False)
+    cost: float = field(compare=False)
 
 
 @dataclass(eq=True, frozen=True)
@@ -138,6 +144,7 @@ class DeleteRelaxationHeuristic(Heuristic):
         heuristic_kind: HeuristicKind,
         internal_caching: bool,
         cache_value_in_state: bool,
+        disable_numeric_reasoning: bool,
     ):
         super().__init__(cache_value_in_state)
         self._heuristic_kind = heuristic_kind
@@ -148,13 +155,20 @@ class DeleteRelaxationHeuristic(Heuristic):
         self._operators: List[Operator] = []
         self._extra_fluents: Dict[Action, List[int]] = {}
         self._num_fluents = len(self._fluent_types)
+        self._disable_numeric_reasoning = disable_numeric_reasoning
 
-        for a, le in events.items():
+        for a in actions:
+            if a not in events:
+                continue
+            le = events[a]
             self._extra_fluents[a] = []
             f_cond = self._num_fluents + len(le) - 1
             cond = FluentNode(f_cond)
             for _, e in le:
                 effects: List[Tuple[int, Union[bool, str]]] = []
+                constant_increase_effects: Dict[int, Union[int, Fraction]] = {}
+                constant_assign_effects: Dict[int, Union[int, Fraction]] = {}
+                complex_numeric_effects: Dict[int, Expression] = {}
                 f = self._num_fluents
                 self._num_fluents += 1
                 self._extra_fluents[a].append(f)
@@ -167,7 +181,19 @@ class DeleteRelaxationHeuristic(Heuristic):
                         else:
                             effects.append((eff.fluent, True))
                             effects.append((eff.fluent, False))
-                    elif t != "real" and t != "int":
+                    elif t == "real" or t == "int":
+                        assert (
+                            eff.fluent not in constant_increase_effects
+                            and eff.fluent not in constant_assign_effects
+                            and eff.fluent not in complex_numeric_effects
+                        )
+                        self._update_numeric_effects(
+                            eff,
+                            constant_increase_effects,
+                            constant_assign_effects,
+                            complex_numeric_effects,
+                        )
+                    else:
                         if len(eff.value) == 1 and isinstance(eff.value[0], str):
                             # eff.value[0] is an object
                             effects.append((eff.fluent, eff.value[0]))
@@ -178,9 +204,22 @@ class DeleteRelaxationHeuristic(Heuristic):
                     e.conditions, cond
                 )
                 if is_applicable:
-                    self._operators.append(Operator(a, conditions, tuple(effects), 1.0))
+                    self._operators.append(
+                        Operator(
+                            len(self._operators),
+                            a,
+                            conditions,
+                            tuple(effects),
+                            constant_increase_effects,
+                            constant_assign_effects,
+                            complex_numeric_effects,
+                            1.0,
+                        )
+                    )
                 cond = FluentNode(f)
-        self._goals = self._convert_to_heuristic_expression(goals)
+        self._goals = self._simplify_condition(
+            self._convert_to_heuristic_expression(goals)
+        )
         extra_goals: Expression = tuple(
             FluentNode(fe[-1]) for fe in self._extra_fluents.values()
         )
@@ -188,7 +227,9 @@ class DeleteRelaxationHeuristic(Heuristic):
         self._extra_goals = self._convert_to_heuristic_expression(extra_goals)
 
         self._precondition_of: Dict[Expression, List[Operator]] = {}
-        self._numeric_conds: Set[Expression] = set()
+        self._simple_numeric_conds: Dict[Expression, Tuple[List[int], List[float]]] = {}
+        self._lt_simple_numeric_conds: Set[Expression] = set()
+        self._complex_numeric_conds: Set[Expression] = set()
         self._empty_pre_operators: List[Operator] = []
         for o in self._operators:
             if len(o.conditions) == 0:
@@ -196,16 +237,31 @@ class DeleteRelaxationHeuristic(Heuristic):
             else:
                 for node in o.conditions:
                     if isinstance(node, LeafNode):
-                        if self._is_numeric_leaf_expression(node.expression):
-                            self._numeric_conds.add(node.expression)
-                        else:
-                            if node.expression not in self._precondition_of:
-                                self._precondition_of[node.expression] = []
-                            self._precondition_of[node.expression].append(o)
+                        if self._is_numeric_leaf_expression(node):
+                            self._update_numeric_conditions(node)
+
+                        if node.expression not in self._precondition_of:
+                            self._precondition_of[node.expression] = []
+                        self._precondition_of[node.expression].append(o)
+
         for node in self._goals:
             if isinstance(node, LeafNode):
-                if self._is_numeric_leaf_expression(node.expression):
-                    self._numeric_conds.add(node.expression)
+                if self._is_numeric_leaf_expression(node):
+                    self._update_numeric_conditions(node)
+
+        self._max_net_effect = float("-inf")
+        self._achieved_simple_numeric_conds: List[List[Expression]] = [
+            [] for _ in self._operators
+        ]
+        for o in self._operators:
+            for c in self._simple_numeric_conds:
+                if self._achieves(o, c):
+                    self._achieved_simple_numeric_conds[o.id].append(c)
+
+        epsilon = -self._max_net_effect / 2
+        for simple_cond in self._lt_simple_numeric_conds:
+            _, weights = self._simple_numeric_conds[simple_cond]
+            weights[-1] += epsilon
 
         self._internal_caching: Optional[
             Dict[Tuple[Union[bool, int, Fraction, str, None], ...], Optional[float]]
@@ -214,11 +270,177 @@ class DeleteRelaxationHeuristic(Heuristic):
     @property
     def name(self) -> str:
         if self._heuristic_kind == HeuristicKind.HFF:
-            return "hff"
+            name = "hff"
         if self._heuristic_kind == HeuristicKind.HADD:
-            return "hadd"
+            name = "hadd"
         if self._heuristic_kind == HeuristicKind.HMAX:
-            return "hmax"
+            name = "hmax"
+
+        if self._disable_numeric_reasoning:
+            name += "_no_numbers"
+        return name
+
+    def _simplify_condition(
+        self, condition: HeuristicExpression
+    ) -> HeuristicExpression:
+        """Simplify leaf expressions in a condition.
+
+        Each `LeafNode` in the condition is rewritten when possible.
+        The following simplifications are applied:
+
+        - Simple numeric leaf expressions containing logical negation (`not`) or equality
+        (`==`) are simplified, unless numeric reasoning is disabled.
+        - Fluent-object inequality expressions (`fluent != object`) are
+        rewritten into an equivalent form.
+
+        Non-leaf nodes or leaf nodes that do not match any simplification rule
+        are left unchanged.
+
+        Args:
+            condition: A heuristic expression.
+
+        Returns:
+            A new heuristic expression with simplified leaf nodes.
+        """
+
+        new_condition: List[HeuristicExpressionNode] = []
+        for node in condition:
+            new_nodes = None
+            if isinstance(node, LeafNode):
+                if (
+                    not self._disable_numeric_reasoning
+                    and self._is_numeric_leaf_expression(node)
+                ):
+                    new_nodes = self._simplify_numeric_leaf_node(node)
+                else:
+                    new_nodes = self._simplify_fluent_not_equals_object_expression(node)
+
+            if new_nodes is None:
+                new_condition.append(node)
+            else:
+                new_condition.extend(new_nodes)
+
+        return tuple(new_condition)
+
+    def _simplify_numeric_leaf_node(
+        self, node: LeafNode
+    ) -> Optional[HeuristicExpression]:
+        """Simplify a simple numeric leaf node expression.
+
+        This method rewrites numeric leaf expressions containing logical negation (`not`)
+        or equality (`==`) into simpler equivalent expressions suitable for heuristic
+        evaluation. Specifically, it transforms:
+
+        - `a == b` into `a <= b and b <= a`.
+        - `not(a == b)` into `a < b or b < a`
+        - `not(a < b)` into `b <= a`
+        - `not(a <= b)` into `b < a`
+
+        Args:
+            node: A `LeafNode` containing a numeric expression.
+
+        Returns:
+            A new `HeuristicExpression` if simplification is possible; otherwise, `None`.
+        """
+
+        def inverted_operands(exp: Expression, op: Op):
+            op1, op2 = op.operands
+            op1_exp = exp[: op1 + 1]
+            op2_exp = exp[op1 + 1 : op2 + 1]
+            return shift_expression(op2_exp, -len(op1_exp)), shift_expression(
+                op1_exp, len(op2_exp)
+            )
+
+        nodes: Optional[HeuristicExpression] = None
+        exp = node.expression
+        if isinstance(exp[-1], Op):
+            if exp[-1].kind == "==":
+                exp1 = exp[:-1] + (Op("<=", exp[-1].operands),)
+                op1, op2 = inverted_operands(exp, exp[-1])
+                exp2 = op1 + op2 + (Op("<=", (len(op1) - 1, len(op1) + len(op2) - 1)),)
+                nodes = (LeafNode(exp1), LeafNode(exp2), AndNode(2))
+            elif exp[-1].kind == "not":
+                negated = exp[exp[-1].operands[0]]
+                if isinstance(negated, Op):
+                    if negated.kind == "==":
+                        exp1 = exp[:-2] + (Op("<", negated.operands),)
+                        op1, op2 = inverted_operands(exp, negated)
+                        exp2 = (
+                            op1
+                            + op2
+                            + (Op("<", (len(op1) - 1, len(op1) + len(op2) - 1)),)
+                        )
+                        nodes = (LeafNode(exp1), LeafNode(exp2), OrNode(2))
+                    elif negated.kind == "<":
+                        op1, op2 = inverted_operands(exp, negated)
+                        nodes = (
+                            LeafNode(
+                                op1
+                                + op2
+                                + (Op("<=", (len(op1) - 1, len(op1) + len(op2) - 1)),)
+                            ),
+                        )
+                    elif negated.kind == "<=":
+                        op1, op2 = inverted_operands(exp, negated)
+                        nodes = (
+                            LeafNode(
+                                op1
+                                + op2
+                                + (Op("<", (len(op1) - 1, len(op1) + len(op2) - 1)),)
+                            ),
+                        )
+
+        if nodes is not None:
+            # Check whether the leaf node represents a simple numeric expression
+            exp = nodes[0].expression  # type: ignore[union-attr]
+            polynomial_exp = exp[:-1] + (Op("-", exp[-1].operands),)  # type: ignore
+            try:
+                self._to_linear_polynomial(polynomial_exp)
+            except ValueError:
+                return None
+
+        return nodes
+
+    def _simplify_fluent_not_equals_object_expression(
+        self, node: LeafNode
+    ) -> Optional[HeuristicExpression]:
+        """Simplify a leaf expression of the form `fluent != object`.
+
+        This method rewrites inequality expressions between a fluent and a specific
+        object into an equivalent disjunction of equalities:
+
+            `fluent != objX` into `fluent == obj1 or fluent == obj2 or ...`
+
+        where `obj1, obj2, ...` are all objects of the fluent's type except `objX`.
+
+        Args:
+            node: A `LeafNode` potentially representing a `fluent != object` expression.
+
+        Returns:
+            A new `HeuristicExpression` representing the disjunction of equality
+            expressions if simplification is possible; otherwise, `None`.
+        """
+
+        exp = node.expression
+        if (
+            len(exp) == 4
+            and isinstance(exp[0], FluentNode)
+            and isinstance(exp[1], str)
+            and isinstance(exp[2], Op)
+            and exp[2].kind == "=="
+            and isinstance(exp[3], Op)
+            and exp[3].kind == "not"
+        ):
+            nodes: List[HeuristicExpressionNode] = []
+            for obj in self._objects[self._fluent_types[exp[0].fluent]]:
+                if obj != exp[1]:
+                    nodes.append(LeafNode((exp[0], obj, Op("==", (0, 1)))))
+            if len(nodes) == 0:
+                return (LeafNode((False,)),)
+            if len(nodes) > 1:
+                nodes.append(OrNode(len(nodes)))
+            return tuple(nodes)
+        return None
 
     def _build_operator_condition(
         self, condition: Expression, extra_fluent: FluentNode
@@ -261,7 +483,9 @@ class DeleteRelaxationHeuristic(Heuristic):
                 Op("and", (len(condition) - 1, len(condition))),
             )
 
-        return True, self._convert_to_heuristic_expression(condition)
+        return True, self._simplify_condition(
+            self._convert_to_heuristic_expression(condition)
+        )
 
     def _convert_to_heuristic_expression(self, exp: Expression) -> HeuristicExpression:
         """
@@ -312,39 +536,6 @@ class DeleteRelaxationHeuristic(Heuristic):
 
         return tuple(result)
 
-    def _is_numeric_leaf_expression(self, exp: Expression) -> bool:
-        """
-        Determine if a leaf expression represents a numeric expression.
-        A leaf expression is assumed to contain no AND or OR nodes.
-
-        Args:
-            exp (Expression): The leaf expression to check.
-
-        Returns:
-            bool: True if the expression is numeric, False otherwise.
-        """
-
-        is_numeric = True
-        if isinstance(exp[-1], bool):  # boolean constant
-            is_numeric = False
-        elif isinstance(exp[-1], FluentNode):  # boolean fluent expression
-            is_numeric = False
-        elif (
-            isinstance(exp[-1], Op) and exp[-1].kind == "not"
-        ):  # not of a boolean fluent expression
-            i = exp[-1].operands[0]
-            if isinstance(exp[i], FluentNode):
-                is_numeric = False
-        elif (
-            isinstance(exp[-1], Op) and exp[-1].kind == "=="
-        ):  # equals between a fluent and an object
-            i1 = exp[-1].operands[0]
-            i2 = exp[-1].operands[1]
-            if isinstance(exp[i1], FluentNode) and isinstance(exp[i2], str):
-                is_numeric = False
-
-        return is_numeric
-
     def _extract_sub_expression(self, exp: Expression, idx: int) -> Expression:
         """
         Extract the sub-expression from a given expression rooted at a specified index.
@@ -363,18 +554,238 @@ class DeleteRelaxationHeuristic(Heuristic):
         # find the start index of the sub-expression
         i = idx
         while isinstance(exp[i], Op):
-            i = min(exp[i].operands)  # type: ignore[union-attr]
+            i = exp[i].operands[0]  # type: ignore[union-attr]
 
-        offset = i
-        res: List[ExpressionNode] = []
-        for j in range(i, idx + 1):
-            e = exp[j]
-            if isinstance(e, Op):
-                res.append(Op(e.kind, tuple([o - offset for o in e.operands])))
+        return shift_expression(exp[i : idx + 1], -i)
+
+    def _update_numeric_effects(
+        self,
+        effect: Effect,
+        constant_increase_effects: Dict[int, Union[int, Fraction]],
+        constant_assign_effects: Dict[int, Union[int, Fraction]],
+        complex_numeric_effects: Dict[int, Expression],
+    ):
+        """Processes a numeric effect and categorizes it into one of three
+        types:
+
+        1. **Constant assignment:** If the effect is a single numeric value, it is
+        stored in `constant_assign_effects`.
+        2. **Constant increase:** If the effect represents a linear increase of a
+        fluent by a constant amount, it is stored in `constant_increase_effects`.
+        3. **Complex numeric effect:** If the effect is non-linear or cannot be
+        simplified to a constant increase, it is stored in `complex_numeric_effects`.
+
+        Args:
+            effect: The numeric effect to process.
+            constant_increase_effects: Mapping from fluent to constant increase
+                values, updated if the effect is a simple increase.
+            constant_assign_effects: Mapping from fluent to constant assignment
+                values, updated if the effect is a constant numeric assignment.
+            complex_numeric_effects: Mapping from fluent to expressions for
+                effects that are complex.
+        """
+
+        if len(effect.value) == 1 and isinstance(effect.value[0], (int, Fraction)):
+            constant_assign_effects[effect.fluent] = effect.value[0]
+            return
+
+        try:
+            polynomial = self._to_linear_polynomial(effect.value)
+        except ValueError:
+            complex_numeric_effects[effect.fluent] = effect.value
+            return
+
+        assert effect.fluent in polynomial
+        k = polynomial.pop(None, 0)
+        if len(polynomial) == 1 and polynomial[effect.fluent] == 1:
+            constant_increase_effects[effect.fluent] = k
+        else:
+            complex_numeric_effects[effect.fluent] = effect.value
+
+    def _is_numeric_leaf_expression(self, node: LeafNode) -> bool:
+        """
+        Determine if a leaf expression represents a numeric expression.
+        A leaf expression is assumed to contain no AND or OR nodes.
+
+        Args:
+            node (LeafNode): The leaf node to check.
+
+        Returns:
+            bool: True if the expression is numeric, False otherwise.
+        """
+
+        exp = node.expression
+        if isinstance(exp[-1], Op):
+            i = -1
+            if exp[-1].kind == "not":
+                i = exp[-1].operands[0]
+
+            if isinstance(exp[i], Op):
+                exp_node: Op = exp[i]  # type: ignore[assignment]
+                if exp_node.kind != "==":
+                    return True
+
+                op1, op2 = exp_node.operands
+                if not isinstance(exp[op1], str) and not isinstance(exp[op2], str):
+                    return True
+
+        return False
+
+    def _update_numeric_conditions(self, numeric_condition: LeafNode):
+        """Processes a numeric condition represented as a `LeafNode` and
+        classifies it as either **simple** or **complex**:
+
+        - If numeric reasoning is disabled, the condition is always treated as complex.
+        - If the condition can be represented as a simple linear numeric expression,
+        it is stored in `_simple_numeric_conds` along with its fluents and weights.
+        - Conditions that cannot be simplified are stored in `_complex_numeric_conds`.
+
+        Args:
+            numeric_condition: A `LeafNode` representing a numeric condition.
+        """
+
+        if self._disable_numeric_reasoning:
+            self._complex_numeric_conds.add(numeric_condition.expression)
+            return
+
+        fluents_weights = self._extract_fluents_weights_simple_numeric_condition(
+            numeric_condition
+        )
+        if fluents_weights is None:
+            self._complex_numeric_conds.add(numeric_condition.expression)
+        else:
+            fluents, weights, is_lt = fluents_weights
+            self._simple_numeric_conds[numeric_condition.expression] = (
+                fluents,
+                weights,
+            )
+            if is_lt:
+                self._lt_simple_numeric_conds.add(numeric_condition.expression)
+
+    def _extract_fluents_weights_simple_numeric_condition(
+        self, node: LeafNode
+    ) -> Optional[Tuple[List[int], List[float], bool]]:
+        """Extracts fluents and weights from a simple numeric condition.
+
+        This method attempts to interpret a numeric condition of the form
+        `linear-expression < constant` or `linear-expression <= constant` as a
+        linear polynomial and extract its components:
+
+        - `fluents`: List of fluents appearing in the expression.
+        - `weights`: Corresponding coefficients of the fluents, with the constant
+        term appended as the last element.
+        - `is_lt`: True if the original operator was `<`, False if `<=`.
+
+        Args:
+            node: A `LeafNode` representing a condition.
+
+        Returns:
+            A tuple `(fluents, weights, is_lt)` if the condition is a simple linear
+            numeric condition; otherwise, `None`.
+        """
+
+        exp = node.expression
+        if not (isinstance(exp[-1], Op) and exp[-1].kind in ("<", "<=")):
+            return None
+
+        polynomial_exp = exp[:-1] + (Op("-", exp[-1].operands),)
+        try:
+            polynomial = self._to_linear_polynomial(polynomial_exp)
+        except ValueError:
+            return None
+
+        k = float(polynomial.pop(None, 0))
+        fluents: List[int] = list(polynomial.keys())  # type: ignore[arg-type]
+        weights: List[float] = [float(polynomial[f]) for f in fluents] + [k]
+        return fluents, weights, exp[-1].kind == "<"
+
+    def _to_linear_polynomial(
+        self, exp: Expression
+    ) -> Dict[Optional[int], Union[int, Fraction]]:
+        """Converts an expression into a linear polynomial representation.
+
+        This method attempts to represent a numeric expression as a linear
+        polynomial of the form:
+
+            w1 * f1 + w2 * f2 + ... + k
+
+        where `fi` are fluents, `wi` are their coefficients, and `k` is a constant
+        term.
+
+        Supported operations in the expression are `+`, `-`, `*`, and `/`, provided
+        they maintain linearity. If the expression is non-linear (e.g., product of
+        two fluents, division by a fluent), a `ValueError` is raised.
+
+        Args:
+            exp: The numeric expression.
+
+        Returns:
+            A dictionary mapping fluents to coefficients and `None` to the constant term.
+
+        Raises:
+            ValueError: If the expression is non-linear or contains unsupported operations.
+        """
+
+        res: List[Dict[Optional[int], Union[int, Fraction]]] = []
+        for node in exp:
+            if isinstance(node, (int, Fraction)):
+                res.append({None: node})
+
+            elif isinstance(node, FluentNode):
+                res.append({node.fluent: 1})
+
+            elif isinstance(node, Op) and node.kind in ("-", "+", "/", "*"):
+                operands = [res.pop() for _ in node.operands]
+
+                def is_constant(polynomial: Dict[Optional[int], Union[int, Fraction]]):
+                    return len(polynomial) == 1 and None in polynomial
+
+                if node.kind == "-":
+                    result = operands[1]
+                    for f, w in operands[0].items():
+                        result[f] = result.get(f, 0) - w
+
+                elif node.kind == "+":
+                    result = {}
+                    for operand in operands:
+                        for f, w in operand.items():
+                            result[f] = result.get(f, 0) + w
+
+                elif node.kind == "/":
+                    dividend = operands[1]
+                    divisor = operands[0]
+                    if not is_constant(divisor):
+                        raise ValueError("non-linear polynomial")
+
+                    result = {
+                        f: Fraction(w) / divisor[None] for f, w in dividend.items()
+                    }
+
+                elif node.kind == "*":
+                    const_multiplier: Fraction = Fraction(1)
+                    polynomial = None
+                    for operand in operands:
+                        if is_constant(operand):
+                            const_multiplier *= operand[None]
+                        elif polynomial is not None:
+                            raise ValueError("non-linear polynomial")
+                        else:
+                            polynomial = operand
+
+                    if polynomial is None:
+                        result = {None: const_multiplier}
+                    else:
+                        for f in polynomial:
+                            polynomial[f] *= const_multiplier
+                        result = polynomial
+
+                res.append(result)
+
             else:
-                res.append(e)
+                raise ValueError("non-linear polynomial")
 
-        return tuple(res)
+        assert len(res) == 1
+        return res[-1]
 
     def _eval(self, state: State, ss: SearchSpaceABC) -> Optional[float]:
         if self._internal_caching is not None:
@@ -392,6 +803,19 @@ class DeleteRelaxationHeuristic(Heuristic):
         return res
 
     def _eval_core(self, state: State) -> Optional[float]:
+        """Compute the heuristic value for a given state.
+
+        This method evaluates the state using the selected delete-relaxation heuristic,
+        which can be one of `hmax`, `hadd`, or `hff`. The returned value estimates
+        the cost to reach the goal from the given state.
+
+        Args:
+            state: The state to evaluate.
+
+        Returns:
+            The heuristic value as a float if computable; otherwise, `None`.
+        """
+
         costs: Dict[Expression, float] = {}
         for f, v in enumerate(state.assignments):
             if v == True:
@@ -402,11 +826,14 @@ class DeleteRelaxationHeuristic(Heuristic):
                 k = (FluentNode(f), v, Op("==", (0, 1)))
             costs[k] = 0.0
 
-        for x in self._numeric_conds:
-            if evaluate(x, state):
-                costs[x] = 0.0
+        for cond in self._simple_numeric_conds:
+            if evaluate(cond, state):
+                costs[cond] = 0.0
+        for cond in self._complex_numeric_conds:
+            if evaluate(cond, state):
+                costs[cond] = 0.0
             else:
-                costs[x] = 1.0
+                costs[cond] = 1.0
 
         for a in self._events.keys():
             j, _ = state.todo.get(a, (None, None))
@@ -419,6 +846,8 @@ class DeleteRelaxationHeuristic(Heuristic):
 
         lp = list(costs.keys())
         reached_by: Dict[Expression, Tuple[Operator, List[Expression]]] = {}
+        operator_cost: Dict[Operator, float] = {}
+        poss: Dict[Expression, Set[Operator]] = {}
         while len(lp) > 0:
             lo = list(self._empty_pre_operators)
             for p in lp:
@@ -428,7 +857,10 @@ class DeleteRelaxationHeuristic(Heuristic):
             new_costs: Dict[Expression, float] = {}
             for o in set(lo):
                 c, l = self._cost(o.conditions, costs)
-                if c is not None:
+                if c is not None and (o not in operator_cost or operator_cost[o] > c):
+                    operator_cost[o] = c
+
+                    achieved_expressions = []
                     for f, e in o.effects:
                         if e == True:
                             k: Expression = (FluentNode(f),)
@@ -436,26 +868,49 @@ class DeleteRelaxationHeuristic(Heuristic):
                             k = (FluentNode(f), Op("not", (0,)))
                         else:
                             k = (FluentNode(f), e, Op("==", (0, 1)))
-                        new_cost_k = new_costs.get(k, None)
-                        cost_k = costs.get(k, None)
-                        if (new_cost_k is not None and new_cost_k > c + o.cost) or (
-                            new_cost_k is None
-                            and (cost_k is None or cost_k > c + o.cost)
-                        ):
-                            if self._heuristic_kind == HeuristicKind.HFF:
-                                reached_by[k] = (o, l)
-                            new_costs[k] = c + o.cost
-                            lp.append(k)
-                        elif (
-                            self._heuristic_kind == HeuristicKind.HFF
-                            and (
-                                (new_cost_k is not None and new_cost_k == c + o.cost)
-                                or (new_cost_k is None and cost_k == c + o.cost)
-                            )
-                            and o.action > reached_by[k][0].action
-                        ):
-                            reached_by[k] = (o, l)
+                        achieved_expressions.append((k, o.cost + c))
 
+                    for simple_cond in self._achieved_simple_numeric_conds[o.id]:
+                        if costs.get(simple_cond, None) == 0.0:
+                            # condition satisfied in state
+                            continue
+
+                        rep = self._repetitions(o, simple_cond, state)
+                        assert rep is not None
+
+                        if self._heuristic_kind == HeuristicKind.HMAX:
+                            if simple_cond not in poss:
+                                poss[simple_cond] = set()
+                            poss[simple_cond].add(o)
+
+                            exp_cost = float(rep) * o.cost + min(  # type: ignore[operator,type-var]
+                                self._cost(o.conditions, costs)[0]
+                                for o in poss[simple_cond]
+                            )
+                        else:
+                            exp_cost = float(rep) * o.cost + c
+                        achieved_expressions.append((simple_cond, exp_cost))
+
+                    for exp, exp_cost in achieved_expressions:
+                        if exp in new_costs:
+                            prev_exp_cost = new_costs[exp]
+                        elif exp in costs:
+                            prev_exp_cost = costs[exp]
+                        else:
+                            prev_exp_cost = None
+
+                        if prev_exp_cost is None or exp_cost < prev_exp_cost:
+                            if self._heuristic_kind == HeuristicKind.HFF:
+                                reached_by[exp] = (o, l)
+                            new_costs[exp] = exp_cost
+                        elif (
+                            prev_exp_cost == exp_cost
+                            and self._heuristic_kind == HeuristicKind.HFF
+                            and o.id > reached_by[exp][0].id
+                        ):
+                            reached_by[exp] = (o, l)
+
+            lp = list(new_costs.keys())
             costs.update(new_costs)
 
         h, _ = self._cost(self._goals, costs)
@@ -499,6 +954,93 @@ class DeleteRelaxationHeuristic(Heuristic):
                 res += len(self._events[a])
 
         return float(res)
+
+    def _achieves(self, operator: Operator, simple_condition: Expression) -> bool:
+        """Check whether an operator achieves a given simple numeric condition.
+
+        The check considers:
+        - If the operator has a constant assignment or complex effect on any of the
+        condition's fluents, the condition is considered achieved.
+        - Otherwise, it computes the net effect of the operator on the
+        condition. If the net effect is negative, the condition is potentially
+        achieved.
+
+        Args:
+            operator: The operator whose effects are being evaluated.
+            simple_condition: A simple numeric condition expression.
+
+        Returns:
+            True if the operator achieves the condition; otherwise, False.
+        """
+
+        fluents, weights = self._simple_numeric_conds[simple_condition]
+        net_effect = 0.0
+        for f, w in zip(fluents, weights):
+            if (
+                f in operator.constant_assign_effects
+                or f in operator.complex_numeric_effects
+            ):
+                return True
+            if f in operator.constant_increase_effects:
+                k = operator.constant_increase_effects[f]
+                net_effect += w * k
+
+        if net_effect < 0.0 and net_effect > self._max_net_effect:
+            self._max_net_effect = net_effect
+
+        return net_effect < 0.0
+
+    def _repetitions(
+        self, operator: Operator, simple_condition: Expression, state: State
+    ) -> Optional[int]:
+        """Estimate how many applications of an operator are needed to satisfy a simple numeric condition.
+
+        This method computes the minimum number of times `operator` must be applied
+        to a given `state` for the `simple_condition` to become satisfied.
+
+        The computation follows these rules:
+        - If the operator has a constant assignment or complex effect on any fluent
+        in the condition, return 1, assuming one application is sufficient.
+        - Otherwise, compute the net effect of the operator on the condition and
+        return the minimum number of repetitions needed.
+
+        Args:
+            operator: The operator whose effects are being evaluated.
+            simple_condition: A simple numeric condition expression.
+            state: The state on which the condition is evaluated.
+
+        Returns:
+            The minimum number of operator applications required to satisfy the
+            condition, 0 if already satisfied, 1 if a constant/complex effect applies,
+            or `None` if the condition cannot be satisfied.
+        """
+
+        fluents, weights = self._simple_numeric_conds[simple_condition]
+        v = weights[-1]
+        for f, w in zip(fluents, weights):
+            v += w * state.get_value(f)  # type: ignore[operator]
+
+        if v <= 0.0:
+            # condition satisfied in state
+            return 0
+
+        for f in fluents:
+            if (
+                f in operator.constant_assign_effects
+                or f in operator.complex_numeric_effects
+            ):
+                return 1
+
+        net_effect = 0.0
+        for f, w in zip(fluents, weights):
+            if f in operator.constant_increase_effects:
+                k = operator.constant_increase_effects[f]
+                net_effect += w * k
+
+        if net_effect >= 0.0:
+            return None
+
+        return math.ceil(-v / net_effect)
 
     def _cost(
         self, exp: HeuristicExpression, costs: Dict[Expression, float]
@@ -571,6 +1113,7 @@ def HFF(
     goals: Expression,
     internal_caching: bool,
     cache_value_in_state: bool,
+    disable_numeric_reasoning: bool = False,
 ) -> DeleteRelaxationHeuristic:
     return DeleteRelaxationHeuristic(
         actions,
@@ -581,6 +1124,7 @@ def HFF(
         HeuristicKind.HFF,
         internal_caching,
         cache_value_in_state,
+        disable_numeric_reasoning,
     )
 
 
@@ -592,6 +1136,7 @@ def HAdd(
     goals: Expression,
     internal_caching: bool,
     cache_value_in_state: bool,
+    disable_numeric_reasoning: bool = False,
 ) -> DeleteRelaxationHeuristic:
     return DeleteRelaxationHeuristic(
         actions,
@@ -602,6 +1147,7 @@ def HAdd(
         HeuristicKind.HADD,
         internal_caching,
         cache_value_in_state,
+        disable_numeric_reasoning,
     )
 
 
@@ -613,6 +1159,7 @@ def HMax(
     goals: Expression,
     internal_caching: bool,
     cache_value_in_state: bool,
+    disable_numeric_reasoning: bool = False,
 ) -> DeleteRelaxationHeuristic:
     return DeleteRelaxationHeuristic(
         actions,
@@ -623,10 +1170,11 @@ def HMax(
         HeuristicKind.HMAX,
         internal_caching,
         cache_value_in_state,
+        disable_numeric_reasoning,
     )
 
 
-class HMaxNumeric(Heuristic):
+class HMaxExplicit(Heuristic):
     def __init__(
         self,
         actions: List[Action],
@@ -720,7 +1268,7 @@ class HMaxNumeric(Heuristic):
 
     @property
     def name(self) -> str:
-        return "hmax_numeric"
+        return "hmax_explicit"
 
     def _extract_fluents(
         self,
