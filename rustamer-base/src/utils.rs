@@ -115,28 +115,38 @@ where
     }
 
     pub fn to_vec(list: &Option<Arc<Self>>) -> Vec<&Q> {
-        let mut result = vec![];
-        let mut current_node = list;
-
-        while let Some(node) = current_node {
-            result.push(&node.payload);
-            current_node = &node.previous;
-        }
-
+        let mut result: Vec<&Q> = PersistentList::iter_rev(list).collect();
         result.reverse();
         result
     }
 
     pub fn to_vec_copy(list: &Option<Arc<Self>>) -> Vec<Q> {
-        let mut result = vec![];
-        let mut current_node = list;
-
-        while let Some(node) = current_node {
-            result.push(node.payload.clone());
-            current_node = &node.previous;
-        }
-
+        let mut result: Vec<Q> = PersistentList::iter_rev(list).cloned().collect();
         result.reverse();
         result
+    }
+
+    /// Iterate from newest to oldest (reverse order)
+    pub fn iter_rev<'a>(list: &'a Option<Arc<Self>>) -> impl Iterator<Item = &'a Q> {
+        struct Iter<'a, Q> {
+            current: Option<&'a Arc<PersistentList<Q>>>,
+        }
+
+        impl<'a, Q> Iterator for Iter<'a, Q> {
+            type Item = &'a Q;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                if let Some(node) = self.current {
+                    self.current = node.previous.as_ref();
+                    Some(&node.payload)
+                } else {
+                    None
+                }
+            }
+        }
+
+        Iter {
+            current: list.as_ref(),
+        }
     }
 }
