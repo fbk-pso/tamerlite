@@ -383,7 +383,7 @@ impl SearchSpace {
             // Add temporal constraints between past or todo events and the current one
             let tn = new_state.temporal_network.as_mut().unwrap();
             let ev = self.tn_interpreter.get_event_id(e.action, e.pos, *id);
-            for e2 in PersistentList::to_vec(&state.path) {
+            for e2 in PersistentList::iter_rev(&state.path) {
                 let ev2 = self.tn_interpreter.get_event_id(e2.0, e2.1, e2.2);
                 let e_id = (e.action, *index);
                 let e2_id = (e2.0, e2.1);
@@ -436,9 +436,7 @@ impl SearchSpace {
                     continue;
                 }
 
-                if !PersistentList::to_vec(&state.path)
-                    .iter()
-                    .any(|(a, _, _)| prev_actions.contains(a))
+                if !PersistentList::iter_rev(&state.path).any(|(a, _, _)| prev_actions.contains(a))
                 {
                     return Ok(false);
                 }

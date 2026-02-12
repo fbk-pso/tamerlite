@@ -685,15 +685,11 @@ class SearchSpace(SearchSpaceABC):
             and self._obj_to_prev_actions_map is not None
         ):
             for obj in self._action_objects[action.idx]:
-                if (
-                    obj not in self._obj_to_prev_actions_map
-                    or action in self._obj_to_prev_actions_map[obj]
-                ):
+                prev_actions = self._obj_to_prev_actions_map.get(obj, None)
+                if prev_actions is None or action in prev_actions:
                     continue
 
-                if not any(
-                    a in self._obj_to_prev_actions_map[obj] for a, _, _ in state.path
-                ):
+                if not any(a in prev_actions for a, _, _ in state.path):
                     return None
 
         if self._is_temporal:
