@@ -21,15 +21,7 @@ from unified_planning.model import Problem, FNode
 from fractions import Fraction
 from typing import List, Tuple, Dict, Optional, Union, Any
 
-from tamerlite.core import (
-    Expression,
-    Effect,
-    Timing,
-    Event,
-    Action,
-    SearchSpace,
-    get_fluents,
-)
+from tamerlite.core import Expression, Effect, Timing, Event, Action, SearchSpace
 from tamerlite.core.search_space import SearchSpaceABC
 from tamerlite.converter import Converter
 
