@@ -169,6 +169,8 @@ pub struct SearchSpace {
     >,
     mutex: MutexChecker,
     precedence: PrecedenceChecker,
+    action_objects: Option<Vec<Vec<String>>>,
+    obj_to_prev_actions_map: Option<FxHashMap<String, FxHashSet<Action>>>,
     initial_state: Option<Vec<ExpressionNode>>,
     goal: Option<Vec<ExpressionNode>>,
     tn_interpreter: TNInterpreter,
@@ -181,11 +183,13 @@ pub struct SearchSpace {
 #[pymethods]
 impl SearchSpace {
     #[new]
-    #[pyo3(signature = (actions_duration, events, actions, initial_state=None, goal=None, epsilon=None))]
+    #[pyo3(signature = (actions_duration, events, actions, action_objects, obj_to_prev_actions_map, initial_state=None, goal=None, epsilon=None))]
     fn new(
         actions_duration: Vec<Option<(Vec<PyExpressionNode>, Vec<PyExpressionNode>, bool, bool)>>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         actions: Vec<Action>,
+        action_objects: Option<Vec<Vec<String>>>,
+        obj_to_prev_actions_map: Option<FxHashMap<String, FxHashSet<Action>>>,
         initial_state: Option<Vec<PyExpressionNode>>,
         goal: Option<Vec<PyExpressionNode>>,
         #[pyo3(from_py_with = get_option_big_rational)] epsilon: Option<BigRational>,
@@ -237,8 +241,10 @@ impl SearchSpace {
             event_fluents: event_fluents,
             mutex: MutexChecker::new(),
             precedence: PrecedenceChecker::new(),
+            action_objects: action_objects,
+            obj_to_prev_actions_map: obj_to_prev_actions_map,
             initial_state: initial_state
-                .map(|inner_map| inner_map.into_iter().map(|v| v.v).collect()),
+                .map(|inner_vec| inner_vec.into_iter().map(|v| v.v).collect()),
             goal: goal.map(|inner_vec| inner_vec.into_iter().map(|e| e.v).collect()),
             tn_interpreter: tn_interpreter,
             epsilon: match &epsilon {
@@ -377,7 +383,7 @@ impl SearchSpace {
             // Add temporal constraints between past or todo events and the current one
             let tn = new_state.temporal_network.as_mut().unwrap();
             let ev = self.tn_interpreter.get_event_id(e.action, e.pos, *id);
-            for e2 in PersistentList::to_vec(&state.path) {
+            for e2 in PersistentList::iter_rev(&state.path) {
                 let ev2 = self.tn_interpreter.get_event_id(e2.0, e2.1, e2.2);
                 let e_id = (e.action, *index);
                 let e2_id = (e2.0, e2.1);
@@ -417,6 +423,26 @@ impl SearchSpace {
         action: Action,
         events: &Vec<(Timing, Event)>,
     ) -> PyResult<bool> {
+        if let (Some(action_objects), Some(obj_to_prev_actions_map)) =
+            (&self.action_objects, &self.obj_to_prev_actions_map)
+        {
+            for obj in &action_objects[action.idx] {
+                let prev_actions = match obj_to_prev_actions_map.get(obj) {
+                    Some(actions) => actions,
+                    None => continue,
+                };
+
+                if prev_actions.contains(&action) {
+                    continue;
+                }
+
+                if !PersistentList::iter_rev(&state.path).any(|(a, _, _)| prev_actions.contains(a))
+                {
+                    return Ok(false);
+                }
+            }
+        }
+
         let mut counter = self.counter.lock().unwrap();
         let mut id = counter.clone();
         if self.is_temporal {
