@@ -511,8 +511,6 @@ class SearchSpace(SearchSpaceABC):
         actions_duration: List[Optional[Tuple[Expression, Expression, bool, bool]]],
         events: Dict[Action, List[Tuple[Timing, Event]]],
         actions: List[Action],
-        mutex: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
-        precedence: Set[Tuple[Tuple[Action, int], Tuple[Action, int]]],
         action_objects: Optional[List[List[str]]],
         obj_to_prev_actions_map: Optional[Dict[str, Set[Action]]],
         initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
