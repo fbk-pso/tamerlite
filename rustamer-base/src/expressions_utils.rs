@@ -471,7 +471,7 @@ pub fn internal_evaluate(
     exp: &Vec<ExpressionNode>,
     fluent_values: &impl FluentValueTrait,
 ) -> PyResult<ExpressionNode> {
-    let mut res: Vec<ExpressionNode> = vec![];
+    let mut res: Vec<ExpressionNode> = Vec::with_capacity(exp.len() - 1);
     for e in exp {
         let value = match &e {
             ExpressionNode::And(v) => {

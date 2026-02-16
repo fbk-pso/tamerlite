@@ -24,7 +24,6 @@ from unified_planning.plans import (
 )
 from unified_planning.model import Problem, FNode, Object, Type, Fluent
 from fractions import Fraction
-import itertools
 from typing import List, Tuple, Dict, Optional, Union, Any, Set, Callable, Iterable
 
 from tamerlite.core import Expression, Effect, Timing, Event, Action, SearchSpace
