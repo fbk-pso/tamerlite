@@ -213,7 +213,7 @@ def test_heuristics(problems):
                             ) as planner:
                                 planner: tamerlite.engine.TamerLite
                                 res: PlanGenerationResult = planner.solve(
-                                    problem, heuristic=heuristic, timeout=None
+                                    problem, timeout=None
                                 )
                                 assert (
                                     res.status
@@ -467,7 +467,7 @@ def test_search_algorithms(problems):
                         ) as planner:
                             planner: tamerlite.engine.TamerLite
                             res: PlanGenerationResult = planner.solve(
-                                problem, heuristic=heuristic, timeout=None
+                                problem, timeout=None
                             )
                             assert (
                                 res.status

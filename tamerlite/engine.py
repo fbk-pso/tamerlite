@@ -71,24 +71,24 @@ class StateWrapper(State):
 @dataclass(frozen=True)
 class HeuristicParams:
     heuristic: Optional[str] = None
-    internal_heuristic_cache: Optional[bool] = None
+    internal_heuristic_cache: bool = True
     weight: Optional[float] = None
 
 
 @dataclass(frozen=True)
 class SearchParams(HeuristicParams):
     search: Optional[str] = None
-    early_termination: Optional[bool] = None
-    weak_equality: Optional[bool] = None
-    symmetry_breaking: Optional[bool] = None
+    early_termination: bool = False
+    weak_equality: bool = False
+    symmetry_breaking: bool = True
 
 
 @dataclass(frozen=True)
 class MultiqueueParams:
     queues: List[HeuristicParams]
-    early_termination: Optional[bool] = None
-    weak_equality: Optional[bool] = None
-    symmetry_breaking: Optional[bool] = None
+    early_termination: bool = False
+    weak_equality: bool = False
+    symmetry_breaking: bool = True
 
 
 class TamerLite(
@@ -96,7 +96,7 @@ class TamerLite(
     unified_planning.engines.mixins.OneshotPlannerMixin,
 ):
 
-    def __init__(self, search: Optional[Union[SearchParams, MultiqueueParams]] = None):
+    def __init__(self, search: Union[SearchParams, MultiqueueParams] = SearchParams()):
         unified_planning.engines.Engine.__init__(self)
         up.engines.mixins.OneshotPlannerMixin.__init__(self)
         self._params = search
@@ -154,22 +154,16 @@ class TamerLite(
 
     def _get_heuristic(
         self,
-        params: Optional[HeuristicParams],
+        params: HeuristicParams,
         heuristic: Optional[Callable[[State], Optional[float]]],
         encoder: Encoder,
         cache_heuristic_in_state: bool = False,
     ) -> Tuple[Heuristic, float]:
-        default_heuristic = "hff"
-        if params is None:
-            h_name = "custom" if heuristic else default_heuristic
-        else:
-            h_name = (
-                "custom"
-                if heuristic and params.heuristic is None
-                else params.heuristic if params.heuristic else default_heuristic
-            )
-
         assert encoder.goal is not None
+        if params.heuristic is None:
+            h_name = "custom" if heuristic is not None else "hff"
+        else:
+            h_name = params.heuristic
 
         if h_name == "custom":
 
@@ -177,7 +171,7 @@ class TamerLite(
                 return heuristic(StateWrapper(encoder, search_state))  # type: ignore[misc]
 
             h = CustomHeuristic(rewrite_h, cache_heuristic_in_state)  # type: ignore[assignment]
-            w = 1.0 if params is None or params.weight is None else params.weight
+            w = 1.0 if params.weight is None else params.weight
 
         elif h_name == "blind":
             h = CustomHeuristic(lambda x: 0.0, cache_heuristic_in_state)  # type: ignore[assignment]
@@ -196,11 +190,6 @@ class TamerLite(
             if h_name not in hh_map:
                 raise NotImplementedError
 
-            internal_heuristic_cache = (
-                True
-                if params is None or params.internal_heuristic_cache is None
-                else params.internal_heuristic_cache
-            )
             events = {
                 a: e
                 for a, e in encoder.events.items()
@@ -212,15 +201,15 @@ class TamerLite(
                 encoder.objects,
                 events,
                 encoder.goal,
-                internal_caching=internal_heuristic_cache,
+                internal_caching=params.internal_heuristic_cache,
                 cache_value_in_state=cache_heuristic_in_state,
             )
-            w = 0.8 if params is None or params.weight is None else params.weight
+            w = 0.8 if params.weight is None else params.weight
 
         return h, w
 
     def _get_search(
-        self, params: Optional[SearchParams], heuristic: Heuristic, weight: float
+        self, params: SearchParams, heuristic: Heuristic, weight: float
     ) -> Tuple[
         str,
         Callable[
@@ -228,11 +217,7 @@ class TamerLite(
             Tuple[Optional[PlanType], Dict[str, str]],
         ],
     ]:
-        if params is None or params.search is None:
-            s = "wastar"
-        else:
-            s = params.search
-
+        s = "wastar" if params.search is None else params.search
         if s == "wastar":
             search = partial(wastar_search, heuristic=heuristic, weight=weight)
         elif s == "astar":
@@ -263,21 +248,12 @@ class TamerLite(
                 compilation_res = compiler.compile(problem)
                 map_back_action_instance = compilation_res.map_back_action_instance
             new_problem = compilation_res.problem
-
-            symmetry_breaking = True
-            if self._params is not None and self._params.symmetry_breaking is not None:
-                symmetry_breaking = self._params.symmetry_breaking
             encoder = Encoder(
-                new_problem, problem, map_back_action_instance, symmetry_breaking
+                new_problem,
+                problem,
+                map_back_action_instance,
+                self._params.symmetry_breaking,
             )
-
-            early_termination = False
-            if self._params is not None and self._params.early_termination is not None:
-                early_termination = self._params.early_termination
-
-            weak_equality = False
-            if self._params is not None and self._params.weak_equality is not None:
-                weak_equality = self._params.weak_equality
 
             if isinstance(self._params, MultiqueueParams):
                 heuristics = []
@@ -290,10 +266,10 @@ class TamerLite(
                     encoder.search_space,
                     heuristics,
                     timeout,
-                    early_termination=early_termination,
-                    weak_equality=weak_equality,
+                    early_termination=self._params.early_termination,
+                    weak_equality=self._params.weak_equality,
                 )
-                if weak_equality and plan is None:
+                if self._params.weak_equality and plan is None:
                     updated_timeout = timeout
                     if updated_timeout is not None:
                         updated_timeout -= start
@@ -301,19 +277,19 @@ class TamerLite(
                         encoder.search_space,
                         heuristics,
                         updated_timeout,
-                        early_termination=early_termination,
+                        early_termination=self._params.early_termination,
                         weak_equality=False,
                     )
             else:
                 h, w = self._get_heuristic(self._params, heuristic, encoder)
                 search_name, search = self._get_search(self._params, h, w)
 
-                if weak_equality and search_name not in ("dfs", "bfs"):
+                if self._params.weak_equality and search_name not in ("dfs", "bfs"):
                     start = time.time()
                     plan, metrics = search(  # type: ignore
                         encoder.search_space,
                         timeout=timeout,
-                        early_termination=early_termination,
+                        early_termination=self._params.early_termination,
                         weak_equality=True,
                     )
                     if plan is None:
@@ -323,14 +299,14 @@ class TamerLite(
                         plan, metrics = search(  # type: ignore
                             encoder.search_space,
                             timeout=updated_timeout,
-                            early_termination=early_termination,
+                            early_termination=self._params.early_termination,
                             weak_equality=False,
                         )
                 else:
                     plan, metrics = search(  # type: ignore
                         encoder.search_space,
                         timeout=timeout,
-                        early_termination=early_termination,
+                        early_termination=self._params.early_termination,
                     )
 
             if plan is not None:
