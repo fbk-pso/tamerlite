@@ -134,6 +134,16 @@ class CustomHeuristic(Heuristic):
         return "custom"
 
 
+def get_event_conditions(event: Event) -> List[Expression]:
+    conditions_set = set()
+    conditions = []
+    for c in split_expression(event.conditions) + event.end_conditions:
+        if c not in conditions_set:
+            conditions.append(c)
+            conditions_set.add(c)
+    return conditions
+
+
 class DeleteRelaxationHeuristic(Heuristic):
     def __init__(
         self,
@@ -202,7 +212,7 @@ class DeleteRelaxationHeuristic(Heuristic):
                             for obj in objects[self._fluent_types[eff.fluent]]:
                                 effects.append((eff.fluent, obj))
                 is_applicable, conditions = self._build_operator_condition(
-                    set(e.end_conditions).union(split_expression(e.conditions)), cond
+                    get_event_conditions(e), cond
                 )
                 if is_applicable:
                     self._operators.append(
@@ -444,7 +454,7 @@ class DeleteRelaxationHeuristic(Heuristic):
         return None
 
     def _build_operator_condition(
-        self, conditions: Iterable[Expression], extra_fluent: FluentNode
+        self, conditions: List[Expression], extra_fluent: FluentNode
     ) -> Tuple[bool, HeuristicExpression]:
         """
         Build the operator condition as a `HeuristicExpression`.
@@ -1222,7 +1232,7 @@ class HMaxExplicit(Heuristic):
                             for obj in objects[self._fluent_types[eff.fluent]]:
                                 effects.append((eff.fluent, obj))
                 conditions: List[Tuple[ExpressionNode, ...]] = [cond]
-                for c in set(e.end_conditions).union(split_expression(e.conditions)):
+                for c in get_event_conditions(e):
                     if len(c) > 0 and c != (True,):
                         conditions.extend(split_expression(c))
                 cond = (FluentNode(f),)
