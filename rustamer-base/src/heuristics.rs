@@ -186,15 +186,31 @@ struct CacheKey {
     todo_values: Vec<usize>,
 }
 
+fn get_event_conditions(
+    event: &Event,
+    expression_manager: &mut ExpressionManager,
+) -> PyResult<Vec<Vec<ExpressionNode>>> {
+    let mut conditions_set = FxHashSet::with_hasher(FxBuildHasher::default());
+    let mut conditions = Vec::new();
+    for condition in split_expression(&event.conditions)?
+        .into_iter()
+        .chain(event.end_conditions.clone())
+    {
+        if conditions_set.insert(expression_manager.put(&condition)) {
+            conditions.push(condition);
+        }
+    }
+    Ok(conditions)
+}
+
 /// Build the operator condition as a `HeuristicExpression`.
 ///
-/// This method takes an existing condition (represented as a `Vec<ExpressionNode>`)
-/// and add an additional fluent (`extra_fluent`). The final result is converted
-/// into a `HeuristicExpression`.
+/// This method takes the operator conditions and add the `extra_fluent`.
+/// The final result is converted into a `HeuristicExpression`.
 ///
 /// # Arguments
 ///
-/// * `condition` - The condition of the operator.
+/// * `conditions` - The conditions of the operator.
 /// * `extra_fluent` - The additional fluent to include in the condition.
 /// * `expression_manager` - A mutable reference to the `ExpressionManager`.
 ///
@@ -203,44 +219,31 @@ struct CacheKey {
 /// Returns `Some(HeuristicExpression)` if the resulting condition is not explicitly false,
 /// otherwise returns `None`.
 fn build_operator_condition(
-    condition: &Vec<ExpressionNode>,
+    conditions: &Vec<Vec<ExpressionNode>>,
     extra_fluent: ExpressionNode,
     objects: &FxHashMap<String, Vec<String>>,
     fluent_types: &Vec<String>,
     disable_numeric_reasoning: bool,
     expression_manager: &mut ExpressionManager,
 ) -> Result<Option<HeuristicExpression>, ArithmeticError> {
-    // If the condition is explicitly False, the operator is not applicable
-    let conditions = if condition == &vec![ExpressionNode::Bool(false)] {
-        return Ok(None);
+    let mut condition_expr = Vec::with_capacity(conditions.len() + 2);
+    let mut operands = Vec::with_capacity(conditions.len() + 1);
+    for condition in conditions {
+        if condition == &vec![ExpressionNode::Bool(false)] {
+            // If the condition is explicitly False, the operator is not applicable
+            return Ok(None);
+        } else if !condition.is_empty() && condition != &vec![ExpressionNode::Bool(true)] {
+            condition_expr.extend(shift_expression(condition, condition_expr.len(), false)?);
+            operands.push(condition_expr.len() - 1);
+        };
+    }
+    condition_expr.push(extra_fluent);
+    operands.push(condition_expr.len() - 1);
+    if operands.len() > 1 {
+        condition_expr.push(ExpressionNode::And(operands));
+    }
 
-    // If the condition is empty or trivially True, the condition become the extra_fluent
-    } else if condition.is_empty() || condition == &vec![ExpressionNode::Bool(true)] {
-        vec![extra_fluent]
-
-    // If the last node is an AND operation, add the new fluent as operand
-    } else if matches!(condition.last().unwrap(), ExpressionNode::And(_)) {
-        let mut condition = condition.clone();
-        let mut and_node = condition.pop().unwrap();
-        if let ExpressionNode::And(ref mut operands) = and_node {
-            operands.push(condition.len());
-        }
-        condition.push(extra_fluent);
-        condition.push(and_node);
-        condition
-
-    // Otherwise, combine the condition and extra_fluent using a new AND operation
-    } else {
-        let mut condition = condition.clone();
-        condition.push(extra_fluent);
-        condition.push(ExpressionNode::And(vec![
-            condition.len() - 2,
-            condition.len() - 1,
-        ]));
-        condition
-    };
-
-    let condition = convert_to_heuristic_expression(&conditions, expression_manager)?;
+    let condition = convert_to_heuristic_expression(&condition_expr, expression_manager)?;
     let condition = simplify_condition(
         &condition,
         objects,
@@ -1169,7 +1172,7 @@ impl DeleteRelaxationHeuristic {
                 }
 
                 if let Some(conditions) = build_operator_condition(
-                    &e.conditions,
+                    &get_event_conditions(e, &mut expression_manager)?,
                     cond.clone(),
                     &objects,
                     &fluent_types,
@@ -1782,14 +1785,16 @@ impl HMaxExplicit {
                     effects.push(eff.clone());
                 }
                 conditions.push(cond);
-                if e.conditions.len() > 0 && e.conditions != vec![ExpressionNode::Bool(true)] {
-                    conditions.extend(split_expression(&e.conditions)?);
+                for condition in get_event_conditions(e, &mut expression_manager)? {
+                    if condition.len() > 0 && condition != vec![ExpressionNode::Bool(true)] {
+                        conditions.extend(split_expression(&condition)?);
+                    }
                 }
-                let condition_expressions: Vec<Expression> = conditions
-                    .iter()
-                    .map(|cond| expression_manager.put(cond))
-                    .collect();
                 if !conditions.contains(&vec![ExpressionNode::Bool(false)]) {
+                    let condition_expressions: Vec<Expression> = conditions
+                        .iter()
+                        .map(|cond| expression_manager.put(cond))
+                        .collect();
                     operators.push(OperatorHmax {
                         action: *a,
                         conditions,
