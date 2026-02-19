@@ -48,6 +48,7 @@ def problems():
     test_problems = [
         problems_generator.get_problem_logistics(1, 1, 4, 2),
         problems_generator.get_problem_numeric(),
+        problems_generator.get_problem_satellite(),
     ]
 
     up_example_problems = list(
