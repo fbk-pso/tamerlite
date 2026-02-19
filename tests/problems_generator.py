@@ -16,6 +16,8 @@
 #
 
 from unified_planning.shortcuts import *
+from unified_planning.io import PDDLReader
+from pathlib import Path
 
 
 def get_problem_matchcellar(n) -> Problem:
@@ -272,4 +274,13 @@ def get_problem_numeric() -> Problem:
     problem.add_goal(GT(b, 2))
     problem.add_goal(LT(x, 1.5))
 
+    return problem
+
+
+def get_problem_satellite() -> Problem:
+    reader = PDDLReader()
+    problem_directory = Path(__file__).resolve().parent / "pddl" / "Satellite"
+    domain = problem_directory / "domain.pddl"
+    instance = problem_directory / "instance.pddl"
+    problem = reader.parse_problem(domain, instance)
     return problem
