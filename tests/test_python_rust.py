@@ -121,7 +121,15 @@ def reload_tamerlite(disable_rustamer: bool):
     reload_package(tamerlite)
 
 
-def skip(problem, search, heuristic, disable_rustamer, internal_heuristic_cache):
+def skip(
+    problem,
+    search,
+    heuristic,
+    weak_equality,
+    symmetry_breaking,
+    disable_rustamer,
+    internal_heuristic_cache,
+):
     return (
         (problem.name == "robot_fluent_of_user_type" and search == "dfs")
         or (problem.name == "robot_loader" and search == "dfs")
@@ -133,7 +141,14 @@ def skip(problem, search, heuristic, disable_rustamer, internal_heuristic_cache)
         or (problem.name == "NumericProblem" and search == "dfs")
         or (
             problem.name == "satellite"
-            and (search in ["dfs", "bfs"] or heuristic == "custom")
+            and (
+                search in ["dfs", "bfs"]
+                or heuristic == "custom"
+                or (
+                    heuristic in ["hmax", "hmax_no_numbers", "hmax_explicit"]
+                    and not weak_equality
+                )
+            )
         )
     )
 
@@ -199,6 +214,8 @@ def test_heuristics(problems):
                                 problem,
                                 search_kind,
                                 heuristic,
+                                weak_equality,
+                                symmetry_breaking,
                                 disable_rustamer,
                                 internal_heuristic_cache,
                             ):
@@ -346,6 +363,8 @@ def test_heuristic_values(problems, data_regression):
                         problem,
                         "wastar",
                         heuristic_name,
+                        True,
+                        True,
                         disable_rustamer,
                         internal_caching,
                     ):
@@ -406,6 +425,8 @@ def test_custom_heuristic(problems):
                             problem,
                             search_kind,
                             heuristic,
+                            weak_equality,
+                            symmetry_breaking,
                             disable_rustamer,
                             internal_heuristic_cache,
                         ):
@@ -455,7 +476,13 @@ def test_search_algorithms(problems):
                     results = []
                     for disable_rustamer in [True, False]:
                         if skip(
-                            problem, search_kind, heuristic, disable_rustamer, True
+                            problem,
+                            search_kind,
+                            heuristic,
+                            weak_equality,
+                            symmetry_breaking,
+                            disable_rustamer,
+                            True,
                         ):
                             continue
 
@@ -509,6 +536,8 @@ def test_multiqueue_search(problems):
                         problem,
                         "multiqueue",
                         heuristic=None,
+                        weak_equality=weak_equality,
+                        symmetry_breaking=symmetry_breaking,
                         disable_rustamer=disable_rustamer,
                         internal_heuristic_cache=True,
                     ):
