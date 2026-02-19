@@ -131,6 +131,10 @@ def skip(problem, search, heuristic, disable_rustamer, internal_heuristic_cache)
         or (problem.name == "depots_p01" and search in ["dfs", "bfs"])
         or (problem.name == "RoboLogistics" and search == "dfs")
         or (problem.name == "NumericProblem" and search == "dfs")
+        or (
+            problem.name == "satellite"
+            and (search in ["dfs", "bfs"] or heuristic == "custom")
+        )
     )
 
 
