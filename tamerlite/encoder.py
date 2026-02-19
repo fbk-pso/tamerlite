@@ -235,6 +235,8 @@ class Encoder:
                         grouped[j] = True
                         groups[-1].append(obj2)
 
+                groups[-1].sort(key=lambda obj: obj.name)
+
         return groups
 
     def _extract_domain_objects(self) -> Set[Object]:

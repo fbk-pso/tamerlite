@@ -30,6 +30,7 @@ from tamerlite.core.search_space import (
     Effect,
     SearchSpaceABC,
     Expression,
+    ExpressionNode,
     FluentNode,
     State,
     Timing,
@@ -133,6 +134,16 @@ class CustomHeuristic(Heuristic):
         return "custom"
 
 
+def get_event_conditions(event: Event) -> List[Expression]:
+    conditions_set = set()
+    conditions = []
+    for c in split_expression(event.conditions) + event.end_conditions:
+        if c not in conditions_set:
+            conditions.append(c)
+            conditions_set.add(c)
+    return conditions
+
+
 class DeleteRelaxationHeuristic(Heuristic):
     def __init__(
         self,
@@ -201,7 +212,7 @@ class DeleteRelaxationHeuristic(Heuristic):
                             for obj in objects[self._fluent_types[eff.fluent]]:
                                 effects.append((eff.fluent, obj))
                 is_applicable, conditions = self._build_operator_condition(
-                    e.conditions, cond
+                    get_event_conditions(e), cond
                 )
                 if is_applicable:
                     self._operators.append(
@@ -443,17 +454,16 @@ class DeleteRelaxationHeuristic(Heuristic):
         return None
 
     def _build_operator_condition(
-        self, condition: Expression, extra_fluent: FluentNode
+        self, conditions: List[Expression], extra_fluent: FluentNode
     ) -> Tuple[bool, HeuristicExpression]:
         """
         Build the operator condition as a `HeuristicExpression`.
 
-        This method takes an existing condition (represented as an `Expression`)
-        and add an additional fluent (`extra_fluent`). The final result is converted
-        into a `HeuristicExpression`.
+        This method takes the operator conditions and add the `extra_fluent`.
+        The final result is converted into a `HeuristicExpression`.
 
         Args:
-            condition (Expression): The condition of the operator.
+            conditions (Expression): The conditions of the operator.
             extra_fluent (FluentNode): The additional fluent to include in the condition.
 
         Returns:
@@ -463,28 +473,22 @@ class DeleteRelaxationHeuristic(Heuristic):
                 - The second element is the resulting `HeuristicExpression`.
         """
 
-        # If the condition is explicitly False, the operator is not applicable
-        if condition == (False,):
-            return False, tuple()
-
-        # If the condition is empty or trivially True, the condition become the extra_fluent
-        if len(condition) == 0 or condition == (True,):
-            condition = (extra_fluent,)
-
-        # If the last node is an AND operation, add the new fluent as operand
-        elif isinstance(condition[-1], Op) and condition[-1].kind == "and":
-            and_op = Op("and", condition[-1].operands + (len(condition) - 1,))
-            condition = condition[:-1] + (extra_fluent, and_op)
-
-        # Otherwise, combine the condition and extra_fluent using a new AND operation
-        else:
-            condition = condition + (
-                extra_fluent,
-                Op("and", (len(condition) - 1, len(condition))),
-            )
+        condition: List[ExpressionNode] = []
+        operands = []
+        for c in conditions:
+            if c == (False,):
+                # If the condition is explicitly False, the operator is not applicable
+                return False, tuple()
+            elif len(c) > 0 and c != (True,):
+                condition.extend(shift_expression(c, len(condition)))
+                operands.append(len(condition) - 1)
+        condition.append(extra_fluent)
+        operands.append(len(condition) - 1)
+        if len(operands) > 1:
+            condition.append(Op("and", tuple(operands)))
 
         return True, self._simplify_condition(
-            self._convert_to_heuristic_expression(condition)
+            self._convert_to_heuristic_expression(tuple(condition))
         )
 
     def _convert_to_heuristic_expression(self, exp: Expression) -> HeuristicExpression:
@@ -1227,14 +1231,14 @@ class HMaxExplicit(Heuristic):
                         else:
                             for obj in objects[self._fluent_types[eff.fluent]]:
                                 effects.append((eff.fluent, obj))
-                if len(e.conditions) == 0 or e.conditions == (True,):
-                    conditions: Tuple[Expression, ...] = (cond,)
-                else:
-                    conditions = split_expression(e.conditions) + (cond,)
+                conditions: List[Tuple[ExpressionNode, ...]] = [cond]
+                for c in get_event_conditions(e):
+                    if len(c) > 0 and c != (True,):
+                        conditions.extend(split_expression(c))
                 cond = (FluentNode(f),)
                 if (False,) not in conditions:
                     self._operators.append(
-                        OperatorHmax(a, conditions, tuple(effects), 1.0)
+                        OperatorHmax(a, tuple(conditions), tuple(effects), 1.0)
                     )
         self._extra_goals: Tuple[Expression, ...] = tuple(
             [(FluentNode(fe[-1]),) for fe in self._extra_fluents.values()]

@@ -560,7 +560,7 @@ impl SearchSpaceTrait for SearchSpace {
                     } else {
                         new_state.todo.insert(action, (index + 1, id + 1));
                     }
-                    if self.expand_event(state, &mut new_state, &e.clone(), index, id)? {
+                    if self.expand_event(state, &mut new_state, &e, index, id)? {
                         return Ok(Some(new_state));
                     }
                 }
@@ -573,7 +573,7 @@ impl SearchSpaceTrait for SearchSpace {
                 let mut new_state = state.clone_for_child();
                 new_state.g += 1.0;
 
-                if self.open_action(state, &mut new_state, action, &events.clone())? {
+                if self.open_action(state, &mut new_state, action, &events)? {
                     return Ok(Some(new_state));
                 }
             }
