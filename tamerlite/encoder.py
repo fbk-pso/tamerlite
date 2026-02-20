@@ -22,13 +22,33 @@ from unified_planning.plans import (
     Plan,
     ActionInstance,
 )
-from unified_planning.model import Problem, FNode, Object, Type, Fluent
+from unified_planning.model import Problem, FNode, Object, Type, Fluent, TimepointKind
 from fractions import Fraction
 from typing import List, Tuple, Dict, Optional, Union, Any, Set, Callable, Iterable
 
 from tamerlite.core import Expression, Effect, Timing, Event, Action, SearchSpace
 from tamerlite.core.search_space import SearchSpaceABC
 from tamerlite.converter import Converter
+
+
+def extract_objects(exp: FNode) -> Iterable[Object]:
+    stack: List[FNode] = [exp]
+    while len(stack) > 0:
+        exp = stack.pop()
+        if exp.is_object_exp():
+            yield exp.object()
+        else:
+            stack.extend(exp.args)
+
+
+def extract_fluents(exp: FNode) -> Iterable[Fluent]:
+    stack: List[FNode] = [exp]
+    while len(stack) > 0:
+        exp = stack.pop()
+        if exp.is_fluent_exp():
+            yield exp.fluent()
+        else:
+            stack.extend(exp.args)
 
 
 PlanType = List[
@@ -49,6 +69,7 @@ class Encoder:
         lifted_problem: Problem,
         map_back_action_instance: Callable[[ActionInstance], Optional[ActionInstance]],
         symmetry_breaking: bool,
+        compression_safe_actions: bool,
         full: bool = True,
     ):
         self._problem = problem
@@ -110,17 +131,31 @@ class Encoder:
         self._goal = None
         action_objects = None
         obj_to_prev_actions_map = None
+        self._compression_safe_actions = None
         if full:
             initial_state = self.initial_state(problem.initial_values)
             self._goal = self.goals(problem.goals)
+
             if symmetry_breaking:
                 action_objects, obj_to_prev_actions_map = (
                     self._compute_obj_to_prev_actions_map()
                 )
+                if len(obj_to_prev_actions_map) == 0:
+                    # Symmetry breaking is not beneficial because there are no equivalent objects
+                    action_objects = None
+                    obj_to_prev_actions_map = None
+
+            if compression_safe_actions:
+                self._compression_safe_actions = self.compression_safe_actions()
+                if not any(self._compression_safe_actions):
+                    # No actions are safe for compression
+                    self._compression_safe_actions = None
+
         self._search_space = SearchSpace(
             actions_duration,
             self._events,
             self._actions,
+            self._compression_safe_actions,
             action_objects,
             obj_to_prev_actions_map,
             initial_state,  # type: ignore[arg-type]
@@ -251,34 +286,25 @@ class Encoder:
         for a in self._lifted_problem.actions:
             if isinstance(a, up.model.InstantaneousAction):
                 for p in a.preconditions:
-                    domain_objects.update(self._extract_objects(p))
+                    domain_objects.update(extract_objects(p))
                 for e in a.effects:
                     if e.is_conditional():
-                        domain_objects.update(self._extract_objects(e.condition))
-                    domain_objects.update(self._extract_objects(e.fluent))
-                    domain_objects.update(self._extract_objects(e.value))
+                        domain_objects.update(extract_objects(e.condition))
+                    domain_objects.update(extract_objects(e.fluent))
+                    domain_objects.update(extract_objects(e.value))
             elif isinstance(a, up.model.DurativeAction):
-                domain_objects.update(self._extract_objects(a.duration.lower))
-                domain_objects.update(self._extract_objects(a.duration.upper))
+                domain_objects.update(extract_objects(a.duration.lower))
+                domain_objects.update(extract_objects(a.duration.upper))
                 for interval, cl in a.conditions.items():
                     for c in cl:
-                        domain_objects.update(self._extract_objects(c))
+                        domain_objects.update(extract_objects(c))
                 for t, el in a.effects.items():
                     for e in el:
                         if e.is_conditional():
-                            domain_objects.update(self._extract_objects(e.condition))
-                        domain_objects.update(self._extract_objects(e.fluent))
-                        domain_objects.update(self._extract_objects(e.value))
+                            domain_objects.update(extract_objects(e.condition))
+                        domain_objects.update(extract_objects(e.fluent))
+                        domain_objects.update(extract_objects(e.value))
         return domain_objects
-
-    def _extract_objects(self, exp: FNode) -> Iterable[Object]:
-        stack: List[FNode] = [exp]
-        while len(stack) > 0:
-            exp = stack.pop()
-            if exp.is_object_exp():
-                yield exp.object()
-            else:
-                stack.extend(exp.args)
 
     def _extract_goal_obj_to_fluent_map(
         self,
@@ -430,6 +456,99 @@ class Encoder:
                     return False
 
         return True
+
+    def compression_safe_actions(self) -> List[bool]:
+        actions = [False] * len(self.action_names)
+        conditions, complex_conditions = self._extract_conditions()
+        for action_name in self.action_names:
+            action = self._problem.action(action_name)
+            if (
+                isinstance(action, up.model.DurativeAction)
+                and self._end_conditions_contained_in_overall_conditions(action)
+                and not self._end_effects_interfere_with_conditions(
+                    action, conditions, complex_conditions
+                )
+            ):
+                actions[self.action_by_name[action_name].idx] = True
+
+        return actions
+
+    def _extract_conditions(self) -> Tuple[Dict[Fluent, Set[bool]], Set[Fluent]]:
+        conditions: Dict[Fluent, Set[bool]] = {}
+        complex_conditions: Set[Fluent] = set()
+        for action in self._problem.actions:
+            action_conditions = (
+                [c for conds in action.conditions.values() for c in conds]
+                if isinstance(action, up.model.DurativeAction)
+                else action.preconditions
+            )
+            for c in action_conditions:
+                f = None
+                if c.is_fluent_exp():
+                    f = c.fluent()
+                    v = True
+                elif c.is_not() and c.arg(0).is_fluent_exp():
+                    f = c.arg(0).fluent()
+                    v = False
+                else:
+                    complex_conditions.update(extract_fluents(c))
+
+                if f is not None:
+                    if f not in conditions:
+                        conditions[f] = set()
+                    conditions[f].add(v)
+
+        return conditions, complex_conditions
+
+    def _end_conditions_contained_in_overall_conditions(
+        self, action: "up.model.Action"
+    ) -> bool:
+        end_conditions = set()
+        overall_conditions = set()
+        for interval, conditions in action.conditions.items():
+            if (
+                interval.lower == interval.upper
+                and interval.lower.timepoint.kind == TimepointKind.END
+                and interval.lower.delay == 0
+            ):
+                end_conditions.update(conditions)
+
+            elif (
+                interval.lower.timepoint.kind == TimepointKind.START
+                and interval.upper.timepoint.kind == TimepointKind.END
+                and interval.lower.delay == 0
+                and interval.upper.delay == 0
+                and interval.is_left_open()
+                and interval.is_right_open()
+            ):
+                overall_conditions.update(conditions)
+
+        for condition in end_conditions:
+            if condition not in overall_conditions:
+                return False
+
+        return True
+
+    def _end_effects_interfere_with_conditions(
+        self,
+        action: "up.model.Action",
+        conditions: Dict[Fluent, Set[bool]],
+        complex_conditions: Set[Fluent],
+    ) -> bool:
+        for timing, effects in action.effects.items():
+            if not (timing.timepoint.kind == TimepointKind.END and timing.delay == 0):
+                continue
+
+            for eff in effects:
+                f = eff.fluent.fluent()
+                if not f.type.is_bool_type() or not eff.value.is_bool_constant():
+                    return True
+
+                negated_value = not eff.value.bool_constant_value()
+                if f in complex_conditions or negated_value in conditions.get(f, set()):
+                    return True
+
+        return False
 
     def goals(self, goals: List[FNode]) -> Expression:
         return self._convert_expression(

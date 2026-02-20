@@ -81,6 +81,7 @@ class SearchParams(HeuristicParams):
     early_termination: bool = False
     weak_equality: bool = False
     symmetry_breaking: bool = True
+    compression_safe_actions: bool = True
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,7 @@ class MultiqueueParams:
     early_termination: bool = False
     weak_equality: bool = False
     symmetry_breaking: bool = True
+    compression_safe_actions: bool = True
 
 
 class TamerLite(
@@ -253,6 +255,7 @@ class TamerLite(
                 problem,
                 map_back_action_instance,
                 self._params.symmetry_breaking,
+                self._params.compression_safe_actions,
             )
 
             if isinstance(self._params, MultiqueueParams):

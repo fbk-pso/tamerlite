@@ -158,6 +158,7 @@ pub struct SearchSpace {
     actions_duration: Vec<Option<(Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool)>>,
     events: FxHashMap<Action, Vec<(Timing, Event)>>,
     actions: Vec<Action>,
+    compression_safe_actions: Option<Vec<bool>>,
     event_fluents: Vec<
         Vec<(
             FxHashSet<usize>,
@@ -183,11 +184,12 @@ pub struct SearchSpace {
 #[pymethods]
 impl SearchSpace {
     #[new]
-    #[pyo3(signature = (actions_duration, events, actions, action_objects, obj_to_prev_actions_map, initial_state=None, goal=None, epsilon=None))]
+    #[pyo3(signature = (actions_duration, events, actions, compression_safe_actions, action_objects, obj_to_prev_actions_map, initial_state=None, goal=None, epsilon=None))]
     fn new(
         actions_duration: Vec<Option<(Vec<PyExpressionNode>, Vec<PyExpressionNode>, bool, bool)>>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         actions: Vec<Action>,
+        compression_safe_actions: Option<Vec<bool>>,
         action_objects: Option<Vec<Vec<String>>>,
         obj_to_prev_actions_map: Option<FxHashMap<String, FxHashSet<Action>>>,
         initial_state: Option<Vec<PyExpressionNode>>,
@@ -238,6 +240,7 @@ impl SearchSpace {
             actions_duration: converted_actions_duration,
             events: events,
             actions: actions,
+            compression_safe_actions: compression_safe_actions,
             event_fluents: event_fluents,
             mutex: MutexChecker::new(),
             precedence: PrecedenceChecker::new(),
@@ -310,6 +313,48 @@ impl SearchSpace {
 }
 
 impl SearchSpace {
+    fn get_successor_state_without_compression(
+        &self,
+        state: &State,
+        action: Action,
+    ) -> PyResult<Option<State>> {
+        if let Some(events) = self.events.get(&action) {
+            if let Some((index, id)) = state.todo.get(&action) {
+                if let Some((_, e)) = events.get(*index) {
+                    // Check if the event is applicable before creating the new state
+                    if !self.is_sat(&e.conditions, state)? {
+                        return Ok(None);
+                    }
+
+                    let mut new_state = state.clone_for_child();
+                    new_state.g += 1.0;
+
+                    if index + 1 >= events.len() {
+                        new_state.todo.remove(&action);
+                    } else {
+                        new_state.todo.insert(action, (index + 1, id + 1));
+                    }
+                    if self.expand_event(state, &mut new_state, &e, index, id)? {
+                        return Ok(Some(new_state));
+                    }
+                }
+            } else {
+                // Check if action is applicable before creating the new state
+                if !self.is_sat(&events[0].1.conditions, state)? {
+                    return Ok(None);
+                }
+
+                let mut new_state = state.clone_for_child();
+                new_state.g += 1.0;
+
+                if self.open_action(state, &mut new_state, action, &events)? {
+                    return Ok(Some(new_state));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     fn is_sat(&self, conditions: &Vec<ExpressionNode>, state: &State) -> PyResult<bool> {
         let sat = match internal_evaluate(conditions, state)? {
             ExpressionNode::Bool(v) => v,
@@ -537,48 +582,28 @@ impl SearchSpaceTrait for SearchSpace {
         &'a self,
         state: &'a State,
     ) -> impl Iterator<Item = PyResult<State>> + 'a {
-        return self
-            .actions
+        self.actions
             .iter()
-            .filter_map(|action| self.get_successor_state(state, *action).transpose());
+            .filter_map(|action| self.get_successor_state(state, *action).transpose())
     }
 
     fn get_successor_state(&self, state: &State, action: Action) -> PyResult<Option<State>> {
-        if let Some(events) = self.events.get(&action) {
-            if let Some((index, id)) = state.todo.get(&action) {
-                if let Some((_, e)) = events.get(*index) {
-                    // Check if the event is applicable before creating the new state
-                    if !self.is_sat(&e.conditions, state)? {
-                        return Ok(None);
-                    }
+        let mut res = self.get_successor_state_without_compression(state, action);
+        while let Ok(Some(new_state)) = &res {
+            let repeat = self
+                .compression_safe_actions
+                .as_ref()
+                .map_or(false, |is_safe| is_safe[action.idx])
+                && new_state.todo.contains_key(&action);
 
-                    let mut new_state = state.clone_for_child();
-                    new_state.g += 1.0;
-
-                    if index + 1 >= events.len() {
-                        new_state.todo.remove(&action);
-                    } else {
-                        new_state.todo.insert(action, (index + 1, id + 1));
-                    }
-                    if self.expand_event(state, &mut new_state, &e, index, id)? {
-                        return Ok(Some(new_state));
-                    }
-                }
-            } else {
-                // Check if action is applicable before creating the new state
-                if !self.is_sat(&events[0].1.conditions, state)? {
-                    return Ok(None);
-                }
-
-                let mut new_state = state.clone_for_child();
-                new_state.g += 1.0;
-
-                if self.open_action(state, &mut new_state, action, &events)? {
-                    return Ok(Some(new_state));
-                }
+            if !repeat {
+                break;
             }
+
+            // TODO: avoid cloning the state
+            res = self.get_successor_state_without_compression(new_state, action);
         }
-        Ok(None)
+        res
     }
 
     fn goal_reached(&self, state: &State, goal: Option<Vec<PyExpressionNode>>) -> PyResult<bool> {
@@ -645,7 +670,9 @@ impl SearchSpaceTrait for SearchSpace {
         let mut counter = 0;
         let mut state = self.initial_state(None)?;
         for action in all_path {
-            state = self.get_successor_state(&state, *action)?.unwrap();
+            state = self
+                .get_successor_state_without_compression(&state, *action)?
+                .unwrap();
             if let Some(events) = self.events.get(action).cloned() {
                 if let Some((index, id)) = todo.get(action).cloned() {
                     if let Some((_, e)) = events.get(index) {
