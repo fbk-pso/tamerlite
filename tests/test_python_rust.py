@@ -228,6 +228,7 @@ def test_heuristics(problems):
                                 internal_heuristic_cache=internal_heuristic_cache,
                                 weak_equality=weak_equality,
                                 symmetry_breaking=symmetry_breaking,
+                                compression_safe_actions=False,
                             )
 
                             with OneshotPlanner(
@@ -290,7 +291,11 @@ def test_heuristic_fixed_values():
             new_problem = compilation_res.problem
             map_back_action_instance = compilation_res.map_back_action_instance
             encoder = Encoder(
-                new_problem, problem, map_back_action_instance, symmetry_breaking=False
+                new_problem,
+                problem,
+                map_back_action_instance,
+                symmetry_breaking=False,
+                compression_safe_actions=False,
             )
             ss: SearchSpaceABC = encoder.search_space
             init_state = ss.initial_state()
@@ -341,7 +346,11 @@ def test_heuristic_values(problems, data_regression):
             new_problem = compilation_res.problem
             map_back_action_instance = compilation_res.map_back_action_instance
             encoder = Encoder(
-                new_problem, problem, map_back_action_instance, symmetry_breaking=False
+                new_problem,
+                problem,
+                map_back_action_instance,
+                symmetry_breaking=False,
+                compression_safe_actions=False,
             )
             ss: SearchSpaceABC = encoder.search_space
             init_state = ss.initial_state()
@@ -439,6 +448,7 @@ def test_custom_heuristic(problems):
                             internal_heuristic_cache=internal_heuristic_cache,
                             weak_equality=weak_equality,
                             symmetry_breaking=symmetry_breaking,
+                            compression_safe_actions=False,
                         )
 
                         with OneshotPlanner(
@@ -492,6 +502,7 @@ def test_search_algorithms(problems):
                             heuristic=heuristic,
                             weak_equality=weak_equality,
                             symmetry_breaking=symmetry_breaking,
+                            compression_safe_actions=False,
                         )
 
                         with OneshotPlanner(
@@ -553,6 +564,7 @@ def test_multiqueue_search(problems):
                         ],
                         weak_equality=weak_equality,
                         symmetry_breaking=symmetry_breaking,
+                        compression_safe_actions=False,
                     )
                     with OneshotPlanner(
                         name="tamerlite", params={"search": search}
@@ -583,7 +595,11 @@ def test_search_space(problems):
             new_problem = compilation_res.problem
             map_back_action_instance = compilation_res.map_back_action_instance
             encoder = Encoder(
-                new_problem, problem, map_back_action_instance, symmetry_breaking=False
+                new_problem,
+                problem,
+                map_back_action_instance,
+                symmetry_breaking=False,
+                compression_safe_actions=False,
             )
             ss: SearchSpaceABC = encoder.search_space
 
