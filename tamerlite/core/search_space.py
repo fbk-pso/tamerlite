@@ -511,6 +511,7 @@ class SearchSpace(SearchSpaceABC):
         actions_duration: List[Optional[Tuple[Expression, Expression, bool, bool]]],
         events: Dict[Action, List[Tuple[Timing, Event]]],
         actions: List[Action],
+        compression_safe_actions: Optional[List[bool]],
         action_objects: Optional[List[List[str]]],
         obj_to_prev_actions_map: Optional[Dict[str, Set[Action]]],
         initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
@@ -520,6 +521,7 @@ class SearchSpace(SearchSpaceABC):
         self._actions_duration = actions_duration
         self._events = events
         self._actions = actions
+        self._compression_safe_actions = compression_safe_actions
         self._action_objects = action_objects
         self._obj_to_prev_actions_map = obj_to_prev_actions_map
         self._initial_state = initial_state
@@ -563,6 +565,19 @@ class SearchSpace(SearchSpaceABC):
             return State(self._initial_state, tn, {}, MultiSet(), 0, [])
 
     def get_successor_state(self, state: State, action: Action) -> Optional[State]:
+        new_state = self.get_successor_state_without_compression(state, action)
+        while (
+            self._compression_safe_actions is not None
+            and self._compression_safe_actions[action.idx]
+            and new_state is not None
+            and action in new_state.todo
+        ):
+            new_state = self.get_successor_state_without_compression(new_state, action)
+        return new_state
+
+    def get_successor_state_without_compression(
+        self, state: State, action: Action
+    ) -> Optional[State]:
         events = self._events[action]
         new_state = state.clone()
         new_state.g = state.g + 1
@@ -743,7 +758,7 @@ class SearchSpace(SearchSpaceABC):
         counter = 0
         state = self.initial_state()
         for action, _, _ in all_path:
-            succ_state = self.get_successor_state(state, action)
+            succ_state = self.get_successor_state_without_compression(state, action)
             assert succ_state is not None
             state = succ_state
 
