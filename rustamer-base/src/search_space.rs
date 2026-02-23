@@ -313,10 +313,11 @@ impl SearchSpace {
 }
 
 impl SearchSpace {
-    fn get_successor_state_without_compression(
+    fn get_successor_state_with_compression(
         &self,
         state: &State,
         action: Action,
+        enable_compression_safe_actions: bool,
     ) -> PyResult<Option<State>> {
         if let Some(events) = self.events.get(&action) {
             if let Some((index, id)) = state.todo.get(&action) {
@@ -346,10 +347,33 @@ impl SearchSpace {
 
                 let mut new_state = state.clone_for_child();
                 new_state.g += 1.0;
-
-                if self.open_action(state, &mut new_state, action, &events)? {
-                    return Ok(Some(new_state));
+                if !self.open_action(state, &mut new_state, action, &events)? {
+                    return Ok(None);
                 }
+
+                if enable_compression_safe_actions
+                    && self
+                        .compression_safe_actions
+                        .as_ref()
+                        .map_or(false, |is_compression_safe| is_compression_safe[action.idx])
+                {
+                    let mut id = new_state.todo.remove(&action).unwrap().1;
+                    for index in 1..events.len() {
+                        new_state.g += 1.0;
+                        if !self.expand_event(
+                            state,
+                            &mut new_state,
+                            &events[index].1,
+                            &index,
+                            &id,
+                        )? {
+                            return Ok(None);
+                        }
+
+                        id += 1;
+                    }
+                }
+                return Ok(Some(new_state));
             }
         }
         Ok(None)
@@ -588,22 +612,7 @@ impl SearchSpaceTrait for SearchSpace {
     }
 
     fn get_successor_state(&self, state: &State, action: Action) -> PyResult<Option<State>> {
-        let mut res = self.get_successor_state_without_compression(state, action);
-        while let Ok(Some(new_state)) = &res {
-            let repeat = self
-                .compression_safe_actions
-                .as_ref()
-                .map_or(false, |is_safe| is_safe[action.idx])
-                && new_state.todo.contains_key(&action);
-
-            if !repeat {
-                break;
-            }
-
-            // TODO: avoid cloning the state
-            res = self.get_successor_state_without_compression(new_state, action);
-        }
-        res
+        self.get_successor_state_with_compression(state, action, true)
     }
 
     fn goal_reached(&self, state: &State, goal: Option<Vec<PyExpressionNode>>) -> PyResult<bool> {
@@ -671,7 +680,7 @@ impl SearchSpaceTrait for SearchSpace {
         let mut state = self.initial_state(None)?;
         for action in all_path {
             state = self
-                .get_successor_state_without_compression(&state, *action)?
+                .get_successor_state_with_compression(&state, *action, false)?
                 .unwrap();
             if let Some(events) = self.events.get(action).cloned() {
                 if let Some((index, id)) = todo.get(action).cloned() {
