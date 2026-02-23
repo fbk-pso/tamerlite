@@ -464,8 +464,9 @@ class Encoder:
             action = self._problem.action(action_name)
             if (
                 isinstance(action, up.model.DurativeAction)
+                and not self._has_intermediate_conditions(action)
                 and self._end_conditions_contained_in_overall_conditions(action)
-                and not self._end_effects_interfere_with_conditions(
+                and not self._effects_interfere_with_conditions(
                     action, conditions, complex_conditions
                 )
             ):
@@ -500,6 +501,12 @@ class Encoder:
 
         return conditions, complex_conditions
 
+    def _has_intermediate_conditions(self, action: "up.model.Action") -> bool:
+        return any(
+            interval.lower.delay != 0 or interval.upper.delay != 0
+            for interval in action.conditions
+        )
+
     def _end_conditions_contained_in_overall_conditions(
         self, action: "up.model.Action"
     ) -> bool:
@@ -518,25 +525,19 @@ class Encoder:
                 and interval.upper.timepoint.kind == TimepointKind.END
                 and interval.lower.delay == 0
                 and interval.upper.delay == 0
-                and interval.is_left_open()
-                and interval.is_right_open()
             ):
                 overall_conditions.update(conditions)
 
-        for condition in end_conditions:
-            if condition not in overall_conditions:
-                return False
+        return all(condition in overall_conditions for condition in end_conditions)
 
-        return True
-
-    def _end_effects_interfere_with_conditions(
+    def _effects_interfere_with_conditions(
         self,
         action: "up.model.Action",
         conditions: Dict[Fluent, Set[bool]],
         complex_conditions: Set[Fluent],
     ) -> bool:
         for timing, effects in action.effects.items():
-            if not (timing.timepoint.kind == TimepointKind.END and timing.delay == 0):
+            if timing.timepoint.kind == TimepointKind.START and timing.delay == 0:
                 continue
 
             for eff in effects:
