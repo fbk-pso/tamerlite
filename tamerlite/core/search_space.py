@@ -565,18 +565,10 @@ class SearchSpace(SearchSpaceABC):
             return State(self._initial_state, tn, {}, MultiSet(), 0, [])
 
     def get_successor_state(self, state: State, action: Action) -> Optional[State]:
-        new_state = self.get_successor_state_without_compression(state, action)
-        while (
-            self._compression_safe_actions is not None
-            and self._compression_safe_actions[action.idx]
-            and new_state is not None
-            and action in new_state.todo
-        ):
-            new_state = self.get_successor_state_without_compression(new_state, action)
-        return new_state
+        return self.get_successor_state_with_compression(state, action, True)
 
-    def get_successor_state_without_compression(
-        self, state: State, action: Action
+    def get_successor_state_with_compression(
+        self, state: State, action: Action, enable_compression_safe_actions: bool
     ) -> Optional[State]:
         events = self._events[action]
         new_state = state.clone()
@@ -591,6 +583,20 @@ class SearchSpace(SearchSpaceABC):
             new_state = self._expand_event(state, new_state, e, index, id)
         else:
             new_state = self._open_action(state, new_state, action, events)
+            if (
+                enable_compression_safe_actions
+                and self._compression_safe_actions is not None
+                and self._compression_safe_actions[action.idx]
+                and new_state is not None
+            ):
+                _, id = new_state.todo.pop(action)
+                for index in range(1, len(events)):
+                    state = new_state.clone()
+                    new_state.g += 1
+                    _, e = events[index]
+                    new_state = self._expand_event(state, new_state, e, index, id)
+                    id += 1
+
         return new_state
 
     def get_successor_states(self, state: State) -> Iterator[State]:
@@ -758,7 +764,7 @@ class SearchSpace(SearchSpaceABC):
         counter = 0
         state = self.initial_state()
         for action, _, _ in all_path:
-            succ_state = self.get_successor_state_without_compression(state, action)
+            succ_state = self.get_successor_state_with_compression(state, action, False)
             assert succ_state is not None
             state = succ_state
 
