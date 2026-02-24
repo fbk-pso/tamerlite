@@ -146,7 +146,9 @@ class Encoder:
                     obj_to_prev_actions_map = None
 
             if compression_safe_actions:
-                self._compression_safe_actions = self.compression_safe_actions()
+                self._compression_safe_actions = (
+                    self._compute_compression_safe_actions()
+                )
                 if not any(self._compression_safe_actions):
                     # No actions are safe for compression
                     self._compression_safe_actions = None
@@ -457,7 +459,7 @@ class Encoder:
 
         return True
 
-    def compression_safe_actions(self) -> List[bool]:
+    def _compute_compression_safe_actions(self) -> List[bool]:
         actions = [False] * len(self.action_names)
         conditions, complex_conditions = self._extract_conditions()
         for action_name in self.action_names:
@@ -597,6 +599,12 @@ class Encoder:
         return self._applicable_actions
 
     @property
+    def compression_safe_actions(self) -> List[Action]:
+        if self._compression_safe_actions is None:
+            return []
+        return [a for a in self._actions if self._compression_safe_actions[a.idx]]
+
+    @property
     def goal(self) -> Optional[Expression]:
         return self._goal
 
@@ -606,7 +614,17 @@ class Encoder:
     def get_action_name(self, action: Action) -> str:
         return self.action_names[action.idx]
 
-    def build_plan(self, plan: PlanType) -> Plan:
+    def are_all_actions_compression_safe(self) -> bool:
+        return self._compression_safe_actions is not None and all(
+            self._compression_safe_actions
+        )
+
+    def build_plan(
+        self, path: List[Action], are_all_actions_compression_safe: bool = False
+    ) -> Plan:
+        if are_all_actions_compression_safe:
+            path = [a for a in path for _ in self._events[a]]
+        plan = self.search_space.build_plan(path)
         if self._is_temporal:
             assert all(map(lambda e: e[0] is not None, plan))
             return TimeTriggeredPlan(

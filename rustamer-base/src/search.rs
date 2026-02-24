@@ -30,6 +30,7 @@ use super::heuristics::*;
 use super::search_space::*;
 use super::search_state::*;
 use super::structures::Action;
+use super::utils::PersistentList;
 
 #[derive(Debug)]
 struct PrioritizedItem {
@@ -96,32 +97,11 @@ pub fn weak_eq(state1: &State, state2: &State) -> bool {
     true
 }
 
-pub fn build_plan<S: SearchSpaceTrait>(
-    ss: &S,
-    state: &State,
-) -> PyResult<Option<Vec<(Option<String>, Action, Option<String>)>>> {
-    let plan = ss.build_plan(state)?;
-    let mut res = Vec::with_capacity(plan.len());
-    for (s, a, d) in plan.into_iter() {
-        let mut ss = None;
-        let mut ds = None;
-        if let Some(start) = s {
-            ss = Some(format!(
-                "{}/{}",
-                start.numer().to_string(),
-                start.denom().to_string()
-            ));
-        }
-        if let Some(duration) = d {
-            ds = Some(format!(
-                "{}/{}",
-                duration.numer().to_string(),
-                duration.denom().to_string()
-            ));
-        }
-        res.push((ss, a, ds));
-    }
-    Ok(Some(res))
+pub fn extract_path(state: &State) -> Vec<Action> {
+    PersistentList::to_vec(&state.path)
+        .into_iter()
+        .map(|(a, _, _)| *a)
+        .collect()
 }
 
 pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
@@ -131,10 +111,7 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     timeout: Option<f32>,
     early_termination: bool,
     weak_equality: bool,
-) -> PyResult<(
-    Option<Vec<(Option<String>, Action, Option<String>)>>,
-    FxHashMap<String, String>,
-)> {
+) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
     let start = SystemTime::now();
     let init = Rc::new(ss.initial_state(None)?);
@@ -142,7 +119,7 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     if early_termination && ss.goal_reached(&init, None)? {
         metrics.insert("expanded_states".to_string(), expanded_states.to_string());
         metrics.insert("goal_depth".to_string(), init.g.to_string());
-        return build_plan(ss, &init).map(|plan| (plan, metrics));
+        return Ok((Some(extract_path(&init)), metrics));
     }
 
     let mut visited_weak_eq_states = FxHashSet::with_hasher(FxBuildHasher::default());
@@ -178,7 +155,7 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         if !early_termination && ss.goal_reached(&state, None)? {
             metrics.insert("expanded_states".to_string(), expanded_states.to_string());
             metrics.insert("goal_depth".to_string(), state.g.to_string());
-            return build_plan(ss, &state).map(|plan| (plan, metrics));
+            return Ok((Some(extract_path(&state)), metrics));
         } else {
             let successors_iter = ss
                 .get_successor_states_iter(&state)
@@ -204,7 +181,7 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
                 if early_termination && ss.goal_reached(&s, None)? {
                     metrics.insert("expanded_states".to_string(), expanded_states.to_string());
                     metrics.insert("goal_depth".to_string(), s.g.to_string());
-                    return build_plan(ss, &s).map(|plan| (plan, metrics));
+                    return Ok((Some(extract_path(&s)), metrics));
                 }
                 match h {
                     Some(v) => {
@@ -227,10 +204,7 @@ pub fn bfs_search<S: SearchSpaceTrait>(
     ss: &S,
     timeout: Option<f32>,
     early_termination: bool,
-) -> PyResult<(
-    Option<Vec<(Option<String>, Action, Option<String>)>>,
-    FxHashMap<String, String>,
-)> {
+) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
     basic_search(ss, true, timeout, early_termination)
 }
 
@@ -238,10 +212,7 @@ pub fn dfs_search<S: SearchSpaceTrait>(
     ss: &S,
     timeout: Option<f32>,
     early_termination: bool,
-) -> PyResult<(
-    Option<Vec<(Option<String>, Action, Option<String>)>>,
-    FxHashMap<String, String>,
-)> {
+) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
     basic_search(ss, false, timeout, early_termination)
 }
 
@@ -250,10 +221,7 @@ fn basic_search<S: SearchSpaceTrait>(
     bfs: bool,
     timeout: Option<f32>,
     early_termination: bool,
-) -> PyResult<(
-    Option<Vec<(Option<String>, Action, Option<String>)>>,
-    FxHashMap<String, String>,
-)> {
+) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
@@ -263,7 +231,7 @@ fn basic_search<S: SearchSpaceTrait>(
     if early_termination && ss.goal_reached(&init, None)? {
         metrics.insert("expanded_states".to_string(), expanded_states.to_string());
         metrics.insert("goal_depth".to_string(), init.g.to_string());
-        return build_plan(ss, &init).map(|plan| (plan, metrics));
+        return Ok((Some(extract_path(&init)), metrics));
     }
     open.push_back(init);
 
@@ -284,14 +252,14 @@ fn basic_search<S: SearchSpaceTrait>(
         if !early_termination && ss.goal_reached(&state, None)? {
             metrics.insert("expanded_states".to_string(), expanded_states.to_string());
             metrics.insert("goal_depth".to_string(), state.g.to_string());
-            return build_plan(ss, &state).map(|plan| (plan, metrics));
+            return Ok((Some(extract_path(&state)), metrics));
         } else {
             for rs in ss.get_successor_states_iter(&state) {
                 let s = rs?;
                 if early_termination && ss.goal_reached(&s, None)? {
                     metrics.insert("expanded_states".to_string(), expanded_states.to_string());
                     metrics.insert("goal_depth".to_string(), s.g.to_string());
-                    return build_plan(ss, &s).map(|plan| (plan, metrics));
+                    return Ok((Some(extract_path(&s)), metrics));
                 }
                 open.push_back(s);
             }
@@ -307,10 +275,7 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     timeout: Option<f32>,
     early_termination: bool,
     weak_equality: bool,
-) -> PyResult<(
-    Option<Vec<(Option<String>, Action, Option<String>)>>,
-    FxHashMap<String, String>,
-)> {
+) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
     let start = SystemTime::now();
     let init = Rc::new(ss.initial_state(None)?);
@@ -319,7 +284,7 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     if early_termination && ss.goal_reached(&init, None)? {
         metrics.insert("expanded_states".to_string(), expanded_states.to_string());
         metrics.insert("goal_depth".to_string(), init.g.to_string());
-        return build_plan(ss, &init).map(|plan| (plan, metrics));
+        return Ok((Some(extract_path(&init)), metrics));
     }
 
     let mut best_h = match heuristic.eval(&init, ss)? {
@@ -344,7 +309,7 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         if !early_termination && ss.goal_reached(&state, None)? {
             metrics.insert("expanded_states".to_string(), expanded_states.to_string());
             metrics.insert("goal_depth".to_string(), state.g.to_string());
-            return build_plan(ss, &state).map(|plan| (plan, metrics));
+            return Ok((Some(extract_path(&state)), metrics));
         } else {
             if !ss.is_temporal() {
                 closed.insert(Rc::clone(&state));
@@ -378,7 +343,7 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
                 if early_termination && ss.goal_reached(&s, None)? {
                     metrics.insert("expanded_states".to_string(), expanded_states.to_string());
                     metrics.insert("goal_depth".to_string(), s.g.to_string());
-                    return build_plan(ss, &s).map(|plan| (plan, metrics));
+                    return Ok((Some(extract_path(&s)), metrics));
                 }
                 match h {
                     Some(v) => {
