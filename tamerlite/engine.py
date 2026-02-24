@@ -270,12 +270,13 @@ class TamerLite(
                 t2s_compiler = TimedToSequential()
                 t2s_compiler.skip_checks = True
                 compilation_res = t2s_compiler.compile(new_problem)
+                new_problem_actions = {a.name: a for a in new_problem.actions}
 
                 def new_map_back_action_instance(
                     ai: ActionInstance,
                 ) -> Optional[ActionInstance]:
-                    if new_problem.has_action(ai.action.name):
-                        action = new_problem.action(ai.action.name)
+                    action = new_problem_actions.get(ai.action.name, None)
+                    if action is not None:
                         return map_back_action_instance(action())
                     return None
 
