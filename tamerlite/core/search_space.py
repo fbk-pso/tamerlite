@@ -499,7 +499,7 @@ class SearchSpaceABC(ABC):
 
     @abstractmethod
     def build_plan(
-        self, state: State
+        self, path: List[Action]
     ) -> List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]:
         pass
 
@@ -752,18 +752,17 @@ class SearchSpace(SearchSpaceABC):
         return self._expand_event(state, new_state, events[0][1], 0, id)
 
     def build_plan(
-        self, state: State
+        self, path: List[Action]
     ) -> List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]:
         if not self.is_temporal:
-            return [(None, e[0], None) for e in state.path]
+            return [(None, a, None) for a in path]
 
-        all_path = state.path
         tn = DeltaSimpleTemporalNetwork()
         todo: Dict[Action, Tuple[int, int]] = {}
-        path: List[Tuple[Event, int]] = []
+        event_path: List[Tuple[Event, int]] = []
         counter = 0
         state = self.initial_state()
-        for action, _, _ in all_path:
+        for action in path:
             succ_state = self.get_successor_state_with_compression(state, action, False)
             assert succ_state is not None
             state = succ_state
@@ -777,7 +776,7 @@ class SearchSpace(SearchSpaceABC):
                     todo[action] = (index + 1, id + 1)
 
                 _, e = action_events[index]
-                for e2, id2 in path:
+                for e2, id2 in event_path:
                     if ((e.action, e.pos), (e2.action, e2.pos)) in self._mutex:
                         b = -self._epsilon
                         tn.add((e2.action, e2.pos, id2), (e.action, e.pos, id), b)
@@ -793,7 +792,7 @@ class SearchSpace(SearchSpaceABC):
                             tn.add((e.action, e.pos, id), (e2.action, e2.pos, id2), b)
                         id2 += 1
 
-                path.append((e, id))
+                event_path.append((e, id))
 
             else:
                 start = (action, True, counter)
@@ -834,7 +833,7 @@ class SearchSpace(SearchSpaceABC):
 
                 e = action_events[0][1]
                 ev = (e.action, e.pos, id)
-                for e2, id2 in path:
+                for e2, id2 in event_path:
                     ev2 = (e2.action, e2.pos, id2)
                     if ((e.action, e.pos), (e2.action, e2.pos)) in self._mutex:
                         b = -self._epsilon
@@ -852,7 +851,7 @@ class SearchSpace(SearchSpaceABC):
                             tn.add(ev, ev2, b)
                         id2 += 1
 
-                path.append((e, id))
+                event_path.append((e, id))
                 if len(action_events) > 1:
                     todo[action] = (1, id + 1)
 

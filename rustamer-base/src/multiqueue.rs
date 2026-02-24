@@ -119,10 +119,7 @@ pub fn multiqueue_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     timeout: Option<f32>,
     early_termination: bool,
     weak_equality: bool,
-) -> PyResult<(
-    Option<Vec<(Option<String>, Action, Option<String>)>>,
-    FxHashMap<String, String>,
-)> {
+) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
     let mut switch_policy = RoundRobinSwitchPolicy::new(heuristics.len());
     _multiqueue_search(
         ss,
@@ -141,10 +138,7 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
     timeout: Option<f32>,
     early_termination: bool,
     weak_equality: bool,
-) -> PyResult<(
-    Option<Vec<(Option<String>, Action, Option<String>)>>,
-    FxHashMap<String, String>,
-)> {
+) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
     let start = SystemTime::now();
     let init = Rc::new(ss.initial_state(None)?);
@@ -152,7 +146,7 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
     if early_termination && ss.goal_reached(&init, None)? {
         metrics.insert("expanded_states".to_string(), expanded_states.to_string());
         metrics.insert("goal_depth".to_string(), init.g.to_string());
-        return build_plan(ss, &init).map(|plan| (plan, metrics));
+        return Ok((Some(extract_path(&init)), metrics));
     }
 
     let item = PrioritizedItem {
@@ -205,7 +199,7 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
             if !early_termination && ss.goal_reached(&state, None)? {
                 metrics.insert("expanded_states".to_string(), expanded_states.to_string());
                 metrics.insert("goal_depth".to_string(), state.g.to_string());
-                return build_plan(ss, &state).map(|plan| (plan, metrics));
+                return Ok((Some(extract_path(&state)), metrics));
             }
 
             let mut candidate_containers: Vec<StateContainer> = Vec::new();
@@ -214,7 +208,7 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
                 if early_termination && ss.goal_reached(&s, None)? {
                     metrics.insert("expanded_states".to_string(), expanded_states.to_string());
                     metrics.insert("goal_depth".to_string(), s.g.to_string());
-                    return build_plan(ss, &s).map(|plan| (plan, metrics));
+                    return Ok((Some(extract_path(&s)), metrics));
                 }
                 let s = Rc::new(s);
                 let keep = if !ss.is_temporal() {

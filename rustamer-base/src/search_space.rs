@@ -55,7 +55,7 @@ pub trait SearchSpaceTrait {
     ) -> PyResult<Vec<Vec<PyExpressionNode>>>;
     fn build_plan(
         &self,
-        state: &State,
+        path: &Vec<Action>,
     ) -> PyResult<Vec<(Option<BigRational>, Action, Option<BigRational>)>>;
 }
 
@@ -309,6 +309,35 @@ impl SearchSpace {
         goal: Option<Vec<PyExpressionNode>>,
     ) -> PyResult<Vec<Vec<PyExpressionNode>>> {
         self.subgoals_sat(state, goal)
+    }
+
+    #[pyo3(name = "build_plan", signature = (path))]
+    fn py_build_plan(
+        &self,
+        path: Vec<Action>,
+    ) -> PyResult<Option<Vec<(Option<String>, Action, Option<String>)>>> {
+        let plan = self.build_plan(&path)?;
+        let mut res = Vec::with_capacity(plan.len());
+        for (s, a, d) in plan.into_iter() {
+            let mut ss = None;
+            let mut ds = None;
+            if let Some(start) = s {
+                ss = Some(format!(
+                    "{}/{}",
+                    start.numer().to_string(),
+                    start.denom().to_string()
+                ));
+            }
+            if let Some(duration) = d {
+                ds = Some(format!(
+                    "{}/{}",
+                    duration.numer().to_string(),
+                    duration.denom().to_string()
+                ));
+            }
+            res.push((ss, a, ds));
+        }
+        Ok(Some(res))
     }
 }
 
@@ -663,23 +692,19 @@ impl SearchSpaceTrait for SearchSpace {
 
     fn build_plan(
         &self,
-        state: &State,
+        path: &Vec<Action>,
     ) -> PyResult<Vec<(Option<BigRational>, Action, Option<BigRational>)>> {
-        let all_path = PersistentList::to_vec(&state.path)
-            .into_iter()
-            .map(|(a, _, _)| a);
-
         if !self.is_temporal {
-            return Ok(all_path.map(|a| (None, a.clone(), None)).collect());
+            return Ok(path.iter().map(|a| (None, *a, None)).collect());
         }
 
         let mut tn = DeltaSTN::new(mk_rational(0, 1));
         let mut todo: FxHashMap<Action, (usize, u32)> =
             FxHashMap::with_hasher(FxBuildHasher::default());
-        let mut path: Vec<(Event, u32)> = Vec::new();
+        let mut event_path: Vec<(Event, u32)> = Vec::new();
         let mut counter = 0;
         let mut state = self.initial_state(None)?;
-        for action in all_path {
+        for action in path {
             state = self
                 .get_successor_state_with_compression(&state, *action, false)?
                 .unwrap();
@@ -692,7 +717,7 @@ impl SearchSpaceTrait for SearchSpace {
                             todo.insert(*action, (index + 1, id + 1));
                         }
                         let ev = self.tn_interpreter.get_event_id(e.action, e.pos, id);
-                        for (e2, id2) in path.iter() {
+                        for (e2, id2) in event_path.iter() {
                             let e_id = (e.action, index);
                             let e2_id = (e2.action, e2.pos);
                             let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, *id2);
@@ -720,7 +745,7 @@ impl SearchSpaceTrait for SearchSpace {
                                 id2 += 1;
                             }
                         }
-                        path.push((e.clone(), id));
+                        event_path.push((e.clone(), id));
                     }
                 } else {
                     let start = self.tn_interpreter.get_action_id(*action, true, counter);
@@ -763,7 +788,7 @@ impl SearchSpaceTrait for SearchSpace {
                     }
                     let e = events[0].1.clone();
                     let ev = self.tn_interpreter.get_event_id(e.action, e.pos, id);
-                    for (e2, id2) in path.iter() {
+                    for (e2, id2) in event_path.iter() {
                         let e_id = (e.action, 0);
                         let e2_id = (e2.action, e2.pos);
                         let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, *id2);
@@ -791,7 +816,7 @@ impl SearchSpaceTrait for SearchSpace {
                             id2 += 1;
                         }
                     }
-                    path.push((e.clone(), id));
+                    event_path.push((e.clone(), id));
                     if events.len() > 1 {
                         todo.insert(*action, (1, id + 1));
                     }
