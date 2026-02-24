@@ -588,6 +588,7 @@ class SearchSpace(SearchSpaceABC):
                 and self._compression_safe_actions is not None
                 and self._compression_safe_actions[action.idx]
                 and new_state is not None
+                and len(events) > 1
             ):
                 _, id = new_state.todo.pop(action)
                 for index in range(1, len(events)):

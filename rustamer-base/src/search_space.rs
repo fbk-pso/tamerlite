@@ -385,6 +385,7 @@ impl SearchSpace {
                         .compression_safe_actions
                         .as_ref()
                         .map_or(false, |is_compression_safe| is_compression_safe[action.idx])
+                    && events.len() > 1
                 {
                     let mut id = new_state.todo.remove(&action).unwrap().1;
                     for index in 1..events.len() {
