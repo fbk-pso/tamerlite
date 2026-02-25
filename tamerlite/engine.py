@@ -260,13 +260,13 @@ class TamerLite(
                 self._params.compression_safe_actions,
             )
 
+            original_encoder = encoder
             are_all_actions_compression_safe = (
                 encoder.are_all_actions_compression_safe()
             )
             if are_all_actions_compression_safe:
                 # Compile a temporal planning problem, where all actions are safe to compress,
                 # into an equivalent classical planning problem
-                original_encoder = encoder
                 t2s_compiler = TimedToSequential()
                 t2s_compiler.skip_checks = True
                 compilation_res = t2s_compiler.compile(new_problem)
@@ -344,15 +344,16 @@ class TamerLite(
 
             if path is not None:
                 if are_all_actions_compression_safe:
-                    path = [
-                        original_encoder.get_action(encoder.action_names[a.idx])
-                        for a in path
-                    ]
-                    plan = original_encoder.build_plan(
-                        path, are_all_actions_compression_safe=True
-                    )
-                else:
-                    plan = encoder.build_plan(path)
+                    compressed_path = path
+                    path = []
+                    for action in compressed_path:
+                        action = original_encoder.get_action(
+                            encoder.action_names[action.idx]
+                        )
+                        for _ in original_encoder.events[action]:
+                            path.append(action)
+
+                plan = original_encoder.build_plan(path)
                 plan = plan.replace_action_instances(map_back_action_instance)
                 status = up.engines.PlanGenerationResultStatus.SOLVED_SATISFICING
             else:
