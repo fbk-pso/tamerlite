@@ -51,6 +51,16 @@ def extract_fluents(exp: FNode) -> Iterable[Fluent]:
             stack.extend(exp.args)
 
 
+def extract_and_arguments(expressions: List[FNode]) -> Iterable[FNode]:
+    stack: List[FNode] = list(expressions)
+    while len(stack) > 0:
+        exp = stack.pop()
+        if exp.is_and():
+            stack.extend(exp.args)
+        else:
+            yield exp
+
+
 PlanType = List[
     Tuple[Optional[Union[Fraction, str]], Action, Optional[Union[Fraction, str]]]
 ]
@@ -461,7 +471,7 @@ class Encoder:
 
     def _compute_compression_safe_actions(self) -> List[bool]:
         actions = [False] * len(self.action_names)
-        conditions, complex_conditions = self._extract_conditions()
+        fluent_to_conditions, complex_condition_fluents = self._extract_conditions()
         for action_name in self.action_names:
             action = self._problem.action(action_name)
             if (
@@ -469,7 +479,7 @@ class Encoder:
                 and not self._has_intermediate_conditions(action)
                 and self._end_conditions_contained_in_overall_conditions(action)
                 and not self._effects_interfere_with_conditions(
-                    action, conditions, complex_conditions
+                    action, fluent_to_conditions, complex_condition_fluents
                 )
             ):
                 actions[self.action_by_name[action_name].idx] = True
@@ -477,31 +487,32 @@ class Encoder:
         return actions
 
     def _extract_conditions(self) -> Tuple[Dict[Fluent, Set[bool]], Set[Fluent]]:
-        conditions: Dict[Fluent, Set[bool]] = {}
-        complex_conditions: Set[Fluent] = set()
+        fluent_to_conditions: Dict[Fluent, Set[bool]] = {}
+        complex_condition_fluents: Set[Fluent] = set()
         for action in self._problem.actions:
             action_conditions = (
-                [c for conds in action.conditions.values() for c in conds]
+                list(action.conditions.values())
                 if isinstance(action, up.model.DurativeAction)
-                else action.preconditions
+                else [action.preconditions]
             )
-            for c in action_conditions:
-                f = None
-                if c.is_fluent_exp():
-                    f = c.fluent()
-                    v = True
-                elif c.is_not() and c.arg(0).is_fluent_exp():
-                    f = c.arg(0).fluent()
-                    v = False
-                else:
-                    complex_conditions.update(extract_fluents(c))
+            for conds in action_conditions:
+                for c in extract_and_arguments(conds):
+                    f = None
+                    if c.is_fluent_exp():
+                        f = c.fluent()
+                        v = True
+                    elif c.is_not() and c.arg(0).is_fluent_exp():
+                        f = c.arg(0).fluent()
+                        v = False
+                    else:
+                        complex_condition_fluents.update(extract_fluents(c))
 
-                if f is not None:
-                    if f not in conditions:
-                        conditions[f] = set()
-                    conditions[f].add(v)
+                    if f is not None:
+                        if f not in fluent_to_conditions:
+                            fluent_to_conditions[f] = set()
+                        fluent_to_conditions[f].add(v)
 
-        return conditions, complex_conditions
+        return fluent_to_conditions, complex_condition_fluents
 
     def _has_intermediate_conditions(self, action: "up.model.Action") -> bool:
         return any(
@@ -512,15 +523,15 @@ class Encoder:
     def _end_conditions_contained_in_overall_conditions(
         self, action: "up.model.Action"
     ) -> bool:
-        end_conditions = set()
-        overall_conditions = set()
+        end_conditions: Set[FNode] = set()
+        overall_conditions: Set[FNode] = set()
         for interval, conditions in action.conditions.items():
             if (
                 interval.lower == interval.upper
                 and interval.lower.timepoint.kind == TimepointKind.END
                 and interval.lower.delay == 0
             ):
-                end_conditions.update(conditions)
+                end_conditions.update(extract_and_arguments(conditions))
 
             elif (
                 interval.lower.timepoint.kind == TimepointKind.START
@@ -528,15 +539,15 @@ class Encoder:
                 and interval.lower.delay == 0
                 and interval.upper.delay == 0
             ):
-                overall_conditions.update(conditions)
+                overall_conditions.update(extract_and_arguments(conditions))
 
         return all(condition in overall_conditions for condition in end_conditions)
 
     def _effects_interfere_with_conditions(
         self,
         action: "up.model.Action",
-        conditions: Dict[Fluent, Set[bool]],
-        complex_conditions: Set[Fluent],
+        fluent_to_conditions: Dict[Fluent, Set[bool]],
+        complex_condition_fluents: Set[Fluent],
     ) -> bool:
         for timing, effects in action.effects.items():
             if timing.timepoint.kind == TimepointKind.START and timing.delay == 0:
@@ -544,11 +555,14 @@ class Encoder:
 
             for eff in effects:
                 f = eff.fluent.fluent()
-                if not f.type.is_bool_type() or not eff.value.is_bool_constant():
+                if not eff.value.is_bool_constant():
                     return True
 
                 negated_value = not eff.value.bool_constant_value()
-                if f in complex_conditions or negated_value in conditions.get(f, set()):
+                if (
+                    f in complex_condition_fluents
+                    or negated_value in fluent_to_conditions.get(f, set())
+                ):
                     return True
 
         return False
@@ -619,11 +633,7 @@ class Encoder:
             self._compression_safe_actions
         )
 
-    def build_plan(
-        self, path: List[Action], are_all_actions_compression_safe: bool = False
-    ) -> Plan:
-        if are_all_actions_compression_safe:
-            path = [a for a in path for _ in self._events[a]]
+    def build_plan(self, path: List[Action]) -> Plan:
         plan = self.search_space.build_plan(path)
         if self._is_temporal:
             assert all(map(lambda e: e[0] is not None, plan))
