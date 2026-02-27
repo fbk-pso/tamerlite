@@ -25,8 +25,8 @@ test = [
 ]
 
 [build-system]
-requires = ["setuptools", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
-[tool.setuptools.packages.find]
-where = ["tamerlite"]
+[tool.hatch.build.targets.wheel]
+packages = ["tamerlite"]
