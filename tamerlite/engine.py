@@ -39,10 +39,10 @@ credits = up.engines.Credits(
     "TamerLite",
     "FBK PSO Unit",
     "tamer@fbk.eu",
-    "https://tamer.fbk.eu",
-    "Free for Educational Use",
-    "",
-    "",
+    "https://github.com/fbk-pso/tamerlite",
+    "LGPLv3",
+    "Heuristic search-based temporal planner.",
+    "Heuristic search-based temporal planner designed to address planning problems with rich temporal dynamics.",
 )
 
 
