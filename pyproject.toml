@@ -5,23 +5,27 @@ description = "Heuristic search-based temporal planner"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "LGPL-3.0-only"
+license-files = ["LICENSE"]
 authors = [
     {name = "FBK PSO Unit", email = "tamer@fbk.eu"}
 ]
 urls = { "Homepage" = "https://github.com/fbk-pso/tamerlite" }
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10"
-]
-
-dependencies = [
-    "rustamer~=0.1.0"
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14"
 ]
 
 [project.optional-dependencies]
 test = [
     "pytest==8.4.1",
     "pytest-regressions==2.8.3"
+]
+rust = [
+    "rustamer~=0.1.0"
 ]
 
 [build-system]
