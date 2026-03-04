@@ -73,13 +73,13 @@ class StateWrapper(State):
 @dataclass(frozen=True)
 class HeuristicParams:
     heuristic: Optional[str] = None
-    internal_heuristic_cache: bool = True
     weight: Optional[float] = None
 
 
 @dataclass(frozen=True)
 class SearchParams(HeuristicParams):
     search: Optional[str] = None
+    internal_heuristic_cache: bool = True
     early_termination: bool = False
     weak_equality: bool = False
     symmetry_breaking: bool = True
@@ -89,6 +89,7 @@ class SearchParams(HeuristicParams):
 @dataclass(frozen=True)
 class MultiqueueParams:
     queues: List[HeuristicParams]
+    internal_heuristic_cache: bool = True
     early_termination: bool = False
     weak_equality: bool = False
     symmetry_breaking: bool = True
@@ -161,6 +162,7 @@ class TamerLite(
         params: HeuristicParams,
         heuristic: Optional[Callable[[State], Optional[float]]],
         encoder: Encoder,
+        internal_heuristic_cache: bool,
         cache_heuristic_in_state: bool = False,
     ) -> Tuple[Heuristic, float]:
         assert encoder.goal is not None
@@ -205,7 +207,7 @@ class TamerLite(
                 encoder.objects,
                 events,
                 encoder.goal,
-                internal_caching=params.internal_heuristic_cache,
+                internal_caching=internal_heuristic_cache,
                 cache_value_in_state=cache_heuristic_in_state,
             )
             w = 0.8 if params.weight is None else params.weight
@@ -291,7 +293,9 @@ class TamerLite(
             if isinstance(self._params, MultiqueueParams):
                 heuristics = []
                 for p in self._params.queues:
-                    h, w = self._get_heuristic(p, heuristic, encoder)
+                    h, w = self._get_heuristic(
+                        p, heuristic, encoder, self._params.internal_heuristic_cache
+                    )
                     heuristics.append((h, w))
 
                 start = time.time()
@@ -314,7 +318,12 @@ class TamerLite(
                         weak_equality=False,
                     )
             else:
-                h, w = self._get_heuristic(self._params, heuristic, encoder)
+                h, w = self._get_heuristic(
+                    self._params,
+                    heuristic,
+                    encoder,
+                    self._params.internal_heuristic_cache,
+                )
                 search_name, search = self._get_search(self._params, h, w)
 
                 if self._params.weak_equality and search_name not in ("dfs", "bfs"):
