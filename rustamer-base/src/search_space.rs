@@ -55,7 +55,7 @@ pub trait SearchSpaceTrait {
     ) -> PyResult<Vec<Vec<PyExpressionNode>>>;
     fn build_plan(
         &self,
-        state: &State,
+        path: &Vec<Action>,
     ) -> PyResult<Vec<(Option<BigRational>, Action, Option<BigRational>)>>;
 }
 
@@ -158,6 +158,7 @@ pub struct SearchSpace {
     actions_duration: Vec<Option<(Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool)>>,
     events: FxHashMap<Action, Vec<(Timing, Event)>>,
     actions: Vec<Action>,
+    compression_safe_actions: Option<Vec<bool>>,
     event_fluents: Vec<
         Vec<(
             FxHashSet<usize>,
@@ -183,11 +184,12 @@ pub struct SearchSpace {
 #[pymethods]
 impl SearchSpace {
     #[new]
-    #[pyo3(signature = (actions_duration, events, actions, action_objects, obj_to_prev_actions_map, initial_state=None, goal=None, epsilon=None))]
+    #[pyo3(signature = (actions_duration, events, actions, compression_safe_actions, action_objects, obj_to_prev_actions_map, initial_state=None, goal=None, epsilon=None))]
     fn new(
         actions_duration: Vec<Option<(Vec<PyExpressionNode>, Vec<PyExpressionNode>, bool, bool)>>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         actions: Vec<Action>,
+        compression_safe_actions: Option<Vec<bool>>,
         action_objects: Option<Vec<Vec<String>>>,
         obj_to_prev_actions_map: Option<FxHashMap<String, FxHashSet<Action>>>,
         initial_state: Option<Vec<PyExpressionNode>>,
@@ -238,6 +240,7 @@ impl SearchSpace {
             actions_duration: converted_actions_duration,
             events: events,
             actions: actions,
+            compression_safe_actions: compression_safe_actions,
             event_fluents: event_fluents,
             mutex: MutexChecker::new(),
             precedence: PrecedenceChecker::new(),
@@ -307,9 +310,106 @@ impl SearchSpace {
     ) -> PyResult<Vec<Vec<PyExpressionNode>>> {
         self.subgoals_sat(state, goal)
     }
+
+    #[pyo3(name = "build_plan", signature = (path))]
+    fn py_build_plan(
+        &self,
+        path: Vec<Action>,
+    ) -> PyResult<Option<Vec<(Option<String>, Action, Option<String>)>>> {
+        let plan = self.build_plan(&path)?;
+        let mut res = Vec::with_capacity(plan.len());
+        for (s, a, d) in plan.into_iter() {
+            let mut ss = None;
+            let mut ds = None;
+            if let Some(start) = s {
+                ss = Some(format!(
+                    "{}/{}",
+                    start.numer().to_string(),
+                    start.denom().to_string()
+                ));
+            }
+            if let Some(duration) = d {
+                ds = Some(format!(
+                    "{}/{}",
+                    duration.numer().to_string(),
+                    duration.denom().to_string()
+                ));
+            }
+            res.push((ss, a, ds));
+        }
+        Ok(Some(res))
+    }
 }
 
 impl SearchSpace {
+    fn get_successor_state_with_compression(
+        &self,
+        state: &State,
+        action: Action,
+        enable_compression_safe_actions: bool,
+    ) -> PyResult<Option<State>> {
+        if let Some(events) = self.events.get(&action) {
+            if let Some((index, id)) = state.todo.get(&action) {
+                if let Some((_, e)) = events.get(*index) {
+                    // Check if the event is applicable before creating the new state
+                    if !self.is_sat(&e.conditions, state)? {
+                        return Ok(None);
+                    }
+
+                    let mut new_state = state.clone_for_child();
+                    new_state.g += 1.0;
+
+                    if index + 1 >= events.len() {
+                        new_state.todo.remove(&action);
+                    } else {
+                        new_state.todo.insert(action, (index + 1, id + 1));
+                    }
+                    if self.expand_event(state, &mut new_state, &e, index, id)? {
+                        return Ok(Some(new_state));
+                    }
+                }
+            } else {
+                // Check if action is applicable before creating the new state
+                if !self.is_sat(&events[0].1.conditions, state)? {
+                    return Ok(None);
+                }
+
+                let mut new_state = state.clone_for_child();
+                new_state.g += 1.0;
+                if !self.open_action(state, &mut new_state, action, &events)? {
+                    return Ok(None);
+                }
+
+                if enable_compression_safe_actions
+                    && self
+                        .compression_safe_actions
+                        .as_ref()
+                        .map_or(false, |is_compression_safe| is_compression_safe[action.idx])
+                    && events.len() > 1
+                {
+                    let mut id = new_state.todo.remove(&action).unwrap().1;
+                    for index in 1..events.len() {
+                        let state = new_state.clone_for_child();
+                        new_state.g += 1.0;
+                        if !self.expand_event(
+                            &state,
+                            &mut new_state,
+                            &events[index].1,
+                            &index,
+                            &id,
+                        )? {
+                            return Ok(None);
+                        }
+
+                        id += 1;
+                    }
+                }
+                return Ok(Some(new_state));
+            }
+        }
+        Ok(None)
+    }
+
     fn is_sat(&self, conditions: &Vec<ExpressionNode>, state: &State) -> PyResult<bool> {
         let sat = match internal_evaluate(conditions, state)? {
             ExpressionNode::Bool(v) => v,
@@ -537,48 +637,13 @@ impl SearchSpaceTrait for SearchSpace {
         &'a self,
         state: &'a State,
     ) -> impl Iterator<Item = PyResult<State>> + 'a {
-        return self
-            .actions
+        self.actions
             .iter()
-            .filter_map(|action| self.get_successor_state(state, *action).transpose());
+            .filter_map(|action| self.get_successor_state(state, *action).transpose())
     }
 
     fn get_successor_state(&self, state: &State, action: Action) -> PyResult<Option<State>> {
-        if let Some(events) = self.events.get(&action) {
-            if let Some((index, id)) = state.todo.get(&action) {
-                if let Some((_, e)) = events.get(*index) {
-                    // Check if the event is applicable before creating the new state
-                    if !self.is_sat(&e.conditions, state)? {
-                        return Ok(None);
-                    }
-
-                    let mut new_state = state.clone_for_child();
-                    new_state.g += 1.0;
-
-                    if index + 1 >= events.len() {
-                        new_state.todo.remove(&action);
-                    } else {
-                        new_state.todo.insert(action, (index + 1, id + 1));
-                    }
-                    if self.expand_event(state, &mut new_state, &e, index, id)? {
-                        return Ok(Some(new_state));
-                    }
-                }
-            } else {
-                // Check if action is applicable before creating the new state
-                if !self.is_sat(&events[0].1.conditions, state)? {
-                    return Ok(None);
-                }
-
-                let mut new_state = state.clone_for_child();
-                new_state.g += 1.0;
-
-                if self.open_action(state, &mut new_state, action, &events)? {
-                    return Ok(Some(new_state));
-                }
-            }
-        }
-        Ok(None)
+        self.get_successor_state_with_compression(state, action, true)
     }
 
     fn goal_reached(&self, state: &State, goal: Option<Vec<PyExpressionNode>>) -> PyResult<bool> {
@@ -628,24 +693,22 @@ impl SearchSpaceTrait for SearchSpace {
 
     fn build_plan(
         &self,
-        state: &State,
+        path: &Vec<Action>,
     ) -> PyResult<Vec<(Option<BigRational>, Action, Option<BigRational>)>> {
-        let all_path = PersistentList::to_vec(&state.path)
-            .into_iter()
-            .map(|(a, _, _)| a);
-
         if !self.is_temporal {
-            return Ok(all_path.map(|a| (None, a.clone(), None)).collect());
+            return Ok(path.iter().map(|a| (None, *a, None)).collect());
         }
 
         let mut tn = DeltaSTN::new(mk_rational(0, 1));
         let mut todo: FxHashMap<Action, (usize, u32)> =
             FxHashMap::with_hasher(FxBuildHasher::default());
-        let mut path: Vec<(Event, u32)> = Vec::new();
+        let mut event_path: Vec<(Event, u32)> = Vec::new();
         let mut counter = 0;
         let mut state = self.initial_state(None)?;
-        for action in all_path {
-            state = self.get_successor_state(&state, *action)?.unwrap();
+        for action in path {
+            state = self
+                .get_successor_state_with_compression(&state, *action, false)?
+                .unwrap();
             if let Some(events) = self.events.get(action).cloned() {
                 if let Some((index, id)) = todo.get(action).cloned() {
                     if let Some((_, e)) = events.get(index) {
@@ -655,7 +718,7 @@ impl SearchSpaceTrait for SearchSpace {
                             todo.insert(*action, (index + 1, id + 1));
                         }
                         let ev = self.tn_interpreter.get_event_id(e.action, e.pos, id);
-                        for (e2, id2) in path.iter() {
+                        for (e2, id2) in event_path.iter() {
                             let e_id = (e.action, index);
                             let e2_id = (e2.action, e2.pos);
                             let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, *id2);
@@ -683,7 +746,7 @@ impl SearchSpaceTrait for SearchSpace {
                                 id2 += 1;
                             }
                         }
-                        path.push((e.clone(), id));
+                        event_path.push((e.clone(), id));
                     }
                 } else {
                     let start = self.tn_interpreter.get_action_id(*action, true, counter);
@@ -726,7 +789,7 @@ impl SearchSpaceTrait for SearchSpace {
                     }
                     let e = events[0].1.clone();
                     let ev = self.tn_interpreter.get_event_id(e.action, e.pos, id);
-                    for (e2, id2) in path.iter() {
+                    for (e2, id2) in event_path.iter() {
                         let e_id = (e.action, 0);
                         let e2_id = (e2.action, e2.pos);
                         let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, *id2);
@@ -754,7 +817,7 @@ impl SearchSpaceTrait for SearchSpace {
                             id2 += 1;
                         }
                     }
-                    path.push((e.clone(), id));
+                    event_path.push((e.clone(), id));
                     if events.len() > 1 {
                         todo.insert(*action, (1, id + 1));
                     }

@@ -19,10 +19,9 @@ import heapq
 from dataclasses import dataclass
 import time
 from typing import List, Tuple, Dict, Optional
-from fractions import Fraction
 from tamerlite.core.search_space import SearchSpaceABC, State, Action
 from tamerlite.core.heuristics import Heuristic
-from tamerlite.core.search import state_representation
+from tamerlite.core.search import state_representation, extract_path
 from abc import ABC, abstractmethod
 
 
@@ -83,10 +82,7 @@ def multiqueue_search(
     timeout: Optional[float] = None,
     early_termination: bool = False,
     weak_equality: bool = False,
-) -> Tuple[
-    Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
-    Dict[str, str],
-]:
+) -> Tuple[Optional[List[Action]], Dict[str, str]]:
     return _multiqueue_search(
         ss=ss,
         heuristics=heuristics,
@@ -104,10 +100,7 @@ def _multiqueue_search(
     timeout: Optional[float] = None,
     early_termination: bool = False,
     weak_equality: bool = False,
-) -> Tuple[
-    Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
-    Dict[str, str],
-]:
+) -> Tuple[Optional[List[Action]], Dict[str, str]]:
     st = time.time()
     opens = []
     init = ss.initial_state()
@@ -115,7 +108,7 @@ def _multiqueue_search(
         visited_states = {state_representation(init, weak_equality)}
     states_expanded = 0
     if early_termination and ss.goal_reached(init):
-        return ss.build_plan(init), {
+        return extract_path(init), {
             "expanded_states": str(states_expanded),
             "goal_depth": str(init.g),
         }
@@ -144,7 +137,7 @@ def _multiqueue_search(
         state = sc.state
         states_expanded += 1
         if not early_termination and ss.goal_reached(state):
-            return ss.build_plan(state), {
+            return extract_path(state), {
                 "expanded_states": str(states_expanded),
                 "goal_depth": str(state.g),
             }
@@ -153,7 +146,7 @@ def _multiqueue_search(
         candidate_states = []
         for s in ss.get_successor_states(state):
             if early_termination and ss.goal_reached(s):
-                return ss.build_plan(s), {
+                return extract_path(s), {
                     "expanded_states": str(states_expanded),
                     "goal_depth": str(s.g),
                 }
