@@ -69,21 +69,19 @@ def state_representation(
     return state
 
 
+def extract_path(state: State) -> List[Action]:
+    return [a for a, _, _ in state.path]
+
+
 def bfs_search(
     ss: SearchSpaceABC, timeout: Optional[float] = None, early_termination: bool = False
-) -> Tuple[
-    Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
-    Dict[str, str],
-]:
+) -> Tuple[Optional[List[Action]], Dict[str, str]]:
     return _basic_search(ss, True, timeout, early_termination)
 
 
 def dfs_search(
     ss: SearchSpaceABC, timeout: Optional[float] = None, early_termination: bool = False
-) -> Tuple[
-    Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
-    Dict[str, str],
-]:
+) -> Tuple[Optional[List[Action]], Dict[str, str]]:
     return _basic_search(ss, False, timeout, early_termination)
 
 
@@ -92,17 +90,14 @@ def _basic_search(
     bfs: bool,
     timeout: Optional[float] = None,
     early_termination: bool = False,
-) -> Tuple[
-    Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
-    Dict[str, str],
-]:
+) -> Tuple[Optional[List[Action]], Dict[str, str]]:
     st = time.time()
     init = ss.initial_state()
     open: Deque[State] = deque()
     expanded_states = 0
 
     if early_termination and ss.goal_reached(init):
-        return ss.build_plan(init), {
+        return extract_path(init), {
             "expanded_states": str(expanded_states),
             "goal_depth": str(init.g),
         }
@@ -117,13 +112,13 @@ def _basic_search(
             state = open.pop()
         expanded_states += 1
         if not early_termination and ss.goal_reached(state):
-            return ss.build_plan(state), {
+            return extract_path(state), {
                 "expanded_states": str(expanded_states),
                 "goal_depth": str(state.g),
             }
         for succ_state in ss.get_successor_states(state):
             if early_termination and ss.goal_reached(succ_state):
-                return ss.build_plan(succ_state), {
+                return extract_path(succ_state), {
                     "expanded_states": str(expanded_states),
                     "goal_depth": str(succ_state.g),
                 }
@@ -137,10 +132,7 @@ def astar_search(
     timeout: Optional[float] = None,
     early_termination: bool = False,
     weak_equality: bool = False,
-) -> Tuple[
-    Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
-    Dict[str, str],
-]:
+) -> Tuple[Optional[List[Action]], Dict[str, str]]:
     return wastar_search(ss, heuristic, 0.5, timeout, early_termination, weak_equality)
 
 
@@ -150,10 +142,7 @@ def gbfs_search(
     timeout: Optional[float] = None,
     early_termination: bool = False,
     weak_equality: bool = False,
-) -> Tuple[
-    Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
-    Dict[str, str],
-]:
+) -> Tuple[Optional[List[Action]], Dict[str, str]]:
     return wastar_search(ss, heuristic, 1, timeout, early_termination, weak_equality)
 
 
@@ -164,7 +153,7 @@ def wastar_search(
     timeout: Optional[float] = None,
     early_termination: bool = False,
     weak_equality: bool = False,
-):
+) -> Tuple[Optional[List[Action]], Dict[str, str]]:
     st = time.time()
     open: List[PrioritizedItem] = []
     init = ss.initial_state()
@@ -172,7 +161,7 @@ def wastar_search(
         visited_states = {state_representation(init, weak_equality)}
     expanded_states = 0
     if early_termination and ss.goal_reached(init):
-        return ss.build_plan(init), {
+        return extract_path(init), {
             "expanded_states": str(expanded_states),
             "goal_depth": str(init.g),
         }
@@ -188,7 +177,7 @@ def wastar_search(
         state = item.state
         expanded_states += 1
         if not early_termination and ss.goal_reached(state):
-            return ss.build_plan(state), {
+            return extract_path(state), {
                 "expanded_states": str(expanded_states),
                 "goal_depth": str(state.g),
             }
@@ -196,7 +185,7 @@ def wastar_search(
         candidate_states = []
         for succ_state in ss.get_successor_states(state):
             if early_termination and ss.goal_reached(succ_state):
-                return ss.build_plan(succ_state), {
+                return extract_path(succ_state), {
                     "expanded_states": str(expanded_states),
                     "goal_depth": str(succ_state.g),
                 }
@@ -223,15 +212,12 @@ def ehc_search(
     timeout: Optional[float] = None,
     early_termination: bool = False,
     weak_equality: bool = False,
-) -> Tuple[
-    Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
-    Dict[str, str],
-]:
+) -> Tuple[Optional[List[Action]], Dict[str, str]]:
     st = time.time()
     init = ss.initial_state()
     expanded_states = 0
     if early_termination and ss.goal_reached(init):
-        return ss.build_plan(init), {
+        return extract_path(init), {
             "expanded_states": str(expanded_states),
             "goal_depth": str(init.g),
         }
@@ -252,7 +238,7 @@ def ehc_search(
             closed.add(state_representation(state, weak_equality))
 
         if not early_termination and ss.goal_reached(state):
-            return ss.build_plan(state), {
+            return extract_path(state), {
                 "expanded_states": str(expanded_states),
                 "goal_depth": str(state.g),
             }
@@ -260,7 +246,7 @@ def ehc_search(
         candidate_states = []
         for succ_state in ss.get_successor_states(state):
             if early_termination and ss.goal_reached(succ_state):
-                return ss.build_plan(succ_state), {
+                return extract_path(succ_state), {
                     "expanded_states": str(expanded_states),
                     "goal_depth": str(succ_state.g),
                 }

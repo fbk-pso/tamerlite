@@ -499,7 +499,7 @@ class SearchSpaceABC(ABC):
 
     @abstractmethod
     def build_plan(
-        self, state: State
+        self, path: List[Action]
     ) -> List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]:
         pass
 
@@ -511,6 +511,7 @@ class SearchSpace(SearchSpaceABC):
         actions_duration: List[Optional[Tuple[Expression, Expression, bool, bool]]],
         events: Dict[Action, List[Tuple[Timing, Event]]],
         actions: List[Action],
+        compression_safe_actions: Optional[List[bool]],
         action_objects: Optional[List[List[str]]],
         obj_to_prev_actions_map: Optional[Dict[str, Set[Action]]],
         initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
@@ -520,6 +521,7 @@ class SearchSpace(SearchSpaceABC):
         self._actions_duration = actions_duration
         self._events = events
         self._actions = actions
+        self._compression_safe_actions = compression_safe_actions
         self._action_objects = action_objects
         self._obj_to_prev_actions_map = obj_to_prev_actions_map
         self._initial_state = initial_state
@@ -563,6 +565,11 @@ class SearchSpace(SearchSpaceABC):
             return State(self._initial_state, tn, {}, MultiSet(), 0, [])
 
     def get_successor_state(self, state: State, action: Action) -> Optional[State]:
+        return self.get_successor_state_with_compression(state, action, True)
+
+    def get_successor_state_with_compression(
+        self, state: State, action: Action, enable_compression_safe_actions: bool
+    ) -> Optional[State]:
         events = self._events[action]
         new_state = state.clone()
         new_state.g = state.g + 1
@@ -576,6 +583,21 @@ class SearchSpace(SearchSpaceABC):
             new_state = self._expand_event(state, new_state, e, index, id)
         else:
             new_state = self._open_action(state, new_state, action, events)
+            if (
+                enable_compression_safe_actions
+                and self._compression_safe_actions is not None
+                and self._compression_safe_actions[action.idx]
+                and new_state is not None
+                and len(events) > 1
+            ):
+                _, id = new_state.todo.pop(action)
+                for index in range(1, len(events)):
+                    state = new_state.clone()
+                    new_state.g += 1
+                    _, e = events[index]
+                    new_state = self._expand_event(state, new_state, e, index, id)
+                    id += 1
+
         return new_state
 
     def get_successor_states(self, state: State) -> Iterator[State]:
@@ -731,19 +753,18 @@ class SearchSpace(SearchSpaceABC):
         return self._expand_event(state, new_state, events[0][1], 0, id)
 
     def build_plan(
-        self, state: State
+        self, path: List[Action]
     ) -> List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]:
         if not self.is_temporal:
-            return [(None, e[0], None) for e in state.path]
+            return [(None, a, None) for a in path]
 
-        all_path = state.path
         tn = DeltaSimpleTemporalNetwork()
         todo: Dict[Action, Tuple[int, int]] = {}
-        path: List[Tuple[Event, int]] = []
+        event_path: List[Tuple[Event, int]] = []
         counter = 0
         state = self.initial_state()
-        for action, _, _ in all_path:
-            succ_state = self.get_successor_state(state, action)
+        for action in path:
+            succ_state = self.get_successor_state_with_compression(state, action, False)
             assert succ_state is not None
             state = succ_state
 
@@ -756,7 +777,7 @@ class SearchSpace(SearchSpaceABC):
                     todo[action] = (index + 1, id + 1)
 
                 _, e = action_events[index]
-                for e2, id2 in path:
+                for e2, id2 in event_path:
                     if ((e.action, e.pos), (e2.action, e2.pos)) in self._mutex:
                         b = -self._epsilon
                         tn.add((e2.action, e2.pos, id2), (e.action, e.pos, id), b)
@@ -772,7 +793,7 @@ class SearchSpace(SearchSpaceABC):
                             tn.add((e.action, e.pos, id), (e2.action, e2.pos, id2), b)
                         id2 += 1
 
-                path.append((e, id))
+                event_path.append((e, id))
 
             else:
                 start = (action, True, counter)
@@ -813,7 +834,7 @@ class SearchSpace(SearchSpaceABC):
 
                 e = action_events[0][1]
                 ev = (e.action, e.pos, id)
-                for e2, id2 in path:
+                for e2, id2 in event_path:
                     ev2 = (e2.action, e2.pos, id2)
                     if ((e.action, e.pos), (e2.action, e2.pos)) in self._mutex:
                         b = -self._epsilon
@@ -831,7 +852,7 @@ class SearchSpace(SearchSpaceABC):
                             tn.add(ev, ev2, b)
                         id2 += 1
 
-                path.append((e, id))
+                event_path.append((e, id))
                 if len(action_events) > 1:
                     todo[action] = (1, id + 1)
 

@@ -23,6 +23,8 @@ import unified_planning.engines
 import unified_planning.engines.mixins
 from unified_planning.model import ProblemKind, FNode
 from unified_planning.model.state import State
+from unified_planning.engines.compilers.timed_to_sequential import TimedToSequential
+from unified_planning.plans import ActionInstance
 from typing import IO, Callable, List, Optional, Union, Tuple, Dict
 
 from tamerlite.core import search_space
@@ -71,24 +73,27 @@ class StateWrapper(State):
 @dataclass(frozen=True)
 class HeuristicParams:
     heuristic: Optional[str] = None
-    internal_heuristic_cache: bool = True
     weight: Optional[float] = None
 
 
 @dataclass(frozen=True)
 class SearchParams(HeuristicParams):
     search: Optional[str] = None
+    internal_heuristic_cache: bool = True
     early_termination: bool = False
     weak_equality: bool = False
     symmetry_breaking: bool = True
+    compression_safe_actions: bool = True
 
 
 @dataclass(frozen=True)
 class MultiqueueParams:
     queues: List[HeuristicParams]
+    internal_heuristic_cache: bool = True
     early_termination: bool = False
     weak_equality: bool = False
     symmetry_breaking: bool = True
+    compression_safe_actions: bool = True
 
 
 class TamerLite(
@@ -157,6 +162,7 @@ class TamerLite(
         params: HeuristicParams,
         heuristic: Optional[Callable[[State], Optional[float]]],
         encoder: Encoder,
+        internal_heuristic_cache: bool,
         cache_heuristic_in_state: bool = False,
     ) -> Tuple[Heuristic, float]:
         assert encoder.goal is not None
@@ -201,7 +207,7 @@ class TamerLite(
                 encoder.objects,
                 events,
                 encoder.goal,
-                internal_caching=params.internal_heuristic_cache,
+                internal_caching=internal_heuristic_cache,
                 cache_value_in_state=cache_heuristic_in_state,
             )
             w = 0.8 if params.weight is None else params.weight
@@ -253,27 +259,58 @@ class TamerLite(
                 problem,
                 map_back_action_instance,
                 self._params.symmetry_breaking,
+                self._params.compression_safe_actions,
             )
+
+            original_encoder = encoder
+            are_all_actions_compression_safe = (
+                encoder.are_all_actions_compression_safe()
+            )
+            if are_all_actions_compression_safe:
+                # Compile a temporal planning problem, where all actions are safe to compress,
+                # into an equivalent classical planning problem
+                t2s_compiler = TimedToSequential()
+                t2s_compiler.skip_checks = True
+                compilation_res = t2s_compiler.compile(new_problem)
+                new_problem_actions = {a.name: a for a in new_problem.actions}
+
+                def new_map_back_action_instance(
+                    ai: ActionInstance,
+                ) -> Optional[ActionInstance]:
+                    action = new_problem_actions.get(ai.action.name, None)
+                    if action is not None:
+                        return map_back_action_instance(action())
+                    return None
+
+                encoder = Encoder(
+                    compilation_res.problem,
+                    problem,
+                    new_map_back_action_instance,
+                    self._params.symmetry_breaking,
+                    self._params.compression_safe_actions,
+                )
 
             if isinstance(self._params, MultiqueueParams):
                 heuristics = []
                 for p in self._params.queues:
-                    h, w = self._get_heuristic(p, heuristic, encoder)
+                    h, w = self._get_heuristic(
+                        p, heuristic, encoder, self._params.internal_heuristic_cache
+                    )
                     heuristics.append((h, w))
 
                 start = time.time()
-                plan, metrics = multiqueue_search(
+                path, metrics = multiqueue_search(
                     encoder.search_space,
                     heuristics,
                     timeout,
                     early_termination=self._params.early_termination,
                     weak_equality=self._params.weak_equality,
                 )
-                if self._params.weak_equality and plan is None:
+                if self._params.weak_equality and path is None:
                     updated_timeout = timeout
                     if updated_timeout is not None:
                         updated_timeout -= start
-                    plan, metrics = multiqueue_search(
+                    path, metrics = multiqueue_search(
                         encoder.search_space,
                         heuristics,
                         updated_timeout,
@@ -281,39 +318,55 @@ class TamerLite(
                         weak_equality=False,
                     )
             else:
-                h, w = self._get_heuristic(self._params, heuristic, encoder)
+                h, w = self._get_heuristic(
+                    self._params,
+                    heuristic,
+                    encoder,
+                    self._params.internal_heuristic_cache,
+                )
                 search_name, search = self._get_search(self._params, h, w)
 
                 if self._params.weak_equality and search_name not in ("dfs", "bfs"):
                     start = time.time()
-                    plan, metrics = search(  # type: ignore
+                    path, metrics = search(  # type: ignore
                         encoder.search_space,
                         timeout=timeout,
                         early_termination=self._params.early_termination,
                         weak_equality=True,
                     )
-                    if plan is None:
+                    if path is None:
                         updated_timeout = timeout
                         if updated_timeout is not None:
                             updated_timeout -= start
-                        plan, metrics = search(  # type: ignore
+                        path, metrics = search(  # type: ignore
                             encoder.search_space,
                             timeout=updated_timeout,
                             early_termination=self._params.early_termination,
                             weak_equality=False,
                         )
                 else:
-                    plan, metrics = search(  # type: ignore
+                    path, metrics = search(  # type: ignore
                         encoder.search_space,
                         timeout=timeout,
                         early_termination=self._params.early_termination,
                     )
 
-            if plan is not None:
-                plan = encoder.build_plan(plan)  # type: ignore[arg-type]
+            if path is not None:
+                if are_all_actions_compression_safe:
+                    compressed_path = path
+                    path = []
+                    for action in compressed_path:
+                        action = original_encoder.get_action(
+                            encoder.action_names[action.idx]
+                        )
+                        for _ in original_encoder.events[action]:
+                            path.append(action)
+
+                plan = original_encoder.build_plan(path)
                 plan = plan.replace_action_instances(map_back_action_instance)
                 status = up.engines.PlanGenerationResultStatus.SOLVED_SATISFICING
             else:
+                plan = None
                 status = up.engines.PlanGenerationResultStatus.UNSOLVABLE_INCOMPLETELY
             return up.engines.PlanGenerationResult(status, plan, self.name, metrics)
         except TimeoutError:
