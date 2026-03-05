@@ -1378,7 +1378,7 @@ class HMaxExplicit(Heuristic):
         ] + [set() for _ in range(self._num_fluents - len(state.assignments))]
 
         # add extra fluents to assignments
-        for action in self._actions:
+        for action in self._events:
             j, _ = state.todo.get(action, (None, None))
             if j is None:
                 idx = len(self._extra_fluents[action]) - 1
