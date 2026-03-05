@@ -1742,6 +1742,7 @@ impl<'a> FluentAssignments<'a> {
 #[derive(Clone, Debug)]
 pub struct HMaxExplicit {
     actions: Vec<Action>,
+    events: FxHashMap<Action, Vec<(Timing, Event)>>,
     goals: Vec<Vec<ExpressionNode>>,
     goal_expressions: Vec<Expression>,
     extra_fluents: FxHashMap<Action, Vec<Vec<ExpressionNode>>>,
@@ -1849,6 +1850,7 @@ impl HMaxExplicit {
 
         let res = HMaxExplicit {
             actions,
+            events,
             goals,
             goal_expressions,
             extra_fluents,
@@ -1981,7 +1983,7 @@ impl HMaxExplicit {
             assignments[f] = FxHashSet::from_iter([v.clone()]);
         }
         // add extra fluents to assignments
-        for action in &self.actions {
+        for action in self.events.keys() {
             let r = state.todo.get(action);
             let idx = match r {
                 Some((j, _)) => j - 1,
