@@ -215,7 +215,7 @@ class TamerLite(
         return h, w
 
     def _get_search(
-        self, params: SearchParams, heuristic: Heuristic, weight: float
+        self, search_name: Optional[str], heuristic: Heuristic, weight: float
     ) -> Tuple[
         str,
         Callable[
@@ -223,21 +223,20 @@ class TamerLite(
             Tuple[Optional[PlanType], Dict[str, str]],
         ],
     ]:
-        s = "wastar" if params.search is None else params.search
-        if s == "wastar":
+        if search_name is None or search_name == "wastar":
             search = partial(wastar_search, heuristic=heuristic, weight=weight)
-        elif s == "astar":
+        elif search_name == "astar":
             search = partial(astar_search, heuristic=heuristic)
-        elif s == "gbfs":
+        elif search_name == "gbfs":
             search = partial(gbfs_search, heuristic=heuristic)
-        elif s == "dfs":
+        elif search_name == "dfs":
             search = partial(dfs_search)
-        elif s == "bfs":
+        elif search_name == "bfs":
             search = partial(bfs_search)
-        elif s == "ehs":
+        elif search_name == "ehs":
             search = partial(ehc_search, heuristic=heuristic)
 
-        return s, search  # type: ignore[return-value]
+        return search_name, search  # type: ignore[return-value]
 
     def _solve(
         self,
@@ -324,7 +323,7 @@ class TamerLite(
                     encoder,
                     self._params.internal_heuristic_cache,
                 )
-                search_name, search = self._get_search(self._params, h, w)
+                search_name, search = self._get_search(self._params.search, h, w)
 
                 if self._params.weak_equality and search_name not in ("dfs", "bfs"):
                     start = time.time()
