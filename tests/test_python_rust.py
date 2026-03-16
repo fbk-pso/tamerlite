@@ -49,6 +49,7 @@ def problems():
         problems_generator.get_problem_logistics(1, 1, 4, 2),
         problems_generator.get_problem_numeric(),
         problems_generator.get_problem_satellite(),
+        problems_generator.get_problem_hierarchical_types(),
     ]
 
     up_example_problems = list(
@@ -139,6 +140,7 @@ def skip(
         or (problem.name == "depots_p01" and search in ["dfs", "bfs"])
         or (problem.name == "RoboLogistics" and search == "dfs")
         or (problem.name == "NumericProblem" and search == "dfs")
+        or (problem.name == "hierarchical-types" and search in ["dfs", "bfs"])
         or (
             problem.name == "satellite"
             and (
