@@ -284,3 +284,93 @@ def get_problem_satellite() -> Problem:
     instance = problem_directory / "instance.pddl"
     problem = reader.parse_problem(domain, instance)
     return problem
+
+
+def get_problem_hierarchical_types() -> Problem:
+    problem = Problem("hierarchical-types")
+
+    # Types (hierarchical)
+    Vehicle = UserType("Vehicle")
+    Truck = UserType("Truck", Vehicle)
+    Van = UserType("Van", Vehicle)
+
+    Package = UserType("Package")
+    FragilePackage = UserType("FragilePackage", Package)
+
+    Location = UserType("Location")
+
+    # Objects
+    truck1 = Object("truck1", Truck)
+    van1 = Object("van1", Van)
+
+    pkg1 = Object("pkg1", Package)
+    fragile1 = Object("fragile1", FragilePackage)
+
+    loc1 = Object("loc1", Location)
+    loc2 = Object("loc2", Location)
+    loc3 = Object("loc3", Location)
+
+    problem.add_objects([truck1, van1, pkg1, fragile1, loc1, loc2, loc3])
+
+    # Fluents
+    at_vehicle = Fluent("at_vehicle", BoolType(), v=Vehicle, l=Location)
+    at_package = Fluent("at_package", BoolType(), p=Package, l=Location)
+
+    # Object fluent (function returning a Vehicle)
+    carrier = Fluent("carrier", Vehicle, p=Package)
+
+    problem.add_fluent(at_vehicle, default_initial_value=False)
+    problem.add_fluent(at_package, default_initial_value=False)
+    problem.add_fluent(carrier, default_initial_value=truck1)
+
+    # Initial state
+    problem.set_initial_value(at_vehicle(truck1, loc1), True)
+    problem.set_initial_value(at_vehicle(van1, loc2), True)
+
+    problem.set_initial_value(at_package(pkg1, loc1), True)
+    problem.set_initial_value(at_package(fragile1, loc3), True)
+
+    # Actions
+    v = Variable("v", Vehicle)
+    p = Variable("p", Package)
+    l_from = Variable("l_from", Location)
+    l_to = Variable("l_to", Location)
+    l = Variable("l", Location)
+
+    move = InstantaneousAction("move", v=Vehicle, l_from=Location, l_to=Location)
+    v = move.parameter("v")
+    l_from = move.parameter("l_from")
+    l_to = move.parameter("l_to")
+
+    move.add_precondition(at_vehicle(v, l_from))
+    move.add_effect(at_vehicle(v, l_from), False)
+    move.add_effect(at_vehicle(v, l_to), True)
+
+    load = InstantaneousAction("load", p=Package, v=Vehicle, l=Location)
+    p = load.parameter("p")
+    v = load.parameter("v")
+    l = load.parameter("l")
+
+    load.add_precondition(at_package(p, l))
+    load.add_precondition(at_vehicle(v, l))
+    load.add_effect(at_package(p, l), False)
+    load.add_effect(carrier(p), v)
+
+    unload = InstantaneousAction("unload", p=Package, v=Vehicle, l=Location)
+    p = unload.parameter("p")
+    v = unload.parameter("v")
+    l = unload.parameter("l")
+
+    unload.add_precondition(Equals(carrier(p), v))
+    unload.add_precondition(at_vehicle(v, l))
+    unload.add_effect(at_package(p, l), True)
+
+    problem.add_actions([move, load, unload])
+
+    # Goals
+    problem.add_goal(at_vehicle(truck1, loc2))
+
+    # inequality goal using object fluent
+    problem.add_goal(Not(Equals(carrier(pkg1), van1)))
+
+    return problem
