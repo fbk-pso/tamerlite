@@ -49,6 +49,7 @@ def problems():
         problems_generator.get_problem_logistics(1, 1, 4, 2),
         problems_generator.get_problem_numeric(),
         problems_generator.get_problem_satellite(),
+        problems_generator.get_problem_hierarchical_types(),
     ]
 
     up_example_problems = list(
@@ -83,7 +84,7 @@ def expressions():
 
     data_path = os.path.join(
         pathlib.Path(__file__).parent.resolve(),
-        "test_python_rust",
+        "test_engine",
         "test_simplify_fixed_expressions.json",
     )
     with open(data_path) as f:
@@ -139,6 +140,14 @@ def skip(
         or (problem.name == "depots_p01" and search in ["dfs", "bfs"])
         or (problem.name == "RoboLogistics" and search == "dfs")
         or (problem.name == "NumericProblem" and search == "dfs")
+        or (problem.name == "hierarchical-types" and search in ["dfs", "bfs"])
+        or (problem.name == "hierarchical_blocks_world" and search == "dfs")
+        or (
+            problem.name == "hierarchical_blocks_world_object_as_root"
+            and search == "dfs"
+        )
+        or (problem.name == "hierarchical_blocks_world_with_object" and search == "dfs")
+        or (problem.name == "tpp_p01" and search == "dfs")
         or (
             problem.name == "satellite"
             and (
@@ -148,6 +157,14 @@ def skip(
                     heuristic in ["hmax", "hmax_no_numbers", "hmax_explicit"]
                     and not weak_equality
                 )
+            )
+        )
+        or (
+            problem.name == "robot_holding"
+            and (
+                search in ["dfs", "bfs"]
+                or not weak_equality
+                and (heuristic == "custom" or search == "gbfs")
             )
         )
     )
