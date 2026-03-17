@@ -159,6 +159,14 @@ def skip(
                 )
             )
         )
+        or (
+            problem.name == "robot_holding"
+            and (
+                search in ["dfs", "bfs"]
+                or not weak_equality
+                and (heuristic == "custom" or search == "gbfs")
+            )
+        )
     )
 
 
