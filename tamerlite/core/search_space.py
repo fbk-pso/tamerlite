@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import List, Tuple, Dict, Iterator, Optional, Union, Set
 from abc import ABC, abstractmethod
+from aalpy.automata.Dfa import *
+from aalpy.base.Automaton import *
 
 
 @dataclass(eq=True, frozen=True)
@@ -78,7 +80,7 @@ def split_expression(exp: Expression) -> Tuple[Expression, ...]:
     last = 0
     for i in exp[-1].operands:
         new_exp: List[ExpressionNode] = []
-        for e in exp[last : i + 1]:
+        for e in exp[last:i + 1]:
             if isinstance(e, OperatorNode):
                 new_operands = tuple([j - last for j in e.operands])
                 new_exp.append(OperatorNode(e.kind, new_operands))
@@ -132,6 +134,7 @@ class Event:
 
 
 class MultiSet:
+
     def __init__(self):
         self._elements = {}
 
@@ -167,6 +170,7 @@ class State:
     active_conditions: MultiSet
     g: int
     path: List[Tuple[Action, int, int]]
+    dfa_state: DfaState | None = None
     heuristic_cache: Dict[str, Optional[float]] = field(default_factory=dict)
 
     def __hash__(self) -> int:
@@ -186,23 +190,26 @@ class State:
         todo = self.todo.copy()
         tn = self.temporal_network.copy_stn() if self.temporal_network else None
         return State(
-            assignments, tn, todo, self.active_conditions.clone(), self.g, self.path[:]
+            assignments,
+            tn,
+            todo,
+            self.active_conditions.clone(),
+            self.g,
+            self.path[:],
+            self.dfa_state,
         )
 
 
 class MutexChecker:
+
     def __init__(
         self,
-        event_fluents: List[
-            List[Tuple[Set[int], Set[int], Set[int], Set[int], Set[int]]]
-        ],
+        event_fluents: List[List[Tuple[Set[int], Set[int], Set[int], Set[int], Set[int]]]],
     ):
         self._event_fluents = event_fluents
         self._mutex: Dict[Tuple[Tuple[Action, int], Tuple[Action, int]], bool] = {}
 
-    def __contains__(
-        self, events_pair: Tuple[Tuple[Action, int], Tuple[Action, int]]
-    ) -> bool:
+    def __contains__(self, events_pair: Tuple[Tuple[Action, int], Tuple[Action, int]]) -> bool:
         (a1, i1), (a2, i2) = events_pair
         if a1 == a2:
             return True
@@ -217,18 +224,15 @@ class MutexChecker:
 
 
 class PrecedenceChecker:
+
     def __init__(
         self,
-        event_fluents: List[
-            List[Tuple[Set[int], Set[int], Set[int], Set[int], Set[int]]]
-        ],
+        event_fluents: List[List[Tuple[Set[int], Set[int], Set[int], Set[int], Set[int]]]],
     ):
         self._event_fluents = event_fluents
         self._precedence: Dict[Tuple[Tuple[Action, int], Tuple[Action, int]], bool] = {}
 
-    def __contains__(
-        self, events_pair: Tuple[Tuple[Action, int], Tuple[Action, int]]
-    ) -> bool:
+    def __contains__(self, events_pair: Tuple[Tuple[Action, int], Tuple[Action, int]]) -> bool:
         (a1, i1), (a2, i2) = events_pair
         if a1 == a2:
             return False
@@ -292,19 +296,15 @@ def evaluate(exp: Expression, state: State) -> Union[bool, int, Fraction, str]:
                     v *= res[i]  # type: ignore[operator,assignment]
                 res.append(v)
             elif e.kind == "/":
-                res.append(Fraction(res[e.operands[0]], res[e.operands[1]]))  # type: ignore[arg-type]
-    assert (
-        isinstance(res[-1], bool)
-        or isinstance(res[-1], int)
-        or isinstance(res[-1], Fraction)
-        or isinstance(res[-1], str)
-    )
+                res.append(Fraction(res[e.operands[0]],
+                                    res[e.operands[1]]))  # type: ignore[arg-type]
+    assert (isinstance(res[-1], bool) or isinstance(res[-1], int) or isinstance(res[-1], Fraction)
+            or isinstance(res[-1], str))
     return res[-1]
 
 
-def simplify(
-    exp: Expression, assignments: Dict[int, Union[bool, int, Fraction, str]]
-) -> Expression:
+def simplify(exp: Expression, assignments: Dict[int, Union[bool, int, Fraction,
+                                                           str]]) -> Expression:
     """This function simplifies the given expression using the given assignments"""
 
     # We iterate over the expression elements and we store the simplified value in the res vector
@@ -374,19 +374,16 @@ def simplify(
             elif e.kind == "==":
                 v1 = res[e.operands[0]]
                 v2 = res[e.operands[1]]
-                if v1 == v2 or (
-                    (isinstance(v1, int) or isinstance(v1, Fraction))
-                    and (isinstance(v2, int) or isinstance(v2, Fraction))
-                ):
+                if v1 == v2 or ((isinstance(v1, int) or isinstance(v1, Fraction)) and
+                                (isinstance(v2, int) or isinstance(v2, Fraction))):
                     res.append(v1 == v2)
                 else:
                     res.append(e)
             elif e.kind in ["<=", "<", "-", "/"]:
                 v1 = res[e.operands[0]]
                 v2 = res[e.operands[1]]
-                if (isinstance(v1, int) or isinstance(v1, Fraction)) and (
-                    isinstance(v2, int) or isinstance(v2, Fraction)
-                ):
+                if (isinstance(v1, int) or isinstance(v1, Fraction)) and (isinstance(v2, int) or
+                                                                          isinstance(v2, Fraction)):
                     r: Union[bool, int, Fraction]
                     if e.kind == "<=":
                         r = v1 <= v2
@@ -439,13 +436,8 @@ def simplify(
     while len(stack) > 0:
         idx, processed = stack.pop()
         e = res[idx]
-        if (
-            isinstance(e, bool)
-            or isinstance(e, int)
-            or isinstance(e, Fraction)
-            or isinstance(e, FluentNode)
-            or isinstance(e, str)
-        ):
+        if (isinstance(e, bool) or isinstance(e, int) or isinstance(e, Fraction)
+                or isinstance(e, FluentNode) or isinstance(e, str)):
             operands_stack.append(len(final_res))
             final_res.append(e)
         else:
@@ -463,6 +455,7 @@ def simplify(
 
 
 class SearchSpaceABC(ABC):
+
     @property
     @abstractmethod
     def is_temporal(self) -> bool:
@@ -492,15 +485,12 @@ class SearchSpaceABC(ABC):
         pass
 
     @abstractmethod
-    def subgoals_sat(
-        self, state: State, goal: Optional[Expression] = None
-    ) -> Set[Expression]:
+    def subgoals_sat(self, state: State, goal: Optional[Expression] = None) -> Set[Expression]:
         pass
 
     @abstractmethod
-    def build_plan(
-        self, state: State
-    ) -> List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]:
+    def build_plan(self,
+                   state: State) -> List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]:
         pass
 
 
@@ -513,6 +503,7 @@ class SearchSpace(SearchSpaceABC):
         actions: List[Action],
         action_objects: Optional[List[List[str]]],
         obj_to_prev_actions_map: Optional[Dict[str, Set[Action]]],
+        dfa: Dfa | None = None,
         initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
         goal: Optional[Expression] = None,
         epsilon: Optional[Fraction] = None,
@@ -527,10 +518,11 @@ class SearchSpace(SearchSpaceABC):
         self._epsilon = Fraction(1, 100) if epsilon is None else epsilon
         self._is_temporal = any(v is not None for v in actions_duration)
         self._counter = 0
+        self._dfa = dfa
+        self._pruned_subtrees = 0
 
-        event_fluents: List[
-            List[Tuple[Set[int], Set[int], Set[int], Set[int], Set[int]]]
-        ] = [[] for _ in actions]
+        event_fluents: List[List[Tuple[Set[int], Set[int], Set[int], Set[int],
+                                       Set[int]]]] = [[] for _ in actions]
         for a, le in self._events.items():
             for _, e in le:
                 a_p = set(get_fluents(e.conditions))
@@ -555,12 +547,32 @@ class SearchSpace(SearchSpaceABC):
         initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
     ) -> State:
         tn = DeltaSimpleTemporalNetwork() if self._is_temporal else None
+        dfa_init = None
+        if self._dfa is not None:
+            dfa_init = self._dfa.initial_state
+            assert dfa_init is not None
         if initial_state is not None:
-            return State(initial_state, tn, {}, MultiSet(), 0, [])
+            return State(
+                initial_state,
+                tn,
+                {},
+                MultiSet(),
+                0,
+                [],
+                dfa_init,
+            )
         else:
             # `initial_state` can be None if the initial state was already provided when instantiating the class
             assert self._initial_state is not None
-            return State(self._initial_state, tn, {}, MultiSet(), 0, [])
+            return State(
+                self._initial_state,
+                tn,
+                {},
+                MultiSet(),
+                0,
+                [],
+                dfa_init,
+            )
 
     def get_successor_state(self, state: State, action: Action) -> Optional[State]:
         events = self._events[action]
@@ -576,13 +588,25 @@ class SearchSpace(SearchSpaceABC):
             new_state = self._expand_event(state, new_state, e, index, id)
         else:
             new_state = self._open_action(state, new_state, action, events)
+        if new_state and self._dfa is not None:
+            #print(action)
+            #print(self._dfa.get_input_alphabet())
+            assert state.dfa_state is not None
+            new_state.dfa_state = state.dfa_state.transitions.get(action)
+
         return new_state
 
     def get_successor_states(self, state: State) -> Iterator[State]:
         for action in self._actions:
             new_state = self.get_successor_state(state, action)
-            if new_state:
-                yield new_state
+            if new_state is None:
+                continue
+
+            if self._dfa is not None and not new_state.dfa_state.output:
+                self._pruned_subtrees += 1
+                continue
+
+            yield new_state
 
     def goal_reached(self, state: State, goal: Optional[Expression] = None) -> bool:
         if len(state.todo) > 0:
@@ -596,9 +620,7 @@ class SearchSpace(SearchSpaceABC):
         assert isinstance(res, bool)
         return res
 
-    def subgoals_sat(
-        self, state: State, goal: Optional[Expression] = None
-    ) -> Set[Expression]:
+    def subgoals_sat(self, state: State, goal: Optional[Expression] = None) -> Set[Expression]:
         if goal is not None:
             goals = split_expression(goal)
         else:
@@ -611,9 +633,8 @@ class SearchSpace(SearchSpaceABC):
                 res.add(g)
         return res
 
-    def _expand_event(
-        self, state: State, new_state: State, e: Event, index: int, id: int
-    ) -> Optional[State]:
+    def _expand_event(self, state: State, new_state: State, e: Event, index: int,
+                      id: int) -> Optional[State]:
         new_state.path.append((e.action, e.pos, id))
         # check conditions
         if not evaluate(e.conditions, state):
@@ -651,18 +672,15 @@ class SearchSpace(SearchSpaceABC):
                             -self._epsilon,
                         )
                     else:
-                        new_state.temporal_network.add(
-                            (e2_action, e2_pos, id2), (e.action, e.pos, id), 0
-                        )
+                        new_state.temporal_network.add((e2_action, e2_pos, id2),
+                                                       (e.action, e.pos, id), 0)
             for a, i in new_state.todo.items():
                 id2 = i[1]
-                for j in range(len(self._events[a][i[0] :])):
+                for j in range(len(self._events[a][i[0]:])):
                     e2_id = (a, i[0] + j)
                     e2 = (a, i[0] + j, id2)
                     if (e_id, e2_id) in self._mutex:
-                        new_state.temporal_network.add(
-                            (e.action, e.pos, id), e2, -self._epsilon
-                        )
+                        new_state.temporal_network.add((e.action, e.pos, id), e2, -self._epsilon)
                     else:
                         new_state.temporal_network.add((e.action, e.pos, id), e2, 0)
                     id2 += 1
@@ -678,10 +696,7 @@ class SearchSpace(SearchSpaceABC):
         action: Action,
         events: List[Tuple[Timing, Event]],
     ) -> Optional[State]:
-        if (
-            self._action_objects is not None
-            and self._obj_to_prev_actions_map is not None
-        ):
+        if (self._action_objects is not None and self._obj_to_prev_actions_map is not None):
             for obj in self._action_objects[action.idx]:
                 prev_actions = self._obj_to_prev_actions_map.get(obj, None)
                 if prev_actions is None or action in prev_actions:
@@ -709,20 +724,20 @@ class SearchSpace(SearchSpaceABC):
                 assert isinstance(u, int) or isinstance(u, Fraction)
                 if duration[3]:
                     u -= self._epsilon
-            new_state.temporal_network.insert_interval(
-                start, end, left_bound=l, right_bound=u
-            )
+            new_state.temporal_network.insert_interval(start, end, left_bound=l, right_bound=u)
             id = self._counter
             for t, e in events:
                 ev = (e.action, e.pos, self._counter)
                 if t.is_from_start():
-                    new_state.temporal_network.insert_interval(
-                        start, ev, left_bound=t.delay, right_bound=t.delay
-                    )
+                    new_state.temporal_network.insert_interval(start,
+                                                               ev,
+                                                               left_bound=t.delay,
+                                                               right_bound=t.delay)
                 else:
-                    new_state.temporal_network.insert_interval(
-                        end, ev, left_bound=t.delay, right_bound=t.delay
-                    )
+                    new_state.temporal_network.insert_interval(end,
+                                                               ev,
+                                                               left_bound=t.delay,
+                                                               right_bound=t.delay)
                 self._counter += 1
             if len(events) > 1:
                 new_state.todo[action] = 1, id + 1
@@ -730,9 +745,8 @@ class SearchSpace(SearchSpaceABC):
             id = self._counter
         return self._expand_event(state, new_state, events[0][1], 0, id)
 
-    def build_plan(
-        self, state: State
-    ) -> List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]:
+    def build_plan(self,
+                   state: State) -> List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]:
         if not self.is_temporal:
             return [(None, e[0], None) for e in state.path]
 

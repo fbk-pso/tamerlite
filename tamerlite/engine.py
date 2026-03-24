@@ -24,6 +24,7 @@ import unified_planning.engines.mixins
 from unified_planning.model import ProblemKind, FNode
 from unified_planning.model.state import State
 from typing import IO, Callable, List, Optional, Union, Tuple, Dict
+from aalpy.automata.Dfa import *
 
 from tamerlite.core import search_space
 from tamerlite.core import wastar_search, astar_search, gbfs_search
@@ -33,7 +34,6 @@ from tamerlite.core import evaluate, make_fluent_node
 from tamerlite.core import HFF, HAdd, HMax, HMaxExplicit, CustomHeuristic
 from tamerlite.core.heuristics import Heuristic
 from tamerlite.encoder import Encoder, PlanType
-
 
 credits = up.engines.Credits(
     "TamerLite",
@@ -47,6 +47,7 @@ credits = up.engines.Credits(
 
 
 class StateWrapper(State):
+
     def __init__(self, encoder: Encoder, search_state: search_space.State):
         self.encoder = encoder
         self.search_state = search_state
@@ -81,6 +82,7 @@ class SearchParams(HeuristicParams):
     early_termination: bool = False
     weak_equality: bool = False
     symmetry_breaking: bool = True
+    dfa: Dfa = None
 
 
 @dataclass(frozen=True)
@@ -89,11 +91,12 @@ class MultiqueueParams:
     early_termination: bool = False
     weak_equality: bool = False
     symmetry_breaking: bool = True
+    dfa: Dfa = None
 
 
 class TamerLite(
-    unified_planning.engines.Engine,
-    unified_planning.engines.mixins.OneshotPlannerMixin,
+        unified_planning.engines.Engine,
+        unified_planning.engines.mixins.OneshotPlannerMixin,
 ):
 
     def __init__(self, search: Union[SearchParams, MultiqueueParams] = SearchParams()):
@@ -165,6 +168,7 @@ class TamerLite(
         else:
             h_name = params.heuristic
 
+        print(h_name)
         if h_name == "custom":
 
             def rewrite_h(search_state: search_space.State):
@@ -172,7 +176,6 @@ class TamerLite(
 
             h = CustomHeuristic(rewrite_h, cache_heuristic_in_state)  # type: ignore[assignment]
             w = 1.0 if params.weight is None else params.weight
-
         elif h_name == "blind":
             h = CustomHeuristic(lambda x: 0.0, cache_heuristic_in_state)  # type: ignore[assignment]
             w = 0.0
@@ -190,11 +193,7 @@ class TamerLite(
             if h_name not in hh_map:
                 raise NotImplementedError
 
-            events = {
-                a: e
-                for a, e in encoder.events.items()
-                if a in encoder.applicable_actions
-            }
+            events = {a: e for a, e in encoder.events.items() if a in encoder.applicable_actions}
             h = hh_map[h_name](  # type: ignore
                 encoder.actions,
                 encoder.fluent_types,
@@ -211,11 +210,11 @@ class TamerLite(
     def _get_search(
         self, params: SearchParams, heuristic: Heuristic, weight: float
     ) -> Tuple[
-        str,
-        Callable[
-            [search_space.SearchSpaceABC, Optional[float], bool],
-            Tuple[Optional[PlanType], Dict[str, str]],
-        ],
+            str,
+            Callable[
+                [search_space.SearchSpaceABC, Optional[float], bool],
+                Tuple[Optional[PlanType], Dict[str, str]],
+            ],
     ]:
         s = "wastar" if params.search is None else params.search
         if s == "wastar":
@@ -242,9 +241,8 @@ class TamerLite(
     ) -> "up.engines.results.PlanGenerationResult":
         assert isinstance(problem, up.model.Problem)
         try:
-            with problem.environment.factory.Compiler(
-                compilation_kind="GROUNDING", problem_kind=problem.kind
-            ) as compiler:
+            with problem.environment.factory.Compiler(compilation_kind="GROUNDING",
+                                                      problem_kind=problem.kind) as compiler:
                 compilation_res = compiler.compile(problem)
                 map_back_action_instance = compilation_res.map_back_action_instance
             new_problem = compilation_res.problem
@@ -253,6 +251,7 @@ class TamerLite(
                 problem,
                 map_back_action_instance,
                 self._params.symmetry_breaking,
+                self._params.dfa,
             )
 
             if isinstance(self._params, MultiqueueParams):
@@ -309,6 +308,8 @@ class TamerLite(
                         early_termination=self._params.early_termination,
                     )
 
+            if self._params.dfa is not None:
+                metrics["pruned states"] = encoder.search_space._pruned_subtrees
             if plan is not None:
                 plan = encoder.build_plan(plan)  # type: ignore[arg-type]
                 plan = plan.replace_action_instances(map_back_action_instance)
