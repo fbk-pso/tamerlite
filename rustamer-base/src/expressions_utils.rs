@@ -35,6 +35,11 @@ pub fn do_shift(
                 .map(|&o| checked_add_sub(o, offset, is_negative))
                 .collect::<Result<_, _>>()?,
         ),
+        ExpressionNode::Or(v) => ExpressionNode::Or(
+            v.iter()
+                .map(|&o| checked_add_sub(o, offset, is_negative))
+                .collect::<Result<_, _>>()?,
+        ),
         ExpressionNode::Plus(v) => ExpressionNode::Plus(
             v.iter()
                 .map(|&o| checked_add_sub(o, offset, is_negative))
