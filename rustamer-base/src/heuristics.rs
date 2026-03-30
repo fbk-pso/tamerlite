@@ -878,11 +878,16 @@ fn to_linear_polynomial(expr: &Vec<ExpressionNode>) -> Option<FxHashMap<Option<u
                     }
                 }
 
-                res.push(polynomial.unwrap_or_else(|| {
+                res.push(if let Some(mut polynomial) = polynomial {
+                    for w in polynomial.values_mut() {
+                        *w *= const_multiplier;
+                    }
+                    polynomial
+                } else {
                     let mut p = FxHashMap::with_hasher(FxBuildHasher::default());
                     p.insert(None, const_multiplier);
                     p
-                }))
+                })
             }
             _ => return None,
         }
