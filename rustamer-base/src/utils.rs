@@ -60,10 +60,6 @@ pub fn mk_integer(n: i32) -> BigInt {
     BigInt::from(n)
 }
 
-pub fn rational_to_f32(n: &BigRational) -> f32 {
-    n.to_f32().unwrap()
-}
-
 pub fn rational_to_f64(n: &BigRational) -> f64 {
     n.to_f64().unwrap()
 }
