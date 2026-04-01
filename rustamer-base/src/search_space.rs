@@ -175,7 +175,7 @@ pub struct SearchSpace {
     initial_state: Option<Vec<ExpressionNode>>,
     goal: Option<Vec<ExpressionNode>>,
     tn_interpreter: TNInterpreter,
-    epsilon: f32,
+    epsilon: f64,
     epsilon_rational: BigRational,
     is_temporal: bool,
     counter: Mutex<u32>,
@@ -251,7 +251,7 @@ impl SearchSpace {
             goal: goal.map(|inner_vec| inner_vec.into_iter().map(|e| e.v).collect()),
             tn_interpreter: tn_interpreter,
             epsilon: match &epsilon {
-                Some(x) => rational_to_f32(x),
+                Some(x) => rational_to_f64(x),
                 None => 0.01,
             },
             epsilon_rational: match epsilon {
@@ -488,7 +488,7 @@ impl SearchSpace {
                 let e_id = (e.action, *index);
                 let e2_id = (e2.0, e2.1);
                 if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
-                    let b: f32 = -self.epsilon;
+                    let b: f64 = -self.epsilon;
                     tn.add(&ev2, &ev, &b);
                 } else {
                     tn.add(&ev2, &ev, &0.0);
@@ -501,7 +501,7 @@ impl SearchSpace {
                     let e2_id = (a.clone(), j + i.0);
                     let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, id2);
                     if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
-                        let b: f32 = -self.epsilon;
+                        let b: f64 = -self.epsilon;
                         tn.add(&ev, &ev2, &b);
                     } else {
                         tn.add(&ev, &ev2, &0.0);
@@ -552,14 +552,14 @@ impl SearchSpace {
             let end = self.tn_interpreter.get_action_id(action, false, *counter);
             *counter += 1;
             let duration = self.actions_duration[action.idx].as_ref();
-            let mut lb: f32 = 0.0;
-            let mut ub: f32 = 0.0;
+            let mut lb: f64 = 0.0;
+            let mut ub: f64 = 0.0;
             if duration.is_some() {
                 let d = duration.unwrap();
-                lb = -rational_to_f32(&get_rational_from_expression_node(&internal_evaluate(
+                lb = -rational_to_f64(&get_rational_from_expression_node(&internal_evaluate(
                     &d.0, state,
                 )?)?);
-                ub = rational_to_f32(&get_rational_from_expression_node(&internal_evaluate(
+                ub = rational_to_f64(&get_rational_from_expression_node(&internal_evaluate(
                     &d.1, state,
                 )?)?);
                 if d.2 {
@@ -574,8 +574,8 @@ impl SearchSpace {
             id = *counter;
             for (t, e) in events.iter() {
                 let ev = self.tn_interpreter.get_event_id(e.action, e.pos, *counter);
-                let b1 = -rational_to_f32(&t.delay);
-                let b2 = rational_to_f32(&t.delay);
+                let b1 = -rational_to_f64(&t.delay);
+                let b2 = rational_to_f64(&t.delay);
                 if t.is_from_start() {
                     tn.add(&start, &ev, &b1);
                     tn.add(&ev, &start, &b2);
@@ -618,7 +618,7 @@ impl SearchSpaceTrait for SearchSpace {
                 }
             },
         };
-        let tn: Option<DeltaSTN<u64, f32>> = match self.is_temporal {
+        let tn: Option<DeltaSTN<u64, f64>> = match self.is_temporal {
             true => Some(DeltaSTN::new(self.epsilon / 1000.0)),
             false => None,
         };
