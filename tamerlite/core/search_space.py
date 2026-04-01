@@ -516,11 +516,14 @@ class SearchSpace(SearchSpaceABC):
         obj_to_prev_actions_map: Optional[Dict[str, Set[Action]]],
         initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
         goal: Optional[Expression] = None,
+        useful_actions: Optional[List[Action]] = None,
         epsilon: Optional[Fraction] = None,
     ):
         self._actions_duration = actions_duration
         self._events = events
-        self._actions = actions
+        self._useful_actions = (
+            useful_actions if useful_actions is not None else list(actions)
+        )
         self._compression_safe_actions = compression_safe_actions
         self._action_objects = action_objects
         self._obj_to_prev_actions_map = obj_to_prev_actions_map
@@ -548,6 +551,14 @@ class SearchSpace(SearchSpaceABC):
     @property
     def is_temporal(self) -> bool:
         return self._is_temporal
+
+    @property
+    def useful_actions(self) -> List[Action]:
+        return self._useful_actions
+
+    @useful_actions.setter
+    def useful_actions(self, useful_actions: List[Action]):
+        self._useful_actions = useful_actions
 
     def reset(self):
         pass
@@ -601,7 +612,7 @@ class SearchSpace(SearchSpaceABC):
         return new_state
 
     def get_successor_states(self, state: State) -> Iterator[State]:
-        for action in self._actions:
+        for action in self._useful_actions:
             new_state = self.get_successor_state(state, action)
             if new_state:
                 yield new_state

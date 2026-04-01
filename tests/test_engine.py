@@ -313,6 +313,7 @@ def test_heuristic_fixed_values():
                 map_back_action_instance,
                 symmetry_breaking=False,
                 compression_safe_actions=False,
+                reachability_analysis=False,
             )
             ss: SearchSpaceABC = encoder.search_space
             init_state = ss.initial_state()
@@ -368,6 +369,7 @@ def test_heuristic_values(problems, data_regression):
                 map_back_action_instance,
                 symmetry_breaking=False,
                 compression_safe_actions=False,
+                reachability_analysis=False,
             )
             ss: SearchSpaceABC = encoder.search_space
             init_state = ss.initial_state()
@@ -630,6 +632,7 @@ def test_search_space(problems):
                 map_back_action_instance,
                 symmetry_breaking=False,
                 compression_safe_actions=False,
+                reachability_analysis=False,
             )
             ss: SearchSpaceABC = encoder.search_space
 

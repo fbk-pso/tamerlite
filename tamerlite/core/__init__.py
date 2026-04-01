@@ -62,6 +62,7 @@ if not use_rustamer:
         make_operator_node,
         make_rational_constant_node,
         shift_expression,
+        get_fluents,
     )
 else:
     from fractions import Fraction
@@ -97,6 +98,7 @@ else:
         make_rational_constant_node,
         shift_expression,
         simplify,
+        get_fluents,
     ) = (
         rustamer_lib.make_bool_constant_node,
         rustamer_lib.make_fluent_node,
@@ -106,6 +108,7 @@ else:
         rustamer_lib.make_rational_constant_node,
         rustamer_lib.shift_expression,
         rustamer_lib.simplify,
+        rustamer_lib.get_fluents,
     )
 
     (
