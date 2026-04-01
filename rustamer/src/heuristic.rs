@@ -15,9 +15,10 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 
+use pyo3::exceptions::PyNotImplementedError;
 use pyo3::prelude::*;
 use rustamer_base::*;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::vec::Vec;
 
 #[pyclass(frozen)]
@@ -171,6 +172,17 @@ impl Heuristic {
     #[pyo3(name = "eval")]
     pub fn py_eval(&self, state: &State, ss: &SearchSpace) -> PyResult<Option<f64>> {
         self.eval(state, ss)
+    }
+
+    pub fn reachable_actions(&self, state: &State) -> PyResult<FxHashSet<Action>> {
+        if self.hdr.is_some() {
+            let h = self.hdr.as_ref().unwrap();
+            h.reachable_actions(state)
+        } else {
+            Err(PyNotImplementedError::new_err(
+                "reachable_actions is not available: hdr is None",
+            ))
+        }
     }
 }
 

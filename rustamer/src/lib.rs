@@ -53,6 +53,7 @@ fn rustamer(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ehc_search, &m)?)?;
     m.add_function(wrap_pyfunction!(rustamer_base::evaluate, &m)?)?;
     m.add_function(wrap_pyfunction!(rustamer_base::simplify, &m)?)?;
+    m.add_function(wrap_pyfunction!(rustamer_base::py_get_fluents, &m)?)?;
 
     Ok(())
 }

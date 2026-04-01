@@ -39,7 +39,7 @@ pub use multiqueue::{
     _multiqueue_search,
     PrioritizedItem,
     MQSwitchPolicy};
-pub use search_space::{SearchSpace, SearchSpaceTrait};
+pub use search_space::{SearchSpace, SearchSpaceTrait, py_get_fluents};
 pub use search_state::State;
 pub use structures::{Timing, Effect, Event, Action};
 pub use expressions::{

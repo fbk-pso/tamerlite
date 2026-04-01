@@ -28,6 +28,7 @@ from typing import List, Tuple, Dict, Optional, Union, Any, Set, Callable, Itera
 
 from tamerlite.core import Expression, Effect, Timing, Event, Action, SearchSpace
 from tamerlite.core.search_space import SearchSpaceABC
+from tamerlite.core import HMax, get_fluents
 from tamerlite.converter import Converter
 
 
@@ -80,6 +81,7 @@ class Encoder:
         map_back_action_instance: Callable[[ActionInstance], Optional[ActionInstance]],
         symmetry_breaking: bool,
         compression_safe_actions: bool,
+        reachability_analysis: bool,
         full: bool = True,
     ):
         self._problem = problem
@@ -172,11 +174,18 @@ class Encoder:
             obj_to_prev_actions_map,
             initial_state,  # type: ignore[arg-type]
             self._goal,
+            self._applicable_actions,
             problem.epsilon,
         )
         self._objects = {}
         for ut in problem.user_types:
             self._objects[ut.name] = [o.name for o in problem.objects(ut)]
+
+        self._useful_actions = None
+        if full and reachability_analysis:
+            self._useful_actions = self._compute_useful_and_reachable_actions()
+            if len(self._useful_actions) < len(self.applicable_actions):
+                self._search_space.useful_actions = self._useful_actions
 
     @property
     def problem(self) -> Problem:
@@ -193,6 +202,56 @@ class Encoder:
         for f in self._fluents:
             initial_state.append(initial_state_values[f])
         return initial_state  # type: ignore[return-value]
+
+    def _compute_useful_and_reachable_actions(self) -> List[Action]:
+        events = {a: e for a, e in self.events.items() if a in self.applicable_actions}
+        heuristic = HMax(
+            self.actions,
+            self.fluent_types,
+            self.objects,
+            events,
+            self.goal,  # type: ignore[arg-type]
+            internal_caching=False,
+            cache_value_in_state=False,
+        )
+        reachable_actions = {
+            a.idx
+            for a in heuristic.reachable_actions(self._search_space.initial_state())
+        }
+
+        actions_affecting_fluent: Dict[int, Set[int]] = {}
+        action_to_condition_fluents: Dict[int, Set[int]] = {}
+        for a, le in events.items():
+            if a.idx not in reachable_actions:
+                continue
+
+            action_to_condition_fluents[a.idx] = set()
+            for _, e in le:
+                for eff in e.effects:
+                    if eff.fluent not in actions_affecting_fluent:
+                        actions_affecting_fluent[eff.fluent] = {a.idx}
+                    else:
+                        actions_affecting_fluent[eff.fluent].add(a.idx)
+
+                for cond in list(e.end_conditions) + [e.conditions]:
+                    action_to_condition_fluents[a.idx].update(get_fluents(cond))
+
+        checked_fluents = [False] * len(self._fluents)
+        stack = list(get_fluents(self.goal))  # type: ignore[arg-type]
+        for f in stack:
+            checked_fluents[f] = True
+
+        useful_actions: Set[int] = set()
+        while len(stack) > 0 and len(useful_actions) < len(action_to_condition_fluents):
+            f = stack.pop()
+            useful_actions.update(actions_affecting_fluent.get(f, set()))
+            for action_idx in actions_affecting_fluent.get(f, set()):
+                for f in action_to_condition_fluents[action_idx]:
+                    if not checked_fluents[f]:
+                        checked_fluents[f] = True
+                        stack.append(f)
+
+        return [a for a in self._actions if a.idx in useful_actions]
 
     def _compute_obj_to_prev_actions_map(
         self,
@@ -613,6 +672,10 @@ class Encoder:
         return self._applicable_actions
 
     @property
+    def useful_actions(self) -> Optional[List[Action]]:
+        return self._useful_actions
+
+    @property
     def compression_safe_actions(self) -> List[Action]:
         if self._compression_safe_actions is None:
             return []
@@ -680,7 +743,7 @@ class Encoder:
         env = self._problem.environment
         em = env.expression_manager
         self._events: Dict[Action, List[Tuple[Timing, Event]]] = {}
-        self._applicable_actions = []
+        applicable_actions = set()
         for a in self._problem.actions:
             if isinstance(a, up.model.DurativeAction):
                 from_start: Dict[Any, Any] = {}
@@ -706,7 +769,7 @@ class Encoder:
                         and not self._simplifier.simplify(em.And(lc)).is_false()
                     )
                 if is_applicable:
-                    self._applicable_actions.append(self.get_action(a.name))
+                    applicable_actions.add(self.get_action(a.name))
 
                 for t, le in a.effects.items():
                     action_events.append((t.delay, t, 4, le))
@@ -788,4 +851,6 @@ class Encoder:
                     )
                 ]
                 if not self._simplifier.simplify(em.And(a.preconditions)).is_false():
-                    self._applicable_actions.append(self.get_action(a.name))
+                    applicable_actions.add(self.get_action(a.name))
+
+        self._applicable_actions = [a for a in self._actions if a in applicable_actions]
