@@ -84,6 +84,7 @@ class SearchParams(HeuristicParams):
     weak_equality: bool = False
     symmetry_breaking: bool = True
     compression_safe_actions: bool = True
+    relevance_analysis: bool = True
 
 
 @dataclass(frozen=True)
@@ -94,6 +95,7 @@ class MultiqueueParams:
     weak_equality: bool = False
     symmetry_breaking: bool = True
     compression_safe_actions: bool = True
+    relevance_analysis: bool = True
 
 
 class TamerLite(
@@ -260,6 +262,7 @@ class TamerLite(
                 map_back_action_instance,
                 self._params.symmetry_breaking,
                 self._params.compression_safe_actions,
+                self._params.relevance_analysis,
             )
 
             original_encoder = encoder
@@ -288,6 +291,7 @@ class TamerLite(
                     new_map_back_action_instance,
                     self._params.symmetry_breaking,
                     self._params.compression_safe_actions,
+                    self._params.relevance_analysis,
                 )
 
             if isinstance(self._params, MultiqueueParams):
