@@ -791,6 +791,31 @@ class DeleteRelaxationHeuristic(Heuristic):
         assert len(res) == 1
         return res[-1]
 
+    def reachable_actions(self, state: State) -> Set[Action]:
+        _, reachable_operators = self._eval_core(state, reachability_analysis=True)
+        assert reachable_operators is not None
+
+        action_operators = {}
+        for o in self._operators:
+            if o.action not in action_operators:
+                action_operators[o.action] = 1
+            else:
+                action_operators[o.action] += 1
+
+        action_reachable_operators = {}
+        for o in reachable_operators:
+            if o.action not in action_reachable_operators:
+                action_reachable_operators[o.action] = 1
+            else:
+                action_reachable_operators[o.action] += 1
+
+        reachable_actions = set(
+            a
+            for a in action_reachable_operators
+            if action_reachable_operators[a] == action_operators[a]
+        )
+        return reachable_actions
+
     def _eval(self, state: State, ss: SearchSpaceABC) -> Optional[float]:
         if self._internal_caching is not None:
             assignments_values = tuple(state.assignments) + tuple(
@@ -799,25 +824,36 @@ class DeleteRelaxationHeuristic(Heuristic):
             if assignments_values in self._internal_caching:
                 return self._internal_caching[assignments_values]
 
-            res = self._eval_core(state)
+            res, _ = self._eval_core(state)
             self._internal_caching[assignments_values] = res
         else:
-            res = self._eval_core(state)
+            res, _ = self._eval_core(state)
 
         return res
 
-    def _eval_core(self, state: State) -> Optional[float]:
+    def _eval_core(
+        self, state: State, reachability_analysis: bool = False
+    ) -> Tuple[Optional[float], Optional[List[Operator]]]:
         """Compute the heuristic value for a given state.
 
         This method evaluates the state using the selected delete-relaxation heuristic,
         which can be one of `hmax`, `hadd`, or `hff`. The returned value estimates
         the cost to reach the goal from the given state.
 
+        If `reachability_analysis` is enabled, the method performs reachability
+        analysis instead of computing the heuristic value and returns the set of
+        reachable operators.
+
         Args:
             state: The state to evaluate.
+            reachability_analysis: If True, perform reachability analysis and return
+                the reachable operators instead of the heuristic value.
 
         Returns:
-            The heuristic value as a float if computable; otherwise, `None`.
+            A tuple containing:
+                - heuristic: The heuristic value as a float, or `None` if not computed.
+                - reachable_operators: A list of reachable `Operator` instances if
+                    `reachability_analysis` is True; otherwise `None`.
         """
 
         costs: Dict[Expression, float] = {}
@@ -917,9 +953,12 @@ class DeleteRelaxationHeuristic(Heuristic):
             lp = list(new_costs.keys())
             costs.update(new_costs)
 
+        if reachability_analysis:
+            return None, list(operator_cost.keys())
+
         h, _ = self._cost(self._goals, costs)
         if h is None:
-            return None
+            return None, None
 
         if self._heuristic_kind != HeuristicKind.HFF:
             eh, _ = self._cost(self._extra_goals, costs)
@@ -930,14 +969,14 @@ class DeleteRelaxationHeuristic(Heuristic):
             else:
                 res = h + eh
 
-            return res
+            return res, None
 
         res = 0
         for a, (j, _) in state.todo.items():
             res += len(self._events[a]) - j
 
         if h == 0.0:
-            return float(res)
+            return float(res), None
 
         relaxed_plan = set()
         stack = list(set(self._cost(self._goals, costs)[1]))
@@ -957,7 +996,7 @@ class DeleteRelaxationHeuristic(Heuristic):
             if a not in state.todo:
                 res += len(self._events[a])
 
-        return float(res)
+        return float(res), None
 
     def _achieves(self, operator: Operator, simple_condition: Expression) -> bool:
         """Check whether an operator achieves a given simple numeric condition.

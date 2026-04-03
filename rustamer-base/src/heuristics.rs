@@ -1320,6 +1320,35 @@ impl DeleteRelaxationHeuristic {
         Ok(res)
     }
 
+    pub fn reachable_actions(&self, state: &State) -> PyResult<FxHashSet<Action>> {
+        let (_, reachable_operators) = self._eval(state, true)?;
+
+        let mut action_operators = FxHashMap::with_hasher(FxBuildHasher::default());
+        for o in &self.operators {
+            *action_operators.entry(o.action).or_insert(0) += 1;
+        }
+
+        let mut action_reachable_operators = FxHashMap::with_hasher(FxBuildHasher::default());
+        for operator_idx in reachable_operators.unwrap() {
+            *action_reachable_operators
+                .entry(&self.operators[operator_idx].action)
+                .or_insert(0) += 1;
+        }
+
+        let reachable_actions = action_reachable_operators
+            .into_iter()
+            .filter_map(|(action, reachable_operators)| {
+                if reachable_operators == action_operators[action] {
+                    Some(*action)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        Ok(reachable_actions)
+    }
+
     pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
         let mut internal_caching = self.internal_caching.lock().unwrap();
         if let Some(internal_caching) = internal_caching.as_mut() {
@@ -1337,13 +1366,12 @@ impl DeleteRelaxationHeuristic {
                 return Ok(res.clone());
             }
 
-            let result = self._eval(state);
-            if let Ok(v) = result {
-                internal_caching.insert(cache_key, v);
-            }
-            result
+            let (v, _) = self._eval(state, false)?;
+            internal_caching.insert(cache_key, v);
+            Ok(v)
         } else {
-            self._eval(state)
+            let (v, _) = self._eval(state, false)?;
+            Ok(v)
         }
     }
 
@@ -1353,15 +1381,27 @@ impl DeleteRelaxationHeuristic {
     /// which can be one of `hmax`, `hadd`, or `hff`. The returned value estimates
     /// the cost to reach the goal from the given state.
     ///
+    /// If `reachability_analysis` is enabled, the method performs reachability
+    /// analysis instead of computing the heuristic value and returns the set of
+    /// reachable operators.
+    ///
     /// # Arguments
     ///
     /// * `state` - The state to evaluate.
+    /// * `reachability_analysis` - If `true`, perform reachability analysis and return
+    ///     the reachable operators instead of the heuristic value.
     ///
     /// # Returns
     ///
-    /// Returns `Ok(Some(value))` with the heuristic value as a floating-point number
-    /// if it can be computed, or `Ok(None)` if the heuristic cannot be evaluated.
-    fn _eval(&self, state: &State) -> PyResult<Option<f64>> {
+    /// A tuple containing:
+    /// * `Option<f64>` - The heuristic value, or `None` if not computed.
+    /// * `Option<Vec<usize>>` - The indices of reachable operators if
+    ///   `reachability_analysis` is `true`; otherwise `None`.
+    fn _eval(
+        &self,
+        state: &State,
+        reachability_analysis: bool,
+    ) -> PyResult<(Option<f64>, Option<Vec<usize>>)> {
         let mut expression_manager = self.expression_manager.lock().unwrap();
         let mut costs: FxHashMap<Expression, f64> = FxHashMap::with_capacity_and_hasher(
             state.assignments.len()
@@ -1499,9 +1539,18 @@ impl DeleteRelaxationHeuristic {
             costs.extend(new_costs.drain());
         }
 
+        if reachability_analysis {
+            let reachable_operators: Vec<usize> = operator_cost
+                .iter()
+                .enumerate()
+                .filter_map(|(i, c)| c.map(|_| i))
+                .collect();
+            return Ok((None, Some(reachable_operators)));
+        }
+
         let h = self.cost(&self.goals, &costs);
         if h.is_none() {
-            return Ok(None);
+            return Ok((None, None));
         }
 
         if matches!(
@@ -1515,9 +1564,9 @@ impl DeleteRelaxationHeuristic {
                     } else {
                         h.unwrap() + v
                     };
-                    Ok(Some(res))
+                    Ok((Some(res), None))
                 }
-                None => Ok(None),
+                None => Ok((None, None)),
             };
         }
 
@@ -1528,7 +1577,7 @@ impl DeleteRelaxationHeuristic {
 
         if let Some(hv) = h {
             if hv == 0.0 {
-                return Ok(Some(res));
+                return Ok((Some(res), None));
             }
         }
 
@@ -1559,7 +1608,7 @@ impl DeleteRelaxationHeuristic {
             }
         }
 
-        Ok(Some(res))
+        Ok((Some(res), None))
     }
 
     /// Collect the leaf expressions that contribute to the cost of the expression.
