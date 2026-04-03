@@ -662,19 +662,71 @@ class Encoder:
     def _convert_timing(self, timing: "up.model.Timing") -> Timing:
         return Timing(timing.is_from_start(), timing.delay)
 
-    def _convert_effect(self, effect: "up.model.Effect") -> Effect:
+    def _convert_effects(self, effects: List["up.model.Effect"]) -> List[Effect]:
         env = self._problem.environment
         em = env.expression_manager
-        if effect.is_increase():
-            value = em.Plus(effect.fluent, effect.value)
-        elif effect.is_decrease():
-            value = em.Minus(effect.fluent, effect.value)
-        else:
-            value = effect.value
+        fluent_to_effects: Dict[FNode, FNode] = {}
+        for effect in effects:
+            if effect.fluent not in fluent_to_effects:
+                fluent_to_effects[effect.fluent] = [[], [], []]
 
-        f = self.fluent_ids[self._convert_fluent(effect.fluent)]
-        v = self._convert_expression(value)
-        return Effect(f, v)
+            if effect.is_increase():
+                fluent_to_effects[effect.fluent][0].append(effect.value)
+            elif effect.is_decrease():
+                fluent_to_effects[effect.fluent][1].append(effect.value)
+            else:
+                fluent_to_effects[effect.fluent][2].append(effect.value)
+
+        converted_effects = []
+        for fluent, (
+            inc_effects,
+            dec_effects,
+            assign_effects,
+        ) in fluent_to_effects.items():
+            some_inc_dec_effects = len(inc_effects) > 0 or len(dec_effects) > 0
+            some_assign_effects = len(assign_effects) > 0
+            is_bool_type = fluent.fluent().type.is_bool_type()
+            assert is_bool_type or len(assign_effects) <= 1
+            assert (some_inc_dec_effects and not some_assign_effects) or (
+                not some_inc_dec_effects and some_assign_effects
+            )
+
+            if some_assign_effects:
+                if len(assign_effects) == 1:
+                    value = assign_effects[0]
+                else:
+                    value = assign_effects[0]
+                    non_constant_assignments = 0
+                    for v in assign_effects:
+                        if v.is_bool_constant():
+                            if v.bool_constant_value() == True:
+                                value = v
+                                non_constant_assignments = 0
+                                break
+                        else:
+                            value = v
+                            non_constant_assignments += 1
+
+                    if non_constant_assignments > 1:
+                        raise Exception(
+                            "TamerLite does not support multiple non-constant boolean assignment effects on the same fluent."
+                        )
+            else:
+                if len(inc_effects) > 0:
+                    if len(dec_effects) > 0:
+                        value = em.Minus(
+                            em.Plus([fluent] + inc_effects), em.Plus(dec_effects)
+                        )
+                    else:
+                        value = em.Plus([fluent] + inc_effects)
+                else:
+                    value = em.Minus(fluent, em.Plus(dec_effects))
+
+            f = self.fluent_ids[self._convert_fluent(fluent)]
+            v = self._convert_expression(value)
+            converted_effects.append(Effect(f, v))
+
+        return converted_effects
 
     def _build_events(self):
         env = self._problem.environment
@@ -755,7 +807,7 @@ class Encoder:
                     c = self._convert_expression(em.And(lc))
                     tsc = tuple([self._convert_expression(sc) for sc in lsc])
                     tec = tuple([self._convert_expression(ec) for ec in lec])
-                    te = tuple([self._convert_effect(e) for e in le])
+                    te = tuple(self._convert_effects(le))
                     self._events[self.get_action(a.name)].append(
                         (t, Event(self.get_action(a.name), pos, c, tsc, tec, te))
                     )
@@ -766,14 +818,14 @@ class Encoder:
                     c = self._convert_expression(em.And(lc))
                     tsc = tuple([self._convert_expression(sc) for sc in lsc])
                     tec = tuple([self._convert_expression(ec) for ec in lec])
-                    te = tuple([self._convert_effect(e) for e in le])
+                    te = tuple(self._convert_effects(le))
                     self._events[self.get_action(a.name)].append(
                         (t, Event(self.get_action(a.name), pos, c, tsc, tec, te))
                     )
                     pos += 1
             else:
                 t = Timing(True, Fraction(0))
-                te = tuple([self._convert_effect(e) for e in a.effects])
+                te = tuple(self._convert_effects(a.effects))
                 self._events[self.get_action(a.name)] = [
                     (
                         t,
