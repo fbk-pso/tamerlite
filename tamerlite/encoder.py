@@ -81,7 +81,7 @@ class Encoder:
         map_back_action_instance: Callable[[ActionInstance], Optional[ActionInstance]],
         symmetry_breaking: bool,
         compression_safe_actions: bool,
-        reachability_analysis: bool,
+        relevance_analysis: bool,
         full: bool = True,
     ):
         self._problem = problem
@@ -181,11 +181,11 @@ class Encoder:
         for ut in problem.user_types:
             self._objects[ut.name] = [o.name for o in problem.objects(ut)]
 
-        self._useful_actions = None
-        if full and reachability_analysis:
-            self._useful_actions = self._compute_useful_and_reachable_actions()
-            if len(self._useful_actions) < len(self.applicable_actions):
-                self._search_space.useful_actions = self._useful_actions
+        self._relevant_actions = None
+        if full and relevance_analysis:
+            self._relevant_actions = self._compute_relevant_actions()
+            if len(self._relevant_actions) < len(self.applicable_actions):
+                self._search_space.relevant_actions = self._relevant_actions
 
     @property
     def problem(self) -> Problem:
@@ -203,7 +203,7 @@ class Encoder:
             initial_state.append(initial_state_values[f])
         return initial_state  # type: ignore[return-value]
 
-    def _compute_useful_and_reachable_actions(self) -> List[Action]:
+    def _compute_relevant_actions(self) -> List[Action]:
         events = {a: e for a, e in self.events.items() if a in self.applicable_actions}
         heuristic = HMax(
             self.actions,
@@ -241,17 +241,19 @@ class Encoder:
         for f in stack:
             checked_fluents[f] = True
 
-        useful_actions: Set[int] = set()
-        while len(stack) > 0 and len(useful_actions) < len(action_to_condition_fluents):
+        relevant_actions: Set[int] = set()
+        while len(stack) > 0 and len(relevant_actions) < len(
+            action_to_condition_fluents
+        ):
             f = stack.pop()
-            useful_actions.update(actions_affecting_fluent.get(f, set()))
+            relevant_actions.update(actions_affecting_fluent.get(f, set()))
             for action_idx in actions_affecting_fluent.get(f, set()):
                 for f in action_to_condition_fluents[action_idx]:
                     if not checked_fluents[f]:
                         checked_fluents[f] = True
                         stack.append(f)
 
-        return [a for a in self._actions if a.idx in useful_actions]
+        return [a for a in self._actions if a.idx in relevant_actions]
 
     def _compute_obj_to_prev_actions_map(
         self,
@@ -672,8 +674,8 @@ class Encoder:
         return self._applicable_actions
 
     @property
-    def useful_actions(self) -> Optional[List[Action]]:
-        return self._useful_actions
+    def relevant_actions(self) -> Optional[List[Action]]:
+        return self._relevant_actions
 
     @property
     def compression_safe_actions(self) -> List[Action]:

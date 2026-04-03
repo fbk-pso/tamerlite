@@ -1384,7 +1384,7 @@ impl DeleteRelaxationHeuristic {
     /// If `reachability_analysis` is enabled, the method performs reachability
     /// analysis instead of computing the heuristic value and returns the set of
     /// reachable operators.
-    /// 
+    ///
     /// # Arguments
     ///
     /// * `state` - The state to evaluate.

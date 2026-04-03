@@ -167,7 +167,7 @@ fn get_fluents<'a>(expr: &'a Vec<ExpressionNode>) -> impl Iterator<Item = usize>
 pub struct SearchSpace {
     actions_duration: Vec<Option<(Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool)>>,
     events: FxHashMap<Action, Vec<(Timing, Event)>>,
-    useful_actions: Vec<Action>,
+    relevant_actions: Vec<Action>,
     compression_safe_actions: Option<Vec<bool>>,
     event_fluents: Vec<
         Vec<(
@@ -194,7 +194,7 @@ pub struct SearchSpace {
 #[pymethods]
 impl SearchSpace {
     #[new]
-    #[pyo3(signature = (actions_duration, events, actions, compression_safe_actions, action_objects, obj_to_prev_actions_map, initial_state=None, goal=None, useful_actions=None, epsilon=None))]
+    #[pyo3(signature = (actions_duration, events, actions, compression_safe_actions, action_objects, obj_to_prev_actions_map, initial_state=None, goal=None, relevant_actions=None, epsilon=None))]
     fn new(
         actions_duration: Vec<Option<(Vec<PyExpressionNode>, Vec<PyExpressionNode>, bool, bool)>>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
@@ -204,11 +204,11 @@ impl SearchSpace {
         obj_to_prev_actions_map: Option<FxHashMap<String, FxHashSet<Action>>>,
         initial_state: Option<Vec<PyExpressionNode>>,
         goal: Option<Vec<PyExpressionNode>>,
-        useful_actions: Option<Vec<Action>>,
+        relevant_actions: Option<Vec<Action>>,
         #[pyo3(from_py_with = get_option_big_rational)] epsilon: Option<BigRational>,
     ) -> PyResult<Self> {
-        let useful_actions = if let Some(useful_actions) = useful_actions {
-            useful_actions
+        let relevant_actions = if let Some(relevant_actions) = relevant_actions {
+            relevant_actions
         } else {
             actions.clone()
         };
@@ -255,7 +255,7 @@ impl SearchSpace {
         let res = SearchSpace {
             actions_duration: converted_actions_duration,
             events: events,
-            useful_actions: useful_actions,
+            relevant_actions: relevant_actions,
             compression_safe_actions: compression_safe_actions,
             event_fluents: event_fluents,
             mutex: MutexChecker::new(),
@@ -287,15 +287,15 @@ impl SearchSpace {
     }
 
     #[getter]
-    #[pyo3(name = "useful_actions")]
-    fn py_useful_actions(&self) -> Vec<Action> {
-        self.useful_actions.clone()
+    #[pyo3(name = "relevant_actions")]
+    fn py_relevant_actions(&self) -> Vec<Action> {
+        self.relevant_actions.clone()
     }
 
     #[setter]
-    #[pyo3(name = "useful_actions")]
-    fn py_set_useful_actions(&mut self, useful_actions: Vec<Action>) {
-        self.useful_actions = useful_actions;
+    #[pyo3(name = "relevant_actions")]
+    fn py_set_relevant_actions(&mut self, relevant_actions: Vec<Action>) {
+        self.relevant_actions = relevant_actions;
     }
 
     #[pyo3(name = "reset")]
@@ -665,7 +665,7 @@ impl SearchSpaceTrait for SearchSpace {
         &'a self,
         state: &'a State,
     ) -> impl Iterator<Item = PyResult<State>> + 'a {
-        self.useful_actions
+        self.relevant_actions
             .iter()
             .filter_map(|action| self.get_successor_state(state, *action).transpose())
     }
