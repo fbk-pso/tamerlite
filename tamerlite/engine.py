@@ -16,16 +16,21 @@
 #
 
 from dataclasses import dataclass
+from fractions import Fraction
 from functools import partial
 import time
 import unified_planning as up
 import unified_planning.engines
 import unified_planning.engines.mixins
-from unified_planning.model import ProblemKind, FNode
+from unified_planning.model import ProblemKind, FNode, StartTiming
 from unified_planning.model.state import State
 from unified_planning.engines.compilers.timed_to_sequential import TimedToSequential
-from unified_planning.plans import ActionInstance
-from typing import IO, Callable, List, Optional, Union, Tuple, Dict
+from unified_planning.engines.plan_validator import (
+    SequentialPlanValidator,
+    TimeTriggeredPlanValidator,
+)
+from unified_planning.plans import ActionInstance, PlanKind
+from typing import IO, Callable, Iterator, List, Optional, Union, Tuple, Dict
 
 from tamerlite.core import search_space
 from tamerlite.core import wastar_search, astar_search, gbfs_search
@@ -101,8 +106,8 @@ class MultiqueueParams:
 class TamerLite(
     unified_planning.engines.Engine,
     unified_planning.engines.mixins.OneshotPlannerMixin,
+    unified_planning.engines.mixins.AnytimePlannerMixin,
 ):
-
     def __init__(self, search: Union[SearchParams, MultiqueueParams] = SearchParams()):
         unified_planning.engines.Engine.__init__(self)
         up.engines.mixins.OneshotPlannerMixin.__init__(self)
@@ -241,6 +246,140 @@ class TamerLite(
 
         return search_name, search  # type: ignore[return-value]
 
+    def _get_solutions_with_params(
+        self,
+        problem: "up.model.AbstractProblem",
+        timeout: Optional[float] = None,
+        output_stream: Optional[IO[str]] = None,
+        warm_start_plan: Optional["up.plans.Plan"] = None,
+        **kwargs,
+    ) -> Iterator["up.engines.results.PlanGenerationResult"]:
+        em = problem.environment.expression_manager
+        tm = problem.environment.type_manager
+
+        with problem.environment.factory.Compiler(
+            compilation_kind="GROUNDING", problem_kind=problem.kind
+        ) as compiler:
+            compilation_res = compiler.compile(problem)
+            map_back_action_instance = compilation_res.map_back_action_instance
+            ground_problem = compilation_res.problem
+            lifted_problem = problem
+
+        start_time = time.time()
+        res = self._solve_ground_problem(
+            lifted_problem,
+            ground_problem,
+            map_back_action_instance,
+            timeout=timeout,
+            output_stream=output_stream,
+        )
+        yield res
+        if res.plan is None:
+            return
+
+        if (
+            ground_problem.quality_metrics is None
+            or len(ground_problem.quality_metrics) == 0
+        ):
+            if res.plan.kind == PlanKind.SEQUENTIAL_PLAN:
+                ground_problem.add_quality_metric(
+                    up.model.metrics.MinimizeSequentialPlanLength()
+                )
+                lifted_problem.add_quality_metric(
+                    up.model.metrics.MinimizeSequentialPlanLength()
+                )
+            elif res.plan.kind == PlanKind.TIME_TRIGGERED_PLAN:
+                ground_problem.add_quality_metric(up.model.metrics.MinimizeMakespan())
+                lifted_problem.add_quality_metric(up.model.metrics.MinimizeMakespan())
+            else:
+                assert False, "Unknown plan type %s" % res.plan.kind
+
+        if res.plan.kind == PlanKind.SEQUENTIAL_PLAN:
+            validator = SequentialPlanValidator()
+        elif res.plan.kind == PlanKind.TIME_TRIGGERED_PLAN:
+            validator = TimeTriggeredPlanValidator()
+        else:
+            raise NotImplementedError("Unknown plan type %s" % res.plan.kind)
+
+        while res.status == up.engines.PlanGenerationResultStatus.SOLVED_SATISFICING:
+            val_res = validator.validate(lifted_problem, res.plan)
+            problem = ground_problem.clone()
+            assert (
+                val_res.metric_evaluations is not None
+            ), "Expected metric evaluations for plan validation result"
+            if len(val_res.metric_evaluations) > 1:
+                raise NotImplementedError("Multiple metric evaluations not supported")
+            exp = None
+            deadline = None
+            for m, v in val_res.metric_evaluations.items():
+                if m.is_minimize_expression_on_final_state():
+                    exp = em.LT(m.expression, v)
+                elif m.is_maximize_expression_on_final_state():
+                    exp = em.GT(m.expression, v)
+                elif m.is_minimize_sequential_plan_length():
+                    plan_length = up.model.Fluent("plan_length", tm.IntType(0))
+                    problem.add_fluent(plan_length, default_initial_value=0)
+                    for a in problem.actions:
+                        if isinstance(a, up.model.InstantaneousAction):
+                            a.add_increase_effect(plan_length, 1)
+                        else:
+                            raise NotImplementedError(
+                                "Only instantaneous actions supported for plan length metric"
+                            )
+                    exp = em.LT(plan_length, v)
+                elif m.is_minimize_action_costs():
+                    actions_cost = up.model.Fluent("actions_cost", tm.IntType(0))
+                    problem.add_fluent(actions_cost, default_initial_value=0)
+                    for a in problem.actions:
+                        cost = m.costs.get(a, m.default)
+                        if cost is None:
+                            continue
+                        if isinstance(a, up.model.InstantaneousAction):
+                            a.add_increase_effect(actions_cost, cost)
+                        elif isinstance(a, up.model.DurativeAction):
+                            a.add_increase_effect(StartTiming(), actions_cost, cost)
+                        else:
+                            assert False, "Unknown action type %s" % type(a)
+                    exp = em.LT(actions_cost, v)
+                elif m.is_minimize_makespan():
+                    deadline = Fraction(v)
+                else:
+                    raise NotImplementedError("Unknown metric type for metric %s" % m)
+            if exp is not None:
+                for a in problem.actions:
+                    if isinstance(a, up.model.InstantaneousAction):
+                        a.add_precondition(exp)
+                    elif isinstance(a, up.model.DurativeAction):
+                        a.add_condition(StartTiming(), exp)
+                problem.add_goal(exp)
+            else:
+                assert deadline is not None
+            elapsed_time = time.time() - start_time
+            if timeout is not None and elapsed_time >= timeout:
+                break
+
+            def new_map_back_action_instance(
+                ai: ActionInstance,
+            ) -> Optional[ActionInstance]:
+                action = ground_problem.action(ai.action.name)
+                if action is not None:
+                    return map_back_action_instance(action())
+                return None
+
+            res = self._solve_ground_problem(
+                lifted_problem,
+                problem,
+                new_map_back_action_instance,
+                timeout=timeout - elapsed_time if timeout else None,
+                output_stream=output_stream,
+                deadline=deadline,
+            )
+            if res.plan:
+                yield res
+
+    def _get_solutions(self, problem, timeout=None, output_stream=None):
+        return self._get_solutions_with_params(problem, timeout, output_stream)
+
     def _solve(
         self,
         problem: "up.model.AbstractProblem",
@@ -249,15 +388,34 @@ class TamerLite(
         output_stream: Optional[IO[str]] = None,
     ) -> "up.engines.results.PlanGenerationResult":
         assert isinstance(problem, up.model.Problem)
-        try:
-            with problem.environment.factory.Compiler(
-                compilation_kind="GROUNDING", problem_kind=problem.kind
-            ) as compiler:
-                compilation_res = compiler.compile(problem)
-                map_back_action_instance = compilation_res.map_back_action_instance
+        with problem.environment.factory.Compiler(
+            compilation_kind="GROUNDING", problem_kind=problem.kind
+        ) as compiler:
+            compilation_res = compiler.compile(problem)
+            map_back_action_instance = compilation_res.map_back_action_instance
             new_problem = compilation_res.problem
-            encoder = Encoder(
+            return self._solve_ground_problem(
+                problem,
                 new_problem,
+                map_back_action_instance,
+                heuristic=heuristic,
+                timeout=timeout,
+                output_stream=output_stream,
+            )
+
+    def _solve_ground_problem(
+        self,
+        problem: "up.model.Problem",
+        ground_problem: "up.model.Problem",
+        map_back_action_instance: Callable[[ActionInstance], Optional[ActionInstance]],
+        heuristic: Optional[Callable[[State], Optional[float]]] = None,
+        timeout: Optional[float] = None,
+        output_stream: Optional[IO[str]] = None,
+        deadline: Optional[Fraction] = None,  # TODO handle deadline
+    ) -> "up.engines.results.PlanGenerationResult":
+        try:
+            encoder = Encoder(
+                ground_problem,
                 problem,
                 map_back_action_instance,
                 self._params.symmetry_breaking,
@@ -274,13 +432,13 @@ class TamerLite(
                 # into an equivalent classical planning problem
                 t2s_compiler = TimedToSequential()
                 t2s_compiler.skip_checks = True
-                compilation_res = t2s_compiler.compile(new_problem)
-                new_problem_actions = {a.name: a for a in new_problem.actions}
+                compilation_res = t2s_compiler.compile(ground_problem)
+                ground_problem_actions = {a.name: a for a in ground_problem.actions}
 
                 def new_map_back_action_instance(
                     ai: ActionInstance,
                 ) -> Optional[ActionInstance]:
-                    action = new_problem_actions.get(ai.action.name, None)
+                    action = ground_problem_actions.get(ai.action.name, None)
                     if action is not None:
                         return map_back_action_instance(action())
                     return None
