@@ -663,15 +663,11 @@ fn update_numeric_effects(
         }
     }
 
-    let polynomial = to_linear_polynomial(&effect.value);
-    if polynomial.is_some() {
-        let mut polynomial = polynomial.unwrap();
-        let k = polynomial.remove(&None).unwrap_or(0.0);
-        if polynomial.len() == 1 && matches!(polynomial.get(&Some(effect.fluent)), Some(1.0)) {
-            constant_increase_effects.insert(effect.fluent, k);
-        } else {
-            complex_numeric_effects.insert(effect.fluent, expression_manager.put(&effect.value));
-        }
+    let mut polynomial = to_linear_polynomial(&effect.value)
+        .unwrap_or(FxHashMap::with_hasher(FxBuildHasher::default()));
+    let k = polynomial.remove(&None).unwrap_or(0.0);
+    if polynomial.len() == 1 && matches!(polynomial.get(&Some(effect.fluent)), Some(1.0)) {
+        constant_increase_effects.insert(effect.fluent, k);
     } else {
         complex_numeric_effects.insert(effect.fluent, expression_manager.put(&effect.value));
     }

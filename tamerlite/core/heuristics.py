@@ -599,9 +599,8 @@ class DeleteRelaxationHeuristic(Heuristic):
             complex_numeric_effects[effect.fluent] = effect.value
             return
 
-        assert effect.fluent in polynomial
         k = polynomial.pop(None, 0)
-        if len(polynomial) == 1 and polynomial[effect.fluent] == 1:
+        if len(polynomial) == 1 and polynomial.get(effect.fluent, 0) == 1:
             constant_increase_effects[effect.fluent] = k
         else:
             complex_numeric_effects[effect.fluent] = effect.value
