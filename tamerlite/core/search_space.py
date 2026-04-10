@@ -517,6 +517,7 @@ class SearchSpace(SearchSpaceABC):
         initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
         goal: Optional[Expression] = None,
         relevant_actions: Optional[List[Action]] = None,
+        deadline: Optional[Fraction] = None,
         epsilon: Optional[Fraction] = None,
     ):
         self._actions_duration = actions_duration
@@ -529,6 +530,9 @@ class SearchSpace(SearchSpaceABC):
         self._obj_to_prev_actions_map = obj_to_prev_actions_map
         self._initial_state = initial_state
         self._goal = goal
+        self._deadline = deadline
+        self._start_plan = "start_plan"
+        self._end_plan = "end_plan"
         self._epsilon = Fraction(1, 100) if epsilon is None else epsilon
         self._is_temporal = any(v is not None for v in actions_duration)
         self._counter = 0
@@ -567,7 +571,17 @@ class SearchSpace(SearchSpaceABC):
         self,
         initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
     ) -> State:
-        tn = DeltaSimpleTemporalNetwork() if self._is_temporal else None
+        if self._is_temporal:
+            tn = DeltaSimpleTemporalNetwork()
+            if self._deadline is not None:
+                tn.insert_interval(
+                    self._start_plan,
+                    self._end_plan,
+                    left_bound=self._deadline,
+                    right_bound=self._deadline,
+                )
+        else:
+            tn = None
         if initial_state is not None:
             return State(initial_state, tn, {}, MultiSet(), 0, [])
         else:
@@ -745,6 +759,8 @@ class SearchSpace(SearchSpaceABC):
             new_state.temporal_network.insert_interval(
                 start, end, left_bound=l, right_bound=u
             )
+            new_state.temporal_network.add(self._start_plan, start, 0)
+            new_state.temporal_network.add(end, self._end_plan, -self._epsilon)
             id = self._counter
             for t, e in events:
                 ev = (e.action, e.pos, self._counter)
