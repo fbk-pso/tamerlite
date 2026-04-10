@@ -159,6 +159,7 @@ class TamerLite(
         supported_kind.set_quality_metrics("FINAL_VALUE")
         supported_kind.set_quality_metrics("MAKESPAN")
         supported_kind.set_quality_metrics("PLAN_LENGTH")
+        supported_kind.set_initial_state("UNDEFINED_INITIAL_NUMERIC")
         return supported_kind
 
     @staticmethod
@@ -254,6 +255,31 @@ class TamerLite(
 
         return search_name, search  # type: ignore[return-value]
 
+    def _compile_problem(self, problem: "up.model.AbstractProblem"):
+        with problem.environment.factory.Compiler(
+            compilation_kind="UNDEFINED_INITIAL_NUMERIC_REMOVING",
+            problem_kind=problem.kind,
+        ) as compiler:
+            compilation_res = compiler.compile(problem)
+            undefined_map_back_action_instance = (
+                compilation_res.map_back_action_instance
+            )
+            problem = compilation_res.problem
+
+        with problem.environment.factory.Compiler(
+            compilation_kind="GROUNDING", problem_kind=problem.kind
+        ) as compiler:
+            compilation_res = compiler.compile(problem)
+            ground_map_back_action_instance = compilation_res.map_back_action_instance
+            ground_problem = compilation_res.problem
+            lifted_problem = problem
+
+        map_back_action_instance = lambda ai: undefined_map_back_action_instance(
+            ground_map_back_action_instance(ai)
+        )
+
+        return lifted_problem, ground_problem, map_back_action_instance
+
     def _get_solutions_with_params(
         self,
         problem: "up.model.AbstractProblem",
@@ -262,20 +288,17 @@ class TamerLite(
         warm_start_plan: Optional["up.plans.Plan"] = None,
         **kwargs,
     ) -> Iterator["up.engines.results.PlanGenerationResult"]:
+        assert isinstance(problem, up.model.Problem)
         if len(problem.quality_metrics) > 1:
             raise NotImplementedError("Multiple quality metrics are not supported")
 
+        start_time = time.time()
         em = problem.environment.expression_manager
         tm = problem.environment.type_manager
-        start_time = time.time()
 
-        with problem.environment.factory.Compiler(
-            compilation_kind="GROUNDING", problem_kind=problem.kind
-        ) as compiler:
-            compilation_res = compiler.compile(problem)
-            map_back_action_instance = compilation_res.map_back_action_instance
-            ground_problem = compilation_res.problem
-            lifted_problem = problem
+        lifted_problem, ground_problem, map_back_action_instance = (
+            self._compile_problem(problem)
+        )
 
         elapsed_time = time.time() - start_time
         res, _, _ = self._solve_ground_problem(
@@ -444,22 +467,21 @@ class TamerLite(
         output_stream: Optional[IO[str]] = None,
     ) -> "up.engines.results.PlanGenerationResult":
         assert isinstance(problem, up.model.Problem)
-        with problem.environment.factory.Compiler(
-            compilation_kind="GROUNDING", problem_kind=problem.kind
-        ) as compiler:
-            compilation_res = compiler.compile(problem)
-            map_back_action_instance = compilation_res.map_back_action_instance
-            new_problem = compilation_res.problem
-            res, _, _ = self._solve_ground_problem(
-                problem,
-                new_problem,
-                map_back_action_instance,
-                heuristic=heuristic,
-                timeout=timeout,
-                output_stream=output_stream,
-                is_intermediate_solution=False,
-            )
-            return res
+        start_time = time.time()
+        lifted_problem, ground_problem, map_back_action_instance = (
+            self._compile_problem(problem)
+        )
+        elapsed_time = time.time() - start_time
+        res, _, _ = self._solve_ground_problem(
+            lifted_problem,
+            ground_problem,
+            map_back_action_instance,
+            heuristic=heuristic,
+            timeout=timeout - elapsed_time if timeout is not None else None,
+            output_stream=output_stream,
+            is_intermediate_solution=False,
+        )
+        return res
 
     def _solve_ground_problem(
         self,
