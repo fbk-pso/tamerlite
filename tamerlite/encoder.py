@@ -83,6 +83,7 @@ class Encoder:
         compression_safe_actions: bool,
         relevance_analysis: bool,
         full: bool = True,
+        deadline: Optional[Fraction] = None,
     ):
         self._problem = problem
         self._lifted_problem = lifted_problem
@@ -175,6 +176,7 @@ class Encoder:
             initial_state,  # type: ignore[arg-type]
             self._goal,
             self._applicable_actions,
+            deadline,
             problem.epsilon,
         )
         self._objects = {}

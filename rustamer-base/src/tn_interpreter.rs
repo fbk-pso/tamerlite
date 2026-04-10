@@ -26,6 +26,8 @@ pub struct TNInterpreter {
     events_ids: FxHashMap<(Action, usize), u32>,
     actions_ids_map_back: FxHashMap<u32, (Action, bool)>,
     events_ids_map_back: FxHashMap<u32, (Action, usize)>,
+    pub start_plan_id: u64,
+    pub end_plan_id: u64,
 }
 
 impl TNInterpreter {
@@ -35,8 +37,10 @@ impl TNInterpreter {
     ) -> Self {
         let mut actions_ids = FxHashMap::with_hasher(FxBuildHasher::default());
         let mut actions_ids_map_back = FxHashMap::with_hasher(FxBuildHasher::default());
+        let start_plan_id = 1;
+        let end_plan_id = 2;
 
-        let mut next_id = 1;
+        let mut next_id = 3;
         for a in actions {
             for b in [true, false] {
                 actions_ids.insert((a.clone(), b), next_id);
@@ -61,6 +65,8 @@ impl TNInterpreter {
             events_ids: events_ids,
             actions_ids_map_back: actions_ids_map_back,
             events_ids_map_back: events_ids_map_back,
+            start_plan_id: start_plan_id,
+            end_plan_id: end_plan_id,
         }
     }
 
