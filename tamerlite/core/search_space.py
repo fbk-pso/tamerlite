@@ -22,6 +22,7 @@ from typing import List, Tuple, Dict, Iterator, Optional, Union, Set
 from abc import ABC, abstractmethod
 from aalpy.automata.Dfa import *
 from aalpy.base.Automaton import *
+from smart_dfa import *
 
 
 @dataclass(eq=True, frozen=True)
@@ -602,7 +603,7 @@ class SearchSpace(SearchSpaceABC):
             if new_state is None:
                 continue
 
-            if self._dfa is not None and not new_state.dfa_state.output:
+            if self._dfa is not None and self._dfa.is_prunable(new_state.dfa_state):
                 self._pruned_subtrees += 1
                 continue
 
