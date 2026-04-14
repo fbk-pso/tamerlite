@@ -155,6 +155,10 @@ class TamerLite(
         supported_kind.set_fluents_type("NUMERIC_FLUENTS")
         supported_kind.set_fluents_type("OBJECT_FLUENTS")
         supported_kind.set_fluents_type("INT_FLUENTS")
+        supported_kind.set_quality_metrics("ACTIONS_COST")
+        supported_kind.set_quality_metrics("FINAL_VALUE")
+        supported_kind.set_quality_metrics("MAKESPAN")
+        supported_kind.set_quality_metrics("PLAN_LENGTH")
         return supported_kind
 
     @staticmethod
@@ -258,6 +262,9 @@ class TamerLite(
         warm_start_plan: Optional["up.plans.Plan"] = None,
         **kwargs,
     ) -> Iterator["up.engines.results.PlanGenerationResult"]:
+        if len(problem.quality_metrics) > 1:
+            raise NotImplementedError("Multiple quality metrics are not supported")
+
         em = problem.environment.expression_manager
         tm = problem.environment.type_manager
         start_time = time.time()
@@ -271,7 +278,7 @@ class TamerLite(
             lifted_problem = problem
 
         elapsed_time = time.time() - start_time
-        res = self._solve_ground_problem(
+        res, _, _ = self._solve_ground_problem(
             lifted_problem,
             ground_problem,
             map_back_action_instance,
@@ -313,14 +320,15 @@ class TamerLite(
                 res = validator.validate(problem, plan)
             return res
 
+        prev_res = up.engines.PlanGenerationResult(
+            res.status, res.plan, res.engine_name, res.metrics, res.log_messages
+        )
         while res.status == up.engines.PlanGenerationResultStatus.INTERMEDIATE:
             val_res = validate_plan(lifted_problem, res.plan)
             assert (
                 val_res.metric_evaluations is not None
                 and len(val_res.metric_evaluations) == 1
             ), "Expected metric evaluations for plan validation result"
-            if len(val_res.metric_evaluations) > 1:
-                raise NotImplementedError("Multiple metric evaluations not supported")
 
             problem = ground_problem.clone()
             exp = None
@@ -381,17 +389,42 @@ class TamerLite(
                 return None
 
             elapsed_time = time.time() - start_time
-            res = self._solve_ground_problem(
-                lifted_problem,
-                problem,
-                new_map_back_action_instance,
-                timeout=timeout - elapsed_time if timeout is not None else None,
-                output_stream=output_stream,
-                deadline=deadline,
-                is_intermediate_solution=True,
+            res, solution_might_exist, is_any_action_compression_safe = (
+                self._solve_ground_problem(
+                    lifted_problem,
+                    problem,
+                    new_map_back_action_instance,
+                    timeout=timeout - elapsed_time if timeout is not None else None,
+                    output_stream=output_stream,
+                    deadline=deadline,
+                    is_intermediate_solution=True,
+                )
             )
-            if res.plan is not None:
+            if (
+                res.status
+                == up.engines.PlanGenerationResultStatus.UNSOLVABLE_INCOMPLETELY
+            ):
+                if solution_might_exist or (
+                    m.is_minimize_makespan() and is_any_action_compression_safe
+                ):
+                    prev_res.status = (
+                        up.engines.PlanGenerationResultStatus.SOLVED_SATISFICING
+                    )
+                else:
+                    prev_res.status = (
+                        up.engines.PlanGenerationResultStatus.SOLVED_OPTIMALLY
+                    )
+                yield prev_res
+            elif res.status == up.engines.PlanGenerationResultStatus.TIMEOUT:
+                prev_res.status = up.engines.PlanGenerationResultStatus.TIMEOUT
+                yield prev_res
+            else:
+                assert res.plan is not None
                 yield res
+
+            prev_res = up.engines.PlanGenerationResult(
+                res.status, res.plan, res.engine_name, res.metrics, res.log_messages
+            )
 
     def _get_solutions(
         self,
@@ -415,7 +448,7 @@ class TamerLite(
             compilation_res = compiler.compile(problem)
             map_back_action_instance = compilation_res.map_back_action_instance
             new_problem = compilation_res.problem
-            return self._solve_ground_problem(
+            res, _, _ = self._solve_ground_problem(
                 problem,
                 new_problem,
                 map_back_action_instance,
@@ -424,6 +457,7 @@ class TamerLite(
                 output_stream=output_stream,
                 is_intermediate_solution=False,
             )
+            return res
 
     def _solve_ground_problem(
         self,
@@ -435,7 +469,7 @@ class TamerLite(
         output_stream: Optional[IO[str]] = None,
         deadline: Optional[Fraction] = None,
         is_intermediate_solution: bool = False,
-    ) -> "up.engines.results.PlanGenerationResult":
+    ) -> Tuple["up.engines.results.PlanGenerationResult", bool, bool]:
         try:
             encoder = Encoder(
                 ground_problem,
@@ -451,6 +485,10 @@ class TamerLite(
             are_all_actions_compression_safe = (
                 not is_intermediate_solution
                 and encoder.are_all_actions_compression_safe()
+            )
+            is_any_action_compression_safe = (
+                are_all_actions_compression_safe
+                or encoder.is_any_action_compression_safe()
             )
             if are_all_actions_compression_safe:
                 # Compile a temporal planning problem, where all actions are safe to compress,
@@ -479,6 +517,7 @@ class TamerLite(
                 )
 
             if isinstance(self._params, MultiqueueParams):
+                search_name = "multiqueue"
                 heuristics = []
                 for p in self._params.queues:
                     h, w = self._get_heuristic(
@@ -557,10 +596,20 @@ class TamerLite(
                     if is_intermediate_solution
                     else up.engines.PlanGenerationResultStatus.SOLVED_SATISFICING
                 )
+                solution_might_exist = True
             else:
                 plan = None
                 status = up.engines.PlanGenerationResultStatus.UNSOLVABLE_INCOMPLETELY
-            return up.engines.PlanGenerationResult(status, plan, self.name, metrics)
+                solution_might_exist = search_name == "ehs"
+            return (
+                up.engines.PlanGenerationResult(status, plan, self.name, metrics),
+                solution_might_exist,
+                is_any_action_compression_safe,
+            )
         except TimeoutError:
             status = up.engines.PlanGenerationResultStatus.TIMEOUT
-            return up.engines.PlanGenerationResult(status, None, self.name)
+            return (
+                up.engines.PlanGenerationResult(status, None, self.name),
+                True,
+                is_any_action_compression_safe,
+            )
