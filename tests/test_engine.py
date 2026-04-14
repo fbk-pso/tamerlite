@@ -193,6 +193,7 @@ def max_generated_states(problem):
         "constant_increase_effect",
         "constant_decrease_effect",
         "disjunctive_linear_conditions",
+        "basic_undef_numeric",
     }:
         return 2
     if problem.name in {"constant_increase_effect_2", "constant_decrease_effect_2"}:
@@ -325,15 +326,12 @@ def test_heuristic_fixed_values():
             reload_tamerlite(disable_rustamer)
             from tamerlite.core import HFF, HAdd, HMax, HMaxExplicit
 
-            with problem.environment.factory.Compiler(
-                compilation_kind="GROUNDING", problem_kind=problem.kind
-            ) as compiler:
-                compilation_res = compiler.compile(problem)
-            new_problem = compilation_res.problem
-            map_back_action_instance = compilation_res.map_back_action_instance
+            lifted_problem, ground_problem, map_back_action_instance = (
+                testing_utils.compile_problem(problem)
+            )
             encoder = Encoder(
-                new_problem,
-                problem,
+                ground_problem,
+                lifted_problem,
                 map_back_action_instance,
                 symmetry_breaking=False,
                 compression_safe_actions=False,
@@ -381,15 +379,12 @@ def test_heuristic_values(problems, data_regression):
             reload_tamerlite(disable_rustamer)
             from tamerlite.core import HFF, HAdd, HMax, HMaxExplicit
 
-            with problem.environment.factory.Compiler(
-                compilation_kind="GROUNDING", problem_kind=problem.kind
-            ) as compiler:
-                compilation_res = compiler.compile(problem)
-            new_problem = compilation_res.problem
-            map_back_action_instance = compilation_res.map_back_action_instance
+            lifted_problem, ground_problem, map_back_action_instance = (
+                testing_utils.compile_problem(problem)
+            )
             encoder = Encoder(
-                new_problem,
-                problem,
+                ground_problem,
+                lifted_problem,
                 map_back_action_instance,
                 symmetry_breaking=False,
                 compression_safe_actions=False,
@@ -644,15 +639,12 @@ def test_search_space(problems):
             reload_package(tamerlite.encoder)
             from tamerlite.encoder import Encoder
 
-            with problem.environment.factory.Compiler(
-                compilation_kind="GROUNDING", problem_kind=problem.kind
-            ) as compiler:
-                compilation_res = compiler.compile(problem)
-            new_problem = compilation_res.problem
-            map_back_action_instance = compilation_res.map_back_action_instance
+            lifted_problem, ground_problem, map_back_action_instance = (
+                testing_utils.compile_problem(problem)
+            )
             encoder = Encoder(
-                new_problem,
-                problem,
+                ground_problem,
+                lifted_problem,
                 map_back_action_instance,
                 symmetry_breaking=False,
                 compression_safe_actions=False,
