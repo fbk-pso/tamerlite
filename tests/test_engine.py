@@ -18,6 +18,7 @@
 import unified_planning
 from unified_planning.shortcuts import *
 from unified_planning.engines import PlanGenerationResult, PlanGenerationResultStatus
+from unified_planning.engines.results import ValidationResult
 import unified_planning.test
 import unified_planning.test.examples
 import up_test_cases.builtin
@@ -50,6 +51,8 @@ def problems():
         problems_generator.get_problem_numeric(),
         problems_generator.get_problem_satellite(),
         problems_generator.get_problem_hierarchical_types(),
+        problems_generator.get_problem_temporal_flight(),
+        problems_generator.get_problem_flight(),
     ]
 
     up_example_problems = list(
@@ -74,6 +77,20 @@ def problems():
             problem.name = new_name
         names.add(problem.name)
 
+    return test_problems
+
+
+@pytest.fixture
+def anytime_problems(problems):
+    test_problems = [
+        problems_generator.get_problem_temporal_flight_minimize_makespan(),
+        problems_generator.get_problem_temporal_flight_minimize_fuel(),
+        problems_generator.get_problem_temporal_flight_maximize_fuel(),
+        problems_generator.get_problem_flight_minimize_plan_length(),
+        problems_generator.get_problem_flight_minimize_fuel(),
+        problems_generator.get_problem_flight_maximize_fuel(),
+    ]
+    test_problems.extend(filter(lambda p: len(p.quality_metrics) == 1, problems))
     return test_problems
 
 
@@ -171,16 +188,23 @@ def skip(
 
 
 def max_generated_states(problem):
-    if problem.name in [
+    if problem.name in {
         "nonlinear_increase_effects",
         "constant_increase_effect",
         "constant_decrease_effect",
         "disjunctive_linear_conditions",
-    ]:
+    }:
         return 2
-    if problem.name in ["constant_increase_effect_2", "constant_decrease_effect_2"]:
+    if problem.name in {"constant_increase_effect_2", "constant_decrease_effect_2"}:
         return 4
     return 1000
+
+
+def max_generated_plans(problem):
+    if problem.name in {"satellite"}:
+        return 1
+
+    return 4
 
 
 def generate_states(ss: SearchSpaceABC, state, num_states: int):
@@ -659,6 +683,95 @@ def test_search_space(problems):
                 assert state1.todo[k][0] == todo2[k.idx][0]
 
             assert state1.g == state2.g
+
+
+def test_anytime_planner(anytime_problems):
+    for problem in anytime_problems:
+        quality_metric = problem.quality_metrics[0]
+        is_minimization_metric = (
+            quality_metric.is_minimize_action_costs()
+            or quality_metric.is_minimize_sequential_plan_length()
+            or quality_metric.is_minimize_makespan()
+            or quality_metric.is_minimize_expression_on_final_state()
+        )
+
+        if testing_utils.is_temporal_problem(problem):
+            weak_equality_flags = [True, False]
+        else:
+            weak_equality_flags = [False]
+
+        search_kind = "wastar"
+        heuristic = "hff"
+        internal_heuristic_cache = True
+        max_plans = max_generated_plans(problem)
+        for weak_equality in weak_equality_flags:
+            for symmetry_breaking in [True, False]:
+                for disable_rustamer in [True, False]:
+                    reload_tamerlite(disable_rustamer)
+                    search = tamerlite.SearchParams(
+                        search=search_kind,
+                        heuristic=heuristic,
+                        weight=0.8,
+                        internal_heuristic_cache=internal_heuristic_cache,
+                        weak_equality=weak_equality,
+                        symmetry_breaking=symmetry_breaking,
+                        compression_safe_actions=False,
+                    )
+
+                    if skip(
+                        problem,
+                        search_kind,
+                        heuristic,
+                        weak_equality,
+                        symmetry_breaking,
+                        disable_rustamer,
+                        internal_heuristic_cache,
+                    ):
+                        continue
+
+                    with AnytimePlanner(
+                        name="tamerlite", params={"search": search}
+                    ) as planner:
+                        counter = 0
+                        for res in planner.get_solutions(problem, timeout=None):
+                            assert res.status in {
+                                PlanGenerationResultStatus.INTERMEDIATE,
+                                PlanGenerationResultStatus.SOLVED_SATISFICING,
+                                PlanGenerationResultStatus.SOLVED_OPTIMALLY,
+                            }
+                            prev_metric_value = None
+                            with PlanValidator(problem_kind=problem.kind) as v:
+                                val_res: ValidationResult = v.validate(
+                                    problem, res.plan
+                                )
+                                assert val_res
+                                assert (
+                                    val_res.metric_evaluations is not None
+                                    and len(val_res.metric_evaluations) == 1
+                                )
+                                metric_value = list(
+                                    val_res.metric_evaluations.values()
+                                )[0]
+                                if prev_metric_value is not None:
+                                    if (
+                                        res.status
+                                        == PlanGenerationResultStatus.INTERMEDIATE
+                                    ):
+                                        if is_minimization_metric:
+                                            assert metric_value < prev_metric_value
+                                        else:
+                                            assert metric_value > prev_metric_value
+                                    else:
+                                        if is_minimization_metric:
+                                            assert metric_value <= prev_metric_value
+                                        else:
+                                            assert metric_value >= prev_metric_value
+                                else:
+                                    prev_metric_value = metric_value
+
+                            counter += 1
+                            if counter == max_plans:
+                                break
 
 
 def test_simplify():
