@@ -374,3 +374,174 @@ def get_problem_hierarchical_types() -> Problem:
     problem.add_goal(Not(Equals(carrier(pkg1), van1)))
 
     return problem
+
+
+def get_problem_flight() -> Problem:
+    problem = Problem("flight")
+    City = UserType("City")
+
+    # --- Fluents ---
+    at = Fluent("at", BoolType(), city=City)
+    connected = Fluent("connected", BoolType(), l_from=City, l_to=City)
+    fuel_used = Fluent("fuel_used", RealType(0, 1000))
+
+    # --- Actions ---
+    fly_fast = InstantaneousAction("fly_fast", l_from=City, l_to=City)
+    l_from = fly_fast.parameter("l_from")
+    l_to = fly_fast.parameter("l_to")
+
+    fly_fast.add_precondition(at(l_from))
+    fly_fast.add_effect(at(l_from), False)
+    fly_fast.add_effect(at(l_to), True)
+    fly_fast.add_effect(fuel_used, Plus(fuel_used, 100))
+
+    fly_slow = InstantaneousAction("fly_slow", l_from=City, l_to=City)
+    l_from2 = fly_slow.parameter("l_from")
+    l_to2 = fly_slow.parameter("l_to")
+
+    fly_slow.add_precondition(at(l_from2))
+    fly_slow.add_precondition(connected(l_from2, l_to2))
+    fly_slow.add_effect(at(l_from2), False)
+    fly_slow.add_effect(at(l_to2), True)
+    fly_slow.add_effect(fuel_used, Plus(fuel_used, 10))
+
+    # --- Problem ---
+    problem.add_fluent(at, default_initial_value=False)
+    problem.add_fluent(connected, default_initial_value=False)
+    problem.add_fluent(fuel_used, default_initial_value=0)
+
+    problem.add_action(fly_fast)
+    problem.add_action(fly_slow)
+
+    # --- Cities ---
+    A = Object("A", City)
+    B = Object("B", City)
+    C = Object("C", City)
+    D = Object("D", City)
+
+    cities = [A, B, C, D]
+    problem.add_objects(cities)
+
+    # --- Initial state ---
+    problem.set_initial_value(at(A), True)
+
+    problem.set_initial_value(connected(A, B), True)
+    problem.set_initial_value(connected(B, A), True)
+    problem.set_initial_value(connected(B, C), True)
+    problem.set_initial_value(connected(C, B), True)
+    problem.set_initial_value(connected(C, D), True)
+    problem.set_initial_value(connected(D, C), True)
+
+    # --- Goal ---
+    problem.add_goal(at(D))
+
+    return problem
+
+
+def get_problem_flight_minimize_plan_length() -> Problem:
+    problem = get_problem_flight()
+    problem.name = "flight_minimize_plan_length"
+    problem.add_quality_metric(MinimizeSequentialPlanLength())
+    return problem
+
+
+def get_problem_flight_minimize_fuel() -> Problem:
+    problem = get_problem_flight()
+    problem.name = "flight_minimize_fuel"
+    fuel_used = problem.fluent("fuel_used")
+    problem.add_quality_metric(MinimizeExpressionOnFinalState(fuel_used))
+    return problem
+
+
+def get_problem_flight_maximize_fuel() -> Problem:
+    problem = get_problem_flight()
+    problem.name = "flight_maximize_fuel"
+    fuel_used = problem.fluent("fuel_used")
+    problem.add_quality_metric(MaximizeExpressionOnFinalState(fuel_used))
+    return problem
+
+
+def get_problem_temporal_flight() -> Problem:
+    problem = Problem("temporal_flight")
+    City = UserType("City")
+
+    # --- Fluents ---
+    at = Fluent("at", BoolType(), city=City)
+    connected = Fluent("connected", BoolType(), l_from=City, l_to=City)
+    fuel_used = Fluent("fuel_used", RealType(0, 1000))
+
+    # --- Actions ---
+    fly_fast = DurativeAction("fly_fast", l_from=City, l_to=City)
+    l_from = fly_fast.parameter("l_from")
+    l_to = fly_fast.parameter("l_to")
+
+    fly_fast.set_fixed_duration(10)
+    fly_fast.add_condition(StartTiming(), at(l_from))
+    fly_fast.add_effect(StartTiming(), at(l_from), False)
+    fly_fast.add_effect(EndTiming(), at(l_to), True)
+    fly_fast.add_effect(StartTiming(), fuel_used, Plus(fuel_used, 100))
+
+    fly_slow = DurativeAction("fly_slow", l_from=City, l_to=City)
+    l_from2 = fly_slow.parameter("l_from")
+    l_to2 = fly_slow.parameter("l_to")
+
+    fly_slow.set_fixed_duration(20)
+    fly_slow.add_condition(StartTiming(), at(l_from2))
+    fly_slow.add_condition(StartTiming(), connected(l_from2, l_to2))
+    fly_slow.add_effect(StartTiming(), at(l_from2), False)
+    fly_slow.add_effect(EndTiming(), at(l_to2), True)
+    fly_slow.add_effect(StartTiming(), fuel_used, Plus(fuel_used, 10))
+
+    # --- Problem ---
+    problem.add_fluent(at, default_initial_value=False)
+    problem.add_fluent(connected, default_initial_value=False)
+    problem.add_fluent(fuel_used, default_initial_value=0)
+
+    problem.add_action(fly_fast)
+    problem.add_action(fly_slow)
+
+    # --- Cities ---
+    A = Object("A", City)
+    B = Object("B", City)
+    C = Object("C", City)
+    D = Object("D", City)
+
+    cities = [A, B, C, D]
+    problem.add_objects(cities)
+
+    # --- Initial state ---
+    problem.set_initial_value(at(A), True)
+    problem.set_initial_value(connected(A, B), True)
+    problem.set_initial_value(connected(B, A), True)
+    problem.set_initial_value(connected(B, C), True)
+    problem.set_initial_value(connected(C, B), True)
+    problem.set_initial_value(connected(C, D), True)
+    problem.set_initial_value(connected(D, C), True)
+
+    # --- Goal ---
+    problem.add_goal(at(D))
+
+    return problem
+
+
+def get_problem_temporal_flight_minimize_makespan() -> Problem:
+    problem = get_problem_temporal_flight()
+    problem.name = "temporal_flight_minimize_makespan"
+    problem.add_quality_metric(MinimizeMakespan())
+    return problem
+
+
+def get_problem_temporal_flight_minimize_fuel() -> Problem:
+    problem = get_problem_temporal_flight()
+    problem.name = "temporal_flight_minimize_fuel"
+    fuel_used = problem.fluent("fuel_used")
+    problem.add_quality_metric(MinimizeExpressionOnFinalState(fuel_used))
+    return problem
+
+
+def get_problem_temporal_flight_maximize_fuel() -> Problem:
+    problem = get_problem_temporal_flight()
+    problem.name = "temporal_flight_maximize_fuel"
+    fuel_used = problem.fluent("fuel_used")
+    problem.add_quality_metric(MaximizeExpressionOnFinalState(fuel_used))
+    return problem
