@@ -700,6 +700,11 @@ class Encoder:
             self._compression_safe_actions
         )
 
+    def is_any_action_compression_safe(self) -> bool:
+        return self._compression_safe_actions is not None and any(
+            self._compression_safe_actions
+        )
+
     def build_plan(self, path: List[Action]) -> Plan:
         plan = self.search_space.build_plan(path)
         if self._is_temporal:
