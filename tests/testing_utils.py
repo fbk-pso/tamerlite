@@ -30,6 +30,30 @@ from typing import List
 import ast
 
 
+def compile_problem(problem: Problem):
+    with problem.environment.factory.Compiler(
+        compilation_kind="UNDEFINED_INITIAL_NUMERIC_REMOVING",
+        problem_kind=problem.kind,
+    ) as compiler:
+        compilation_res = compiler.compile(problem)
+        undefined_map_back_action_instance = compilation_res.map_back_action_instance
+        problem = compilation_res.problem
+
+    with problem.environment.factory.Compiler(
+        compilation_kind="GROUNDING", problem_kind=problem.kind
+    ) as compiler:
+        compilation_res = compiler.compile(problem)
+        ground_map_back_action_instance = compilation_res.map_back_action_instance
+        ground_problem = compilation_res.problem
+        lifted_problem = problem
+
+    map_back_action_instance = lambda ai: undefined_map_back_action_instance(
+        ground_map_back_action_instance(ai)
+    )
+
+    return lifted_problem, ground_problem, map_back_action_instance
+
+
 def is_strictly_increasing(l: List):
     for i in range(len(l) - 1):
         if l[i] >= l[i + 1]:
