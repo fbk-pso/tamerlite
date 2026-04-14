@@ -404,8 +404,10 @@ class TamerLite(
                 res.status
                 == up.engines.PlanGenerationResultStatus.UNSOLVABLE_INCOMPLETELY
             ):
-                if solution_might_exist or (
-                    m.is_minimize_makespan() and is_any_action_compression_safe
+                if (
+                    len(lifted_problem.quality_metrics) == 0
+                    or solution_might_exist
+                    or (m.is_minimize_makespan() and is_any_action_compression_safe)
                 ):
                     prev_res.status = (
                         up.engines.PlanGenerationResultStatus.SOLVED_SATISFICING
