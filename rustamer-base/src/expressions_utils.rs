@@ -142,7 +142,11 @@ pub fn split_expression(exp: &Vec<ExpressionNode>) -> PyResult<Vec<Vec<Expressio
                     ExpressionNode::Not(i) => {
                         new_exp.push(make_operator("not".to_string(), vec![i - last])?);
                     }
-                    _ => {
+                    ExpressionNode::Bool(_)
+                    | ExpressionNode::Int(_)
+                    | ExpressionNode::Rational(_)
+                    | ExpressionNode::Fluent(_)
+                    | ExpressionNode::Object(_) => {
                         new_exp.push(e.clone());
                     }
                 }
