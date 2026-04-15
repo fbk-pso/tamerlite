@@ -758,13 +758,13 @@ class Encoder:
             some_inc_dec_effects = len(inc_effects) > 0 or len(dec_effects) > 0
             some_assign_effects = len(assign_effects) > 0
             is_bool_type = fluent.fluent().type.is_bool_type()
-            assert is_bool_type or len(assign_effects) <= 1
             assert (some_inc_dec_effects and not some_assign_effects) or (
                 not some_inc_dec_effects and some_assign_effects
             )
 
             if some_assign_effects:
-                if len(assign_effects) == 1:
+                if len(assign_effects) == 1 or not is_bool_type:
+                    # NOTE: If multiple numeric assignment effects are present, they are assumed to be identical
                     value = assign_effects[0]
                 else:
                     value = assign_effects[0]
