@@ -18,7 +18,7 @@
 from typing import List, Dict
 
 from unified_planning.model import FNode, AbstractProblem
-from unified_planning.model.walkers import DagWalker, Nnf
+from unified_planning.model.walkers import DagWalker, Nnf, ExpressionQuantifiersRemover
 
 from tamerlite.core import Expression
 from tamerlite.core import (
@@ -35,13 +35,19 @@ from tamerlite.core import (
 class Converter(DagWalker):
     def __init__(self, problem: AbstractProblem, fluent_ids: Dict[str, int]):
         DagWalker.__init__(self)
-        self.static_fluents = problem.get_static_fluents()
+        self._problem = problem
         self._fluent_ids = fluent_ids
+        self._qrm = ExpressionQuantifiersRemover(problem.environment)
+        self._nnf = Nnf(problem.environment)
+        self.static_fluents = problem.get_static_fluents()
 
     def convert(self, expression: FNode) -> Expression:
         """Converts the given expression."""
-        w = Nnf(expression.environment)
-        return self.walk(w.get_nnf_expression(expression))
+        return self.walk(
+            self._nnf.get_nnf_expression(
+                self._qrm.remove_quantifiers(expression, self._problem).simplify()
+            )
+        )
 
     def walk_and(self, expression: FNode, args: List[Expression]) -> Expression:
         if len(args) == 0:
