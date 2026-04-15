@@ -185,6 +185,7 @@ pub struct SearchSpace {
     initial_state: Option<Vec<ExpressionNode>>,
     goal: Option<Vec<ExpressionNode>>,
     tn_interpreter: TNInterpreter,
+    deadline: Option<f64>,
     epsilon: f64,
     epsilon_rational: BigRational,
     is_temporal: bool,
@@ -194,7 +195,7 @@ pub struct SearchSpace {
 #[pymethods]
 impl SearchSpace {
     #[new]
-    #[pyo3(signature = (actions_duration, events, actions, compression_safe_actions, action_objects, obj_to_prev_actions_map, initial_state=None, goal=None, relevant_actions=None, epsilon=None))]
+    #[pyo3(signature = (actions_duration, events, actions, compression_safe_actions, action_objects, obj_to_prev_actions_map, initial_state=None, goal=None, relevant_actions=None, deadline=None, epsilon=None))]
     fn new(
         actions_duration: Vec<Option<(Vec<PyExpressionNode>, Vec<PyExpressionNode>, bool, bool)>>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
@@ -205,6 +206,7 @@ impl SearchSpace {
         initial_state: Option<Vec<PyExpressionNode>>,
         goal: Option<Vec<PyExpressionNode>>,
         relevant_actions: Option<Vec<Action>>,
+        #[pyo3(from_py_with = get_option_big_rational)] deadline: Option<BigRational>,
         #[pyo3(from_py_with = get_option_big_rational)] epsilon: Option<BigRational>,
     ) -> PyResult<Self> {
         let relevant_actions = if let Some(relevant_actions) = relevant_actions {
@@ -266,6 +268,7 @@ impl SearchSpace {
                 .map(|inner_vec| inner_vec.into_iter().map(|v| v.v).collect()),
             goal: goal.map(|inner_vec| inner_vec.into_iter().map(|e| e.v).collect()),
             tn_interpreter: tn_interpreter,
+            deadline: deadline.map(|v| rational_to_f64(&v)),
             epsilon: match &epsilon {
                 Some(x) => rational_to_f64(x),
                 None => 0.01,
@@ -599,6 +602,8 @@ impl SearchSpace {
             }
             tn.add(&start, &end, &lb);
             tn.add(&end, &start, &ub);
+            tn.add(&self.tn_interpreter.start_plan_id, &start, &0.0);
+            tn.add(&end, &self.tn_interpreter.end_plan_id, &-self.epsilon);
             id = *counter;
             for (t, e) in events.iter() {
                 let ev = self.tn_interpreter.get_event_id(e.action, e.pos, *counter);
@@ -646,9 +651,23 @@ impl SearchSpaceTrait for SearchSpace {
                 }
             },
         };
-        let tn: Option<DeltaSTN<u64, f64>> = match self.is_temporal {
-            true => Some(DeltaSTN::new(self.epsilon / 1000.0)),
-            false => None,
+        let tn: Option<DeltaSTN<u64, f64>> = if self.is_temporal {
+            let mut tn = DeltaSTN::new(self.epsilon / 1000.0);
+            if let Some(deadline) = &self.deadline {
+                tn.add(
+                    &self.tn_interpreter.end_plan_id,
+                    &self.tn_interpreter.start_plan_id,
+                    &deadline,
+                );
+                tn.add(
+                    &self.tn_interpreter.start_plan_id,
+                    &self.tn_interpreter.end_plan_id,
+                    &-deadline,
+                );
+            }
+            Some(tn)
+        } else {
+            None
         };
         Ok(State {
             assignments: init,
