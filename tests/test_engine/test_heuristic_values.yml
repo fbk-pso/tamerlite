@@ -28639,6 +28639,28 @@ basic_numeric0:
   hmax_no_numbers:
   - 1
   - 0
+basic_undef_numeric:
+  hadd:
+  - 1
+  - 0
+  hadd_no_numbers:
+  - 1
+  - 0
+  hff:
+  - 1
+  - 0
+  hff_no_numbers:
+  - 0
+  - 0
+  hmax:
+  - 1
+  - 0
+  hmax_explicit:
+  - 1
+  - 0
+  hmax_no_numbers:
+  - 1
+  - 0
 basic_with_default_values:
   hadd:
   - 1
