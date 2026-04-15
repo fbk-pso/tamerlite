@@ -299,6 +299,7 @@ class TamerLite(
         lifted_problem, ground_problem, map_back_action_instance = (
             self._compile_problem(problem)
         )
+        original_problem = problem
 
         elapsed_time = time.time() - start_time
         res, _, _ = self._solve_ground_problem(
@@ -347,7 +348,8 @@ class TamerLite(
             res.status, res.plan, res.engine_name, res.metrics, res.log_messages
         )
         while res.status == up.engines.PlanGenerationResultStatus.INTERMEDIATE:
-            val_res = validate_plan(lifted_problem, res.plan)
+            val_res = validate_plan(original_problem, res.plan)
+            assert val_res
             assert (
                 val_res.metric_evaluations is not None
                 and len(val_res.metric_evaluations) == 1
