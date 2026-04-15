@@ -100,62 +100,60 @@ pub fn shift_expression(
 }
 
 pub fn split_expression(exp: &Vec<ExpressionNode>) -> PyResult<Vec<Vec<ExpressionNode>>> {
-    let mut res = Vec::new();
-    if let Some(g) = exp.last() {
-        if let ExpressionNode::And(v) = g {
-            let mut last = 0;
-            for i in v.iter() {
-                let mut new_exp = Vec::new();
-                for e in exp.iter().skip(last).take(*i + 1 - last) {
-                    match e {
-                        ExpressionNode::And(v) => {
-                            let operands = v.iter().map(|&j| j - last).collect();
-                            new_exp.push(make_operator("and".to_string(), operands)?);
-                        }
-                        ExpressionNode::Plus(v) => {
-                            let operands = v.iter().map(|&j| j - last).collect();
-                            new_exp.push(make_operator("+".to_string(), operands)?);
-                        }
-                        ExpressionNode::Times(v) => {
-                            let operands = v.iter().map(|&j| j - last).collect();
-                            new_exp.push(make_operator("*".to_string(), operands)?);
-                        }
-                        ExpressionNode::Equals(i1, i2) => {
-                            new_exp
-                                .push(make_operator("==".to_string(), vec![i1 - last, i2 - last])?);
-                        }
-                        ExpressionNode::LE(i1, i2) => {
-                            new_exp
-                                .push(make_operator("<=".to_string(), vec![i1 - last, i2 - last])?);
-                        }
-                        ExpressionNode::LT(i1, i2) => {
-                            new_exp
-                                .push(make_operator("<".to_string(), vec![i1 - last, i2 - last])?);
-                        }
-                        ExpressionNode::Minus(i1, i2) => {
-                            new_exp
-                                .push(make_operator("-".to_string(), vec![i1 - last, i2 - last])?);
-                        }
-                        ExpressionNode::Div(i1, i2) => {
-                            new_exp
-                                .push(make_operator("/".to_string(), vec![i1 - last, i2 - last])?);
-                        }
-                        ExpressionNode::Not(i) => {
-                            new_exp.push(make_operator("not".to_string(), vec![i - last])?);
-                        }
-                        _ => {
-                            new_exp.push(e.clone());
-                        }
+    if let Some(ExpressionNode::And(operands)) = exp.last() {
+        let mut res = Vec::with_capacity(operands.len());
+        let mut last = 0;
+        for op in operands.iter() {
+            let mut new_exp = Vec::with_capacity(op + 1 - last);
+            for i in last..=*op {
+                let e = &exp[i];
+                match e {
+                    ExpressionNode::And(v) => {
+                        let operands = v.iter().map(|&j| j - last).collect();
+                        new_exp.push(make_operator("and".to_string(), operands)?);
+                    }
+                    ExpressionNode::Or(v) => {
+                        let operands = v.iter().map(|&j| j - last).collect();
+                        new_exp.push(make_operator("or".to_string(), operands)?);
+                    }
+                    ExpressionNode::Plus(v) => {
+                        let operands = v.iter().map(|&j| j - last).collect();
+                        new_exp.push(make_operator("+".to_string(), operands)?);
+                    }
+                    ExpressionNode::Times(v) => {
+                        let operands = v.iter().map(|&j| j - last).collect();
+                        new_exp.push(make_operator("*".to_string(), operands)?);
+                    }
+                    ExpressionNode::Equals(i1, i2) => {
+                        new_exp.push(make_operator("==".to_string(), vec![i1 - last, i2 - last])?);
+                    }
+                    ExpressionNode::LE(i1, i2) => {
+                        new_exp.push(make_operator("<=".to_string(), vec![i1 - last, i2 - last])?);
+                    }
+                    ExpressionNode::LT(i1, i2) => {
+                        new_exp.push(make_operator("<".to_string(), vec![i1 - last, i2 - last])?);
+                    }
+                    ExpressionNode::Minus(i1, i2) => {
+                        new_exp.push(make_operator("-".to_string(), vec![i1 - last, i2 - last])?);
+                    }
+                    ExpressionNode::Div(i1, i2) => {
+                        new_exp.push(make_operator("/".to_string(), vec![i1 - last, i2 - last])?);
+                    }
+                    ExpressionNode::Not(i) => {
+                        new_exp.push(make_operator("not".to_string(), vec![i - last])?);
+                    }
+                    _ => {
+                        new_exp.push(e.clone());
                     }
                 }
-                res.push(new_exp);
-                last = i + 1;
             }
-        } else {
-            return Ok(vec![exp.clone()]);
+            res.push(new_exp);
+            last = op + 1;
         }
+        Ok(res)
+    } else {
+        Ok(vec![exp.clone()])
     }
-    Ok(res)
 }
 
 #[pyfunction]
