@@ -184,6 +184,9 @@ def skip(
                 and (heuristic == "custom" or search == "gbfs")
             )
         )
+        or (problem.name == "timed_connected_locations" and search == "dfs")
+        or (problem.name == "hierarchical_blocks_world_exists" and search == "dfs")
+        or (problem.name == "existential_linear_conditions" and search == "dfs")
     )
 
 
@@ -198,6 +201,8 @@ def max_generated_states(problem):
         return 2
     if problem.name in {"constant_increase_effect_2", "constant_decrease_effect_2"}:
         return 4
+    if problem.name == "existential_linear_conditions":
+        return 3
     return 1000
 
 

@@ -23,6 +23,7 @@ from unified_planning.plans import (
     ActionInstance,
 )
 from unified_planning.model import Problem, FNode, Object, Type, Fluent, TimepointKind
+from unified_planning.model.walkers import Nnf, ExpressionQuantifiersRemover
 from fractions import Fraction
 from typing import List, Tuple, Dict, Optional, Union, Any, Set, Callable, Iterable
 
@@ -92,6 +93,8 @@ class Encoder:
             self._simplifier = up.model.walkers.Simplifier(problem.environment, problem)
         else:
             self._simplifier = problem.environment.simplifier
+        self._qrm = ExpressionQuantifiersRemover(problem.environment)
+        self._nnf = Nnf(problem.environment)
 
         fluent_types = {}
         for f in problem.initial_values.keys():
@@ -728,7 +731,9 @@ class Encoder:
         return str(fluent_exp)
 
     def _convert_expression(self, expression: FNode) -> Expression:
+        expression = self._qrm.remove_quantifiers(expression, self._problem)
         expression = self._simplifier.simplify(expression)
+        expression = self._nnf.get_nnf_expression(expression)
         return self._converter.convert(expression)
 
     def _convert_timing(self, timing: "up.model.Timing") -> Timing:
@@ -758,7 +763,6 @@ class Encoder:
             some_inc_dec_effects = len(inc_effects) > 0 or len(dec_effects) > 0
             some_assign_effects = len(assign_effects) > 0
             is_bool_type = fluent.fluent().type.is_bool_type()
-            assert is_bool_type or len(assign_effects) <= 1
             assert (some_inc_dec_effects and not some_assign_effects) or (
                 not some_inc_dec_effects and some_assign_effects
             )
@@ -766,6 +770,11 @@ class Encoder:
             if some_assign_effects:
                 if len(assign_effects) == 1:
                     value = assign_effects[0]
+                elif not is_bool_type:
+                    # NOTE: If multiple numeric assignment effects are present, they are assumed to be identical
+                    value = assign_effects[0]
+                    for v in assign_effects:
+                        assert value == v
                 else:
                     value = assign_effects[0]
                     non_constant_assignments = 0
