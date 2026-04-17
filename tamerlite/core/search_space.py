@@ -603,6 +603,9 @@ class SearchSpace(SearchSpaceABC):
             if new_state is None:
                 continue
 
+            if new_state.dfa_state is None:
+                continue
+
             if self._dfa is not None and self._dfa.is_prunable(new_state.dfa_state):
                 self._pruned_subtrees += 1
                 continue

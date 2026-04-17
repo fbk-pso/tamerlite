@@ -168,7 +168,7 @@ class TamerLite(
         else:
             h_name = params.heuristic
 
-        print(h_name)
+        #print(h_name)
         if h_name == "custom":
 
             def rewrite_h(search_state: search_space.State):
@@ -205,7 +205,7 @@ class TamerLite(
             )
             w = 0.8 if params.weight is None else params.weight
 
-        return h, w
+        return h, w, h_name
 
     def _get_search(
         self, params: SearchParams, heuristic: Heuristic, weight: float
@@ -257,7 +257,7 @@ class TamerLite(
             if isinstance(self._params, MultiqueueParams):
                 heuristics = []
                 for p in self._params.queues:
-                    h, w = self._get_heuristic(p, heuristic, encoder)
+                    h, w, _ = self._get_heuristic(p, heuristic, encoder)
                     heuristics.append((h, w))
 
                 start = time.time()
@@ -280,7 +280,7 @@ class TamerLite(
                         weak_equality=False,
                     )
             else:
-                h, w = self._get_heuristic(self._params, heuristic, encoder)
+                h, w, h_name = self._get_heuristic(self._params, heuristic, encoder)
                 search_name, search = self._get_search(self._params, h, w)
 
                 if self._params.weak_equality and search_name not in ("dfs", "bfs"):
@@ -308,9 +308,11 @@ class TamerLite(
                         early_termination=self._params.early_termination,
                     )
 
+            metrics["heuristic"] = h_name
             if self._params.dfa is not None:
-                metrics["pruned states"] = encoder.search_space._pruned_subtrees
+                metrics["pruned_states"] = encoder.search_space._pruned_subtrees
             if plan is not None:
+                metrics["plan_length"] = len(plan)
                 plan = encoder.build_plan(plan)  # type: ignore[arg-type]
                 plan = plan.replace_action_instances(map_back_action_instance)
                 status = up.engines.PlanGenerationResultStatus.SOLVED_SATISFICING
