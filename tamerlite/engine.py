@@ -308,9 +308,12 @@ class TamerLite(
                         early_termination=self._params.early_termination,
                     )
 
+            metrics["plan_length"] = 0
             metrics["heuristic"] = h_name
+            metrics["n_dfa_states"] = 0
             if self._params.dfa is not None:
                 metrics["pruned_states"] = encoder.search_space._pruned_subtrees
+                metrics["n_dfa_states"] = len(self._params.dfa.states)
             if plan is not None:
                 metrics["plan_length"] = len(plan)
                 plan = encoder.build_plan(plan)  # type: ignore[arg-type]

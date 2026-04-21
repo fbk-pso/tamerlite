@@ -87,7 +87,7 @@ class Encoder:
             for state in self._dfa.states:
                 new_transitions = {}
                 for input_symbol, destination_state in state.transitions.items():
-                    assert input_symbol in self._action_names, f"the DFA symbol{self._action_names} is different from up action{input_symbol}"
+                    assert input_symbol in self._action_names, f"the DFA symbol{self._action_names} is different from up action {input_symbol}"
                     planner_action_id = self._action_by_name[input_symbol]
                     new_transitions[planner_action_id] = destination_state
                 state.transitions = new_transitions
