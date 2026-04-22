@@ -205,7 +205,7 @@ class TamerLite(
             )
             w = 0.8 if params.weight is None else params.weight
 
-        return h, w, h_name
+        return h, w
 
     def _get_search(
         self, params: SearchParams, heuristic: Heuristic, weight: float
@@ -257,7 +257,7 @@ class TamerLite(
             if isinstance(self._params, MultiqueueParams):
                 heuristics = []
                 for p in self._params.queues:
-                    h, w, _ = self._get_heuristic(p, heuristic, encoder)
+                    h, w = self._get_heuristic(p, heuristic, encoder)
                     heuristics.append((h, w))
 
                 start = time.time()
@@ -280,7 +280,7 @@ class TamerLite(
                         weak_equality=False,
                     )
             else:
-                h, w, h_name = self._get_heuristic(self._params, heuristic, encoder)
+                h, w = self._get_heuristic(self._params, heuristic, encoder)
                 search_name, search = self._get_search(self._params, h, w)
 
                 if self._params.weak_equality and search_name not in ("dfs", "bfs"):
@@ -309,7 +309,7 @@ class TamerLite(
                     )
 
             metrics["plan_length"] = 0
-            metrics["heuristic"] = h_name
+            metrics["heuristic"] = self._params.heuristic
             metrics["n_dfa_states"] = 0
             if self._params.dfa is not None:
                 metrics["pruned_states"] = encoder.search_space._pruned_subtrees
