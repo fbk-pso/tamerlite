@@ -16,6 +16,7 @@
 //
 
 use itertools::Itertools;
+use num::{BigInt, BigRational, Zero};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -816,56 +817,60 @@ fn extract_fluents_weights_simple_numeric_condition(
 /// Returns `Some(FxHashMap<Option<usize>, f64>)` mapping fluents to coefficients,
 /// with `None` representing the constant term. Returns `None` if the expression is non-linear.
 fn to_linear_polynomial(expr: &Vec<ExpressionNode>) -> Option<FxHashMap<Option<usize>, f64>> {
+    let zero = integer_to_rational(BigInt::from(0));
+    let one = integer_to_rational(BigInt::from(1));
     let mut res = Vec::new();
     for node in expr {
         match node {
             ExpressionNode::Int(v) => {
-                let mut p = FxHashMap::with_hasher(FxBuildHasher::default());
-                p.insert(None, integer_to_f64(v));
-                res.push(p);
+                res.push(constant_polynomial(integer_to_rational(*v.clone())));
             }
             ExpressionNode::Rational(v) => {
-                let mut p = FxHashMap::with_hasher(FxBuildHasher::default());
-                p.insert(None, rational_to_f64(v));
-                res.push(p);
+                res.push(constant_polynomial(*v.clone()));
             }
             ExpressionNode::Fluent(f) => {
                 let mut p = FxHashMap::with_hasher(FxBuildHasher::default());
-                p.insert(Some(*f), 1.0);
+                p.insert(Some(*f), one.clone());
                 res.push(p);
             }
             ExpressionNode::Minus(_, _) => {
                 let p2 = res.pop().unwrap();
                 let p1 = res.last_mut().unwrap();
                 for (f, w) in p2 {
-                    *p1.entry(f).or_insert(0.0) -= w;
+                    *p1.entry(f).or_insert(zero.clone()) -= w;
                 }
+                simplify_polynomial(p1)
             }
             ExpressionNode::Plus(operands) => {
                 let mut p = res.pop().unwrap();
                 for _ in 1..operands.len() {
                     for (f, w) in res.pop().unwrap() {
-                        *p.entry(f).or_insert(0.0) += w;
+                        *p.entry(f).or_insert(zero.clone()) += w;
                     }
                 }
+                simplify_polynomial(&mut p);
                 res.push(p);
             }
             ExpressionNode::Div(_, _) => {
                 let divisor = res.pop().unwrap();
                 let dividend = res.last_mut().unwrap();
-                if !is_constant(&divisor) {
+                if !is_constant_polynomial(&divisor) {
                     return None;
                 }
-                for (f, w) in divisor {
-                    *dividend.entry(f).or_insert(0.0) /= w;
+                let divisor = divisor.get(&None).unwrap();
+                if divisor.is_zero() {
+                    return None;
+                }
+                for value in dividend.values_mut() {
+                    *value /= divisor;
                 }
             }
             ExpressionNode::Times(operands) => {
-                let mut const_multiplier = 1.0;
+                let mut const_multiplier = one.clone();
                 let mut polynomial = None;
                 for _ in 0..operands.len() {
                     let operand = res.pop().unwrap();
-                    if is_constant(&operand) {
+                    if is_constant_polynomial(&operand) {
                         const_multiplier *= operand.get(&None).unwrap();
                     } else if polynomial.is_some() {
                         return None;
@@ -874,26 +879,50 @@ fn to_linear_polynomial(expr: &Vec<ExpressionNode>) -> Option<FxHashMap<Option<u
                     }
                 }
 
-                res.push(if let Some(mut polynomial) = polynomial {
-                    for w in polynomial.values_mut() {
-                        *w *= const_multiplier;
+                res.push(match polynomial {
+                    Some(mut polynomial) if !const_multiplier.is_zero() => {
+                        for w in polynomial.values_mut() {
+                            *w *= const_multiplier.clone();
+                        }
+                        polynomial
                     }
-                    polynomial
-                } else {
-                    let mut p = FxHashMap::with_hasher(FxBuildHasher::default());
-                    p.insert(None, const_multiplier);
-                    p
-                })
+                    _ => constant_polynomial(const_multiplier),
+                });
             }
             _ => return None,
         }
     }
 
-    Some(res.pop().unwrap())
+    res.pop()
+        .unwrap()
+        .into_iter()
+        .map(|(f, v)| (f, rational_to_f64(&v)))
+        .collect::<FxHashMap<Option<usize>, f64>>()
+        .into()
 }
 
-fn is_constant(polynomial: &FxHashMap<Option<usize>, f64>) -> bool {
+fn constant_polynomial(v: BigRational) -> FxHashMap<Option<usize>, BigRational> {
+    let mut p = FxHashMap::with_hasher(FxBuildHasher::default());
+    p.insert(None, v);
+    p
+}
+
+fn is_constant_polynomial(polynomial: &FxHashMap<Option<usize>, BigRational>) -> bool {
     polynomial.len() == 1 && polynomial.contains_key(&None)
+}
+
+/// Simplifies a polynomial by removing zero-coefficient terms.
+///
+/// This function iterates over all terms in the polynomial and removes any entry
+/// whose coefficient is zero, with the exception of the constant term (`None`),
+/// which is always retained.
+///
+/// # Arguments
+///
+/// * `polynomial` - A mutable reference to a polynomial represented as a map of
+///   fluents to coefficients.
+fn simplify_polynomial(polynomial: &mut FxHashMap<Option<usize>, BigRational>) {
+    polynomial.retain(|key, value| !value.is_zero() || key.is_none());
 }
 
 /// Checks whether an operator achieves a given simple numeric condition.
@@ -961,6 +990,8 @@ fn achieves(
 /// * `fluents` - Vector of fluents involved in the condition.
 /// * `weights` - Corresponding weights for each fluent, with the constant term last.
 /// * `state` - The state on which the condition is evaluated.
+/// * `inadmissible_numeric_heuristic_variant` - Whether to approximate constant
+///     or non-linear numeric effects as contributing to the operator's net effect.
 ///
 /// # Returns
 ///
@@ -972,6 +1003,7 @@ fn repetitions(
     fluents: &Vec<usize>,
     weights: &Vec<f64>,
     state: &State,
+    inadmissible_numeric_heuristic_variant: bool,
 ) -> PyResult<Option<f64>> {
     let mut v = *weights.last().unwrap();
     for (f, w) in fluents.iter().zip(weights) {
@@ -984,11 +1016,13 @@ fn repetitions(
         return Ok(Some(0.0));
     }
 
-    for f in fluents {
-        if operator.constant_assign_effects.contains_key(f)
-            || operator.complex_numeric_effects.contains_key(f)
-        {
-            return Ok(Some(1.0));
+    if !inadmissible_numeric_heuristic_variant {
+        for f in fluents {
+            if operator.constant_assign_effects.contains_key(f)
+                || operator.complex_numeric_effects.contains_key(f)
+            {
+                return Ok(Some(1.0));
+            }
         }
     }
 
@@ -996,6 +1030,11 @@ fn repetitions(
     for (f, w) in fluents.iter().zip(weights) {
         if let Some(k) = operator.constant_increase_effects.get(f) {
             net_effect += w * k;
+        } else if inadmissible_numeric_heuristic_variant
+            && (operator.constant_assign_effects.contains_key(f)
+                || operator.complex_numeric_effects.contains_key(f))
+        {
+            net_effect -= 1.0;
         }
     }
 
@@ -1062,6 +1101,7 @@ pub struct DeleteRelaxationHeuristic {
     heuristic_kind: HeuristicKind,
     internal_caching: Arc<Mutex<Option<FxHashMap<CacheKey, Option<f64>>>>>,
     expression_manager: Arc<Mutex<ExpressionManager>>,
+    inadmissible_numeric_heuristic_variant: bool,
     disable_numeric_reasoning: bool,
 }
 
@@ -1074,6 +1114,7 @@ impl DeleteRelaxationHeuristic {
         goals: Vec<PyExpressionNode>,
         heuristic_kind: HeuristicKind,
         internal_caching: bool,
+        inadmissible_numeric_heuristic_variant: bool,
         disable_numeric_reasoning: bool,
     ) -> PyResult<Self> {
         let mut operators = Vec::with_capacity(events.iter().map(|(_, e)| e.len()).sum());
@@ -1311,6 +1352,7 @@ impl DeleteRelaxationHeuristic {
             heuristic_kind,
             internal_caching: Arc::new(Mutex::new(internal_caching)),
             expression_manager: Arc::new(Mutex::new(expression_manager)),
+            inadmissible_numeric_heuristic_variant,
             disable_numeric_reasoning,
         };
         Ok(res)
@@ -1489,7 +1531,14 @@ impl DeleteRelaxationHeuristic {
                         }
 
                         let (fluents, weights) = &self.simple_numeric_conds[simple_cond];
-                        let rep = repetitions(o, fluents, weights, state)?.unwrap();
+                        let rep = repetitions(
+                            o,
+                            fluents,
+                            weights,
+                            state,
+                            self.inadmissible_numeric_heuristic_variant,
+                        )?
+                        .unwrap();
 
                         let expr_cost = if matches!(self.heuristic_kind, HeuristicKind::HMAX) {
                             poss.entry(simple_cond)

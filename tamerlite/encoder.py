@@ -218,6 +218,7 @@ class Encoder:
             self.goal,  # type: ignore[arg-type]
             internal_caching=False,
             cache_value_in_state=False,
+            inadmissible_numeric_heuristic_variant=False,
         )
         reachable_actions = {
             a.idx
