@@ -21,7 +21,11 @@ import time
 from typing import List, Tuple, Dict, Optional
 from tamerlite.core.search_space import SearchSpaceABC, State, Action
 from tamerlite.core.heuristics import Heuristic
-from tamerlite.core.search import state_representation, extract_path
+from tamerlite.core.search import (
+    _check_search_limits,
+    extract_path,
+    state_representation,
+)
 from abc import ABC, abstractmethod
 
 
@@ -80,6 +84,7 @@ def multiqueue_search(
     ss: SearchSpaceABC,
     heuristics: List[Tuple[Heuristic, float]],
     timeout: Optional[float] = None,
+    max_expanded_states: Optional[int] = None,
     early_termination: bool = False,
     weak_equality: bool = False,
 ) -> Tuple[Optional[List[Action]], Dict[str, str]]:
@@ -88,6 +93,7 @@ def multiqueue_search(
         heuristics=heuristics,
         switch_policy=RoundRobinSwitchPolicy(len(heuristics)),
         timeout=timeout,
+        max_expanded_states=max_expanded_states,
         early_termination=early_termination,
         weak_equality=weak_equality,
     )
@@ -98,6 +104,7 @@ def _multiqueue_search(
     heuristics: List[Tuple[Heuristic, float]],
     switch_policy: MQSwitchPolicy,
     timeout: Optional[float] = None,
+    max_expanded_states: Optional[int] = None,
     early_termination: bool = False,
     weak_equality: bool = False,
 ) -> Tuple[Optional[List[Action]], Dict[str, str]]:
@@ -121,8 +128,7 @@ def _multiqueue_search(
         switch_policy.notify_push(i, item)
 
     while True:
-        if timeout is not None and time.time() - st > timeout:
-            raise TimeoutError
+        _check_search_limits(st, timeout, states_expanded, max_expanded_states)
         if any(len(o) == 0 for o in opens):
             break
 
