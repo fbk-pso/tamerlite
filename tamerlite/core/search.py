@@ -46,10 +46,8 @@ class WeakEqState:
         return hash(tuple(self.state.assignments))
 
     def __eq__(self, oth) -> bool:
-        if (
-            len(self.state.todo) != len(oth.state.todo)
-            or self.state.assignments != oth.state.assignments
-        ):
+        if (len(self.state.todo) != len(oth.state.todo)
+                or self.state.assignments != oth.state.assignments):
             return False
 
         for a in self.state.todo:
@@ -61,28 +59,30 @@ class WeakEqState:
         return True
 
 
-def state_representation(
-    state: State, weak_equality: bool
-) -> Union[State, WeakEqState]:
+def state_representation(state: State, weak_equality: bool) -> Union[State, WeakEqState]:
     if weak_equality:
         return WeakEqState(state)
     return state
 
 
 def bfs_search(
-    ss: SearchSpaceABC, timeout: Optional[float] = None, early_termination: bool = False
+    ss: SearchSpaceABC,
+    timeout: Optional[float] = None,
+    early_termination: bool = False
 ) -> Tuple[
-    Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
-    Dict[str, str],
+        Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
+        Dict[str, str],
 ]:
     return _basic_search(ss, True, timeout, early_termination)
 
 
 def dfs_search(
-    ss: SearchSpaceABC, timeout: Optional[float] = None, early_termination: bool = False
+    ss: SearchSpaceABC,
+    timeout: Optional[float] = None,
+    early_termination: bool = False
 ) -> Tuple[
-    Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
-    Dict[str, str],
+        Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
+        Dict[str, str],
 ]:
     return _basic_search(ss, False, timeout, early_termination)
 
@@ -93,8 +93,8 @@ def _basic_search(
     timeout: Optional[float] = None,
     early_termination: bool = False,
 ) -> Tuple[
-    Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
-    Dict[str, str],
+        Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
+        Dict[str, str],
 ]:
     st = time.time()
     init = ss.initial_state()
@@ -138,8 +138,8 @@ def astar_search(
     early_termination: bool = False,
     weak_equality: bool = False,
 ) -> Tuple[
-    Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
-    Dict[str, str],
+        Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
+        Dict[str, str],
 ]:
     return wastar_search(ss, heuristic, 0.5, timeout, early_termination, weak_equality)
 
@@ -151,8 +151,8 @@ def gbfs_search(
     early_termination: bool = False,
     weak_equality: bool = False,
 ) -> Tuple[
-    Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
-    Dict[str, str],
+        Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
+        Dict[str, str],
 ]:
     return wastar_search(ss, heuristic, 1, timeout, early_termination, weak_equality)
 
@@ -175,6 +175,7 @@ def wastar_search(
         return ss.build_plan(init), {
             "expanded_states": str(expanded_states),
             "goal_depth": str(init.g),
+            "len_plan": len([a for a, _, _ in init.path])
         }
 
     init_h = heuristic.eval(init, ss)
@@ -191,6 +192,7 @@ def wastar_search(
             return ss.build_plan(state), {
                 "expanded_states": str(expanded_states),
                 "goal_depth": str(state.g),
+                "len_plan": len([a for a, _, _ in state.path])
             }
 
         candidate_states = []
@@ -199,6 +201,7 @@ def wastar_search(
                 return ss.build_plan(succ_state), {
                     "expanded_states": str(expanded_states),
                     "goal_depth": str(succ_state.g),
+                    "len_plan": len([a for a, _, _ in state.path])
                 }
 
             if not ss.is_temporal or weak_equality:
@@ -224,8 +227,8 @@ def ehc_search(
     early_termination: bool = False,
     weak_equality: bool = False,
 ) -> Tuple[
-    Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
-    Dict[str, str],
+        Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
+        Dict[str, str],
 ]:
     st = time.time()
     init = ss.initial_state()
