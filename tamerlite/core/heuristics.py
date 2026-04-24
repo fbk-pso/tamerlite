@@ -774,7 +774,7 @@ class DeleteRelaxationHeuristic(Heuristic):
                             f: Fraction(w) / divisor[None] for f, w in dividend.items()
                         }
                     except ZeroDivisionError:
-                        return None
+                        raise ValueError("zero-division error")
 
                 elif node.kind == "*":
                     const_multiplier: Fraction = Fraction(1)
