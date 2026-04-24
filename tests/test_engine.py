@@ -187,6 +187,28 @@ def skip(
         or (problem.name == "timed_connected_locations" and search == "dfs")
         or (problem.name == "hierarchical_blocks_world_exists" and search == "dfs")
         or (problem.name == "existential_linear_conditions" and search == "dfs")
+        or (
+            problem.name == "plant_watering_4_1"
+            and (search == "multiqueue" or heuristic != "hadd")
+        )
+        or (problem.name == "rovers_pfile2" and search in ["dfs", "bfs"])
+        or (
+            problem.name == "block_grouping_5_5_1_1"
+            and (
+                heuristic
+                in ["custom", "hmax_no_numbers", "hff_no_numbers", "hmax_explicit"]
+                or search in ["bfs", "ehs"]
+            )
+        )
+        or (
+            problem.name == "farmland_2_100_1229"
+            and (search in ["dfs", "bfs", "ehs"] or heuristic == "hmax_explicit")
+        )
+        or (problem.name == "depots_pfile1" and search in ["dfs", "bfs"])
+        or (
+            problem.name == "universal_existential_linear_conditions"
+            and search == "dfs"
+        )
     )
 
 
@@ -197,12 +219,15 @@ def max_generated_states(problem):
         "constant_decrease_effect",
         "disjunctive_linear_conditions",
         "basic_undef_numeric",
+        "equality_linear_conditions",
     }:
         return 2
     if problem.name in {"constant_increase_effect_2", "constant_decrease_effect_2"}:
         return 4
-    if problem.name == "existential_linear_conditions":
+    if problem.name in {"existential_linear_conditions", "nonlinear_assign_effects"}:
         return 3
+    if problem.name == "farmland_2_100_1229":
+        return 100
     return 1000
 
 
@@ -367,6 +392,7 @@ def test_heuristic_fixed_values():
                         encoder.goal,
                         internal_caching=internal_caching,
                         cache_value_in_state=False,
+                        inadmissible_numeric_heuristic_variant=False,
                     )
 
                     for i, state in enumerate(states):
@@ -430,6 +456,7 @@ def test_heuristic_values(problems, data_regression):
                         encoder.goal,
                         internal_caching=internal_caching,
                         cache_value_in_state=False,
+                        inadmissible_numeric_heuristic_variant=False,
                     )
 
                     if heuristic_name not in values:
