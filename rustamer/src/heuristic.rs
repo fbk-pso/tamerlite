@@ -43,7 +43,7 @@ impl Heuristic {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (actions, fluent_types, objects, events, goals, internal_caching, cache_value_in_state, disable_numeric_reasoning=false))]
+    #[pyo3(signature = (actions, fluent_types, objects, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant, disable_numeric_reasoning=false))]
     pub fn hff(
         actions: Vec<Action>,
         fluent_types: Vec<String>,
@@ -52,6 +52,7 @@ impl Heuristic {
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
         cache_value_in_state: bool,
+        inadmissible_numeric_heuristic_variant: bool,
         disable_numeric_reasoning: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
@@ -63,6 +64,7 @@ impl Heuristic {
                 goals,
                 HeuristicKind::HFF,
                 internal_caching,
+                inadmissible_numeric_heuristic_variant,
                 disable_numeric_reasoning,
             )?),
             hmax_explicit: None,
@@ -72,7 +74,7 @@ impl Heuristic {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (actions, fluent_types, objects, events, goals, internal_caching, cache_value_in_state, disable_numeric_reasoning=false))]
+    #[pyo3(signature = (actions, fluent_types, objects, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant, disable_numeric_reasoning=false))]
     pub fn hadd(
         actions: Vec<Action>,
         fluent_types: Vec<String>,
@@ -81,6 +83,7 @@ impl Heuristic {
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
         cache_value_in_state: bool,
+        inadmissible_numeric_heuristic_variant: bool,
         disable_numeric_reasoning: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
@@ -92,6 +95,7 @@ impl Heuristic {
                 goals,
                 HeuristicKind::HADD,
                 internal_caching,
+                inadmissible_numeric_heuristic_variant,
                 disable_numeric_reasoning,
             )?),
             hmax_explicit: None,
@@ -101,7 +105,7 @@ impl Heuristic {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (actions, fluent_types, objects, events, goals, internal_caching, cache_value_in_state, disable_numeric_reasoning=false))]
+    #[pyo3(signature = (actions, fluent_types, objects, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant, disable_numeric_reasoning=false))]
     pub fn hmax(
         actions: Vec<Action>,
         fluent_types: Vec<String>,
@@ -110,6 +114,7 @@ impl Heuristic {
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
         cache_value_in_state: bool,
+        inadmissible_numeric_heuristic_variant: bool,
         disable_numeric_reasoning: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
@@ -121,6 +126,7 @@ impl Heuristic {
                 goals,
                 HeuristicKind::HMAX,
                 internal_caching,
+                inadmissible_numeric_heuristic_variant,
                 disable_numeric_reasoning,
             )?),
             hmax_explicit: None,
@@ -130,14 +136,16 @@ impl Heuristic {
     }
 
     #[staticmethod]
+    #[allow(unused_variables)]
     pub fn hmax_explicit(
         actions: Vec<Action>,
         fluent_types: Vec<String>,
-        _objects: FxHashMap<String, Vec<String>>,
+        objects: FxHashMap<String, Vec<String>>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
         cache_value_in_state: bool,
+        inadmissible_numeric_heuristic_variant: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
             hdr: None,

@@ -155,6 +155,7 @@ class DeleteRelaxationHeuristic(Heuristic):
         heuristic_kind: HeuristicKind,
         internal_caching: bool,
         cache_value_in_state: bool,
+        inadmissible_numeric_heuristic_variant: bool,
         disable_numeric_reasoning: bool,
     ):
         super().__init__(cache_value_in_state)
@@ -166,6 +167,9 @@ class DeleteRelaxationHeuristic(Heuristic):
         self._operators: List[Operator] = []
         self._extra_fluents: Dict[Action, List[int]] = {}
         self._num_fluents = len(self._fluent_types)
+        self._inadmissible_numeric_heuristic_variant = (
+            inadmissible_numeric_heuristic_variant
+        )
         self._disable_numeric_reasoning = disable_numeric_reasoning
 
         for a in actions:
@@ -729,6 +733,12 @@ class DeleteRelaxationHeuristic(Heuristic):
             ValueError: If the expression is non-linear or contains unsupported operations.
         """
 
+        def is_constant(polynomial: Dict[Optional[int], Union[int, Fraction]]):
+            return len(polynomial) == 1 and None in polynomial
+
+        def simplify(polynomial: Dict[Optional[int], Union[int, Fraction]]):
+            return {k: v for k, v in polynomial.items() if v != 0 or k is None}
+
         res: List[Dict[Optional[int], Union[int, Fraction]]] = []
         for node in exp:
             if isinstance(node, (int, Fraction)):
@@ -740,19 +750,18 @@ class DeleteRelaxationHeuristic(Heuristic):
             elif isinstance(node, Op) and node.kind in ("-", "+", "/", "*"):
                 operands = [res.pop() for _ in node.operands]
 
-                def is_constant(polynomial: Dict[Optional[int], Union[int, Fraction]]):
-                    return len(polynomial) == 1 and None in polynomial
-
                 if node.kind == "-":
                     result = operands[1]
                     for f, w in operands[0].items():
                         result[f] = result.get(f, 0) - w
+                    simplify(result)
 
                 elif node.kind == "+":
                     result = {}
                     for operand in operands:
                         for f, w in operand.items():
                             result[f] = result.get(f, 0) + w
+                    simplify(result)
 
                 elif node.kind == "/":
                     dividend = operands[1]
@@ -760,9 +769,12 @@ class DeleteRelaxationHeuristic(Heuristic):
                     if not is_constant(divisor):
                         raise ValueError("non-linear polynomial")
 
-                    result = {
-                        f: Fraction(w) / divisor[None] for f, w in dividend.items()
-                    }
+                    try:
+                        result = {
+                            f: Fraction(w) / divisor[None] for f, w in dividend.items()
+                        }
+                    except ZeroDivisionError:
+                        return None
 
                 elif node.kind == "*":
                     const_multiplier: Fraction = Fraction(1)
@@ -1066,18 +1078,24 @@ class DeleteRelaxationHeuristic(Heuristic):
             # condition satisfied in state
             return 0
 
-        for f in fluents:
-            if (
-                f in operator.constant_assign_effects
-                or f in operator.complex_numeric_effects
-            ):
-                return 1
+        if not self._inadmissible_numeric_heuristic_variant:
+            for f in fluents:
+                if (
+                    f in operator.constant_assign_effects
+                    or f in operator.complex_numeric_effects
+                ):
+                    return 1
 
         net_effect = 0.0
         for f, w in zip(fluents, weights):
             if f in operator.constant_increase_effects:
                 k = operator.constant_increase_effects[f]
                 net_effect += w * k
+            elif self._inadmissible_numeric_heuristic_variant and (
+                f in operator.constant_assign_effects
+                or f in operator.complex_numeric_effects
+            ):
+                net_effect -= 1.0
 
         if net_effect >= 0.0:
             return None
@@ -1155,6 +1173,7 @@ def HFF(
     goals: Expression,
     internal_caching: bool,
     cache_value_in_state: bool,
+    inadmissible_numeric_heuristic_variant: bool,
     disable_numeric_reasoning: bool = False,
 ) -> DeleteRelaxationHeuristic:
     return DeleteRelaxationHeuristic(
@@ -1166,6 +1185,7 @@ def HFF(
         HeuristicKind.HFF,
         internal_caching,
         cache_value_in_state,
+        inadmissible_numeric_heuristic_variant,
         disable_numeric_reasoning,
     )
 
@@ -1178,6 +1198,7 @@ def HAdd(
     goals: Expression,
     internal_caching: bool,
     cache_value_in_state: bool,
+    inadmissible_numeric_heuristic_variant: bool,
     disable_numeric_reasoning: bool = False,
 ) -> DeleteRelaxationHeuristic:
     return DeleteRelaxationHeuristic(
@@ -1189,6 +1210,7 @@ def HAdd(
         HeuristicKind.HADD,
         internal_caching,
         cache_value_in_state,
+        inadmissible_numeric_heuristic_variant,
         disable_numeric_reasoning,
     )
 
@@ -1201,6 +1223,7 @@ def HMax(
     goals: Expression,
     internal_caching: bool,
     cache_value_in_state: bool,
+    inadmissible_numeric_heuristic_variant: bool,
     disable_numeric_reasoning: bool = False,
 ) -> DeleteRelaxationHeuristic:
     return DeleteRelaxationHeuristic(
@@ -1212,6 +1235,7 @@ def HMax(
         HeuristicKind.HMAX,
         internal_caching,
         cache_value_in_state,
+        inadmissible_numeric_heuristic_variant,
         disable_numeric_reasoning,
     )
 
@@ -1226,6 +1250,7 @@ class HMaxExplicit(Heuristic):
         goals: Expression,
         internal_caching: bool,
         cache_value_in_state: bool,
+        inadmissible_numeric_heuristic_variant: bool,
     ):
         super().__init__(cache_value_in_state)
         self._actions = actions
