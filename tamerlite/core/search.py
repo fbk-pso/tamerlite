@@ -73,22 +73,41 @@ def extract_path(state: State) -> List[Action]:
     return [a for a, _, _ in state.path]
 
 
+def _check_search_limits(
+    st: float,
+    timeout: Optional[float],
+    expanded_states: int,
+    max_expanded_states: Optional[int],
+) -> None:
+    if timeout is not None and time.time() - st > timeout:
+        raise TimeoutError
+    if max_expanded_states is not None and expanded_states >= max_expanded_states:
+        raise TimeoutError
+
+
 def bfs_search(
-    ss: SearchSpaceABC, timeout: Optional[float] = None, early_termination: bool = False
+    ss: SearchSpaceABC,
+    timeout: Optional[float] = None,
+    max_expanded_states: Optional[int] = None,
+    early_termination: bool = False,
 ) -> Tuple[Optional[List[Action]], Dict[str, str]]:
-    return _basic_search(ss, True, timeout, early_termination)
+    return _basic_search(ss, True, timeout, max_expanded_states, early_termination)
 
 
 def dfs_search(
-    ss: SearchSpaceABC, timeout: Optional[float] = None, early_termination: bool = False
+    ss: SearchSpaceABC,
+    timeout: Optional[float] = None,
+    max_expanded_states: Optional[int] = None,
+    early_termination: bool = False,
 ) -> Tuple[Optional[List[Action]], Dict[str, str]]:
-    return _basic_search(ss, False, timeout, early_termination)
+    return _basic_search(ss, False, timeout, max_expanded_states, early_termination)
 
 
 def _basic_search(
     ss: SearchSpaceABC,
     bfs: bool,
     timeout: Optional[float] = None,
+    max_expanded_states: Optional[int] = None,
     early_termination: bool = False,
 ) -> Tuple[Optional[List[Action]], Dict[str, str]]:
     st = time.time()
@@ -104,8 +123,7 @@ def _basic_search(
     open.append(init)
 
     while len(open) > 0:
-        if timeout is not None and time.time() - st > timeout:
-            raise TimeoutError
+        _check_search_limits(st, timeout, expanded_states, max_expanded_states)
         if bfs:
             state = open.popleft()
         else:
@@ -130,20 +148,38 @@ def astar_search(
     ss: SearchSpaceABC,
     heuristic: Heuristic,
     timeout: Optional[float] = None,
+    max_expanded_states: Optional[int] = None,
     early_termination: bool = False,
     weak_equality: bool = False,
 ) -> Tuple[Optional[List[Action]], Dict[str, str]]:
-    return wastar_search(ss, heuristic, 0.5, timeout, early_termination, weak_equality)
+    return wastar_search(
+        ss,
+        heuristic,
+        0.5,
+        timeout,
+        max_expanded_states,
+        early_termination,
+        weak_equality,
+    )
 
 
 def gbfs_search(
     ss: SearchSpaceABC,
     heuristic: Heuristic,
     timeout: Optional[float] = None,
+    max_expanded_states: Optional[int] = None,
     early_termination: bool = False,
     weak_equality: bool = False,
 ) -> Tuple[Optional[List[Action]], Dict[str, str]]:
-    return wastar_search(ss, heuristic, 1, timeout, early_termination, weak_equality)
+    return wastar_search(
+        ss,
+        heuristic,
+        1,
+        timeout,
+        max_expanded_states,
+        early_termination,
+        weak_equality,
+    )
 
 
 def wastar_search(
@@ -151,6 +187,7 @@ def wastar_search(
     heuristic: Heuristic,
     weight: float = 0.5,
     timeout: Optional[float] = None,
+    max_expanded_states: Optional[int] = None,
     early_termination: bool = False,
     weak_equality: bool = False,
 ) -> Tuple[Optional[List[Action]], Dict[str, str]]:
@@ -171,8 +208,7 @@ def wastar_search(
         return None, {"expanded_states": str(0)}
     heapq.heappush(open, PrioritizedItem(init_h, init))
     while open:
-        if timeout is not None and time.time() - st > timeout:
-            raise TimeoutError
+        _check_search_limits(st, timeout, expanded_states, max_expanded_states)
         item = heapq.heappop(open)
         state = item.state
         expanded_states += 1
@@ -210,6 +246,7 @@ def ehc_search(
     ss: SearchSpaceABC,
     heuristic: Heuristic,
     timeout: Optional[float] = None,
+    max_expanded_states: Optional[int] = None,
     early_termination: bool = False,
     weak_equality: bool = False,
 ) -> Tuple[Optional[List[Action]], Dict[str, str]]:
@@ -230,8 +267,7 @@ def ehc_search(
 
     closed = set()
     while len(open) > 0:
-        if timeout is not None and time.time() - st > timeout:
-            raise TimeoutError
+        _check_search_limits(st, timeout, expanded_states, max_expanded_states)
         state = open.popleft()
         expanded_states += 1
         if not ss.is_temporal or weak_equality:

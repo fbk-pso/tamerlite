@@ -36,7 +36,6 @@ from tamerlite.core import HFF, HAdd, HMax, HMaxExplicit, CustomHeuristic
 from tamerlite.core.heuristics import Heuristic
 from tamerlite.encoder import Encoder, PlanType
 
-
 credits = up.engines.Credits(
     "TamerLite",
     "FBK PSO Unit",
@@ -79,6 +78,7 @@ class HeuristicParams:
 @dataclass(frozen=True)
 class SearchParams(HeuristicParams):
     search: Optional[str] = None
+    max_expanded_states: Optional[int] = None
     internal_heuristic_cache: bool = True
     early_termination: bool = False
     weak_equality: bool = False
@@ -89,6 +89,7 @@ class SearchParams(HeuristicParams):
 @dataclass(frozen=True)
 class MultiqueueParams:
     queues: List[HeuristicParams]
+    max_expanded_states: Optional[int] = None
     internal_heuristic_cache: bool = True
     early_termination: bool = False
     weak_equality: bool = False
@@ -220,7 +221,7 @@ class TamerLite(
     ) -> Tuple[
         str,
         Callable[
-            [search_space.SearchSpaceABC, Optional[float], bool],
+            [search_space.SearchSpaceABC, Optional[float], Optional[int], bool],
             Tuple[Optional[PlanType], Dict[str, str]],
         ],
     ]:
@@ -238,6 +239,15 @@ class TamerLite(
             search = partial(ehc_search, heuristic=heuristic)
 
         return search_name, search  # type: ignore[return-value]
+
+    @staticmethod
+    def _remaining_expanded_budget(
+        max_expanded_states: Optional[int], metrics: Dict[str, str]
+    ) -> Optional[int]:
+        if max_expanded_states is None:
+            return None
+        used = int(metrics.get("expanded_states", 0))
+        return max(0, max_expanded_states - used)
 
     def _solve(
         self,
@@ -303,17 +313,22 @@ class TamerLite(
                     encoder.search_space,
                     heuristics,
                     timeout,
+                    self._params.max_expanded_states,
                     early_termination=self._params.early_termination,
                     weak_equality=self._params.weak_equality,
                 )
                 if self._params.weak_equality and path is None:
                     updated_timeout = timeout
+                    updated_max_expanded_states = self._remaining_expanded_budget(
+                        self._params.max_expanded_states, metrics
+                    )
                     if updated_timeout is not None:
                         updated_timeout -= start
                     path, metrics = multiqueue_search(
                         encoder.search_space,
                         heuristics,
                         updated_timeout,
+                        updated_max_expanded_states,
                         early_termination=self._params.early_termination,
                         weak_equality=False,
                     )
@@ -331,16 +346,21 @@ class TamerLite(
                     path, metrics = search(  # type: ignore
                         encoder.search_space,
                         timeout=timeout,
+                        max_expanded_states=self._params.max_expanded_states,
                         early_termination=self._params.early_termination,
                         weak_equality=True,
                     )
                     if path is None:
                         updated_timeout = timeout
+                        updated_max_expanded_states = self._remaining_expanded_budget(
+                            self._params.max_expanded_states, metrics
+                        )
                         if updated_timeout is not None:
                             updated_timeout -= start
                         path, metrics = search(  # type: ignore
                             encoder.search_space,
                             timeout=updated_timeout,
+                            max_expanded_states=updated_max_expanded_states,
                             early_termination=self._params.early_termination,
                             weak_equality=False,
                         )
@@ -348,6 +368,7 @@ class TamerLite(
                     path, metrics = search(  # type: ignore
                         encoder.search_space,
                         timeout=timeout,
+                        max_expanded_states=self._params.max_expanded_states,
                         early_termination=self._params.early_termination,
                     )
 
