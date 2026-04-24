@@ -120,17 +120,29 @@ class Encoder:
             self._goal = self.goals(problem.goals)
             if symmetry_breaking:
                 action_objects, obj_to_prev_actions_map = (self._compute_obj_to_prev_actions_map())
-        self._search_space = SearchSpace(
-            actions_duration,
-            self._events,
-            self._actions,
-            action_objects,
-            obj_to_prev_actions_map,
-            self._dfa,
-            initial_state,  # type: ignore[arg-type]
-            self._goal,
-            problem.epsilon,
-        )
+        if self._dfa:
+            self._search_space = SearchSpace(
+                actions_duration,
+                self._events,
+                self._actions,
+                action_objects,
+                obj_to_prev_actions_map,
+                initial_state,  # type: ignore[arg-type]
+                self._goal,
+                problem.epsilon,
+                self._dfa,
+            )
+        else:
+            self._search_space = SearchSpace(
+                actions_duration,
+                self._events,
+                self._actions,
+                action_objects,
+                obj_to_prev_actions_map,
+                initial_state,  # type: ignore[arg-type]
+                self._goal,
+                problem.epsilon,
+            )
         self._objects = {}
         for ut in problem.user_types:
             self._objects[ut.name] = [o.name for o in problem.objects(ut)]
