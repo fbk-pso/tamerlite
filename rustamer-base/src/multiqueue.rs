@@ -117,6 +117,7 @@ pub fn multiqueue_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     ss: &S,
     heuristics: Vec<(H, f64)>,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
@@ -126,6 +127,7 @@ pub fn multiqueue_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         heuristics,
         &mut switch_policy,
         timeout,
+        max_expanded_states,
         early_termination,
         weak_equality,
     )
@@ -136,6 +138,7 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
     heuristics: Vec<(H, f64)>,
     switch_policy: &mut T,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
@@ -179,6 +182,11 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
     loop {
         if let Some(t) = timeout {
             if start.elapsed().unwrap().as_secs_f32() > t {
+                return Err(PyTimeoutError::new_err("Timeout"));
+            }
+        }
+        if let Some(m) = max_expanded_states {
+            if expanded_states >= m {
                 return Err(PyTimeoutError::new_err("Timeout"));
             }
         }

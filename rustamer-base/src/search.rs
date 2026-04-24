@@ -109,6 +109,7 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     heuristic: &H,
     weight: f64,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
@@ -147,6 +148,11 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     while let Some(current) = open.pop() {
         if let Some(t) = timeout {
             if start.elapsed().unwrap().as_secs_f32() > t {
+                return Err(PyTimeoutError::new_err("Timeout"));
+            }
+        }
+        if let Some(m) = max_expanded_states {
+            if expanded_states >= m {
                 return Err(PyTimeoutError::new_err("Timeout"));
             }
         }
@@ -203,23 +209,26 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
 pub fn bfs_search<S: SearchSpaceTrait>(
     ss: &S,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
 ) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
-    basic_search(ss, true, timeout, early_termination)
+    basic_search(ss, true, timeout, max_expanded_states, early_termination)
 }
 
 pub fn dfs_search<S: SearchSpaceTrait>(
     ss: &S,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
 ) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
-    basic_search(ss, false, timeout, early_termination)
+    basic_search(ss, false, timeout, max_expanded_states, early_termination)
 }
 
 fn basic_search<S: SearchSpaceTrait>(
     ss: &S,
     bfs: bool,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
 ) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
@@ -238,6 +247,11 @@ fn basic_search<S: SearchSpaceTrait>(
     while !open.is_empty() {
         if let Some(t) = timeout {
             if start.elapsed().unwrap().as_secs_f32() > t {
+                return Err(PyTimeoutError::new_err("Timeout"));
+            }
+        }
+        if let Some(m) = max_expanded_states {
+            if expanded_states >= m {
                 return Err(PyTimeoutError::new_err("Timeout"));
             }
         }
@@ -273,6 +287,7 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     ss: &S,
     heuristic: &H,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
@@ -301,6 +316,11 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     while let Some(state) = open.pop_front() {
         if let Some(t) = timeout {
             if start.elapsed().unwrap().as_secs_f32() > t {
+                return Err(PyTimeoutError::new_err("Timeout"));
+            }
+        }
+        if let Some(m) = max_expanded_states {
+            if expanded_states >= m {
                 return Err(PyTimeoutError::new_err("Timeout"));
             }
         }
