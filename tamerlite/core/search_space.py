@@ -504,10 +504,10 @@ class SearchSpace(SearchSpaceABC):
         actions: List[Action],
         action_objects: Optional[List[List[str]]],
         obj_to_prev_actions_map: Optional[Dict[str, Set[Action]]],
-        dfa: Dfa | None = None,
         initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
         goal: Optional[Expression] = None,
         epsilon: Optional[Fraction] = None,
+        dfa: Dfa | None = None,
     ):
         self._actions_duration = actions_duration
         self._events = events

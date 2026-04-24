@@ -87,9 +87,9 @@ class Encoder:
             for state in self._dfa.states:
                 new_transitions = {}
                 for input_symbol, destination_state in state.transitions.items():
-                    assert input_symbol in self._action_names, f"the DFA symbol{self._action_names} is different from up action {input_symbol}"
-                    planner_action_id = self._action_by_name[input_symbol]
-                    new_transitions[planner_action_id] = destination_state
+                    if input_symbol in self._action_by_name:
+                        planner_action_id = self._action_by_name[input_symbol]
+                        new_transitions[planner_action_id] = destination_state
                 state.transitions = new_transitions
 
         self._actions: List[Action] = [self._action_by_name[name] for name in self._action_names]
@@ -120,7 +120,7 @@ class Encoder:
             self._goal = self.goals(problem.goals)
             if symmetry_breaking:
                 action_objects, obj_to_prev_actions_map = (self._compute_obj_to_prev_actions_map())
-        if self._dfa:
+        if self._dfa is not None:
             self._search_space = SearchSpace(
                 actions_duration,
                 self._events,
