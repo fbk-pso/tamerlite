@@ -32,9 +32,15 @@ from unified_planning.engines.plan_validator import (
 from unified_planning.engines.compilers.utils import get_fresh_name
 from unified_planning.plans import ActionInstance, PlanKind
 from typing import IO, Callable, Iterator, List, Optional, Union, Tuple, Dict
+import warnings
 
 from tamerlite.core import search_space
 from tamerlite.core import wastar_search, astar_search, gbfs_search
+from tamerlite.core import (
+    wastar_search_memory_bounded,
+    astar_search_memory_bounded,
+    gbfs_search_memory_bounded,
+)
 from tamerlite.core import bfs_search, dfs_search, ehc_search
 from tamerlite.core import multiqueue_search
 from tamerlite.core import evaluate, make_fluent_node
@@ -92,6 +98,7 @@ class SearchParams(HeuristicParams):
     symmetry_breaking: bool = True
     compression_safe_actions: bool = True
     relevance_analysis: bool = True
+    incomplete_memory_bounded_search: bool = False
 
 
 @dataclass(frozen=True)
@@ -243,7 +250,13 @@ class TamerLite(
         return h, w
 
     def _get_search(
-        self, search_name: Optional[str], heuristic: Heuristic, weight: float
+        self,
+        search_name: Optional[str],
+        heuristic: Heuristic,
+        weight: float,
+        incomplete_memory_bounded_search: bool,
+        weak_equality: bool,
+        is_temporal: bool,
     ) -> Tuple[
         str,
         Callable[
@@ -251,12 +264,33 @@ class TamerLite(
             Tuple[Optional[PlanType], Dict[str, str]],
         ],
     ]:
+        if (
+            (search_name is None or search_name in {"wastar", "astar", "gbfs"})
+            and incomplete_memory_bounded_search
+            and is_temporal
+            and weak_equality
+        ):
+            warnings.warn(
+                "Memory-bounded search does not support weak equality correctly."
+            )
+
         if search_name is None or search_name == "wastar":
-            search = partial(wastar_search, heuristic=heuristic, weight=weight)
+            if incomplete_memory_bounded_search:
+                search = partial(
+                    wastar_search_memory_bounded, heuristic=heuristic, weight=weight
+                )
+            else:
+                search = partial(wastar_search, heuristic=heuristic, weight=weight)
         elif search_name == "astar":
-            search = partial(astar_search, heuristic=heuristic)
+            if incomplete_memory_bounded_search:
+                search = partial(astar_search_memory_bounded, heuristic=heuristic)
+            else:
+                search = partial(astar_search, heuristic=heuristic)
         elif search_name == "gbfs":
-            search = partial(gbfs_search, heuristic=heuristic)
+            if incomplete_memory_bounded_search:
+                search = partial(gbfs_search_memory_bounded, heuristic=heuristic)
+            else:
+                search = partial(gbfs_search, heuristic=heuristic)
         elif search_name == "dfs":
             search = partial(dfs_search)
         elif search_name == "bfs":
@@ -602,7 +636,14 @@ class TamerLite(
                     self._params.inadmissible_numeric_heuristic_variant,
                     self._params.internal_heuristic_cache,
                 )
-                search_name, search = self._get_search(self._params.search, h, w)
+                search_name, search = self._get_search(
+                    self._params.search,
+                    h,
+                    w,
+                    self._params.incomplete_memory_bounded_search,
+                    self._params.weak_equality,
+                    encoder.search_space.is_temporal,
+                )
 
                 if self._params.weak_equality and search_name not in ("dfs", "bfs"):
                     start = time.time()

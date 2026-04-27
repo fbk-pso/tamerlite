@@ -22,7 +22,8 @@ from dataclasses import dataclass
 from tamerlite.core.search_space import SearchSpaceABC, State, Action
 from tamerlite.core.heuristics import Heuristic
 from typing import Tuple, List, Dict, Deque, Optional, Union
-from fractions import Fraction
+from min_max_heap import MinMaxHeap
+from bloom_filter2 import BloomFilter
 
 
 @dataclass
@@ -36,6 +37,48 @@ class PrioritizedItem:
         if self.heuristic > other.heuristic:
             return False
         return len(self.state.todo) < len(other.state.todo)
+
+    def __le__(self, other):
+        if self.heuristic < other.heuristic:
+            return True
+        if self.heuristic > other.heuristic:
+            return False
+        return len(self.state.todo) <= len(other.state.todo)
+
+
+class BoundedPriorityQueue:
+    """A bounded priority queue that keeps only the top-N smallest items.
+
+    Args:
+        bound: Maximum number of elements to keep.
+    """
+
+    def __init__(self, bound: int):
+        assert bound > 0, "bound must be positive"
+        self._bound = bound
+        self._heap = MinMaxHeap()
+
+    def push(self, item: PrioritizedItem) -> bool:
+        """Push item if it belongs in the top-N smallest elements."""
+
+        if self._heap.size() < self._bound:
+            self._heap.push(item)
+            return True
+
+        # Heap is at capacity: only insert if item improves the collection.
+        current_max = self._heap.max()
+        if item < current_max:
+            self._heap.pop_max()  # evict the largest element
+            self._heap.push(item)
+            return True
+
+        return False  # item rejected
+
+    def pop(self) -> PrioritizedItem:
+        return self._heap.pop_min()
+
+    def __len__(self) -> int:
+        return self._heap.size()
 
 
 @dataclass
@@ -202,6 +245,95 @@ def wastar_search(
             if h is not None:
                 f = (1 - weight) * succ_state.g + weight * h
                 heapq.heappush(open, PrioritizedItem(f, succ_state))
+
+    return None, {"expanded_states": str(expanded_states)}
+
+
+def astar_search_memory_bounded(
+    ss: SearchSpaceABC,
+    heuristic: Heuristic,
+    timeout: Optional[float] = None,
+    early_termination: bool = False,
+    weak_equality: bool = False,
+) -> Tuple[Optional[List[Action]], Dict[str, str]]:
+    return wastar_search_memory_bounded(
+        ss, heuristic, 0.5, timeout, early_termination, weak_equality
+    )
+
+
+def gbfs_search_memory_bounded(
+    ss: SearchSpaceABC,
+    heuristic: Heuristic,
+    timeout: Optional[float] = None,
+    early_termination: bool = False,
+    weak_equality: bool = False,
+) -> Tuple[Optional[List[Action]], Dict[str, str]]:
+    return wastar_search_memory_bounded(
+        ss, heuristic, 1, timeout, early_termination, weak_equality
+    )
+
+
+def wastar_search_memory_bounded(
+    ss: SearchSpaceABC,
+    heuristic: Heuristic,
+    weight: float = 0.5,
+    timeout: Optional[float] = None,
+    early_termination: bool = False,
+    weak_equality: bool = False,
+) -> Tuple[Optional[List[Action]], Dict[str, str]]:
+    st = time.time()
+    init = ss.initial_state()
+    expanded_states = 0
+    if early_termination and ss.goal_reached(init):
+        return extract_path(init), {
+            "expanded_states": str(expanded_states),
+            "goal_depth": str(init.g),
+        }
+
+    if not ss.is_temporal or weak_equality:
+        BLOOM_ITEMS = 20_000_000
+        BLOOM_FP_RATE = 1e-4
+        visited_states = BloomFilter(max_elements=BLOOM_ITEMS, error_rate=BLOOM_FP_RATE)
+        visited_states.add(init.assignments)
+
+    init_h = heuristic.eval(init, ss)
+    if init_h is None:
+        return None, {"expanded_states": str(0)}
+
+    QUEUE_BOUND = 400_000
+    open = BoundedPriorityQueue(QUEUE_BOUND)
+    open.push(PrioritizedItem(init_h, init))
+    while len(open) > 0:
+        if timeout is not None and time.time() - st > timeout:
+            raise TimeoutError
+        item = open.pop()
+        state = item.state
+        expanded_states += 1
+        if not early_termination and ss.goal_reached(state):
+            return extract_path(state), {
+                "expanded_states": str(expanded_states),
+                "goal_depth": str(state.g),
+            }
+
+        candidate_states = []
+        for succ_state in ss.get_successor_states(state):
+            if early_termination and ss.goal_reached(succ_state):
+                return extract_path(succ_state), {
+                    "expanded_states": str(expanded_states),
+                    "goal_depth": str(succ_state.g),
+                }
+
+            if not ss.is_temporal or weak_equality:
+                if succ_state.assignments not in visited_states:
+                    visited_states.add(succ_state.assignments)
+                    candidate_states.append(succ_state)
+            else:
+                candidate_states.append(succ_state)
+
+        for succ_state, h in heuristic.eval_gen(candidate_states, ss):
+            if h is not None:
+                f = (1 - weight) * succ_state.g + weight * h
+                open.push(PrioritizedItem(f, succ_state))
 
     return None, {"expanded_states": str(expanded_states)}
 
