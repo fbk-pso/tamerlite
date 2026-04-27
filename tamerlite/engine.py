@@ -309,10 +309,8 @@ class TamerLite(
                     )
 
             metrics["heuristic"] = self._params.heuristic
-            metrics["n_dfa_states"] = 0
             if self._params.dfa is not None:
                 metrics["pruned_states"] = encoder.search_space._pruned_subtrees
-                metrics["n_dfa_states"] = len(self._params.dfa.states)
             if plan is not None:
                 plan = encoder.build_plan(plan)  # type: ignore[arg-type]
                 plan = plan.replace_action_instances(map_back_action_instance)
