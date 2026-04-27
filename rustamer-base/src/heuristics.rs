@@ -57,6 +57,23 @@ pub trait HeuristicTrait {
     }
 
     /// Evaluates the heuristic for a given state, returning an iterator over the results.
+    /// This method is used in non-multiqueue search algorithms
+    fn eval_gen_owned<'a, I, S: SearchSpaceTrait>(
+        &'a self,
+        states_iter: I,
+        ss: &'a S,
+    ) -> PyResult<Box<dyn Iterator<Item = PyResult<(State, Option<f64>)>> + 'a>>
+    where
+        I: Iterator<Item = PyResult<State>> + 'a,
+    {
+        return Ok(Box::new(states_iter.map(|state| {
+            let state = state?;
+            let h_value = self.eval(&state, ss)?;
+            Ok((state, h_value))
+        })));
+    }
+
+    /// Evaluates the heuristic for a given state, returning an iterator over the results.
     /// This method is used in multiqueue search algorithms
     fn eval_gen_container<'a, S: SearchSpaceTrait>(
         &'a self,
