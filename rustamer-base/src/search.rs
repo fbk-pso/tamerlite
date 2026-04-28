@@ -54,11 +54,12 @@ impl HasTodoLen for Rc<State> {
 struct PrioritizedItem<T: HasTodoLen> {
     heuristic: f64,
     state: T,
+    idx: usize,
 }
 
 impl<T: HasTodoLen> PartialEq for PrioritizedItem<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.heuristic == other.heuristic && self.state.todo_len() == other.state.todo_len()
+    fn eq(&self, _other: &Self) -> bool {
+        false
     }
 }
 
@@ -77,6 +78,10 @@ impl<T: HasTodoLen> Ord for PrioritizedItem<T> {
         } else if self.heuristic > other.heuristic {
             std::cmp::Ordering::Less
         } else if self.state.todo_len() < other.state.todo_len() {
+            std::cmp::Ordering::Greater
+        } else if self.state.todo_len() > other.state.todo_len() {
+            std::cmp::Ordering::Less
+        } else if self.idx < other.idx {
             std::cmp::Ordering::Greater
         } else {
             std::cmp::Ordering::Less
@@ -173,6 +178,7 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     let start = SystemTime::now();
     let init = Rc::new(ss.initial_state(None)?);
     let mut expanded_states = 0;
+    let mut generated_states = 1;
     if early_termination && ss.goal_reached(&init, None)? {
         metrics.insert("expanded_states".to_string(), expanded_states.to_string());
         metrics.insert("goal_depth".to_string(), init.g.to_string());
@@ -200,6 +206,7 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     open.push(PrioritizedItem {
         heuristic: init_h,
         state: init,
+        idx: 0,
     });
     while let Some(current) = open.pop() {
         if let Some(t) = timeout {
@@ -246,10 +253,12 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
                         open.push(PrioritizedItem {
                             heuristic: f,
                             state: s,
+                            idx: generated_states,
                         });
                     }
                     None => {}
                 }
+                generated_states += 1;
             }
         }
     }
@@ -269,6 +278,7 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
     let mut expanded_states = 0;
+    let mut generated_states = 1;
     if early_termination && ss.goal_reached(&init, None)? {
         metrics.insert("expanded_states".to_string(), expanded_states.to_string());
         metrics.insert("goal_depth".to_string(), init.g.to_string());
@@ -301,6 +311,7 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
     open.push(PrioritizedItem {
         heuristic: init_h,
         state: init,
+        idx: 0,
     });
     while let Some(current) = open.pop() {
         if let Some(t) = timeout {
@@ -342,10 +353,12 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
                         open.push(PrioritizedItem {
                             heuristic: f,
                             state: s,
+                            idx: generated_states,
                         });
                     }
                     None => {}
                 }
+                generated_states += 1;
             }
         }
     }
