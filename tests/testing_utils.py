@@ -65,6 +65,14 @@ def is_temporal_problem(problem: Problem):
     return problem.kind.has_continuous_time() or problem.kind.has_discrete_time()
 
 
+def is_numeric_problem(problem: Problem):
+    return (
+        problem.kind.has_int_fluents()
+        or problem.kind.has_real_fluents()
+        or problem.kind.has_numeric_fluents()
+    )
+
+
 def construct_numeric_exp_rec(offset=0, depth=0) -> tuple:
     kinds = ["int", "rational", "fluent", "+", "-", "*", "/"]
 

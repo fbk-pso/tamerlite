@@ -72,6 +72,10 @@ pub fn integer_to_f64(n: &BigInt) -> f64 {
     n.to_f64().unwrap()
 }
 
+pub fn integer_to_rational(n: BigInt) -> BigRational {
+    BigRational::from_integer(n)
+}
+
 #[derive(Debug)]
 pub enum ArithmeticError {
     Overflow,
