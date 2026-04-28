@@ -1030,14 +1030,20 @@ class DeleteRelaxationHeuristic(Heuristic):
         fluents, weights = self._simple_numeric_conds[simple_condition]
         net_effect = 0.0
         for f, w in zip(fluents, weights):
-            if (
-                f in operator.constant_assign_effects
-                or f in operator.complex_numeric_effects
-            ):
-                return True
+            if not self._inadmissible_numeric_heuristic_variant:
+                if (
+                    f in operator.constant_assign_effects
+                    or f in operator.complex_numeric_effects
+                ):
+                    return True
             if f in operator.constant_increase_effects:
                 k = operator.constant_increase_effects[f]
                 net_effect += w * k
+            elif self._inadmissible_numeric_heuristic_variant and (
+                f in operator.constant_assign_effects
+                or f in operator.complex_numeric_effects
+            ):
+                net_effect -= 1.0
 
         if net_effect < 0.0 and net_effect > self._max_net_effect:
             self._max_net_effect = net_effect
