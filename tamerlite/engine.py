@@ -29,6 +29,7 @@ from unified_planning.engines.plan_validator import (
     SequentialPlanValidator,
     TimeTriggeredPlanValidator,
 )
+from unified_planning.engines.compilers.utils import get_fresh_name
 from unified_planning.plans import ActionInstance, PlanKind
 from typing import IO, Callable, Iterator, List, Optional, Union, Tuple, Dict
 
@@ -85,6 +86,7 @@ class HeuristicParams:
 class SearchParams(HeuristicParams):
     search: Optional[str] = None
     internal_heuristic_cache: bool = True
+    inadmissible_numeric_heuristic_variant: bool = False
     early_termination: bool = False
     weak_equality: bool = False
     symmetry_breaking: bool = True
@@ -96,6 +98,7 @@ class SearchParams(HeuristicParams):
 class MultiqueueParams:
     queues: List[HeuristicParams]
     internal_heuristic_cache: bool = True
+    inadmissible_numeric_heuristic_variant: bool = False
     early_termination: bool = False
     weak_equality: bool = False
     symmetry_breaking: bool = True
@@ -157,6 +160,7 @@ class TamerLite(
         supported_kind.set_fluents_type("NUMERIC_FLUENTS")
         supported_kind.set_fluents_type("OBJECT_FLUENTS")
         supported_kind.set_fluents_type("INT_FLUENTS")
+        supported_kind.set_fluents_type("REAL_FLUENTS")
         supported_kind.set_quality_metrics("ACTIONS_COST")
         supported_kind.set_quality_metrics("FINAL_VALUE")
         supported_kind.set_quality_metrics("MAKESPAN")
@@ -181,6 +185,7 @@ class TamerLite(
         params: HeuristicParams,
         heuristic: Optional[Callable[[State], Optional[float]]],
         encoder: Encoder,
+        inadmissible_numeric_heuristic_variant: bool,
         internal_heuristic_cache: bool,
         cache_heuristic_in_state: bool = False,
     ) -> Tuple[Heuristic, float]:
@@ -213,7 +218,10 @@ class TamerLite(
                 "hmax_no_numbers": partial(HMax, disable_numeric_reasoning=True),
             }
             if h_name not in hh_map:
-                raise NotImplementedError
+                raise NotImplementedError(
+                    f"Unknown heuristic '{h_name}'. "
+                    f"Supported values are: custom, blind, {', '.join(sorted(hh_map))}."
+                )
 
             events = {
                 a: e
@@ -228,6 +236,7 @@ class TamerLite(
                 encoder.goal,
                 internal_caching=internal_heuristic_cache,
                 cache_value_in_state=cache_heuristic_in_state,
+                inadmissible_numeric_heuristic_variant=inadmissible_numeric_heuristic_variant,
             )
             w = 0.8 if params.weight is None else params.weight
 
@@ -254,6 +263,11 @@ class TamerLite(
             search = partial(bfs_search)
         elif search_name == "ehs":
             search = partial(ehc_search, heuristic=heuristic)
+        else:
+            raise NotImplementedError(
+                f"Unknown search '{search_name}'. "
+                "Supported values are: wastar, astar, gbfs, dfs, bfs, ehs."
+            )
 
         return search_name, search  # type: ignore[return-value]
 
@@ -366,7 +380,9 @@ class TamerLite(
             elif m.is_maximize_expression_on_final_state():
                 exp = em.GT(m.expression, v)
             elif m.is_minimize_sequential_plan_length():
-                plan_length = up.model.Fluent("plan_length", tm.IntType(0))
+                plan_length = up.model.Fluent(
+                    get_fresh_name(problem, "plan_length"), tm.IntType(0)
+                )
                 problem.add_fluent(plan_length, default_initial_value=0)
                 for a in problem.actions:
                     if isinstance(a, up.model.InstantaneousAction):
@@ -377,7 +393,9 @@ class TamerLite(
                         )
                 exp = em.LT(plan_length, v)
             elif m.is_minimize_action_costs():
-                actions_cost = up.model.Fluent("actions_cost", tm.IntType(0))
+                actions_cost = up.model.Fluent(
+                    get_fresh_name(problem, "actions_cost"), tm.IntType(0)
+                )
                 problem.add_fluent(actions_cost, default_initial_value=0)
                 for a in problem.actions:
                     cost = m.costs.get(a, m.default)
@@ -549,7 +567,11 @@ class TamerLite(
                 heuristics = []
                 for p in self._params.queues:
                     h, w = self._get_heuristic(
-                        p, heuristic, encoder, self._params.internal_heuristic_cache
+                        p,
+                        heuristic,
+                        encoder,
+                        self._params.inadmissible_numeric_heuristic_variant,
+                        self._params.internal_heuristic_cache,
                     )
                     heuristics.append((h, w))
 
@@ -577,6 +599,7 @@ class TamerLite(
                     self._params,
                     heuristic,
                     encoder,
+                    self._params.inadmissible_numeric_heuristic_variant,
                     self._params.internal_heuristic_cache,
                 )
                 search_name, search = self._get_search(self._params.search, h, w)

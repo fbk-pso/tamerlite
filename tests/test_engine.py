@@ -187,6 +187,28 @@ def skip(
         or (problem.name == "timed_connected_locations" and search == "dfs")
         or (problem.name == "hierarchical_blocks_world_exists" and search == "dfs")
         or (problem.name == "existential_linear_conditions" and search == "dfs")
+        or (
+            problem.name == "plant_watering_4_1"
+            and (search == "multiqueue" or heuristic != "hadd")
+        )
+        or (problem.name == "rovers_pfile2" and search in ["dfs", "bfs"])
+        or (
+            problem.name == "block_grouping_5_5_1_1"
+            and (
+                heuristic
+                in ["custom", "hmax_no_numbers", "hff_no_numbers", "hmax_explicit"]
+                or search in ["bfs", "ehs"]
+            )
+        )
+        or (
+            problem.name == "farmland_2_100_1229"
+            and (search in ["dfs", "bfs", "ehs"] or heuristic == "hmax_explicit")
+        )
+        or (problem.name == "depots_pfile1" and search in ["dfs", "bfs"])
+        or (
+            problem.name == "universal_existential_linear_conditions"
+            and search == "dfs"
+        )
     )
 
 
@@ -197,12 +219,15 @@ def max_generated_states(problem):
         "constant_decrease_effect",
         "disjunctive_linear_conditions",
         "basic_undef_numeric",
+        "equality_linear_conditions",
     }:
         return 2
     if problem.name in {"constant_increase_effect_2", "constant_decrease_effect_2"}:
         return 4
-    if problem.name == "existential_linear_conditions":
+    if problem.name in {"existential_linear_conditions", "nonlinear_assign_effects"}:
         return 3
+    if problem.name == "farmland_2_100_1229":
+        return 100
     return 1000
 
 
@@ -251,49 +276,58 @@ def test_heuristics(problems):
             "hmax_no_numbers",
             "hmax_explicit",
         ]:
-            for weak_equality in weak_equality_flags:
-                for symmetry_breaking in [True, False]:
-                    results = []
-                    for disable_rustamer in [True, False]:
-                        reload_tamerlite(disable_rustamer)
-                        for internal_heuristic_cache in [True, False]:
-                            if skip(
-                                problem,
-                                search_kind,
-                                heuristic,
-                                weak_equality,
-                                symmetry_breaking,
-                                disable_rustamer,
-                                internal_heuristic_cache,
-                            ):
-                                continue
+            inadmissible_numeric_heuristic_flags = [False]
+            if testing_utils.is_numeric_problem(problem) and heuristic in {
+                "hff",
+                "hadd",
+                "hmax",
+            }:
+                inadmissible_numeric_heuristic_flags = [True, False]
+            for inadmissible_numeric_heuristic in inadmissible_numeric_heuristic_flags:
+                for weak_equality in weak_equality_flags:
+                    for symmetry_breaking in [True, False]:
+                        results = []
+                        for disable_rustamer in [True, False]:
+                            reload_tamerlite(disable_rustamer)
+                            for internal_heuristic_cache in [True, False]:
+                                if skip(
+                                    problem,
+                                    search_kind,
+                                    heuristic,
+                                    weak_equality,
+                                    symmetry_breaking,
+                                    disable_rustamer,
+                                    internal_heuristic_cache,
+                                ):
+                                    continue
 
-                            search = tamerlite.SearchParams(
-                                search=search_kind,
-                                heuristic=heuristic,
-                                weight=0.8,
-                                internal_heuristic_cache=internal_heuristic_cache,
-                                weak_equality=weak_equality,
-                                symmetry_breaking=symmetry_breaking,
-                                compression_safe_actions=False,
-                            )
-
-                            with OneshotPlanner(
-                                name="tamerlite", params={"search": search}
-                            ) as planner:
-                                planner: tamerlite.engine.TamerLite
-                                res: PlanGenerationResult = planner.solve(
-                                    problem, timeout=None
+                                search = tamerlite.SearchParams(
+                                    search=search_kind,
+                                    heuristic=heuristic,
+                                    weight=0.8,
+                                    internal_heuristic_cache=internal_heuristic_cache,
+                                    inadmissible_numeric_heuristic_variant=inadmissible_numeric_heuristic,
+                                    weak_equality=weak_equality,
+                                    symmetry_breaking=symmetry_breaking,
+                                    compression_safe_actions=False,
                                 )
-                                assert (
-                                    res.status
-                                    == PlanGenerationResultStatus.SOLVED_SATISFICING
-                                )
-                                results.append(res)
-                                with PlanValidator(problem_kind=problem.kind) as v:
-                                    assert v.validate(problem, res.plan)
 
-                    check_metrics_equality(results)
+                                with OneshotPlanner(
+                                    name="tamerlite", params={"search": search}
+                                ) as planner:
+                                    planner: tamerlite.engine.TamerLite
+                                    res: PlanGenerationResult = planner.solve(
+                                        problem, timeout=None
+                                    )
+                                    assert (
+                                        res.status
+                                        == PlanGenerationResultStatus.SOLVED_SATISFICING
+                                    )
+                                    results.append(res)
+                                    with PlanValidator(problem_kind=problem.kind) as v:
+                                        assert v.validate(problem, res.plan)
+
+                        check_metrics_equality(results)
 
 
 def test_heuristic_fixed_values():
@@ -367,6 +401,7 @@ def test_heuristic_fixed_values():
                         encoder.goal,
                         internal_caching=internal_caching,
                         cache_value_in_state=False,
+                        inadmissible_numeric_heuristic_variant=False,
                     )
 
                     for i, state in enumerate(states):
@@ -410,43 +445,57 @@ def test_heuristic_values(problems, data_regression):
                 (partial(HMax, disable_numeric_reasoning=True), "hmax_no_numbers"),
                 (HMaxExplicit, "hmax_explicit"),
             ]:
-                for internal_caching in [True, False]:
-                    if skip(
-                        problem,
-                        "wastar",
-                        heuristic_name,
-                        True,
-                        True,
-                        disable_rustamer,
-                        internal_caching,
-                    ):
-                        continue
+                inadmissible_numeric_heuristic_flags = [False]
+                if testing_utils.is_numeric_problem(problem) and heuristic_name in {
+                    "hff",
+                    "hadd",
+                    "hmax",
+                }:
+                    inadmissible_numeric_heuristic_flags = [True, False]
+                for (
+                    inadmissible_numeric_heuristic
+                ) in inadmissible_numeric_heuristic_flags:
+                    for internal_caching in [True, False]:
+                        if skip(
+                            problem,
+                            "wastar",
+                            heuristic_name,
+                            True,
+                            True,
+                            disable_rustamer,
+                            internal_caching,
+                        ):
+                            continue
 
-                    heuristic: Heuristic = heuristic_class(
-                        encoder.actions,
-                        encoder.fluent_types,
-                        encoder.objects,
-                        encoder.events,
-                        encoder.goal,
-                        internal_caching=internal_caching,
-                        cache_value_in_state=False,
-                    )
+                        heuristic: Heuristic = heuristic_class(
+                            encoder.actions,
+                            encoder.fluent_types,
+                            encoder.objects,
+                            encoder.events,
+                            encoder.goal,
+                            internal_caching=internal_caching,
+                            cache_value_in_state=False,
+                            inadmissible_numeric_heuristic_variant=inadmissible_numeric_heuristic,
+                        )
 
-                    if heuristic_name not in values:
-                        values[heuristic_name] = []
-                        for state in states:
-                            h_val = heuristic.eval(state, ss)
-                            if h_val is not None:
-                                h_val = int(h_val)
-                            values[heuristic_name].append(h_val)
+                        values_key = heuristic_name + (
+                            "_inadmissible" if inadmissible_numeric_heuristic else ""
+                        )
+                        if values_key not in values:
+                            values[values_key] = []
+                            for state in states:
+                                h_val = heuristic.eval(state, ss)
+                                if h_val is not None:
+                                    h_val = int(h_val)
+                                values[values_key].append(h_val)
 
-                    else:
-                        assert len(states) == len(values[heuristic_name])
-                        for i, state in enumerate(states):
-                            h_val = heuristic.eval(state, ss)
-                            if h_val is not None:
-                                h_val = int(h_val)
-                            assert h_val == values[heuristic_name][i]
+                        else:
+                            assert len(states) == len(values[values_key])
+                            for i, state in enumerate(states):
+                                h_val = heuristic.eval(state, ss)
+                                if h_val is not None:
+                                    h_val = int(h_val)
+                                assert h_val == values[values_key][i]
 
         heuristic_values[problem.name] = values
 
