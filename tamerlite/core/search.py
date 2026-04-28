@@ -24,26 +24,24 @@ from tamerlite.core.heuristics import Heuristic
 from typing import Tuple, List, Dict, Deque, Optional, Union
 from min_max_heap import MinMaxHeap
 from bloom_filter2 import BloomFilter
+from fractions import Fraction
 
 
 @dataclass
 class PrioritizedItem:
     heuristic: float
     state: State
+    idx: int
 
     def __lt__(self, other):
-        if self.heuristic < other.heuristic:
-            return True
-        if self.heuristic > other.heuristic:
-            return False
-        return len(self.state.todo) < len(other.state.todo)
+        return (self.heuristic, len(self.state.todo), self.idx) < (
+            other.heuristic,
+            len(other.state.todo),
+            other.idx,
+        )
 
     def __le__(self, other):
-        if self.heuristic < other.heuristic:
-            return True
-        if self.heuristic > other.heuristic:
-            return False
-        return len(self.state.todo) <= len(other.state.todo)
+        return self < other
 
 
 class BoundedPriorityQueue:
@@ -203,6 +201,7 @@ def wastar_search(
     if not ss.is_temporal or weak_equality:
         visited_states = {state_representation(init, weak_equality)}
     expanded_states = 0
+    generated_states = 1
     if early_termination and ss.goal_reached(init):
         return extract_path(init), {
             "expanded_states": str(expanded_states),
@@ -212,7 +211,7 @@ def wastar_search(
     init_h = heuristic.eval(init, ss)
     if init_h is None:
         return None, {"expanded_states": str(0)}
-    heapq.heappush(open, PrioritizedItem(init_h, init))
+    heapq.heappush(open, PrioritizedItem(init_h, init, 0))
     while open:
         if timeout is not None and time.time() - st > timeout:
             raise TimeoutError
@@ -244,7 +243,8 @@ def wastar_search(
         for succ_state, h in heuristic.eval_gen(candidate_states, ss):
             if h is not None:
                 f = (1 - weight) * succ_state.g + weight * h
-                heapq.heappush(open, PrioritizedItem(f, succ_state))
+                heapq.heappush(open, PrioritizedItem(f, succ_state, generated_states))
+            generated_states += 1
 
     return None, {"expanded_states": str(expanded_states)}
 
@@ -284,17 +284,31 @@ def wastar_search_memory_bounded(
     st = time.time()
     init = ss.initial_state()
     expanded_states = 0
+    generated_states = 1
     if early_termination and ss.goal_reached(init):
         return extract_path(init), {
             "expanded_states": str(expanded_states),
             "goal_depth": str(init.g),
         }
 
+    def bloom_key(state: State) -> bytes:
+        key = []
+        for v in state.assignments:
+            if isinstance(v, bool):
+                key.append(f"{int(v)}")
+            elif isinstance(v, int):
+                key.append(f"{v}")
+            elif isinstance(v, Fraction):
+                key.append(f"{v.numerator}/{v.denominator}")
+            elif isinstance(v, str):
+                key.append(v)
+        return "|".join(key).encode("utf-8")
+
     if not ss.is_temporal or weak_equality:
         BLOOM_ITEMS = 20_000_000
         BLOOM_FP_RATE = 1e-4
         visited_states = BloomFilter(max_elements=BLOOM_ITEMS, error_rate=BLOOM_FP_RATE)
-        visited_states.add(init.assignments)
+        visited_states.add(bloom_key(init))
 
     init_h = heuristic.eval(init, ss)
     if init_h is None:
@@ -302,7 +316,7 @@ def wastar_search_memory_bounded(
 
     QUEUE_BOUND = 400_000
     open = BoundedPriorityQueue(QUEUE_BOUND)
-    open.push(PrioritizedItem(init_h, init))
+    open.push(PrioritizedItem(init_h, init, generated_states))
     while len(open) > 0:
         if timeout is not None and time.time() - st > timeout:
             raise TimeoutError
@@ -324,8 +338,9 @@ def wastar_search_memory_bounded(
                 }
 
             if not ss.is_temporal or weak_equality:
-                if succ_state.assignments not in visited_states:
-                    visited_states.add(succ_state.assignments)
+                succ_state_key = bloom_key(succ_state)
+                if succ_state_key not in visited_states:
+                    visited_states.add(succ_state_key)
                     candidate_states.append(succ_state)
             else:
                 candidate_states.append(succ_state)
@@ -333,7 +348,8 @@ def wastar_search_memory_bounded(
         for succ_state, h in heuristic.eval_gen(candidate_states, ss):
             if h is not None:
                 f = (1 - weight) * succ_state.g + weight * h
-                open.push(PrioritizedItem(f, succ_state))
+                open.push(PrioritizedItem(f, succ_state, generated_states))
+            generated_states += 1
 
     return None, {"expanded_states": str(expanded_states)}
 
