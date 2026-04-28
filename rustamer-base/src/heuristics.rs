@@ -953,16 +953,24 @@ fn achieves(
     fluents: &Vec<usize>,
     weights: &Vec<f64>,
     max_net_effect: &mut f64,
+    inadmissible_numeric_heuristic_variant: bool,
 ) -> bool {
     let mut net_effect = 0.0;
     for (f, w) in fluents.iter().zip(weights) {
-        if operator.constant_assign_effects.contains_key(f)
-            || operator.complex_numeric_effects.contains_key(f)
-        {
-            return true;
+        if !inadmissible_numeric_heuristic_variant {
+            if operator.constant_assign_effects.contains_key(f)
+                || operator.complex_numeric_effects.contains_key(f)
+            {
+                return true;
+            }
         }
         if let Some(k) = operator.constant_increase_effects.get(f) {
             net_effect += w * k;
+        } else if inadmissible_numeric_heuristic_variant
+            && (operator.constant_assign_effects.contains_key(f)
+                || operator.complex_numeric_effects.contains_key(f))
+        {
+            net_effect -= 1.0;
         }
     }
     if net_effect < 0.0 && net_effect > *max_net_effect {
@@ -1313,7 +1321,13 @@ impl DeleteRelaxationHeuristic {
             vec![Vec::new(); operators.len()];
         for o in &operators {
             for (c, (fluents, weights)) in &simple_numeric_conds {
-                if achieves(o, fluents, weights, &mut max_net_effect) {
+                if achieves(
+                    o,
+                    fluents,
+                    weights,
+                    &mut max_net_effect,
+                    inadmissible_numeric_heuristic_variant,
+                ) {
                     achieved_simple_numeric_conds[o.id.id].push(*c);
                 }
             }
