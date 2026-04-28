@@ -41,7 +41,14 @@ if not use_rustamer:
         "Tamerlite is using the Python core implementation instead of the Rust one. "
         "For better performance, ensure rustamer is installed and not disabled."
     )
-    from tamerlite.core.search import wastar_search, astar_search, gbfs_search
+    from tamerlite.core.search import (
+        wastar_search,
+        wastar_search_memory_bounded,
+        astar_search,
+        astar_search_memory_bounded,
+        gbfs_search,
+        gbfs_search_memory_bounded,
+    )
     from tamerlite.core.search import bfs_search, dfs_search, ehc_search
     from tamerlite.core.multiqueue import multiqueue_search
     from tamerlite.core.search_space import SearchSpace, get_fluent_value
@@ -68,10 +75,20 @@ else:
     from fractions import Fraction
     from typing import List, Union, Iterator
 
-    wastar_search, astar_search, gbfs_search = (
+    (
+        wastar_search,
+        wastar_search_memory_bounded,
+        astar_search,
+        astar_search_memory_bounded,
+        gbfs_search,
+        gbfs_search_memory_bounded,
+    ) = (
         rustamer_lib.wastar_search,
+        rustamer_lib.wastar_search_memory_bounded,
         rustamer_lib.astar_search,
+        rustamer_lib.astar_search_memory_bounded,
         rustamer_lib.gbfs_search,
+        rustamer_lib.gbfs_search_memory_bounded,
     )
     ehc_search, bfs_search, dfs_search = (
         rustamer_lib.ehc_search,

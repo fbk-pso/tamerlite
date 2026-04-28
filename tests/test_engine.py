@@ -569,66 +569,73 @@ def test_search_algorithms(problems):
         heuristic = "hff"
         for search_kind in ["wastar", "astar", "gbfs", "dfs", "bfs", "ehs"]:
             weak_equality_flags = [False]
+            memory_bounded_flags = [False]
             if testing_utils.is_temporal_problem(problem):
                 compression_safe_flags = [True, False]
-                if search_kind not in (
-                    "dfs",
-                    "bfs",
-                ):
+                if search_kind not in ("dfs", "bfs"):
                     weak_equality_flags = [True, False]
             else:
                 compression_safe_flags = [False]
+                if search_kind in {"wastar", "astar", "gbfs"}:
+                    memory_bounded_flags = [True, False]
 
-            for weak_equality in weak_equality_flags:
-                for symmetry_breaking in [True, False]:
-                    for compression_safe_actions in compression_safe_flags:
-                        results = []
-                        for disable_rustamer in [True, False]:
-                            if skip(
-                                problem,
-                                search_kind,
-                                heuristic,
-                                weak_equality,
-                                symmetry_breaking,
-                                disable_rustamer,
-                                True,
-                            ):
-                                continue
+            for memory_bounded in memory_bounded_flags:
+                for weak_equality in weak_equality_flags:
+                    if memory_bounded and weak_equality:
+                        continue
 
-                            reload_tamerlite(disable_rustamer)
-                            search = tamerlite.SearchParams(
-                                search=search_kind,
-                                heuristic=heuristic,
-                                weak_equality=weak_equality,
-                                symmetry_breaking=symmetry_breaking,
-                                compression_safe_actions=compression_safe_actions,
-                            )
-
-                            with OneshotPlanner(
-                                name="tamerlite", params={"search": search}
-                            ) as planner:
-                                planner: tamerlite.engine.TamerLite
-                                res: PlanGenerationResult = planner.solve(
-                                    problem, timeout=None
-                                )
-                                assert (
-                                    res.status
-                                    == PlanGenerationResultStatus.SOLVED_SATISFICING
-                                    or (
-                                        search_kind == "ehs"
-                                        and res.status
-                                        == PlanGenerationResultStatus.UNSOLVABLE_INCOMPLETELY
-                                    )
-                                )
-                                if (
-                                    res.status
-                                    == PlanGenerationResultStatus.SOLVED_SATISFICING
+                    for symmetry_breaking in [True, False]:
+                        for compression_safe_actions in compression_safe_flags:
+                            results = []
+                            for disable_rustamer in [True, False]:
+                                if skip(
+                                    problem,
+                                    search_kind,
+                                    heuristic,
+                                    weak_equality,
+                                    symmetry_breaking,
+                                    disable_rustamer,
+                                    True,
                                 ):
-                                    results.append(res)
-                                    with PlanValidator(problem_kind=problem.kind) as v:
-                                        assert v.validate(problem, res.plan)
+                                    continue
 
-                        check_metrics_equality(results)
+                                reload_tamerlite(disable_rustamer)
+                                search = tamerlite.SearchParams(
+                                    search=search_kind,
+                                    heuristic=heuristic,
+                                    weak_equality=weak_equality,
+                                    symmetry_breaking=symmetry_breaking,
+                                    compression_safe_actions=compression_safe_actions,
+                                    incomplete_memory_bounded_search=memory_bounded,
+                                )
+
+                                with OneshotPlanner(
+                                    name="tamerlite", params={"search": search}
+                                ) as planner:
+                                    planner: tamerlite.engine.TamerLite
+                                    res: PlanGenerationResult = planner.solve(
+                                        problem, timeout=None
+                                    )
+                                    assert (
+                                        res.status
+                                        == PlanGenerationResultStatus.SOLVED_SATISFICING
+                                        or (
+                                            search_kind == "ehs"
+                                            and res.status
+                                            == PlanGenerationResultStatus.UNSOLVABLE_INCOMPLETELY
+                                        )
+                                    )
+                                    if (
+                                        res.status
+                                        == PlanGenerationResultStatus.SOLVED_SATISFICING
+                                    ):
+                                        results.append(res)
+                                        with PlanValidator(
+                                            problem_kind=problem.kind
+                                        ) as v:
+                                            assert v.validate(problem, res.plan)
+
+                            check_metrics_equality(results)
 
 
 def test_multiqueue_search(problems):

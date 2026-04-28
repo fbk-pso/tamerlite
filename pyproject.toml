@@ -10,6 +10,10 @@ authors = [
     {name = "FBK PSO Unit", email = "tamer@fbk.eu"}
 ]
 urls = { "Homepage" = "https://github.com/fbk-pso/tamerlite" }
+dependencies = [
+    "min-max-heap==1.0.1",
+    "bloom-filter2==2.0.0"
+]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
