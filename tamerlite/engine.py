@@ -427,8 +427,10 @@ class TamerLite(
                         )
                 exp = em.LT(plan_length, v)
             elif m.is_minimize_action_costs():
+                m = list(problem.quality_metrics)[0]
                 actions_cost = up.model.Fluent(
-                    get_fresh_name(problem, "actions_cost"), tm.IntType(0)
+                    get_fresh_name(problem, "actions_cost"),
+                    tm.RealType(lower_bound=0.0),
                 )
                 problem.add_fluent(actions_cost, default_initial_value=0)
                 for a in problem.actions:
