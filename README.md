@@ -67,10 +67,20 @@ Defines parameters for a single search strategy.
 
 | Field                      | Type              | Description                                                                 |
 |----------------------------|-------------------|-----------------------------------------------------------------------------|
-| `search`                   | `Optional[str]`   | The search algorithm to use. Supported values: `"astar"`, `"wastar"`, `"gbfs"`, `"bfs"`, `"dfs"`, `"ehs"`. Default: `"wastar"`. |
-| `heuristic`                | `Optional[str]`   | The heuristic function to use. Supported values: `"hff"`, `"hadd"`, `"hmax"`, `"hmax_explicit"`, `"blind"`, `"custom"`. Default: `"hff"`. |
-| `weight`                   | `Optional[float]` | A numeric value between 0 and 1 used by weighted search variants like `wastar`. Default: `0.8`. |
-| `internal_heuristic_cache` | `Optional[bool]`  | Enables internal caching within the heuristic if set to `True`. Default: `True`. |
+
+| Field                      | Type              | Description                                                                 |
+|----------------------------|-------------------|-----------------------------------------------------------------------------|
+| `search`                   | `Optional[str]`   | Search algorithm to use. Supported values: `"astar"`, `"wastar"`, `"gbfs"`, `"bfs"`, `"dfs"`, `"ehs"`. Default: `"wastar"`. |
+| `heuristic`                | `Optional[str]`   | Heuristic used by heuristic search algorithms. Supported values: `"hff"`, `"hadd"`, `"hmax"`, `"hmax_explicit"`, `"blind"`, `"custom"`. Default: `"hff"`. |
+| `weight`                   | `Optional[float]` | Heuristic weight used by weighted search variants like `wastar`. Must be between 0 and 1. Default: `0.8`. |
+| `internal_heuristic_cache` | `bool`            | Enable internal caching within the heuristic. Default: `True`. |
+| `inadmissible_numeric_heuristic_variant` | `bool` | Enable the inadmissible numeric variant for `hff`, `hadd`, `hmax` heuristics. Default: `False`. |
+| `early_termination`        | `bool`            | Stop as soon as a generated successor state satisfies the goal, instead of waiting until the state is selected for expansion. Default: `False`. |
+| `weak_equality`            | `bool`            | Use weaker state equality on temporal problems. If no plan is found, retry with weak equality disabled. Default: `False`. |
+| `symmetry_breaking`        | `bool`            | Prune equivalent symmetric states during search. Default: `True`. |
+| `compression_safe_actions` | `bool`            | Enable contiguous expansion of compression-safe temporal actions. Default: `True`. |
+| `relevance_analysis`       | `bool`            | Filter out actions that cannot contribute to the goal. Default: `True`. |
+| `incomplete_memory_bounded_search` | `bool`    | Use incomplete memory-bounded variants of `"wastar"`, `"astar"`, and `"gbfs"`. Default: `False`. |
 
 ---
 
@@ -78,9 +88,16 @@ Defines parameters for a single search strategy.
 
 Defines a multi-queue search strategy composed of multiple `SearchParams`.
 
-| Field     | Type                    | Description                                           |
-|-----------|-------------------------|-------------------------------------------------------|
-| `queues`  | `List[SearchParams]`    | A list of independent search configurations. The `search` field is ignored in this case. |
+| Field                      | Type                    | Description                                           |
+|----------------------------|-------------------------|-------------------------------------------------------|
+| `queues`                   | `List[HeuristicParams]` | A list of independent heuristic configurations. |
+| `internal_heuristic_cache` | `bool`            | Enable internal caching within the heuristic. Default: `True`. |
+| `inadmissible_numeric_heuristic_variant` | `bool` | Enable the inadmissible numeric variant for `hff`, `hadd`, `hmax` heuristics. Default: `False`. |
+| `early_termination`        | `bool`            | Stop as soon as a generated successor state satisfies the goal, instead of waiting until the state is selected for expansion. Default: `False`. |
+| `weak_equality`            | `bool`            | Use weaker state equality on temporal problems. If no plan is found, retry with weak equality disabled. Default: `False`. |
+| `symmetry_breaking`        | `bool`            | Prune equivalent symmetric states during search. Default: `True`. |
+| `compression_safe_actions` | `bool`            | Enable contiguous expansion of compression-safe temporal actions. Default: `True`. |
+| `relevance_analysis`       | `bool`            | Filter out actions that cannot contribute to the goal. Default: `True`. |
 
 ---
 
