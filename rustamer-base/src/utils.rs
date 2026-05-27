@@ -52,6 +52,15 @@ pub fn get_option_big_rational(obj: &pyo3::Bound<'_, PyAny>) -> PyResult<Option<
     }
 }
 
+pub fn big_rational_to_py_fraction<'py>(
+    n: &BigRational,
+    py: Python<'py>,
+) -> PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
+    let fractions = PyModule::import(py, "fractions")?;
+    let fraction_type = fractions.getattr("Fraction")?;
+    fraction_type.call1((format!("{}/{}", n.numer(), n.denom()),))
+}
+
 pub fn mk_rational(n: i32, d: i32) -> BigRational {
     BigRational::new(BigInt::from(n), BigInt::from(d))
 }

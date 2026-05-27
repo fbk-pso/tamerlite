@@ -131,8 +131,7 @@ else:
         elif exp.int_constant is not None:
             return exp.int_constant
         elif exp.real_constant is not None:
-            n, d = exp.real_constant
-            return Fraction(n, d)
+            return exp.real_constant
         else:
             raise NotImplementedError("Unreachable code")
 
@@ -145,7 +144,6 @@ else:
         elif r.int_constant is not None:
             return r.int_constant
         elif r.real_constant is not None:
-            n, d = r.real_constant
-            return Fraction(n, d)
+            return r.real_constant
         else:
             raise NotImplementedError("Unreachable code")

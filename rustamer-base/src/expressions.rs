@@ -20,7 +20,7 @@ use num_rational::BigRational;
 use pyo3::{exceptions::PyValueError, prelude::*};
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
-use crate::utils::integer_to_i32;
+use crate::utils::{big_rational_to_py_fraction, integer_to_i32};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ExpressionNode {
@@ -141,11 +141,11 @@ impl PyExpressionNode {
     }
 
     #[getter]
-    fn real_constant(&self) -> Option<(i32, i32)> {
+    fn real_constant<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
         if let ExpressionNode::Rational(v) = &self.v {
-            Some((integer_to_i32(v.numer()), integer_to_i32(v.denom())))
+            Ok(Some(big_rational_to_py_fraction(v, py)?))
         } else {
-            None
+            Ok(None)
         }
     }
 
