@@ -50,6 +50,35 @@ pip install .                 # install tamerlite (uses src/ layout)
 The Rust sources live under [`crates/`](crates/) as a Cargo workspace (root `Cargo.toml`).
 Run `cargo build --workspace` to build both crates with a single `target/`.
 
+### Development wheels
+
+Every push to `main` publishes a rolling pre-release tagged `dev` under
+[Releases](https://github.com/fbk-pso/tamerlite/releases) with wheels for every
+platform built from that commit. They carry PEP 440 dev versions like
+`0.2.0.dev42+g<sha>`. Install one directly:
+
+```bash
+pip install --pre <url-of-wheel-on-dev-release>
+```
+
+### Releases
+
+To cut a versioned release:
+
+```bash
+just bump 0.2.0                            # updates pyproject.toml + Cargo.toml + rustamer pin
+git commit -am "release: v0.2.0"
+git tag v0.2.0 && git push --follow-tags
+```
+
+The push of a `v*` tag triggers `.github/workflows/build-and-release.yml`,
+which publishes `rustamer` and `tamerlite` to PyPI and creates an immutable
+GitHub Release with auto-generated notes and all built wheels attached.
+
+The version-equality guard (`just check-versions`) runs in CI on every push;
+it asserts that the base `X.Y.Z` in `pyproject.toml` matches the one in the
+root `Cargo.toml`.
+
 ### Development tooling
 
 This repository is configured with:

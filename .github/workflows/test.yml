@@ -31,6 +31,9 @@ jobs:
       - name: Sync environment
         run: uv sync --all-extras --frozen
 
+      - name: Version guard
+        run: just check-versions
+
       - name: pre-commit
         run: just precommit
 

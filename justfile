@@ -17,13 +17,13 @@ test:
 
 # Run lint + format checks (read-only)
 lint:
-    uv run ruff check src tests
-    uv run ruff format --check src tests
+    uv run ruff check src tests ci
+    uv run ruff format --check src tests ci
 
 # Apply formatter and auto-fix lint issues
 format:
-    uv run ruff format src tests
-    uv run ruff check --fix src tests
+    uv run ruff format src tests ci
+    uv run ruff check --fix src tests ci
 
 # Static type checking
 typecheck:
@@ -36,6 +36,20 @@ precommit:
 # Build sdist + wheel for the tamerlite Python package
 build:
     uv build
+
+# Verify pyproject.toml and root Cargo.toml base versions agree
+# Uses python3 directly (stdlib only) so it doesn't re-resolve uv during a bump.
+check-versions:
+    python3 ci/check_versions.py
+
+# Bump version in pyproject.toml, root Cargo.toml, and the rustamer pin
+bump version:
+    sed -i 's/^version = ".*"/version = "{{version}}"/' pyproject.toml
+    sed -i 's/^version = ".*"/version = "{{version}}"/' Cargo.toml
+    sed -i 's/"rustamer==.*"/"rustamer=={{version}}"/' pyproject.toml
+    just check-versions
+    uv lock
+    @echo "Now: git commit -am 'release: v{{version}}' && git tag v{{version}} && git push --follow-tags"
 
 # Remove build, cache, and tooling artifacts
 clean:
