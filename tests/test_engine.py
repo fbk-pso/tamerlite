@@ -15,30 +15,28 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 
-import unified_planning
-from unified_planning.shortcuts import *
-from unified_planning.engines import PlanGenerationResult, PlanGenerationResultStatus
-from unified_planning.engines.results import ValidationResult
-import unified_planning.test
-import unified_planning.test.examples
-import up_test_cases.builtin
-
-import tamerlite
-from tamerlite.core.heuristics import Heuristic
-from tamerlite.core import HFF, HAdd, HMax, HMaxExplicit, CustomHeuristic
-from tamerlite.core import simplify
-from tamerlite.core.search_space import SearchSpaceABC
-from tamerlite.encoder import Encoder
-import tamerlite.encoder
-import tamerlite.engine
-
-import problems_generator
-import testing_utils
-import pytest
 import importlib
 import os
 import types
 from functools import partial
+
+import pytest
+import unified_planning
+import unified_planning.test
+import unified_planning.test.examples
+import up_test_cases.builtin
+from unified_planning.engines import PlanGenerationResult, PlanGenerationResultStatus
+from unified_planning.engines.results import ValidationResult
+from unified_planning.shortcuts import *
+
+import problems_generator
+import tamerlite
+import tamerlite.encoder
+import tamerlite.engine
+import testing_utils
+from tamerlite.core.heuristics import Heuristic
+from tamerlite.core.search_space import SearchSpaceABC
+from tamerlite.encoder import Encoder
 
 env = get_environment()
 env.factory.add_engine("tamerlite", "tamerlite.engine", "TamerLite")
@@ -96,8 +94,8 @@ def anytime_problems(problems):
 
 @pytest.fixture
 def expressions():
-    import pathlib
     import json
+    import pathlib
 
     data_path = os.path.join(
         pathlib.Path(__file__).parent.resolve(),
@@ -836,8 +834,8 @@ def test_simplify():
         from tamerlite.core import simplify
         from testing_utils import (
             construct_expressions,
-            parse_expression,
             is_strictly_increasing,
+            parse_expression,
         )
 
         expressions = construct_expressions(num_expressions, max_depth=20)

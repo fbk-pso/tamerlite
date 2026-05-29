@@ -6,35 +6,59 @@
 ## Installation
 
 TamerLite is not currently available on PyPI and must be installed from source.
-It includes a core module written in Rust (under the `rustamer` and `rustamer-base` directories), which must be compiled using [Maturin](https://github.com/PyO3/maturin) before installing the package.
+It includes a core module written in Rust (under the `rustamer` and `rustamer-base` directories), which is compiled using [Maturin](https://github.com/PyO3/maturin).
 
 ### Prerequisites
 
-Make sure the following tools are installed:
-
 - Python 3.10+
 - Rust toolchain (only needed if building the Rust extension from source)
-- Maturin (`pip install maturin`, only needed if building from source)
+- [uv](https://github.com/astral-sh/uv) — Python project & environment manager (recommended)
+- [just](https://github.com/casey/just) — command runner (optional, for the shortcuts below)
 
-### Installation steps
+### Quick start (recommended, with `uv`)
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/fbk-pso/tamerlite.git
-   cd tamerlite
-   ```
+```bash
+git clone https://github.com/fbk-pso/tamerlite.git
+cd tamerlite
+uv sync --all-extras    # creates .venv, builds rustamer workspace member, installs dev deps
+uv run pre-commit install
+```
 
-2. Build and install the Rust extension:
-   ```bash
-   pip install rustamer/
-   ```
+Common tasks via [`just`](justfile):
 
-3. Install the remaining Python code:
-   ```bash
-   pip install .
-   ```
+```bash
+just              # list recipes
+just install      # uv sync --all-extras
+just build-rust   # rebuild the rustamer Rust extension
+just test         # pytest
+just lint         # ruff check + ruff format --check
+just format       # ruff format + ruff check --fix
+just typecheck    # mypy
+just precommit    # run all pre-commit hooks
+just build        # build sdist + wheel for tamerlite
+```
 
-> **Note:** Precompiled wheels for `rustamer` are available as artifacts from the GitHub Actions CI on the `main` branch. If you download and install the precompiled rustamer wheel manually, you can skip step 2 and proceed directly to step 4. You can find the artifacts in the [Actions tab](https://github.com/fbk-pso/tamerlite/actions) of the GitHub repository.
+### Manual installation (pip)
+
+If you prefer pip:
+
+```bash
+pip install crates/rustamer   # build & install the Rust extension
+pip install .                 # install tamerlite (uses src/ layout)
+```
+
+The Rust sources live under [`crates/`](crates/) as a Cargo workspace (root `Cargo.toml`).
+Run `cargo build --workspace` to build both crates with a single `target/`.
+
+### Development tooling
+
+This repository is configured with:
+
+- **uv** workspace (root + `rustamer/`) — single `uv.lock` reproduces both Python and Rust dependencies.
+- **ruff** for linting and formatting (`pyproject.toml` → `[tool.ruff]`).
+- **mypy** for static type checking (`pyproject.toml` → `[tool.mypy]`).
+- **pre-commit** hooks (`.pre-commit-config.yaml`) — enforced in CI.
+- **just** task runner (`justfile`).
 
 ## Usage
 

@@ -15,9 +15,10 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 
-from unified_planning.shortcuts import *
+import pathlib
+
 from unified_planning.io import PDDLReader
-from pathlib import Path
+from unified_planning.shortcuts import *
 
 
 def get_problem_matchcellar(n) -> Problem:
@@ -183,7 +184,7 @@ def get_problem_logistics(nRob, nPall, nPos, nTreatment) -> Problem:
     problem.add_action(unload_at_depot)
     problem.add_action(make_treat)
 
-    last_position = problem.object(f"p{nPos-1}")
+    last_position = problem.object(f"p{nPos - 1}")
     # All robots stay at the same position, and so do the pallets
     for i in range(nRob):
         problem.set_initial_value(
@@ -279,7 +280,7 @@ def get_problem_numeric() -> Problem:
 
 def get_problem_satellite() -> Problem:
     reader = PDDLReader()
-    problem_directory = Path(__file__).resolve().parent / "pddl" / "Satellite"
+    problem_directory = pathlib.Path(__file__).resolve().parent / "pddl" / "Satellite"
     domain = problem_directory / "domain.pddl"
     instance = problem_directory / "instance.pddl"
     problem = reader.parse_problem(domain, instance)
