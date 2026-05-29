@@ -15,39 +15,48 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 
+import time
+import warnings
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import partial
-import time
+from typing import IO, Callable, Dict, Iterator, List, Optional, Tuple, Union
+
 import unified_planning as up
 import unified_planning.engines
 import unified_planning.engines.mixins
-from unified_planning.model import ProblemKind, FNode, StartTiming
-from unified_planning.model.state import State
 from unified_planning.engines.compilers.timed_to_sequential import TimedToSequential
+from unified_planning.engines.compilers.utils import get_fresh_name
 from unified_planning.engines.plan_validator import (
     SequentialPlanValidator,
     TimeTriggeredPlanValidator,
 )
-from unified_planning.engines.compilers.utils import get_fresh_name
+from unified_planning.model import FNode, ProblemKind, StartTiming
+from unified_planning.model.state import State
 from unified_planning.plans import ActionInstance, PlanKind
-from typing import IO, Callable, Iterator, List, Optional, Union, Tuple, Dict
-import warnings
 
-from tamerlite.core import search_space
-from tamerlite.core import wastar_search, astar_search, gbfs_search
 from tamerlite.core import (
-    wastar_search_memory_bounded,
+    HFF,
+    CustomHeuristic,
+    HAdd,
+    HMax,
+    HMaxExplicit,
+    astar_search,
     astar_search_memory_bounded,
+    bfs_search,
+    dfs_search,
+    ehc_search,
+    evaluate,
+    gbfs_search,
     gbfs_search_memory_bounded,
+    make_fluent_node,
+    multiqueue_search,
+    search_space,
+    wastar_search,
+    wastar_search_memory_bounded,
 )
-from tamerlite.core import bfs_search, dfs_search, ehc_search
-from tamerlite.core import multiqueue_search
-from tamerlite.core import evaluate, make_fluent_node
-from tamerlite.core import HFF, HAdd, HMax, HMaxExplicit, CustomHeuristic
 from tamerlite.core.heuristics import Heuristic
 from tamerlite.encoder import Encoder, PlanType
-
 
 credits = up.engines.Credits(
     "TamerLite",

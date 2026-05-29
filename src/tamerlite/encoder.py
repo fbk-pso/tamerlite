@@ -15,22 +15,31 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 
-import unified_planning as up
-from unified_planning.plans import (
-    TimeTriggeredPlan,
-    SequentialPlan,
-    Plan,
-    ActionInstance,
-)
-from unified_planning.model import Problem, FNode, Object, Type, Fluent, TimepointKind
-from unified_planning.model.walkers import Nnf, ExpressionQuantifiersRemover
 from fractions import Fraction
-from typing import List, Tuple, Dict, Optional, Union, Any, Set, Callable, Iterable
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple, Union
 
-from tamerlite.core import Expression, Effect, Timing, Event, Action, SearchSpace
-from tamerlite.core.search_space import SearchSpaceABC
-from tamerlite.core import HMax, get_fluents
+import unified_planning as up
+from unified_planning.model import Fluent, FNode, Object, Problem, TimepointKind, Type
+from unified_planning.model.walkers import ExpressionQuantifiersRemover, Nnf
+from unified_planning.plans import (
+    ActionInstance,
+    Plan,
+    SequentialPlan,
+    TimeTriggeredPlan,
+)
+
 from tamerlite.converter import Converter
+from tamerlite.core import (
+    Action,
+    Effect,
+    Event,
+    Expression,
+    HMax,
+    SearchSpace,
+    Timing,
+    get_fluents,
+)
+from tamerlite.core.search_space import SearchSpaceABC
 
 
 def extract_objects(exp: FNode) -> Iterable[Object]:

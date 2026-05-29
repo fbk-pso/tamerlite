@@ -16,13 +16,14 @@
 #
 
 import heapq
-from dataclasses import dataclass
 import time
-from typing import List, Tuple, Dict, Optional
-from tamerlite.core.search_space import SearchSpaceABC, State, Action
-from tamerlite.core.heuristics import Heuristic
-from tamerlite.core.search import state_representation, extract_path
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+
+from tamerlite.core.heuristics import Heuristic
+from tamerlite.core.search import extract_path, state_representation
+from tamerlite.core.search_space import Action, SearchSpaceABC, State
 
 
 @dataclass

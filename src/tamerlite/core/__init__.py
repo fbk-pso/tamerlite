@@ -15,10 +15,10 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 
+import importlib
 import os
 import sys
 import warnings
-import importlib
 
 use_rustamer = True
 if "DISABLE_RUSTAMER" in os.environ:
@@ -41,27 +41,35 @@ if not use_rustamer:
         "Tamerlite is using the Python core implementation instead of the Rust one. "
         "For better performance, ensure rustamer is installed and not disabled."
     )
-    from tamerlite.core.search import (
-        wastar_search,
-        wastar_search_memory_bounded,
-        astar_search,
-        astar_search_memory_bounded,
-        gbfs_search,
-        gbfs_search_memory_bounded,
-    )
-    from tamerlite.core.search import bfs_search, dfs_search, ehc_search
-    from tamerlite.core.multiqueue import multiqueue_search
-    from tamerlite.core.search_space import SearchSpace, get_fluent_value
     from tamerlite.core.heuristics import (
         HFF,
+        CustomHeuristic,
         HAdd,
         HMax,
         HMaxExplicit,
-        CustomHeuristic,
     )
-    from tamerlite.core.search_space import Timing, Effect, Event, Action
-    from tamerlite.core.search_space import Expression, evaluate, simplify
+    from tamerlite.core.multiqueue import multiqueue_search
+    from tamerlite.core.search import (
+        astar_search,
+        astar_search_memory_bounded,
+        bfs_search,
+        dfs_search,
+        ehc_search,
+        gbfs_search,
+        gbfs_search_memory_bounded,
+        wastar_search,
+        wastar_search_memory_bounded,
+    )
     from tamerlite.core.search_space import (
+        Action,
+        Effect,
+        Event,
+        Expression,
+        SearchSpace,
+        Timing,
+        evaluate,
+        get_fluent_value,
+        get_fluents,
         make_bool_constant_node,
         make_fluent_node,
         make_int_constant_node,
@@ -69,11 +77,11 @@ if not use_rustamer:
         make_operator_node,
         make_rational_constant_node,
         shift_expression,
-        get_fluents,
+        simplify,
     )
 else:
     from fractions import Fraction
-    from typing import List, Union, Iterator
+    from typing import Iterator, List, Union
 
     (
         wastar_search,

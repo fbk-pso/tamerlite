@@ -1,11 +1,12 @@
 [package]
 name = "rustamer-base"
-version = "0.1.0"
-edition = "2021"
-license = "GPLv3"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [dependencies]
-pyo3 = "0.27.1"
+pyo3.workspace = true
+rustc-hash.workspace = true
 num-rational = "0.4.1"
 num = "0.4.1"
 multiset = "0.0.5"
@@ -13,7 +14,6 @@ num-traits = "0.2.16"
 regex = "1.9.3"
 itertools = "0.14"
 im = "15.1.0"
-rustc-hash = "2.1.1"
 min-max-heap = "1.3"
 fastbloom = "0.17"
 foldhash = "0.2"
