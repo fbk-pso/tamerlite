@@ -8,56 +8,73 @@ on:
         type: string
 
 jobs:
-  basic-checks:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Black check
-        run: |
-          python3 -m pip install black==25.12.0
-          python3 -m black --check .
-
-      - name: MyPy check
-        run: |
-          python3 -m pip install mypy==1.19.1
-          python3 -m mypy tamerlite
-
-  test:
-    needs: [basic-checks]
+  lint:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install just
+        uses: extractions/setup-just@v3
+        with:
+          just-version: "1.51.0"
 
       - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{inputs.python-version}}
+        run: uv python install 3.12
 
-      - name: Build rustamer
-        uses: PyO3/maturin-action@v1
-        with:
-          working-directory: rustamer
-          command: build
-          args: --release
+      - name: Sync environment
+        run: uv sync --all-extras --frozen
 
-      - name: Install unified-planning and tamerlite
+      - name: pre-commit
+        run: just precommit
+
+      - name: mypy
+        run: just typecheck
+
+  test:
+    needs: [lint]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install just
+        uses: extractions/setup-just@v3
+        with:
+          just-version: "1.51.0"
+
+      - name: Set up Python
+        run: uv python install ${{ inputs.python-version }}
+
+      - name: Sync environment (project + workspace + dev)
+        run: uv sync --all-extras --frozen --python ${{ inputs.python-version }}
+
+      - name: Clone unified-planning test cases (matching the locked commit)
         run: |
-          python3 -m pip install --find-links rustamer/target/wheels/ rustamer
-          python3 -m pip install .[test]
-          git clone https://github.com/aiplan4eu/unified-planning.git
-          python3 -m pip install -r unified-planning/requirements.txt
-          python3 -m pip install unified-planning/
+          sha=$(uv run python -c "import tomllib; d = tomllib.load(open('uv.lock', 'rb')); print(next(p['source']['git'].rsplit('#', 1)[1] for p in d['package'] if p['name'] == 'unified-planning'))")
+          git clone --filter=blob:none https://github.com/aiplan4eu/unified-planning.git up-checkout
+          git -C up-checkout checkout "$sha"
+
+      - name: Register tamerlite engine
+        run: |
           echo -e "[engine tamerlite]\nmodule_name: tamerlite.engine\nclass_name: TamerLite" > .up.ini
 
-      - name: Run UP tests
-        run: |
-          python3 unified-planning/up_test_cases/report.py tamerlite
+      - name: Run UP test report
+        run: uv run python up-checkout/up_test_cases/report.py tamerlite
 
-      - name: Run Tamerlite tests
-        run: |
-            export PYTHONPATH="unified-planning/up_test_cases"
-            python3 -m pytest tests/ -v
+      - name: Run TamerLite pytest suite
+        env:
+          PYTHONPATH: up-checkout/up_test_cases
+        run: just test
