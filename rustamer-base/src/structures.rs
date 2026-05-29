@@ -20,7 +20,7 @@ use num::rational::BigRational;
 use pyo3::prelude::*;
 
 use super::expressions::{ExpressionNode, PyExpressionNode};
-use super::utils::get_big_rational;
+use super::utils::{big_rational_to_py_fraction, get_big_rational};
 
 #[pyclass(frozen)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -77,6 +77,11 @@ impl Timing {
 
     pub fn is_from_end(&self) -> bool {
         !self.start
+    }
+
+    #[getter]
+    fn delay<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        big_rational_to_py_fraction(&self.delay, py)
     }
 
     fn __repr__(&self) -> String {
@@ -139,6 +144,11 @@ impl Event {
                 .collect(),
             effects: effects,
         }
+    }
+
+    #[getter]
+    fn pos(&self) -> usize {
+        self.pos
     }
 
     #[getter]
