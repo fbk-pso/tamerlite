@@ -15,15 +15,18 @@ build-rust:
 test:
     uv run pytest tests/ -v
 
-# Run lint + format checks (read-only)
+# Run all lint + format checks (Python + Rust). Read-only.
 lint:
     uv run ruff check src tests ci
     uv run ruff format --check src tests ci
+    cargo fmt --all -- --check
+    cargo clippy --workspace --all-targets -- -W warnings
 
-# Apply formatter and auto-fix lint issues
+# Apply formatters (Python + Rust) and auto-fix Python lint issues
 format:
     uv run ruff format src tests ci
     uv run ruff check --fix src tests ci
+    cargo fmt --all
 
 # Static type checking
 typecheck:

@@ -24,3 +24,20 @@ repos:
         additional_dependencies:
           - "min-max-heap==1.0.1"
           - "bloom-filter2==2.0.0"
+
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt --check
+        entry: cargo fmt --all -- --check
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: cargo-clippy
+        name: cargo clippy (informational)
+        # Informational: prints warnings without failing. Tighten to
+        # `-D warnings` once the existing warning backlog is cleaned up.
+        entry: cargo clippy --workspace --all-targets -- -W warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
