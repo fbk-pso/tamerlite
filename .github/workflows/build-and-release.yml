@@ -213,7 +213,7 @@ jobs:
         with:
           name: stamped-manifests
       - name: Build sdist + wheel
-        run: just build
+        run: just build-python
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
