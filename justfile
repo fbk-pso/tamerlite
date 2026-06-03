@@ -36,9 +36,27 @@ typecheck:
 precommit:
     uv run pre-commit run --all-files --show-diff-on-failure
 
-# Build sdist + wheel for the tamerlite Python package
-build:
+# Build sdist + wheel for the tamerlite Python package (hatchling).
+# Used by the CI tamerlite job; locally callable on its own.
+build-python:
     uv build
+
+# Build the rustamer wheel + sdist (current interpreter only) via maturin.
+build-rust-wheel:
+    uv run --no-sync maturin build --release --out dist \
+        --manifest-path crates/rustamer/Cargo.toml
+    uv run --no-sync maturin sdist --out dist \
+        --manifest-path crates/rustamer/Cargo.toml
+
+# Build BOTH wheels + sdists into ./dist/ (release-equivalent local mirror).
+# Note: the rustamer wheel here covers only the current Python interpreter;
+# CI's maturin-action handles the multi-Python matrix on tag.
+build: clean-dist build-python build-rust-wheel
+    @ls -1 dist/
+
+# Helper: remove ./dist/ for a clean build state.
+clean-dist:
+    rm -rf dist
 
 # Verify pyproject.toml and root Cargo.toml base versions agree
 # Uses python3 directly (stdlib only) so it doesn't re-resolve uv during a bump.
