@@ -29,7 +29,8 @@ from typing import List, Tuple, Dict, Optional, Union, Any, Set, Callable, Itera
 from tamerlite.core import Expression, Effect, Timing, Event, Action, SearchSpace
 from tamerlite.core.search_space import SearchSpaceABC
 from tamerlite.converter import Converter
-from aalpy.automata.Dfa import *
+from aalpy.automata.Dfa import Dfa
+from tamerlite.pruning_automata import DfaPruningModel
 
 PlanType = List[Tuple[Optional[Union[Fraction, str]], Action, Optional[Union[Fraction, str]]]]
 
@@ -47,7 +48,7 @@ class Encoder:
         lifted_problem: Problem,
         map_back_action_instance: Callable[[ActionInstance], Optional[ActionInstance]],
         symmetry_breaking: bool,
-        dfa: Dfa | None = None,
+        dfa: object | None = None,
         full: bool = True,
     ):
         self._problem = problem
@@ -82,15 +83,6 @@ class Encoder:
         self._action_by_name: Dict[str, Action] = {
             name: Action(index) for index, name in enumerate(self._action_names)
         }
-
-        if self._dfa is not None:
-            for state in self._dfa.states:
-                new_transitions = {}
-                for input_symbol, destination_state in state.transitions.items():
-                    if input_symbol in self._action_by_name:
-                        planner_action_id = self._action_by_name[input_symbol]
-                        new_transitions[planner_action_id] = destination_state
-                state.transitions = new_transitions
 
         self._actions: List[Action] = [self._action_by_name[name] for name in self._action_names]
         actions_duration_map: Dict[str, Optional[Tuple[Expression, Expression, bool, bool]]] = {}
@@ -146,6 +138,11 @@ class Encoder:
         self._objects = {}
         for ut in problem.user_types:
             self._objects[ut.name] = [o.name for o in problem.objects(ut)]
+
+        if isinstance(self._dfa, Dfa):
+            self._dfa = DfaPruningModel(self._dfa)
+        if self._dfa is not None:
+            self._dfa.bind_to_planner(self._action_by_name, self._objects)
 
     @property
     def problem(self) -> Problem:

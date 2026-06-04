@@ -24,7 +24,7 @@ import unified_planning.engines.mixins
 from unified_planning.model import ProblemKind, FNode
 from unified_planning.model.state import State
 from typing import IO, Callable, List, Optional, Union, Tuple, Dict
-from aalpy.automata.Dfa import *
+from aalpy.automata.Dfa import Dfa
 
 from tamerlite.core import search_space
 from tamerlite.core import wastar_search, astar_search, gbfs_search
@@ -82,7 +82,7 @@ class SearchParams(HeuristicParams):
     early_termination: bool = False
     weak_equality: bool = False
     symmetry_breaking: bool = True
-    dfa: Dfa = None
+    dfa: object = None
 
 
 @dataclass(frozen=True)
@@ -91,7 +91,7 @@ class MultiqueueParams:
     early_termination: bool = False
     weak_equality: bool = False
     symmetry_breaking: bool = True
-    dfa: Dfa = None
+    dfa: object = None
 
 
 class TamerLite(

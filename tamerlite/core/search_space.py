@@ -20,10 +20,6 @@ from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import List, Tuple, Dict, Iterator, Optional, Union, Set
 from abc import ABC, abstractmethod
-from aalpy.automata.Dfa import *
-from aalpy.base.Automaton import *
-from smart_dfa import *
-
 
 @dataclass(eq=True, frozen=True)
 class OperatorNode:
@@ -171,15 +167,18 @@ class State:
     active_conditions: MultiSet
     g: int
     path: List[Tuple[Action, int, int]]
-    dfa_state: DfaState | None = None
+    pruning_state: object | None = None
     heuristic_cache: Dict[str, Optional[float]] = field(default_factory=dict)
 
     def __hash__(self) -> int:
-        return hash(tuple(self.assignments))
+        return hash((tuple(self.assignments), self._pruning_state_key()))
 
     def __eq__(self, oth) -> bool:
         if self.temporal_network is None:
-            return self.assignments == oth.assignments
+            return (
+                self.assignments == oth.assignments
+                and self._pruning_state_key() == oth._pruning_state_key()
+            )
         else:
             return False
 
@@ -197,8 +196,17 @@ class State:
             self.active_conditions.clone(),
             self.g,
             self.path[:],
-            self.dfa_state,
+            self.pruning_state,
         )
+
+    def _pruning_state_key(self):
+        if self.pruning_state is None:
+            return None
+        if hasattr(self.pruning_state, "object_states"):
+            return tuple(self.pruning_state.object_states)
+        if hasattr(self.pruning_state, "state_id"):
+            return self.pruning_state.state_id
+        return self.pruning_state
 
 
 class MutexChecker:
@@ -507,7 +515,7 @@ class SearchSpace(SearchSpaceABC):
         initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
         goal: Optional[Expression] = None,
         epsilon: Optional[Fraction] = None,
-        dfa: Dfa | None = None,
+        dfa: object | None = None,
     ):
         self._actions_duration = actions_duration
         self._events = events
@@ -551,7 +559,6 @@ class SearchSpace(SearchSpaceABC):
         dfa_init = None
         if self._dfa is not None:
             dfa_init = self._dfa.initial_state
-            assert dfa_init is not None
         if initial_state is not None:
             return State(
                 initial_state,
@@ -590,10 +597,8 @@ class SearchSpace(SearchSpaceABC):
         else:
             new_state = self._open_action(state, new_state, action, events)
         if new_state and self._dfa is not None:
-            #print(action)
-            #print(self._dfa.get_input_alphabet())
-            assert state.dfa_state is not None
-            new_state.dfa_state = state.dfa_state.transitions.get(action)
+            assert state.pruning_state is not None
+            new_state.pruning_state = self._dfa.advance(state.pruning_state, action)
 
         return new_state
 
@@ -603,10 +608,10 @@ class SearchSpace(SearchSpaceABC):
             if new_state is None:
                 continue
 
-            if new_state.dfa_state is None and self._dfa is not None:
+            if new_state.pruning_state is None and self._dfa is not None:
                 continue
 
-            if self._dfa is not None and self._dfa.is_prunable(new_state.dfa_state):
+            if self._dfa is not None and self._dfa.is_prunable(new_state.pruning_state):
                 self._pruned_subtrees += 1
                 continue
 

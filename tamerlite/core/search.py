@@ -43,11 +43,12 @@ class WeakEqState:
     state: State
 
     def __hash__(self) -> int:
-        return hash(tuple(self.state.assignments))
+        return hash((tuple(self.state.assignments), self.state._pruning_state_key()))
 
     def __eq__(self, oth) -> bool:
         if (len(self.state.todo) != len(oth.state.todo)
-                or self.state.assignments != oth.state.assignments):
+                or self.state.assignments != oth.state.assignments
+                or self.state._pruning_state_key() != oth.state._pruning_state_key()):
             return False
 
         for a in self.state.todo:

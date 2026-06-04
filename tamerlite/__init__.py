@@ -17,3 +17,4 @@
 
 from tamerlite import engine
 from tamerlite.engine import HeuristicParams, SearchParams, MultiqueueParams
+from tamerlite.pruning_automata import DfaPruningModel, MultiAutomatonPruningModel
