@@ -144,9 +144,10 @@ git tag v0.2.0 && git push --follow-tags
 ```
 
 The `v*` tag triggers [build-and-release.yml](.github/workflows/build-and-release.yml):
-- `publish-rustamer` → `maturin upload` with secret `PYPI_API_TOKEN_RUSTAMER`
-- `publish-tamerlite` → `uv publish` with secret `PYPI_API_TOKEN_TAMERLITE`
-- `github-release` → `softprops/action-gh-release@v2` with auto-generated notes, all wheels attached
+- `publish-rustamer` / `publish-tamerlite` → `pypa/gh-action-pypi-publish@release/v1` using **PyPI Trusted Publishing** (OIDC). Each job declares a GitHub environment (`pypi-rustamer` / `pypi-tamerlite`) that matches the corresponding pending publisher registered on PyPI; no API tokens are stored in the repo.
+- `github-release` → `softprops/action-gh-release@v2` with auto-generated notes (from PR titles since the previous tag) and all wheels attached.
+
+Both `github-release` and `dev-release` jobs authenticate with an **installation token from the `tamerlite-releaser` GitHub App** (`actions/create-github-app-token@v1`), not `GITHUB_TOKEN` — because the org policy locks workflow tokens to read-only. The App is installed only on this repo with `Contents: read/write`; its credentials live in two repo secrets: `RELEASER_APP_ID` and `RELEASER_APP_PRIVATE_KEY`.
 
 **Every push to `main`:**
 - `stamp-dev` stamps the dev version into pyproject + Cargo (artifact only, not committed)
