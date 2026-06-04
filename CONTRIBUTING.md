@@ -113,6 +113,21 @@ installation token from the `tamerlite-releaser` GitHub App (because the
 org policy locks `GITHUB_TOKEN` to read-only). Credentials live in two
 repo secrets: `RELEASER_APP_ID` and `RELEASER_APP_PRIVATE_KEY`.
 
+## Keeping dependencies fresh
+
+Dependabot is configured ([.github/dependabot.yml](.github/dependabot.yml))
+to open weekly PRs against three ecosystems:
+
+- **uv** (Python deps) — including the git-tracked `unified-planning`
+  dependency: a PR lands whenever the upstream `main` moves.
+- **cargo** (Rust deps) — patch/minor/major updates for both crates.
+- **github-actions** — pinned action versions in workflows, grouped into a
+  single PR per week to cut noise.
+
+Just review the PR's diff, let CI run, and merge if green. For
+`unified-planning` in particular this is how we stay synchronised with
+upstream without manually running `uv lock --upgrade` ourselves.
+
 ## Deeper reference
 
 For architecture (Python/Rust dual implementation, encoder, engine
