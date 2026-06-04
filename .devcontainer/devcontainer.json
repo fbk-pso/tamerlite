@@ -1,0 +1,45 @@
+{
+    "name": "tamerlite-devcontainer",
+    "image": "mcr.microsoft.com/devcontainers/python:3.12",
+    "features": {
+        "ghcr.io/devcontainers/features/node:1": {
+            "version": "lts"
+        },
+        "ghcr.io/devcontainers/features/rust:1": {
+            "version": "latest"
+        }
+    },
+    "mounts": [
+        "source=${localEnv:HOME}/.claude,target=/home/vscode/.claude,type=bind,consistency=cached"
+    ],
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "ms-python.debugpy",
+                "rust-lang.rust-analyzer",
+                "Anthropic.claude-code"
+            ],
+            "settings": {
+                "python.defaultInterpreterPath": "${containerWorkspaceFolder}/.venv/bin/python",
+                "python.testing.pytestEnabled": true,
+                "python.testing.pytestArgs": ["tests"],
+                "python.testing.unittestEnabled": false,
+                "[rust]": {
+                    "editor.defaultFormatter": "rust-lang.rust-analyzer",
+                    "editor.formatOnSave": true
+                },
+                "claude.terminalCommand.executionPolicy": "always"
+            }
+        }
+    },
+    "containerEnv": {
+        "PYTHONPATH": "${containerWorkspaceFolder}",
+        "CLAUDE_CONFIG_DIR": "/home/vscode/.claude",
+        "DISABLE_AUTOUPDATER": "1",
+        "CLAUDE_ACCEPT_DEFAULTS": "true"
+    },
+    "postCreateCommand": "npm install -g @anthropic-ai/claude-code",
+    "remoteUser": "vscode"
+}
