@@ -235,35 +235,40 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [linux, windows, macos, sdist]
     runs-on: ubuntu-latest
+    environment: pypi-rustamer
+    permissions:
+      id-token: write
     steps:
       - uses: actions/download-artifact@v4
         with:
           pattern: wheels-*
           merge-multiple: true
           path: dist
-      - name: Publish rustamer to PyPI
-        uses: PyO3/maturin-action@v1
-        env:
-          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN_RUSTAMER }}
+      - name: Keep only rustamer artifacts
+        run: |
+          find dist -mindepth 1 -type f ! -name 'rustamer-*' -delete
+          ls -1 dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          command: upload
-          args: --skip-existing dist/rustamer-*
+          packages-dir: dist
+          skip-existing: true
 
   publish-tamerlite:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [tamerlite]
     runs-on: ubuntu-latest
+    environment: pypi-tamerlite
+    permissions:
+      id-token: write
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: wheels-tamerlite
           path: dist
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-      - name: Publish tamerlite to PyPI
-        env:
-          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN_TAMERLITE }}
-        run: uv publish dist/*
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          skip-existing: true
 
   github-release:
     if: startsWith(github.ref, 'refs/tags/v')
