@@ -7,7 +7,7 @@ requires-python = ">=3.10"
 license = "GPL-3.0-only"
 license-files = ["LICENSE"]
 authors = [
-    {name = "FBK PSO Unit", email = "tamer@fbk.eu"}
+    {name = "FBK PSO Unit", email = "pso-tools@fbk.eu"}
 ]
 urls = { "Homepage" = "https://github.com/fbk-pso/tamerlite" }
 dependencies = [

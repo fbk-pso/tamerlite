@@ -194,4 +194,5 @@ See the `LICENSE` file for full details.
 
 ## Contact
 
-For questions, bug reports, or contributions, please open an issue on GitHub or contact the authors.
+For questions, bug reports, or contributions, please open an issue on GitHub or
+contact the authors at <pso-tools@fbk.eu>.

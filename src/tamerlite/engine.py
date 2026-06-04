@@ -61,7 +61,7 @@ from tamerlite.encoder import Encoder, PlanType
 credits = up.engines.Credits(
     "TamerLite",
     "FBK PSO Unit",
-    "tamer@fbk.eu",
+    "pso-tools@fbk.eu",
     "https://github.com/fbk-pso/tamerlite",
     "GPLv3",
     "Heuristic search-based temporal planner.",
