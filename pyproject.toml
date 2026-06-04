@@ -60,18 +60,6 @@ rustamer = { workspace = true }
 line-length = 88
 target-version = "py310"
 src = ["src", "tests"]
-# Restrict lint/format to project code; ignore root-level scratch files
-# (main.py, test.py, etc.) and vendored directories.
-extend-exclude = [
-    "ipc2023-dataset",
-    "kr",
-    "counters",
-    "build",
-    "dist",
-    "/main.py",
-    "/test.py",
-    "/test_with_llm.py",
-]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
