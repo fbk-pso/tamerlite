@@ -529,6 +529,7 @@ class SearchSpace(SearchSpaceABC):
         self._counter = 0
         self._dfa = dfa
         self._pruned_subtrees = 0
+        self._pruned_subtrees_by_label: Dict[str, int] = {}
 
         event_fluents: List[List[Tuple[Set[int], Set[int], Set[int], Set[int],
                                        Set[int]]]] = [[] for _ in actions]
@@ -613,6 +614,10 @@ class SearchSpace(SearchSpaceABC):
 
             if self._dfa is not None and self._dfa.is_prunable(new_state.pruning_state):
                 self._pruned_subtrees += 1
+                labels_fn = getattr(self._dfa, "pruning_labels", None)
+                if callable(labels_fn):
+                    for label in labels_fn(new_state.pruning_state):
+                        self._pruned_subtrees_by_label[label] = self._pruned_subtrees_by_label.get(label, 0) + 1
                 continue
 
             yield new_state

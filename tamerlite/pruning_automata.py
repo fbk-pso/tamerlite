@@ -4,11 +4,22 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Mapping, Sequence
+import sys
 
 from aalpy.automata.Dfa import Dfa
 from aalpy.utils import load_automaton_from_file
 
-from trace_conversion_utils import split_ground_action
+try:
+    from trace_conversion_utils import split_ground_action
+except ModuleNotFoundError:
+    REPO_ROOT = Path(__file__).resolve().parents[2]
+    for candidate in (
+        REPO_ROOT / "src",
+        REPO_ROOT / "src" / "trace_preprocessing",
+    ):
+        if str(candidate) not in sys.path:
+            sys.path.insert(0, str(candidate))
+    from trace_conversion_utils import split_ground_action
 
 
 @dataclass(frozen=True)
@@ -64,6 +75,11 @@ class DfaPruningModel:
         if progress is None:
             return False
         return self._state_by_id[progress.state_id].is_accepting
+
+    def pruning_labels(self, progress: SingleAutomatonProgress | None) -> tuple[str, ...]:
+        if not self.is_prunable(progress):
+            return ()
+        return ("single_dfa",)
 
     def progress_key(self, progress: SingleAutomatonProgress | None):
         return None if progress is None else progress.state_id
@@ -202,17 +218,22 @@ class MultiAutomatonPruningModel:
         )
 
     def is_prunable(self, progress: MultiAutomatonProgress | None) -> bool:
-        if progress is None:
-            return False
+        return bool(self.pruning_labels(progress))
 
+    def pruning_labels(self, progress: MultiAutomatonProgress | None) -> tuple[str, ...]:
+        if progress is None:
+            return ()
+
+        accepting_focus_types = set()
         for focus_type, spec in self._automata.items():
             valid_objects = set(self._objects_by_type.get(focus_type, ()))
             for progress_focus_type, object_name, state_id in progress.object_states:
                 if progress_focus_type != focus_type or object_name not in valid_objects:
                     continue
                 if self._state_by_type_and_id[focus_type][state_id].is_accepting:
-                    return True
-        return False
+                    accepting_focus_types.add(focus_type)
+                    break
+        return tuple(sorted(accepting_focus_types))
 
     def progress_key(self, progress: MultiAutomatonProgress | None):
         return None if progress is None else progress.object_states

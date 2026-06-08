@@ -17,6 +17,7 @@
 
 from dataclasses import dataclass
 from functools import partial
+import json
 import time
 import unified_planning as up
 import unified_planning.engines
@@ -311,6 +312,11 @@ class TamerLite(
             metrics["heuristic"] = self._params.heuristic
             if self._params.dfa is not None:
                 metrics["pruned_states"] = encoder.search_space._pruned_subtrees
+                if getattr(encoder.search_space, "_pruned_subtrees_by_label", None):
+                    metrics["pruned_states_by_label"] = json.dumps(
+                        encoder.search_space._pruned_subtrees_by_label,
+                        sort_keys=True,
+                    )
             if plan is not None:
                 plan = encoder.build_plan(plan)  # type: ignore[arg-type]
                 plan = plan.replace_action_instances(map_back_action_instance)
