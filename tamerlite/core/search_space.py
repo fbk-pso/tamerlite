@@ -22,7 +22,7 @@ from typing import List, Tuple, Dict, Iterator, Optional, Union, Set
 from abc import ABC, abstractmethod
 from aalpy.automata.Dfa import *
 from aalpy.base.Automaton import *
-from smart_dfa import *
+from automata.smart_dfa import *
 
 
 @dataclass(eq=True, frozen=True)
