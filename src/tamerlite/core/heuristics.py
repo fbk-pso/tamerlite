@@ -15,29 +15,30 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 
+import itertools
+import math
+from abc import ABC, abstractmethod
+from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Iterable, List, Dict, Tuple, Union, Optional, Set, Iterator
-import math
 from fractions import Fraction
-from collections import defaultdict
-import itertools
-from abc import ABC, abstractmethod
+from typing import Callable, Dict, Iterable, Iterator, List, Optional, Set, Tuple, Union
 
 from tamerlite.core.search_space import (
     Action,
-    Event,
     Effect,
-    SearchSpaceABC,
+    Event,
     Expression,
     ExpressionNode,
     FluentNode,
+    SearchSpaceABC,
     State,
     Timing,
     evaluate,
     shift_expression,
+    split_expression,
 )
-from tamerlite.core.search_space import OperatorNode as Op, split_expression
+from tamerlite.core.search_space import OperatorNode as Op
 
 
 @dataclass(eq=True, frozen=True)
@@ -280,7 +281,7 @@ class DeleteRelaxationHeuristic(Heuristic):
 
         self._internal_caching: Optional[
             Dict[Tuple[Union[bool, int, Fraction, str, None], ...], Optional[float]]
-        ] = ({} if internal_caching else None)
+        ] = {} if internal_caching else None
 
     @property
     def name(self) -> str:
@@ -1337,7 +1338,7 @@ class HMaxExplicit(Heuristic):
 
         self._internal_caching: Optional[
             Dict[Tuple[Union[bool, int, Fraction, str, None], ...], Optional[float]]
-        ] = ({} if internal_caching else None)
+        ] = {} if internal_caching else None
 
     @property
     def name(self) -> str:

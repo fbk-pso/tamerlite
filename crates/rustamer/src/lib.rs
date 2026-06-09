@@ -22,8 +22,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
 use heuristic::*;
-use search::*;
 use rustamer_base;
+use search::*;
 
 /// A Python module implemented in Rust.
 #[pymodule]
@@ -38,9 +38,15 @@ fn rustamer(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Heuristic>()?;
 
     m.add_function(wrap_pyfunction!(rustamer_base::make_operator_node, &m)?)?;
-    m.add_function(wrap_pyfunction!(rustamer_base::make_bool_constant_node, &m)?)?;
+    m.add_function(wrap_pyfunction!(
+        rustamer_base::make_bool_constant_node,
+        &m
+    )?)?;
     m.add_function(wrap_pyfunction!(rustamer_base::make_int_constant_node, &m)?)?;
-    m.add_function(wrap_pyfunction!(rustamer_base::make_rational_constant_node, &m)?)?;
+    m.add_function(wrap_pyfunction!(
+        rustamer_base::make_rational_constant_node,
+        &m
+    )?)?;
     m.add_function(wrap_pyfunction!(rustamer_base::make_object_node, &m)?)?;
     m.add_function(wrap_pyfunction!(rustamer_base::make_fluent_node, &m)?)?;
     m.add_function(wrap_pyfunction!(rustamer_base::py_shift_expression, &m)?)?;

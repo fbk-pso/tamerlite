@@ -1,0 +1,18 @@
+[package]
+name = "rustamer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "rustamer"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3.workspace = true
+rustc-hash.workspace = true
+rustamer-base = { path = "../rustamer-base" }
+
+[profile.profiling]
+inherits = "release"
+debug = true

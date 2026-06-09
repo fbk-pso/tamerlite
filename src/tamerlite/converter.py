@@ -15,13 +15,13 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 
-from typing import List, Dict
+from typing import Dict, List
 
-from unified_planning.model import FNode, AbstractProblem
+from unified_planning.model import AbstractProblem, FNode
 from unified_planning.model.walkers import DagWalker
 
-from tamerlite.core import Expression
 from tamerlite.core import (
+    Expression,
     make_bool_constant_node,
     make_fluent_node,
     make_int_constant_node,

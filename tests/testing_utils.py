@@ -15,19 +15,21 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 
+import ast
+import random
+from typing import List
+
 from unified_planning.model import Problem
+
 from tamerlite.core import (
+    Expression,
     make_bool_constant_node,
     make_fluent_node,
     make_int_constant_node,
     make_object_node,
     make_operator_node,
     make_rational_constant_node,
-    Expression,
 )
-import random
-from typing import List
-import ast
 
 
 def compile_problem(problem: Problem):

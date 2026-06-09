@@ -15,11 +15,12 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 
-from unified_planning.model import DeltaSimpleTemporalNetwork
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from fractions import Fraction
-from typing import List, Tuple, Dict, Iterator, Optional, Union, Set
-from abc import ABC, abstractmethod
+from typing import Dict, Iterator, List, Optional, Set, Tuple, Union
+
+from unified_planning.model import DeltaSimpleTemporalNetwork
 
 
 @dataclass(eq=True, frozen=True)
@@ -505,7 +506,6 @@ class SearchSpaceABC(ABC):
 
 
 class SearchSpace(SearchSpaceABC):
-
     def __init__(
         self,
         actions_duration: List[Optional[Tuple[Expression, Expression, bool, bool]]],

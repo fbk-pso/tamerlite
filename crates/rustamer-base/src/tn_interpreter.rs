@@ -31,10 +31,7 @@ pub struct TNInterpreter {
 }
 
 impl TNInterpreter {
-    pub fn new(
-        actions: &Vec<Action>,
-        events: &FxHashMap<Action, Vec<(Timing, Event)>>,
-    ) -> Self {
+    pub fn new(actions: &Vec<Action>, events: &FxHashMap<Action, Vec<(Timing, Event)>>) -> Self {
         let mut actions_ids = FxHashMap::with_hasher(FxBuildHasher::default());
         let mut actions_ids_map_back = FxHashMap::with_hasher(FxBuildHasher::default());
         let start_plan_id = 1;
@@ -124,10 +121,7 @@ impl TNInterpreter {
         tn.get_model_value(&id)
     }
 
-    pub fn get_actions_timings<Q>(
-        &self,
-        tn: &DeltaSTN<u64, Q>,
-    ) -> Vec<((Action, bool, u32), Q)>
+    pub fn get_actions_timings<Q>(&self, tn: &DeltaSTN<u64, Q>) -> Vec<((Action, bool, u32), Q)>
     where
         Q: num_traits::Num + std::ops::Neg<Output = Q> + PartialOrd + Clone,
     {
@@ -146,10 +140,7 @@ impl TNInterpreter {
         res
     }
 
-    pub fn get_events_timings<Q>(
-        &self,
-        tn: &DeltaSTN<u64, Q>,
-    ) -> Vec<((Action, usize, u32), Q)>
+    pub fn get_events_timings<Q>(&self, tn: &DeltaSTN<u64, Q>) -> Vec<((Action, usize, u32), Q)>
     where
         Q: num_traits::Num + std::ops::Neg<Output = Q> + PartialOrd + Clone,
     {
