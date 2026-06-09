@@ -18,6 +18,18 @@ To try the latest unreleased build, install a wheel directly from the rolling
 pip install --pre <url-of-wheel-on-dev-release>
 ```
 
+### Install from source
+
+```bash
+git clone https://github.com/fbk-pso/tamerlite.git
+cd tamerlite
+pip install ./crates/rustamer   # builds the Rust acceleration wheel (requires a Rust toolchain + maturin)
+pip install .                   # installs the tamerlite Python wheel
+```
+
+For a contributor setup (uv + just + pre-commit + dev tools), see
+[CONTRIBUTING.md](CONTRIBUTING.md) instead.
+
 > **Note:** the Rust acceleration is optional. If `rustamer` is not installed,
 > or if you set the environment variable `DISABLE_RUSTAMER=1`, TamerLite
 > transparently falls back to a slower pure-Python implementation.
