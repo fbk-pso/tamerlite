@@ -74,7 +74,9 @@ jobs:
 
       - name: Clone unified-planning test cases (matching the locked commit)
         run: |
-          sha=$(uv run python -c "import tomllib; d = tomllib.load(open('uv.lock', 'rb')); print(next(p['source']['git'].rsplit('#', 1)[1] for p in d['package'] if p['name'] == 'unified-planning'))")
+          # Use system python3 (>= 3.11) instead of `uv run python` so this
+          # step works on the 3.10 matrix entry where tomllib is missing.
+          sha=$(python3 -c "import tomllib; d = tomllib.load(open('uv.lock', 'rb')); print(next(p['source']['git'].rsplit('#', 1)[1] for p in d['package'] if p['name'] == 'unified-planning'))")
           git clone --filter=blob:none https://github.com/aiplan4eu/unified-planning.git up-checkout
           git -C up-checkout checkout "$sha"
 
