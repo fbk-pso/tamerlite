@@ -10,7 +10,7 @@ from aalpy.automata.Dfa import Dfa
 from aalpy.utils import load_automaton_from_file
 
 try:
-    from trace_conversion_utils import split_ground_action
+    from trace_conversion_utils import _is_numeric_parameter_type, split_ground_action
 except ModuleNotFoundError:
     REPO_ROOT = Path(__file__).resolve().parents[2]
     for candidate in (
@@ -19,7 +19,7 @@ except ModuleNotFoundError:
     ):
         if str(candidate) not in sys.path:
             sys.path.insert(0, str(candidate))
-    from trace_conversion_utils import split_ground_action
+    from trace_conversion_utils import _is_numeric_parameter_type, split_ground_action
 
 
 @dataclass(frozen=True)
@@ -129,6 +129,7 @@ class MultiAutomatonPruningModel:
             else:
                 candidates = [summary_file.parent / raw_dot_path]
                 candidates.extend(parent / raw_dot_path for parent in summary_file.parents)
+                candidates.append(summary_file.parent / focus_type / raw_dot_path.name)
                 dot_path = next((candidate for candidate in candidates if candidate.exists()), candidates[0])
             dfa = load_automaton_from_file(str(dot_path), automaton_type="dfa")
             entry_signature = entry.get("signature") or {}
@@ -251,6 +252,9 @@ class MultiAutomatonPruningModel:
 
         rendered_parameters = []
         for parameter_type, parameter_name in typed_parameters:
+            if _is_numeric_parameter_type(parameter_type):
+                rendered_parameters.append("INT")
+                continue
             rendered_parameters.append(
                 self._render_parameter_token(
                     parameter_type=parameter_type,
