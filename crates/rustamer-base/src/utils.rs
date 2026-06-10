@@ -118,7 +118,7 @@ where
 
     pub fn append(payload: Q, previous: &Option<Arc<Self>>) -> Option<Arc<Self>> {
         Some(Arc::new(PersistentList {
-            payload: payload,
+            payload,
             previous: previous.clone(),
         }))
     }
@@ -136,7 +136,7 @@ where
     }
 
     /// Iterate from newest to oldest (reverse order)
-    pub fn iter_rev<'a>(list: &'a Option<Arc<Self>>) -> impl Iterator<Item = &'a Q> {
+    pub fn iter_rev(list: &Option<Arc<Self>>) -> impl Iterator<Item = &Q> {
         struct Iter<'a, Q> {
             current: Option<&'a Arc<PersistentList<Q>>>,
         }

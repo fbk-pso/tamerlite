@@ -38,7 +38,7 @@ pub struct StateContainer {
 }
 
 impl StateContainer {
-    fn set_expanded(&self, expanded: bool) -> () {
+    fn set_expanded(&self, expanded: bool) {
         *self.expanded.borrow_mut() = expanded;
     }
 }
@@ -139,7 +139,7 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
-    let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
+    let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
     let start = SystemTime::now();
     let init = Rc::new(ss.initial_state(None)?);
     let mut expanded_states = 0;
@@ -157,8 +157,8 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
         },
     };
 
-    let mut visited_weak_eq_states = FxHashSet::with_hasher(FxBuildHasher::default());
-    let mut visited_states = FxHashSet::with_hasher(FxBuildHasher::default());
+    let mut visited_weak_eq_states = FxHashSet::with_hasher(FxBuildHasher);
+    let mut visited_states = FxHashSet::with_hasher(FxBuildHasher);
     if !ss.is_temporal() {
         visited_states.insert(Rc::clone(&item.state_container.state));
     } else if weak_equality {
@@ -196,14 +196,14 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
             current.state_container.set_expanded(true);
             let state = &current.state_container.state;
             expanded_states += 1;
-            if !early_termination && ss.goal_reached(&state, None)? {
+            if !early_termination && ss.goal_reached(state, None)? {
                 metrics.insert("expanded_states".to_string(), expanded_states.to_string());
                 metrics.insert("goal_depth".to_string(), state.g.to_string());
-                return Ok((Some(extract_path(&state)), metrics));
+                return Ok((Some(extract_path(state)), metrics));
             }
 
             let mut candidate_containers: Vec<StateContainer> = Vec::new();
-            for rs in ss.get_successor_states_iter(&state) {
+            for rs in ss.get_successor_states_iter(state) {
                 let s = rs?;
                 if early_termination && ss.goal_reached(&s, None)? {
                     metrics.insert("expanded_states".to_string(), expanded_states.to_string());

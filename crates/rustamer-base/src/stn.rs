@@ -62,8 +62,8 @@ where
 {
     pub fn new(tolerance: Q) -> Self {
         DeltaSTN {
-            constraints: FxHashMap::with_hasher(FxBuildHasher::default()),
-            distances: FxHashMap::with_hasher(FxBuildHasher::default()),
+            constraints: FxHashMap::with_hasher(FxBuildHasher),
+            distances: FxHashMap::with_hasher(FxBuildHasher),
             is_sat: true,
             tolerance,
         }
@@ -75,16 +75,16 @@ where
                 self.distances.insert(*x, Q::zero());
                 self.constraints.insert(*x, DeltaNeighbors::mk_empty());
             }
-            if !self.distances.contains_key(&y) {
+            if !self.distances.contains_key(y) {
                 self.distances.insert(*y, Q::zero());
                 self.constraints.insert(*y, DeltaNeighbors::mk_empty());
             }
-            if !self.is_subsumed(&x, &y, &b) {
-                let old_x = self.constraints.get(&x).unwrap();
+            if !self.is_subsumed(x, y, b) {
+                let old_x = self.constraints.get(x).unwrap();
                 self.constraints
-                    .insert(x.clone(), DeltaNeighbors::add(&y, &b, old_x));
+                    .insert(*x, DeltaNeighbors::add(y, b, old_x));
             }
-            self.is_sat = self.inc_check(&x, &y, &b);
+            self.is_sat = self.inc_check(x, y, b);
         }
     }
 
@@ -109,13 +109,8 @@ where
     }
 
     pub fn equals_with_tolerance(&self, b1: &Q, b2: &Q) -> bool {
-        if b1.clone() - b2.clone() <= self.tolerance
+        b1.clone() - b2.clone() <= self.tolerance
             && b1.clone() - b2.clone() >= -self.tolerance.clone()
-        {
-            true
-        } else {
-            false
-        }
     }
 
     fn inc_check(&mut self, x: &T, y: &T, b: &Q) -> bool {
@@ -151,7 +146,7 @@ where
     }
 }
 
-pub fn _tnsolve(fname: String) -> () {
+pub fn _tnsolve(fname: String) {
     let re_new_tn = Regex::new(r#"^NewTN\("([a-z0-9]+)"\);$"#).unwrap();
     let re_check = Regex::new(r#"^Check\("([a-z0-9]+)"\);$"#).unwrap();
     let re_destroy_tn = Regex::new(r#"^DestroyTN\("([a-z0-9]+)"\);$"#).unwrap();
@@ -161,7 +156,7 @@ pub fn _tnsolve(fname: String) -> () {
     )
     .unwrap();
 
-    let mut tn_map = FxHashMap::<String, DeltaSTN<u32, f64>>::with_hasher(FxBuildHasher::default());
+    let mut tn_map = FxHashMap::<String, DeltaSTN<u32, f64>>::with_hasher(FxBuildHasher);
 
     for line in read_to_string(fname).unwrap().lines() {
         if let Some(new_tn) = re_new_tn.captures(line) {
@@ -203,5 +198,5 @@ pub fn _tnsolve(fname: String) -> () {
 
         println!("Unmatched line: {}", line)
     }
-    println!("")
+    println!()
 }

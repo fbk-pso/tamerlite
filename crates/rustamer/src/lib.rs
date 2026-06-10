@@ -22,7 +22,6 @@ use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
 use heuristic::*;
-use rustamer_base;
 use search::*;
 
 /// A Python module implemented in Rust.
