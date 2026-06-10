@@ -1,4 +1,4 @@
-"""Stamp a derived dev version into pyproject.toml + Cargo manifests.
+"""Stamp a derived dev version into pyproject.toml + Cargo.toml.
 
 Run only in CI on main-branch builds. The patched files are consumed by the
 downstream build jobs but never committed.
@@ -9,14 +9,14 @@ Cargo  (SemVer):    <base>-dev.<N>            e.g. 0.2.0-dev.42
 <N> is the total commit count on HEAD (monotonic, doesn't depend on tag fetch).
 
 Three files are patched:
-- pyproject.toml             [project].version  -> Python dev string
-- Cargo.toml                 [workspace.package].version -> Cargo dev string
-- crates/rustamer/Cargo.toml [package].version (was `version.workspace = true`)
+- pyproject.toml                [project].version  -> Python dev string
+- Cargo.toml                    [workspace.package].version -> Cargo dev string
+- crates/rustamer/pyproject.toml [project].version  -> Python dev string
 
-The third patch is necessary because maturin's wheel-naming logic does not
-always follow Cargo's `workspace.true` inheritance in cross-compile / container
-build contexts; replacing the inheritance line with a literal version makes
-the wheel name pick up the dev string reliably.
+The third patch is what makes the rustamer wheel name pick up the dev
+version: maturin uses pyproject's [project].version (PEP 621) for wheel
+naming, not Cargo's package.version, so the rustamer pyproject must be
+stamped explicitly.
 """
 
 from __future__ import annotations
@@ -68,16 +68,15 @@ def main() -> None:
         )
     )
 
-    # Shadow `version.workspace = true` in the rustamer crate with a literal,
-    # so maturin's wheel naming picks up the dev version even when the
-    # build runs inside a manylinux container that doesn't resolve the
-    # workspace inheritance for naming.
-    rc = pathlib.Path("crates/rustamer/Cargo.toml")
-    rc.write_text(
+    # Maturin reads the wheel version from [project].version of the crate's
+    # own pyproject.toml (PEP 621), not from Cargo. Patch it explicitly so
+    # the rustamer wheel name carries the dev string.
+    rp = pathlib.Path("crates/rustamer/pyproject.toml")
+    rp.write_text(
         re.sub(
-            r"^version\.workspace = true$",
-            f'version = "{rs_v}"',
-            rc.read_text(),
+            r'^version = ".*"',
+            f'version = "{py_v}"',
+            rp.read_text(),
             count=1,
             flags=re.M,
         )

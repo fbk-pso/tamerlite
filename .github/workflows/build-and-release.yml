@@ -44,7 +44,7 @@ jobs:
           path: |
             pyproject.toml
             Cargo.toml
-            crates/rustamer/Cargo.toml
+            crates/rustamer/pyproject.toml
 
   linux:
     runs-on: ubuntu-latest
