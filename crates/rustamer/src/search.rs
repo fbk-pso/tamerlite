@@ -17,7 +17,6 @@
 
 use super::heuristic::Heuristic;
 use pyo3::prelude::*;
-use rustamer_base;
 use rustamer_base::Action;
 use rustc_hash::FxHashMap;
 

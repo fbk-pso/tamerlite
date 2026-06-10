@@ -56,7 +56,7 @@ impl ExpressionManager {
     pub fn new() -> ExpressionManager {
         ExpressionManager {
             all_expressions: vec![],
-            expression2id: FxHashMap::with_hasher(FxBuildHasher::default()),
+            expression2id: FxHashMap::with_hasher(FxBuildHasher),
         }
     }
 

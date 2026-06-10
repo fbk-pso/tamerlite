@@ -38,7 +38,7 @@ impl Heuristic {
             hdr: None,
             hmax_explicit: None,
             hcustom: Some(CustomHeuristic::new(callable)?),
-            cache_value_in_state: cache_value_in_state,
+            cache_value_in_state,
         })
     }
 
@@ -69,7 +69,7 @@ impl Heuristic {
             )?),
             hmax_explicit: None,
             hcustom: None,
-            cache_value_in_state: cache_value_in_state,
+            cache_value_in_state,
         })
     }
 
@@ -100,7 +100,7 @@ impl Heuristic {
             )?),
             hmax_explicit: None,
             hcustom: None,
-            cache_value_in_state: cache_value_in_state,
+            cache_value_in_state,
         })
     }
 
@@ -131,7 +131,7 @@ impl Heuristic {
             )?),
             hmax_explicit: None,
             hcustom: None,
-            cache_value_in_state: cache_value_in_state,
+            cache_value_in_state,
         })
     }
 
@@ -157,7 +157,7 @@ impl Heuristic {
                 internal_caching,
             )?),
             hcustom: None,
-            cache_value_in_state: cache_value_in_state,
+            cache_value_in_state,
         })
     }
 
@@ -222,6 +222,6 @@ impl HeuristicTrait for Heuristic {
                 heuristic_cache.insert(self.name(), h_value);
             }
         }
-        return h_value;
+        h_value
     }
 }

@@ -95,7 +95,7 @@ pub fn shift_expression(
     is_negative: bool,
 ) -> Result<Vec<ExpressionNode>, ArithmeticError> {
     exp.iter()
-        .map(|e| do_shift(&e, offset, is_negative))
+        .map(|e| do_shift(e, offset, is_negative))
         .collect::<Result<_, _>>()
 }
 

@@ -131,8 +131,8 @@ impl Event {
         effects: Vec<Effect>,
     ) -> Self {
         Event {
-            action: action,
-            pos: pos,
+            action,
+            pos,
             conditions: conditions.into_iter().map(|e| e.v).collect(),
             start_conditions: start_conditions
                 .into_iter()
@@ -142,7 +142,7 @@ impl Event {
                 .into_iter()
                 .map(|inner_vec| inner_vec.into_iter().map(|e| e.v).collect())
                 .collect(),
-            effects: effects,
+            effects,
         }
     }
 

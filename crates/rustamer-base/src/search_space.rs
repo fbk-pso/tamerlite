@@ -67,7 +67,7 @@ struct MutexChecker {
 impl MutexChecker {
     fn new() -> Self {
         MutexChecker {
-            mutex: Mutex::new(FxHashMap::with_hasher(FxBuildHasher::default())),
+            mutex: Mutex::new(FxHashMap::with_hasher(FxBuildHasher)),
         }
     }
 
@@ -90,7 +90,7 @@ impl MutexChecker {
         }
 
         let mut mutex = self.mutex.lock().unwrap();
-        if let Some(are_mutex) = mutex.get(&events_pair) {
+        if let Some(are_mutex) = mutex.get(events_pair) {
             return *are_mutex;
         }
 
@@ -110,7 +110,7 @@ struct PrecedenceChecker {
 impl PrecedenceChecker {
     fn new() -> Self {
         PrecedenceChecker {
-            precedence: Mutex::new(FxHashMap::with_hasher(FxBuildHasher::default())),
+            precedence: Mutex::new(FxHashMap::with_hasher(FxBuildHasher)),
         }
     }
 
@@ -133,7 +133,7 @@ impl PrecedenceChecker {
         }
 
         let mut precedence = self.precedence.lock().unwrap();
-        if let Some(res) = precedence.get(&events_pair) {
+        if let Some(res) = precedence.get(events_pair) {
             return *res;
         }
 
@@ -238,16 +238,10 @@ impl SearchSpace {
                 a_p.extend(e.effects.iter().flat_map(|eff| get_fluents(&eff.value)));
                 let a_e: FxHashSet<usize> = e.effects.iter().map(|eff| eff.fluent).collect();
                 let a_pe: FxHashSet<usize> = a_p.union(&a_e).copied().collect();
-                let a_sc: FxHashSet<usize> = e
-                    .start_conditions
-                    .iter()
-                    .flat_map(|c| get_fluents(c))
-                    .collect();
-                let a_ec: FxHashSet<usize> = e
-                    .end_conditions
-                    .iter()
-                    .flat_map(|c| get_fluents(c))
-                    .collect();
+                let a_sc: FxHashSet<usize> =
+                    e.start_conditions.iter().flat_map(get_fluents).collect();
+                let a_ec: FxHashSet<usize> =
+                    e.end_conditions.iter().flat_map(get_fluents).collect();
                 event_fluents[a.idx].push((a_p, a_e, a_pe, a_sc, a_ec));
             }
         }
@@ -256,18 +250,18 @@ impl SearchSpace {
 
         let res = SearchSpace {
             actions_duration: converted_actions_duration,
-            events: events,
-            relevant_actions: relevant_actions,
-            compression_safe_actions: compression_safe_actions,
-            event_fluents: event_fluents,
+            events,
+            relevant_actions,
+            compression_safe_actions,
+            event_fluents,
             mutex: MutexChecker::new(),
             precedence: PrecedenceChecker::new(),
-            action_objects: action_objects,
-            obj_to_prev_actions_map: obj_to_prev_actions_map,
+            action_objects,
+            obj_to_prev_actions_map,
             initial_state: initial_state
                 .map(|inner_vec| inner_vec.into_iter().map(|v| v.v).collect()),
             goal: goal.map(|inner_vec| inner_vec.into_iter().map(|e| e.v).collect()),
-            tn_interpreter: tn_interpreter,
+            tn_interpreter,
             deadline: deadline.map(|v| rational_to_f64(&v)),
             epsilon: match &epsilon {
                 Some(x) => rational_to_f64(x),
@@ -277,7 +271,7 @@ impl SearchSpace {
                 Some(x) => x,
                 None => mk_rational(1, 100),
             },
-            is_temporal: is_temporal,
+            is_temporal,
             counter: Mutex::new(0),
         };
         Ok(res)
@@ -353,18 +347,10 @@ impl SearchSpace {
             let mut ss = None;
             let mut ds = None;
             if let Some(start) = s {
-                ss = Some(format!(
-                    "{}/{}",
-                    start.numer().to_string(),
-                    start.denom().to_string()
-                ));
+                ss = Some(format!("{}/{}", start.numer(), start.denom()));
             }
             if let Some(duration) = d {
-                ds = Some(format!(
-                    "{}/{}",
-                    duration.numer().to_string(),
-                    duration.denom().to_string()
-                ));
+                ds = Some(format!("{}/{}", duration.numer(), duration.denom()));
             }
             res.push((ss, a, ds));
         }
@@ -395,7 +381,7 @@ impl SearchSpace {
                     } else {
                         new_state.todo.insert(action, (index + 1, id + 1));
                     }
-                    if self.expand_event(state, &mut new_state, &e, index, id)? {
+                    if self.expand_event(state, &mut new_state, e, index, id)? {
                         return Ok(Some(new_state));
                     }
                 }
@@ -407,7 +393,7 @@ impl SearchSpace {
 
                 let mut new_state = state.clone_for_child();
                 new_state.g += 1.0;
-                if !self.open_action(state, &mut new_state, action, &events)? {
+                if !self.open_action(state, &mut new_state, action, events)? {
                     return Ok(None);
                 }
 
@@ -415,7 +401,7 @@ impl SearchSpace {
                     && self
                         .compression_safe_actions
                         .as_ref()
-                        .map_or(false, |is_compression_safe| is_compression_safe[action.idx])
+                        .is_some_and(|is_compression_safe| is_compression_safe[action.idx])
                     && events.len() > 1
                 {
                     let mut id = new_state.todo.remove(&action).unwrap().1;
@@ -467,7 +453,7 @@ impl SearchSpace {
 
         // check active conditions
         for c in new_state.active_conditions.iter() {
-            let sat = match internal_evaluate(&c, state)? {
+            let sat = match internal_evaluate(c, state)? {
                 ExpressionNode::Bool(v) => v,
                 _ => {
                     return Err(PyException::new_err(
@@ -482,7 +468,7 @@ impl SearchSpace {
 
         // remove end conditions
         for c in e.end_conditions.iter() {
-            new_state.active_conditions.remove(&c);
+            new_state.active_conditions.remove(c);
         }
 
         // insert start conditions
@@ -497,7 +483,7 @@ impl SearchSpace {
 
         // check active conditions
         for c in new_state.active_conditions.iter() {
-            let sat = match internal_evaluate(&c, new_state)? {
+            let sat = match internal_evaluate(c, new_state)? {
                 ExpressionNode::Bool(v) => v,
                 _ => {
                     return Err(PyException::new_err(
@@ -529,7 +515,7 @@ impl SearchSpace {
                 let mut id2 = i.1;
                 for (j, (_, e2)) in self.events[a].iter().skip(i.0).enumerate() {
                     let e_id = (e.action, *index);
-                    let e2_id = (a.clone(), j + i.0);
+                    let e2_id = (*a, j + i.0);
                     let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, id2);
                     if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
                         let b: f64 = -self.epsilon;
@@ -575,7 +561,7 @@ impl SearchSpace {
         }
 
         let mut counter = self.counter.lock().unwrap();
-        let mut id = counter.clone();
+        let mut id = *counter;
         if self.is_temporal {
             // Add temporal constraints between events of the action
             let tn = new_state.temporal_network.as_mut().unwrap();
@@ -657,7 +643,7 @@ impl SearchSpaceTrait for SearchSpace {
                 tn.add(
                     &self.tn_interpreter.end_plan_id,
                     &self.tn_interpreter.start_plan_id,
-                    &deadline,
+                    deadline,
                 );
                 tn.add(
                     &self.tn_interpreter.start_plan_id,
@@ -672,11 +658,11 @@ impl SearchSpaceTrait for SearchSpace {
         Ok(State {
             assignments: init,
             temporal_network: tn,
-            todo: FxHashMap::with_hasher(FxBuildHasher::default()),
+            todo: FxHashMap::with_hasher(FxBuildHasher),
             active_conditions: HashMultiSet::new(),
             g: 0.0,
             path: PersistentList::new(),
-            heuristic_cache: Mutex::new(FxHashMap::with_hasher(FxBuildHasher::default())),
+            heuristic_cache: Mutex::new(FxHashMap::with_hasher(FxBuildHasher)),
         })
     }
 
@@ -707,7 +693,7 @@ impl SearchSpaceTrait for SearchSpace {
                 }
             },
         };
-        match internal_evaluate(&g, state)? {
+        match internal_evaluate(g, state)? {
             ExpressionNode::Bool(v) => Ok(v),
             _ => Err(PyException::new_err(
                 "The goal is not a boolean expression!",
@@ -723,13 +709,13 @@ impl SearchSpaceTrait for SearchSpace {
         let goals = match goal {
             Some(v) => split_expression(&v.into_iter().map(|e| e.v).collect())?,
             None => match &self.goal {
-                Some(v) => split_expression(&v)?,
+                Some(v) => split_expression(v)?,
                 None => {
                     return Err(PyException::new_err("The goal must be defined somewhere!"));
                 }
             },
         };
-        let mut res: FxHashSet<_> = FxHashSet::with_hasher(FxBuildHasher::default());
+        let mut res: FxHashSet<_> = FxHashSet::with_hasher(FxBuildHasher);
         for g in goals {
             if internal_evaluate(&g, state)? == ExpressionNode::Bool(true) {
                 res.insert(g.into_iter().map(|v| PyExpressionNode { v }).collect());
@@ -747,8 +733,7 @@ impl SearchSpaceTrait for SearchSpace {
         }
 
         let mut tn = DeltaSTN::new(mk_rational(0, 1));
-        let mut todo: FxHashMap<Action, (usize, u32)> =
-            FxHashMap::with_hasher(FxBuildHasher::default());
+        let mut todo: FxHashMap<Action, (usize, u32)> = FxHashMap::with_hasher(FxBuildHasher);
         let mut event_path: Vec<(Event, u32)> = Vec::new();
         let mut counter = 0;
         let mut state = self.initial_state(None)?;
@@ -782,7 +767,7 @@ impl SearchSpaceTrait for SearchSpace {
                             let mut id2 = i.1;
                             for (j, (_, e2)) in self.events[a].iter().skip(i.0).enumerate() {
                                 let e_id = (e.action, index);
-                                let e2_id = (a.clone(), j + i.0);
+                                let e2_id = (*a, j + i.0);
                                 let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, id2);
                                 if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
                                     let b = -self.epsilon_rational.clone();
@@ -853,7 +838,7 @@ impl SearchSpaceTrait for SearchSpace {
                         let mut id2 = i.1;
                         for (j, (_, e2)) in self.events[a].iter().skip(i.0).enumerate() {
                             let e_id = (e.action, 0);
-                            let e2_id = (a.clone(), j + i.0);
+                            let e2_id = (*a, j + i.0);
                             let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, id2);
                             if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
                                 let b = -self.epsilon_rational.clone();
@@ -874,9 +859,9 @@ impl SearchSpaceTrait for SearchSpace {
 
         let mut res = Vec::new();
         let mut start_time: FxHashMap<(Action, u32), BigRational> =
-            FxHashMap::with_hasher(FxBuildHasher::default());
+            FxHashMap::with_hasher(FxBuildHasher);
         let mut end_time: FxHashMap<(Action, u32), BigRational> =
-            FxHashMap::with_hasher(FxBuildHasher::default());
+            FxHashMap::with_hasher(FxBuildHasher);
         for (a, t) in self.tn_interpreter.get_actions_timings(&tn).iter() {
             if a.1 {
                 start_time.insert((a.0, a.2), t.clone());

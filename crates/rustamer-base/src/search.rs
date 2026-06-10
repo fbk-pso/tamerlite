@@ -174,7 +174,7 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
-    let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
+    let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
     let start = SystemTime::now();
     let init = Rc::new(ss.initial_state(None)?);
     let mut expanded_states = 0;
@@ -185,8 +185,8 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         return Ok((Some(extract_path(&init)), metrics));
     }
 
-    let mut visited_weak_eq_states = FxHashSet::with_hasher(FxBuildHasher::default());
-    let mut visited_states = FxHashSet::with_hasher(FxBuildHasher::default());
+    let mut visited_weak_eq_states = FxHashSet::with_hasher(FxBuildHasher);
+    let mut visited_states = FxHashSet::with_hasher(FxBuildHasher);
     if !ss.is_temporal() {
         visited_states.insert(Rc::clone(&init));
     } else if weak_equality {
@@ -247,16 +247,13 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
                     metrics.insert("goal_depth".to_string(), s.g.to_string());
                     return Ok((Some(extract_path(&s)), metrics));
                 }
-                match h {
-                    Some(v) => {
-                        let f = weight * v + (1.0 - weight) * s.g;
-                        open.push(PrioritizedItem {
-                            heuristic: f,
-                            state: s,
-                            idx: generated_states,
-                        });
-                    }
-                    None => {}
+                if let Some(v) = h {
+                    let f = weight * v + (1.0 - weight) * s.g;
+                    open.push(PrioritizedItem {
+                        heuristic: f,
+                        state: s,
+                        idx: generated_states,
+                    });
                 }
                 generated_states += 1;
             }
@@ -274,7 +271,7 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
-    let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
+    let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
     let mut expanded_states = 0;
@@ -347,16 +344,13 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
                     metrics.insert("goal_depth".to_string(), s.g.to_string());
                     return Ok((Some(extract_path(&s)), metrics));
                 }
-                match h {
-                    Some(v) => {
-                        let f = weight * v + (1.0 - weight) * s.g;
-                        open.push(PrioritizedItem {
-                            heuristic: f,
-                            state: s,
-                            idx: generated_states,
-                        });
-                    }
-                    None => {}
+                if let Some(v) = h {
+                    let f = weight * v + (1.0 - weight) * s.g;
+                    open.push(PrioritizedItem {
+                        heuristic: f,
+                        state: s,
+                        idx: generated_states,
+                    });
                 }
                 generated_states += 1;
             }
@@ -388,7 +382,7 @@ fn basic_search<S: SearchSpaceTrait>(
     timeout: Option<f32>,
     early_termination: bool,
 ) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
-    let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
+    let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
     let mut open = VecDeque::new();
@@ -442,7 +436,7 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
-    let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
+    let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
     let start = SystemTime::now();
     let init = Rc::new(ss.initial_state(None)?);
     let mut expanded_states = 0;
@@ -462,8 +456,8 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     };
     let mut open = VecDeque::new();
     open.push_back(init);
-    let mut closed = FxHashSet::with_hasher(FxBuildHasher::default());
-    let mut closed_weak_eq = FxHashSet::with_hasher(FxBuildHasher::default());
+    let mut closed = FxHashSet::with_hasher(FxBuildHasher);
+    let mut closed_weak_eq = FxHashSet::with_hasher(FxBuildHasher);
     while let Some(state) = open.pop_front() {
         if let Some(t) = timeout {
             if start.elapsed().unwrap().as_secs_f32() > t {
@@ -511,19 +505,16 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
                     metrics.insert("goal_depth".to_string(), s.g.to_string());
                     return Ok((Some(extract_path(&s)), metrics));
                 }
-                match h {
-                    Some(v) => {
-                        if v < best_h {
-                            new_best_found = true;
-                            best_h = v;
-                            open.clear();
-                            open.push_back(s);
-                            break;
-                        } else {
-                            open.push_back(s);
-                        }
+                if let Some(v) = h {
+                    if v < best_h {
+                        new_best_found = true;
+                        best_h = v;
+                        open.clear();
+                        open.push_back(s);
+                        break;
+                    } else {
+                        open.push_back(s);
                     }
-                    None => {}
                 }
             }
             if new_best_found {
