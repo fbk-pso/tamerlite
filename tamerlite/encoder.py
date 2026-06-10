@@ -59,7 +59,10 @@ class Encoder:
         else:
             self._simplifier = problem.environment.simplifier
 
-        self._dfa = dfa
+        if isinstance(dfa, Dfa):
+            self._dfa = DfaPruningModel(dfa)
+        else:
+            self._dfa = dfa
 
         fluent_types = {}
         for f in problem.initial_values.keys():
@@ -139,8 +142,6 @@ class Encoder:
         for ut in problem.user_types:
             self._objects[ut.name] = [o.name for o in problem.objects(ut)]
 
-        if isinstance(self._dfa, Dfa):
-            self._dfa = DfaPruningModel(self._dfa)
         if self._dfa is not None:
             self._dfa.bind_to_planner(self._action_by_name, self._objects)
 

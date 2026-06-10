@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,11 +40,81 @@ class MultiAutomatonSpec:
     dfa: Dfa
 
 
+@dataclass(frozen=True)
+class SingleDfaVariantSpec:
+    name: str
+    split_ground_actions: bool
+    abstract_ground_actions: bool
+
+    @classmethod
+    def from_metadata(cls, metadata: Mapping[str, object] | None) -> "SingleDfaVariantSpec":
+        payload = metadata or {}
+        split_ground_actions = bool(payload.get("split_ground_actions", False))
+        abstract_ground_actions = bool(payload.get("abstract_ground_actions", False))
+        if abstract_ground_actions:
+            return cls(
+                name="single-dfa-abstract",
+                split_ground_actions=False,
+                abstract_ground_actions=True,
+            )
+        if split_ground_actions:
+            return cls(
+                name="single-dfa-split",
+                split_ground_actions=True,
+                abstract_ground_actions=False,
+            )
+        return cls(
+            name="single-dfa-plain",
+            split_ground_actions=False,
+            abstract_ground_actions=False,
+        )
+
+
+def _normalize_transition_token(token: object) -> str:
+    token_str = str(token)
+    if len(token_str) >= 2 and token_str[0] == token_str[-1] and token_str[0] in {"'", '"'}:
+        return token_str[1:-1]
+    return token_str
+
+
 class DfaPruningModel:
-    def __init__(self, dfa: Dfa):
+    def __init__(self, dfa: Dfa, *, variant: SingleDfaVariantSpec | None = None):
         self._dfa = dfa
+        self._variant = variant or SingleDfaVariantSpec(
+            name="single-dfa-plain",
+            split_ground_actions=False,
+            abstract_ground_actions=False,
+        )
         self._action_by_name: Dict[str, object] = {}
+        self._tokens_by_action: Dict[object, tuple[str, ...]] = {}
         self._state_by_id = {str(state.state_id): state for state in dfa.states}
+        self._known_action_labels = self._collect_action_labels()
+
+    @classmethod
+    def from_automaton_files(
+        cls,
+        dot_path: str | Path,
+        *,
+        dataset_path: str | Path | None = None,
+    ) -> "DfaPruningModel":
+        dot_file = Path(dot_path)
+        payload = None
+        if dataset_path is None:
+            candidate = dot_file.with_suffix(".dataset.json")
+            if candidate.exists():
+                dataset_path = candidate
+        if dataset_path is not None:
+            payload = json.loads(Path(dataset_path).read_text(encoding="utf-8"))
+        variant = SingleDfaVariantSpec.from_metadata((payload or {}).get("metadata"))
+        dfa = load_automaton_from_file(str(dot_file), automaton_type="dfa")
+        return cls(dfa, variant=variant)
+
+    @property
+    def variant_name(self) -> str:
+        return self._variant.name
+
+    def clone(self) -> "DfaPruningModel":
+        return DfaPruningModel(copy.deepcopy(self._dfa), variant=self._variant)
 
     def bind_to_planner(
         self,
@@ -52,12 +123,16 @@ class DfaPruningModel:
     ) -> None:
         del objects_by_type
         self._action_by_name = dict(action_by_name)
+        self._tokens_by_action = {}
+        for action_name, action in self._action_by_name.items():
+            tokens = self._planner_tokens_for_action_name(action_name)
+            if tokens:
+                self._tokens_by_action[action] = tokens
+
         for state in self._dfa.states:
             new_transitions = {}
             for input_symbol, destination_state in state.transitions.items():
-                planner_action = self._action_by_name.get(str(input_symbol))
-                if planner_action is not None:
-                    new_transitions[planner_action] = destination_state
+                new_transitions[_normalize_transition_token(input_symbol)] = destination_state
             state.transitions = new_transitions
 
     @property
@@ -66,10 +141,17 @@ class DfaPruningModel:
 
     def advance(self, progress: SingleAutomatonProgress, action: object) -> SingleAutomatonProgress | None:
         state = self._state_by_id[progress.state_id]
-        next_state = state.transitions.get(action)
-        if next_state is None:
+        tokens = self._tokens_by_action.get(action)
+        if not tokens:
             return None
-        return SingleAutomatonProgress(str(next_state.state_id))
+
+        current_state = state
+        for token in tokens:
+            next_state = current_state.transitions.get(token)
+            if next_state is None:
+                return None
+            current_state = next_state
+        return SingleAutomatonProgress(str(current_state.state_id))
 
     def is_prunable(self, progress: SingleAutomatonProgress | None) -> bool:
         if progress is None:
@@ -79,10 +161,45 @@ class DfaPruningModel:
     def pruning_labels(self, progress: SingleAutomatonProgress | None) -> tuple[str, ...]:
         if not self.is_prunable(progress):
             return ()
-        return ("single_dfa",)
+        return (self._variant.name,)
 
     def progress_key(self, progress: SingleAutomatonProgress | None):
         return None if progress is None else progress.state_id
+
+    def _collect_action_labels(self) -> tuple[str, ...]:
+        labels = set()
+        for state in self._dfa.states:
+            for token in state.transitions:
+                token_str = _normalize_transition_token(token)
+                if not token_str:
+                    continue
+                labels.add(token_str)
+        return tuple(sorted(labels, key=len, reverse=True))
+
+    def _planner_tokens_for_action_name(self, action_name: str) -> tuple[str, ...]:
+        if self._variant.name == "single-dfa-plain":
+            return (action_name,)
+
+        label = self._infer_action_label(action_name)
+        if label is None:
+            return ()
+
+        if self._variant.name == "single-dfa-abstract":
+            return (label,)
+
+        suffix = action_name[len(label):]
+        if suffix.startswith("_"):
+            suffix = suffix[1:]
+        parameters = tuple(part for part in suffix.split("_") if part)
+        return (label, *parameters)
+
+    def _infer_action_label(self, action_name: str) -> str | None:
+        for candidate in self._known_action_labels:
+            if action_name == candidate:
+                return candidate
+            if action_name.startswith(f"{candidate}_"):
+                return candidate
+        return None
 
 
 class MultiAutomatonPruningModel:
@@ -259,32 +376,15 @@ class MultiAutomatonPruningModel:
         rendered_parameters = []
         for parameter_type, parameter_name in typed_parameters:
             if _is_numeric_parameter_type(parameter_type):
-                rendered_parameters.append("INT")
+                rendered_parameters.append(parameter_name)
                 continue
-            rendered_parameters.append(
-                self._render_parameter_token(
-                    parameter_type=parameter_type,
-                    parameter_name=parameter_name,
-                    focus_type=focus_type,
-                    focus_object=focus_object,
-                )
-            )
 
-        if not rendered_parameters:
-            return action_name
+            normalized_type = str(parameter_type).lower()
+            placeholder = self._placeholders_by_type.get(normalized_type, normalized_type[:1])
+            if parameter_name == focus_object:
+                rendered_parameters.append(f"*{placeholder}*")
+            elif self._abstract_other_objects:
+                rendered_parameters.append(placeholder)
+            else:
+                rendered_parameters.append(parameter_name)
         return f"{action_name}({','.join(rendered_parameters)})"
-
-    def _render_parameter_token(
-        self,
-        *,
-        parameter_type: str,
-        parameter_name: str,
-        focus_type: str,
-        focus_object: str,
-    ) -> str:
-        if parameter_name == focus_object:
-            placeholder = self._automata[focus_type].placeholder
-            return f"*{placeholder}*"
-        if self._abstract_other_objects:
-            return self._placeholders_by_type[parameter_type]
-        return parameter_name

@@ -1,9 +1,10 @@
+import json
 from pathlib import Path
 
 from aalpy.automata.Dfa import Dfa, DfaState
 from tamerlite.core.search import WeakEqState
 from tamerlite.core.search_space import Action, Event, MultiSet, SearchSpace, State, Timing
-from tamerlite.pruning_automata import MultiAutomatonPruningModel
+from tamerlite.pruning_automata import DfaPruningModel, MultiAutomatonPruningModel
 
 
 def _build_dfa(bad_token: str) -> Dfa:
@@ -36,6 +37,94 @@ def test_multi_automaton_progress_is_part_of_state_identity():
 
     assert state_a != state_b
     assert WeakEqState(state_a) != WeakEqState(state_b)
+
+
+def test_single_dfa_plain_uses_exact_grounded_action_tokens():
+    inspect_r0 = Action(0)
+
+    pruning_model = DfaPruningModel(_build_dfa("inspect_r0"))
+    pruning_model.bind_to_planner(
+        action_by_name={"inspect_r0": inspect_r0},
+        objects_by_type={"robot": ["r0"]},
+    )
+
+    progress = pruning_model.initial_state
+    next_progress = pruning_model.advance(progress, inspect_r0)
+    assert pruning_model.is_prunable(next_progress)
+    assert pruning_model.pruning_labels(next_progress) == ("single-dfa-plain",)
+
+
+def test_single_dfa_abstract_maps_grounded_actions_to_lifted_action_names(tmp_path: Path):
+    automaton_dir = tmp_path / "single_dfa_abstract"
+    automaton_dir.mkdir(parents=True)
+
+    dfa = _build_dfa("inspect")
+    dfa.save(str(automaton_dir / "automaton"), file_type="dot")
+    (automaton_dir / "automaton.dataset.json").write_text(
+        json.dumps(
+            {
+                "format": "flat_trace_dataset/v1",
+                "positive": [["inspect"]],
+                "negative": [],
+                "metadata": {
+                    "split_ground_actions": False,
+                    "abstract_ground_actions": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    pruning_model = DfaPruningModel.from_automaton_files(automaton_dir / "automaton.dot")
+    inspect_r0 = Action(0)
+    pruning_model.bind_to_planner(
+        action_by_name={"inspect_r0": inspect_r0},
+        objects_by_type={"robot": ["r0"]},
+    )
+
+    progress = pruning_model.initial_state
+    next_progress = pruning_model.advance(progress, inspect_r0)
+    assert pruning_model.is_prunable(next_progress)
+    assert pruning_model.pruning_labels(next_progress) == ("single-dfa-abstract",)
+
+
+def test_single_dfa_split_consumes_action_name_and_parameter_tokens(tmp_path: Path):
+    automaton_dir = tmp_path / "single_dfa_split"
+    automaton_dir.mkdir(parents=True)
+
+    safe = DfaState("safe", is_accepting=False)
+    mid = DfaState("mid", is_accepting=False)
+    bad = DfaState("bad", is_accepting=True)
+    safe.transitions["inspect"] = mid
+    mid.transitions["r0"] = bad
+    dfa = Dfa(safe, [safe, mid, bad])
+    dfa.save(str(automaton_dir / "automaton"), file_type="dot")
+    (automaton_dir / "automaton.dataset.json").write_text(
+        json.dumps(
+            {
+                "format": "flat_trace_dataset/v1",
+                "positive": [["inspect", "r0"]],
+                "negative": [],
+                "metadata": {
+                    "split_ground_actions": True,
+                    "abstract_ground_actions": False,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    pruning_model = DfaPruningModel.from_automaton_files(automaton_dir / "automaton.dot")
+    inspect_r0 = Action(0)
+    pruning_model.bind_to_planner(
+        action_by_name={"inspect_r0": inspect_r0},
+        objects_by_type={"robot": ["r0"]},
+    )
+
+    progress = pruning_model.initial_state
+    next_progress = pruning_model.advance(progress, inspect_r0)
+    assert pruning_model.is_prunable(next_progress)
+    assert pruning_model.pruning_labels(next_progress) == ("single-dfa-split",)
 
 
 def test_multi_automaton_prunes_only_the_object_that_reaches_accepting():
