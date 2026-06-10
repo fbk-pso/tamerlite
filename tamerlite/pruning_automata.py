@@ -157,11 +157,17 @@ class MultiAutomatonPruningModel:
             str(object_type).lower(): tuple(sorted(object_names))
             for object_type, object_names in objects_by_type.items()
         }
+        object_type_by_name = {
+            object_name: object_type
+            for object_type, object_names in self._objects_by_type.items()
+            for object_name in object_names
+        }
 
         for action_name, action in self._action_by_name.items():
             parsed_name, typed_parameters = split_ground_action(
                 action_name,
                 self._action_parameter_types,
+                object_type_by_name=object_type_by_name,
             )
             self._planner_action_details[action] = (parsed_name, typed_parameters)
 
