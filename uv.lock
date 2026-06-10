@@ -658,16 +658,16 @@ wheels = [
 
 [[package]]
 name = "pytest-regressions"
-version = "2.8.3"
+version = "2.11.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pytest" },
     { name = "pytest-datadir" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3a/63/cdb0ee15012a538fa07de21ec0a5c8eb113db9f28378f67b538d1c0b6d04/pytest_regressions-2.8.3.tar.gz", hash = "sha256:1ad90708bee02a3d36c78ef0b6f9692a9a30d312dd828680fd6d2a7235fcd221", size = 117168, upload-time = "2025-09-05T12:51:32.319Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ba/0f/1d6b8cc851596be52c401af53fd0d844e72921b0b11866b88995673cd320/pytest_regressions-2.11.0.tar.gz", hash = "sha256:d4a86092f979eb25d2403c51b2b61039781c4c7c7a364a56b9fa838872a650f7", size = 117474, upload-time = "2026-05-25T12:09:01.796Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/55/b9/7b2fe8407744cc37a74e29bed833256a305133505ea4979564911a98338b/pytest_regressions-2.8.3-py3-none-any.whl", hash = "sha256:72500dd95bde418c850f290a3108dacb56427067f364f7112cb5b16f6d6cc29c", size = 24894, upload-time = "2025-09-05T12:51:31.1Z" },
+    { url = "https://files.pythonhosted.org/packages/97/61/fe772eda66bb8e2ee72da2937382aa4f803ca1e41092ca8d59953e96262c/pytest_regressions-2.11.0-py3-none-any.whl", hash = "sha256:fcb2bbcfb2fda256624d434c88cb1e4003667b7e078ee4084887cf839bbdf831", size = 25556, upload-time = "2026-05-25T12:09:00.292Z" },
 ]
 
 [[package]]
@@ -951,7 +951,7 @@ dev = [
     { name = "mypy", specifier = "==2.1.0" },
     { name = "pre-commit", specifier = "==4.0.1" },
     { name = "pytest", specifier = "==9.0.3" },
-    { name = "pytest-regressions", specifier = "==2.8.3" },
+    { name = "pytest-regressions", specifier = "==2.11.0" },
     { name = "ruff", specifier = "==0.15.16" },
     { name = "rustamer", editable = "crates/rustamer" },
     { name = "unified-planning", git = "https://github.com/aiplan4eu/unified-planning.git" },
