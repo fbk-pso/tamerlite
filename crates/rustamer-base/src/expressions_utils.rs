@@ -99,14 +99,13 @@ pub fn shift_expression(
         .collect::<Result<_, _>>()
 }
 
-pub fn split_expression(exp: &Vec<ExpressionNode>) -> PyResult<Vec<Vec<ExpressionNode>>> {
+pub fn split_expression(exp: &[ExpressionNode]) -> PyResult<Vec<Vec<ExpressionNode>>> {
     if let Some(ExpressionNode::And(operands)) = exp.last() {
         let mut res = Vec::with_capacity(operands.len());
         let mut last = 0;
         for op in operands.iter() {
             let mut new_exp = Vec::with_capacity(op + 1 - last);
-            for i in last..=*op {
-                let e = &exp[i];
+            for e in &exp[last..=*op] {
                 match e {
                     ExpressionNode::And(v) => {
                         let operands = v.iter().map(|&j| j - last).collect();
@@ -156,7 +155,7 @@ pub fn split_expression(exp: &Vec<ExpressionNode>) -> PyResult<Vec<Vec<Expressio
         }
         Ok(res)
     } else {
-        Ok(vec![exp.clone()])
+        Ok(vec![exp.to_owned()])
     }
 }
 
@@ -234,29 +233,26 @@ pub fn simplify(
                 } else {
                     let val1 = get_rational_from_expression_node(&res[p1]);
                     let val2 = get_rational_from_expression_node(&res[p2]);
-                    if val1.is_ok() && val2.is_ok() {
-                        ExpressionNode::Bool(val1.unwrap() == val2.unwrap())
-                    } else {
-                        e.v
+                    match (val1, val2) {
+                        (Ok(v1), Ok(v2)) => ExpressionNode::Bool(v1 == v2),
+                        _ => e.v,
                     }
                 }
             }
             ExpressionNode::LE(p1, p2) => {
                 let val1 = get_rational_from_expression_node(&res[p1]);
                 let val2 = get_rational_from_expression_node(&res[p2]);
-                if val1.is_ok() && val2.is_ok() {
-                    ExpressionNode::Bool(val1.unwrap() <= val2.unwrap())
-                } else {
-                    e.v
+                match (val1, val2) {
+                    (Ok(v1), Ok(v2)) => ExpressionNode::Bool(v1 <= v2),
+                    _ => e.v,
                 }
             }
             ExpressionNode::LT(p1, p2) => {
                 let val1 = get_rational_from_expression_node(&res[p1]);
                 let val2 = get_rational_from_expression_node(&res[p2]);
-                if val1.is_ok() && val2.is_ok() {
-                    ExpressionNode::Bool(val1.unwrap() < val2.unwrap())
-                } else {
-                    e.v
+                match (val1, val2) {
+                    (Ok(v1), Ok(v2)) => ExpressionNode::Bool(v1 < v2),
+                    _ => e.v,
                 }
             }
             ExpressionNode::Plus(ref v) => {
@@ -265,8 +261,8 @@ pub fn simplify(
                 let mut operands = Vec::new();
                 for p in v.iter() {
                     let val = get_rational_from_expression_node(&res[*p]);
-                    if val.is_ok() {
-                        r += val.unwrap();
+                    if let Ok(val) = val {
+                        r += val;
 
                         if first_constant_operand.is_none() {
                             first_constant_operand = Some(*p);
@@ -277,9 +273,7 @@ pub fn simplify(
                     }
                 }
 
-                if first_constant_operand.is_none() {
-                    e.v
-                } else {
+                if let Some(first_constant_operand) = first_constant_operand {
                     let new_node = if r.is_integer() {
                         ExpressionNode::Int(Box::new(r.to_integer()))
                     } else {
@@ -289,23 +283,26 @@ pub fn simplify(
                     if operands.len() == 1 {
                         new_node
                     } else {
-                        res[first_constant_operand.unwrap()] = new_node;
+                        res[first_constant_operand] = new_node;
                         ExpressionNode::Plus(operands)
                     }
+                } else {
+                    e.v
                 }
             }
             ExpressionNode::Minus(p1, p2) => {
                 let val1 = get_rational_from_expression_node(&res[p1]);
                 let val2 = get_rational_from_expression_node(&res[p2]);
-                if val1.is_ok() && val2.is_ok() {
-                    let r = val1.unwrap() - val2.unwrap();
-                    if r.is_integer() {
-                        ExpressionNode::Int(Box::new(r.to_integer()))
-                    } else {
-                        ExpressionNode::Rational(Box::new(r))
+                match (val1, val2) {
+                    (Ok(v1), Ok(v2)) => {
+                        let r = v1 - v2;
+                        if r.is_integer() {
+                            ExpressionNode::Int(Box::new(r.to_integer()))
+                        } else {
+                            ExpressionNode::Rational(Box::new(r))
+                        }
                     }
-                } else {
-                    e.v
+                    _ => e.v,
                 }
             }
             ExpressionNode::Times(ref v) => {
@@ -314,8 +311,8 @@ pub fn simplify(
                 let mut operands = Vec::new();
                 for p in v.iter() {
                     let val = get_rational_from_expression_node(&res[*p]);
-                    if val.is_ok() {
-                        r *= val.unwrap();
+                    if let Ok(val) = val {
+                        r *= val;
 
                         if first_constant_operand.is_none() {
                             first_constant_operand = Some(*p);
@@ -326,9 +323,7 @@ pub fn simplify(
                     }
                 }
 
-                if first_constant_operand.is_none() {
-                    e.v
-                } else {
+                if let Some(first_constant_operand) = first_constant_operand {
                     let new_node = if r.is_integer() {
                         ExpressionNode::Int(Box::new(r.to_integer()))
                     } else {
@@ -338,28 +333,30 @@ pub fn simplify(
                     if operands.len() == 1 {
                         new_node
                     } else {
-                        res[first_constant_operand.unwrap()] = new_node;
+                        res[first_constant_operand] = new_node;
                         ExpressionNode::Times(operands)
                     }
+                } else {
+                    e.v
                 }
             }
             ExpressionNode::Div(p1, p2) => {
                 let val1 = get_rational_from_expression_node(&res[p1]);
                 let val2 = get_rational_from_expression_node(&res[p2]);
-                if val1.is_ok() && val2.is_ok() {
-                    let val2 = val2.unwrap();
-                    if val2.is_zero() {
-                        return Err(PyZeroDivisionError::new_err("division by zero"));
-                    }
+                match (val1, val2) {
+                    (Ok(v1), Ok(v2)) => {
+                        if v2.is_zero() {
+                            return Err(PyZeroDivisionError::new_err("division by zero"));
+                        }
 
-                    let r = val1.unwrap() / val2;
-                    if r.is_integer() {
-                        ExpressionNode::Int(Box::new(r.to_integer()))
-                    } else {
-                        ExpressionNode::Rational(Box::new(r))
+                        let r = v1 / v2;
+                        if r.is_integer() {
+                            ExpressionNode::Int(Box::new(r.to_integer()))
+                        } else {
+                            ExpressionNode::Rational(Box::new(r))
+                        }
                     }
-                } else {
-                    e.v
+                    _ => e.v,
                 }
             }
             ExpressionNode::Fluent(s) => {

@@ -177,7 +177,7 @@ pub fn _tnsolve(fname: String) {
         }
 
         if let Some(destroy_tn) = re_destroy_tn.captures(line) {
-            tn_map.remove(&destroy_tn[1].to_owned());
+            tn_map.remove(&destroy_tn[1]);
             continue;
         }
 
@@ -192,7 +192,7 @@ pub fn _tnsolve(fname: String) {
             let x = add[2].parse::<u32>().unwrap();
             let y = add[3].parse::<u32>().unwrap();
             let b = add[4].parse::<f64>().unwrap();
-            tn_map.get_mut(&add[1].to_owned()).unwrap().add(&x, &y, &b);
+            tn_map.get_mut(&add[1]).unwrap().add(&x, &y, &b);
             continue;
         }
 

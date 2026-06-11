@@ -30,6 +30,22 @@ use super::structures::*;
 use super::tn_interpreter::TNInterpreter;
 use super::utils::*;
 
+type ScheduledAction = (Option<BigRational>, Action, Option<BigRational>);
+type PyScheduledAction = (Option<String>, Action, Option<String>);
+type MutexCache = Mutex<FxHashMap<((Action, usize), (Action, usize)), bool>>;
+type PrecedenceCache = Mutex<FxHashMap<((Action, usize), (Action, usize)), bool>>;
+type EventFluents = Vec<
+    Vec<(
+        FxHashSet<usize>,
+        FxHashSet<usize>,
+        FxHashSet<usize>,
+        FxHashSet<usize>,
+        FxHashSet<usize>,
+    )>,
+>;
+type DurationInterval = (Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool);
+type PyDurationInterval = (Vec<PyExpressionNode>, Vec<PyExpressionNode>, bool, bool);
+
 pub trait SearchSpaceTrait {
     fn is_temporal(&self) -> bool;
     fn tn_interpreter(&self) -> &TNInterpreter;
@@ -53,94 +69,75 @@ pub trait SearchSpaceTrait {
         state: &State,
         goal: Option<Vec<PyExpressionNode>>,
     ) -> PyResult<Vec<Vec<PyExpressionNode>>>;
-    fn build_plan(
-        &self,
-        path: &Vec<Action>,
-    ) -> PyResult<Vec<(Option<BigRational>, Action, Option<BigRational>)>>;
+    fn build_plan(&self, path: &[Action]) -> PyResult<Vec<ScheduledAction>>;
 }
 
 #[derive(Debug)]
 struct MutexChecker {
-    mutex: Mutex<FxHashMap<((Action, usize), (Action, usize)), bool>>,
+    cache: MutexCache,
 }
 
 impl MutexChecker {
     fn new() -> Self {
         MutexChecker {
-            mutex: Mutex::new(FxHashMap::with_hasher(FxBuildHasher)),
+            cache: Mutex::new(FxHashMap::with_hasher(FxBuildHasher)),
         }
     }
 
     fn check(
         &self,
         events_pair: &((Action, usize), (Action, usize)),
-        event_fluents: &Vec<
-            Vec<(
-                FxHashSet<usize>,
-                FxHashSet<usize>,
-                FxHashSet<usize>,
-                FxHashSet<usize>,
-                FxHashSet<usize>,
-            )>,
-        >,
+        event_fluents: &EventFluents,
     ) -> bool {
         let ((a1, i1), (a2, i2)) = events_pair;
         if a1 == a2 {
             return true;
         }
 
-        let mut mutex = self.mutex.lock().unwrap();
-        if let Some(are_mutex) = mutex.get(events_pair) {
+        let mut cache = self.cache.lock().unwrap();
+        if let Some(are_mutex) = cache.get(events_pair) {
             return *are_mutex;
         }
 
         let (_, a_e, a_pe, _, _) = &event_fluents[a1.idx][*i1];
         let (b_p, b_e, _, _, _) = &event_fluents[a2.idx][*i2];
         let are_mutex = !(b_p.is_disjoint(a_e) && a_pe.is_disjoint(b_e));
-        mutex.insert(*events_pair, are_mutex);
+        cache.insert(*events_pair, are_mutex);
         are_mutex
     }
 }
 
 #[derive(Debug)]
 struct PrecedenceChecker {
-    precedence: Mutex<FxHashMap<((Action, usize), (Action, usize)), bool>>,
+    cache: PrecedenceCache,
 }
 
 impl PrecedenceChecker {
     fn new() -> Self {
         PrecedenceChecker {
-            precedence: Mutex::new(FxHashMap::with_hasher(FxBuildHasher)),
+            cache: Mutex::new(FxHashMap::with_hasher(FxBuildHasher)),
         }
     }
 
     fn check(
         &self,
         events_pair: &((Action, usize), (Action, usize)),
-        event_fluents: &Vec<
-            Vec<(
-                FxHashSet<usize>,
-                FxHashSet<usize>,
-                FxHashSet<usize>,
-                FxHashSet<usize>,
-                FxHashSet<usize>,
-            )>,
-        >,
+        event_fluents: &EventFluents,
     ) -> bool {
         let ((a1, i1), (a2, i2)) = events_pair;
         if a1 == a2 {
             return true;
         }
 
-        let mut precedence = self.precedence.lock().unwrap();
-        if let Some(res) = precedence.get(events_pair) {
+        let mut cache = self.cache.lock().unwrap();
+        if let Some(res) = cache.get(events_pair) {
             return *res;
         }
 
         let (_, a_e, _, _, a_ec) = &event_fluents[a1.idx][*i1];
         let (_, b_e, _, b_sc, _) = &event_fluents[a2.idx][*i2];
         let res = !(a_e.is_disjoint(b_sc) && b_e.is_disjoint(a_ec));
-        precedence.insert(*events_pair, res);
+        cache.insert(*events_pair, res);
         res
     }
 }
@@ -155,7 +152,7 @@ pub fn py_get_fluents(expr: Vec<PyExpressionNode>) -> Vec<usize> {
         .collect()
 }
 
-fn get_fluents<'a>(expr: &'a Vec<ExpressionNode>) -> impl Iterator<Item = usize> + 'a {
+fn get_fluents<'a>(expr: &'a [ExpressionNode]) -> impl Iterator<Item = usize> + 'a {
     expr.iter().filter_map(|node| match node {
         ExpressionNode::Fluent(fluent) => Some(*fluent),
         _ => None,
@@ -165,19 +162,11 @@ fn get_fluents<'a>(expr: &'a Vec<ExpressionNode>) -> impl Iterator<Item = usize>
 #[pyclass(name = "SearchSpace")]
 #[derive(Debug)]
 pub struct SearchSpace {
-    actions_duration: Vec<Option<(Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool)>>,
+    actions_duration: Vec<Option<DurationInterval>>,
     events: FxHashMap<Action, Vec<(Timing, Event)>>,
     relevant_actions: Vec<Action>,
     compression_safe_actions: Option<Vec<bool>>,
-    event_fluents: Vec<
-        Vec<(
-            FxHashSet<usize>,
-            FxHashSet<usize>,
-            FxHashSet<usize>,
-            FxHashSet<usize>,
-            FxHashSet<usize>,
-        )>,
-    >,
+    event_fluents: EventFluents,
     mutex: MutexChecker,
     precedence: PrecedenceChecker,
     action_objects: Option<Vec<Vec<String>>>,
@@ -197,7 +186,7 @@ impl SearchSpace {
     #[new]
     #[pyo3(signature = (actions_duration, events, actions, compression_safe_actions, action_objects, obj_to_prev_actions_map, initial_state=None, goal=None, relevant_actions=None, deadline=None, epsilon=None))]
     fn new(
-        actions_duration: Vec<Option<(Vec<PyExpressionNode>, Vec<PyExpressionNode>, bool, bool)>>,
+        actions_duration: Vec<Option<PyDurationInterval>>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         actions: Vec<Action>,
         compression_safe_actions: Option<Vec<bool>>,
@@ -215,9 +204,7 @@ impl SearchSpace {
             actions.clone()
         };
         let is_temporal = actions_duration.iter().any(|value| !value.is_none());
-        let converted_actions_duration: Vec<
-            Option<(Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool)>,
-        > = actions_duration
+        let converted_actions_duration: Vec<Option<DurationInterval>> = actions_duration
             .into_iter()
             .map(|value| {
                 value.map(|(vec1, vec2, b1, b2)| {
@@ -238,10 +225,16 @@ impl SearchSpace {
                 a_p.extend(e.effects.iter().flat_map(|eff| get_fluents(&eff.value)));
                 let a_e: FxHashSet<usize> = e.effects.iter().map(|eff| eff.fluent).collect();
                 let a_pe: FxHashSet<usize> = a_p.union(&a_e).copied().collect();
-                let a_sc: FxHashSet<usize> =
-                    e.start_conditions.iter().flat_map(get_fluents).collect();
-                let a_ec: FxHashSet<usize> =
-                    e.end_conditions.iter().flat_map(get_fluents).collect();
+                let a_sc: FxHashSet<usize> = e
+                    .start_conditions
+                    .iter()
+                    .flat_map(|c| get_fluents(c))
+                    .collect();
+                let a_ec: FxHashSet<usize> = e
+                    .end_conditions
+                    .iter()
+                    .flat_map(|c| get_fluents(c))
+                    .collect();
                 event_fluents[a.idx].push((a_p, a_e, a_pe, a_sc, a_ec));
             }
         }
@@ -337,10 +330,7 @@ impl SearchSpace {
     }
 
     #[pyo3(name = "build_plan", signature = (path))]
-    fn py_build_plan(
-        &self,
-        path: Vec<Action>,
-    ) -> PyResult<Option<Vec<(Option<String>, Action, Option<String>)>>> {
+    fn py_build_plan(&self, path: Vec<Action>) -> PyResult<Option<Vec<PyScheduledAction>>> {
         let plan = self.build_plan(&path)?;
         let mut res = Vec::with_capacity(plan.len());
         for (s, a, d) in plan.into_iter() {
@@ -405,16 +395,10 @@ impl SearchSpace {
                     && events.len() > 1
                 {
                     let mut id = new_state.todo.remove(&action).unwrap().1;
-                    for index in 1..events.len() {
+                    for (index, event) in events.iter().enumerate().skip(1) {
                         let state = new_state.clone_for_child();
                         new_state.g += 1.0;
-                        if !self.expand_event(
-                            &state,
-                            &mut new_state,
-                            &events[index].1,
-                            &index,
-                            &id,
-                        )? {
+                        if !self.expand_event(&state, &mut new_state, &event.1, &index, &id)? {
                             return Ok(None);
                         }
 
@@ -538,7 +522,7 @@ impl SearchSpace {
         state: &State,
         new_state: &mut State,
         action: Action,
-        events: &Vec<(Timing, Event)>,
+        events: &[(Timing, Event)],
     ) -> PyResult<bool> {
         if let (Some(action_objects), Some(obj_to_prev_actions_map)) =
             (&self.action_objects, &self.obj_to_prev_actions_map)
@@ -571,8 +555,8 @@ impl SearchSpace {
             let duration = self.actions_duration[action.idx].as_ref();
             let mut lb: f64 = 0.0;
             let mut ub: f64 = 0.0;
-            if duration.is_some() {
-                let d = duration.unwrap();
+            if let Some(duration) = duration {
+                let d = duration;
                 lb = -rational_to_f64(&get_rational_from_expression_node(&internal_evaluate(
                     &d.0, state,
                 )?)?);
@@ -707,7 +691,7 @@ impl SearchSpaceTrait for SearchSpace {
         goal: Option<Vec<PyExpressionNode>>,
     ) -> PyResult<Vec<Vec<PyExpressionNode>>> {
         let goals = match goal {
-            Some(v) => split_expression(&v.into_iter().map(|e| e.v).collect())?,
+            Some(v) => split_expression(&v.into_iter().map(|e| e.v).collect::<Vec<_>>())?,
             None => match &self.goal {
                 Some(v) => split_expression(v)?,
                 None => {
@@ -724,10 +708,7 @@ impl SearchSpaceTrait for SearchSpace {
         Ok(res.into_iter().collect())
     }
 
-    fn build_plan(
-        &self,
-        path: &Vec<Action>,
-    ) -> PyResult<Vec<(Option<BigRational>, Action, Option<BigRational>)>> {
+    fn build_plan(&self, path: &[Action]) -> PyResult<Vec<ScheduledAction>> {
         if !self.is_temporal {
             return Ok(path.iter().map(|a| (None, *a, None)).collect());
         }

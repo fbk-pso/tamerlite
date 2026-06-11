@@ -35,6 +35,8 @@ use super::search_state::*;
 use super::structures::Action;
 use super::utils::PersistentList;
 
+pub type SearchResult = (Option<Vec<Action>>, FxHashMap<String, String>);
+
 trait HasTodoLen {
     fn todo_len(&self) -> usize;
 }
@@ -173,7 +175,7 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     timeout: Option<f32>,
     early_termination: bool,
     weak_equality: bool,
-) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
+) -> PyResult<SearchResult> {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
     let start = SystemTime::now();
     let init = Rc::new(ss.initial_state(None)?);
@@ -270,7 +272,7 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
     timeout: Option<f32>,
     early_termination: bool,
     weak_equality: bool,
-) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
+) -> PyResult<SearchResult> {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
@@ -364,7 +366,7 @@ pub fn bfs_search<S: SearchSpaceTrait>(
     ss: &S,
     timeout: Option<f32>,
     early_termination: bool,
-) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
+) -> PyResult<SearchResult> {
     basic_search(ss, true, timeout, early_termination)
 }
 
@@ -372,7 +374,7 @@ pub fn dfs_search<S: SearchSpaceTrait>(
     ss: &S,
     timeout: Option<f32>,
     early_termination: bool,
-) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
+) -> PyResult<SearchResult> {
     basic_search(ss, false, timeout, early_termination)
 }
 
@@ -381,7 +383,7 @@ fn basic_search<S: SearchSpaceTrait>(
     bfs: bool,
     timeout: Option<f32>,
     early_termination: bool,
-) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
+) -> PyResult<SearchResult> {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
@@ -435,7 +437,7 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     timeout: Option<f32>,
     early_termination: bool,
     weak_equality: bool,
-) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
+) -> PyResult<SearchResult> {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
     let start = SystemTime::now();
     let init = Rc::new(ss.initial_state(None)?);

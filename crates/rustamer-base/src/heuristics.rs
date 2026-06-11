@@ -36,6 +36,11 @@ use super::search_state::State;
 use super::structures::*;
 use super::utils::*;
 
+type EvalGenItem = PyResult<(Rc<State>, Option<f64>)>;
+type EvalGenOwnedItem = PyResult<(State, Option<f64>)>;
+type EvalGenContainerItem = PyResult<(usize, Option<f64>)>;
+type HeuristicCache = Arc<Mutex<Option<FxHashMap<CacheKey, Option<f64>>>>>;
+
 pub trait HeuristicTrait {
     fn eval<S: SearchSpaceTrait>(&self, state: &State, ss: &S) -> PyResult<Option<f64>>;
 
@@ -45,7 +50,7 @@ pub trait HeuristicTrait {
         &'a self,
         states_iter: I,
         ss: &'a S,
-    ) -> PyResult<Box<dyn Iterator<Item = PyResult<(Rc<State>, Option<f64>)>> + 'a>>
+    ) -> PyResult<Box<dyn Iterator<Item = EvalGenItem> + 'a>>
     where
         I: Iterator<Item = PyResult<Rc<State>>> + 'a,
     {
@@ -62,7 +67,7 @@ pub trait HeuristicTrait {
         &'a self,
         states_iter: I,
         ss: &'a S,
-    ) -> PyResult<Box<dyn Iterator<Item = PyResult<(State, Option<f64>)>> + 'a>>
+    ) -> PyResult<Box<dyn Iterator<Item = EvalGenOwnedItem> + 'a>>
     where
         I: Iterator<Item = PyResult<State>> + 'a,
     {
@@ -77,9 +82,9 @@ pub trait HeuristicTrait {
     /// This method is used in multiqueue search algorithms
     fn eval_gen_container<'a, S: SearchSpaceTrait>(
         &'a self,
-        states: &'a Vec<StateContainer>,
+        states: &'a [StateContainer],
         ss: &'a S,
-    ) -> PyResult<Box<dyn Iterator<Item = PyResult<(usize, Option<f64>)>> + 'a>> {
+    ) -> PyResult<Box<dyn Iterator<Item = EvalGenContainerItem> + 'a>> {
         Ok(Box::new(states.iter().enumerate().map(|(i, sc)| {
             let h_value = self.eval(&sc.state, ss)?;
             Ok((i, h_value))
@@ -240,7 +245,7 @@ fn build_operator_condition(
     conditions: &Vec<Vec<ExpressionNode>>,
     extra_fluent: ExpressionNode,
     objects: &FxHashMap<String, Vec<String>>,
-    fluent_types: &Vec<String>,
+    fluent_types: &[String],
     disable_numeric_reasoning: bool,
     expression_manager: &mut ExpressionManager,
 ) -> Result<Option<HeuristicExpression>, ArithmeticError> {
@@ -290,7 +295,7 @@ fn build_operator_condition(
 ///   including `And`, `Or`, and `Leaf` nodes.
 /// - `contains_or_node`: a boolean indicating whether the expression contains at least one `Or` node.
 fn convert_to_heuristic_expression(
-    expr: &Vec<ExpressionNode>,
+    expr: &[ExpressionNode],
     expression_manager: &mut ExpressionManager,
 ) -> Result<HeuristicExpression, ArithmeticError> {
     let mut contains_or_node = false;
@@ -371,7 +376,7 @@ fn convert_to_heuristic_expression(
 fn simplify_condition(
     condition: &HeuristicExpression,
     objects: &FxHashMap<String, Vec<String>>,
-    fluent_types: &Vec<String>,
+    fluent_types: &[String],
     disable_numeric_reasoning: bool,
     expression_manager: &mut ExpressionManager,
 ) -> Result<HeuristicExpression, ArithmeticError> {
@@ -440,9 +445,9 @@ fn simplify_numeric_leaf_node(
         let new_expr = match node {
             ExpressionNode::Equals(op1, op2) => {
                 let mut expr1 = expr.clone();
-                expr1
-                    .last_mut()
-                    .map(|last| *last = ExpressionNode::LE(*op1, *op2));
+                if let Some(last) = expr1.last_mut() {
+                    *last = ExpressionNode::LE(*op1, *op2);
+                }
                 let expr1 = expression_manager.put(&expr1);
 
                 let expr2 =
@@ -538,7 +543,7 @@ fn simplify_numeric_leaf_node(
 }
 
 fn invert_operands<F>(
-    expr: &Vec<ExpressionNode>,
+    expr: &[ExpressionNode],
     op1: usize,
     op2: usize,
     expression_node_type: F,
@@ -559,7 +564,7 @@ where
 }
 
 fn inverted_operands(
-    expr: &Vec<ExpressionNode>,
+    expr: &[ExpressionNode],
     op1: usize,
     op2: usize,
 ) -> Result<(Vec<ExpressionNode>, Vec<ExpressionNode>), ArithmeticError> {
@@ -595,7 +600,7 @@ fn inverted_operands(
 fn simplify_fluent_not_equals_object_expression(
     expr: &Expression,
     objects: &FxHashMap<String, Vec<String>>,
-    fluent_types: &Vec<String>,
+    fluent_types: &[String],
     expression_manager: &mut ExpressionManager,
 ) -> Option<HeuristicExpression> {
     let expr = expression_manager.force_get(expr).clone();
@@ -701,7 +706,7 @@ fn update_numeric_effects(
 /// # Returns
 ///
 /// Returns `true` if the leaf expression is numeric, `false` otherwise.
-fn is_numeric_leaf_expression(expr: &Vec<ExpressionNode>) -> bool {
+fn is_numeric_leaf_expression(expr: &[ExpressionNode]) -> bool {
     let idx = match expr.last() {
         Some(ExpressionNode::Not(op)) => *op,
         _ => expr.len() - 1,
@@ -967,7 +972,7 @@ fn simplify_polynomial(polynomial: &mut FxHashMap<Option<usize>, BigRational>) {
 /// Returns `true` if the operator achieves the condition, otherwise `false`.
 fn achieves(
     operator: &Operator,
-    fluents: &Vec<usize>,
+    fluents: &[usize],
     weights: &Vec<f64>,
     max_net_effect: &mut f64,
     inadmissible_numeric_heuristic_variant: bool,
@@ -1015,7 +1020,7 @@ fn achieves(
 /// * `weights` - Corresponding weights for each fluent, with the constant term last.
 /// * `state` - The state on which the condition is evaluated.
 /// * `inadmissible_numeric_heuristic_variant` - Whether to approximate constant
-///     or non-linear numeric effects as contributing to the operator's net effect.
+///   or non-linear numeric effects as contributing to the operator's net effect.
 ///
 /// # Returns
 ///
@@ -1084,7 +1089,7 @@ fn repetitions(
 /// sub-expression with all operand indices re-indexed relative to the start of
 /// the sub-expression, or an `ArithmeticError` if extraction fails.
 fn extract_sub_expression(
-    expr: &Vec<ExpressionNode>,
+    expr: &[ExpressionNode],
     idx: usize,
 ) -> Result<Vec<ExpressionNode>, ArithmeticError> {
     // find the start index of the sub-expression
@@ -1123,7 +1128,7 @@ pub struct DeleteRelaxationHeuristic {
     complex_numeric_conds: FxHashSet<Expression>,
     achieved_simple_numeric_conds: Vec<Vec<Expression>>,
     heuristic_kind: HeuristicKind,
-    internal_caching: Arc<Mutex<Option<FxHashMap<CacheKey, Option<f64>>>>>,
+    internal_caching: HeuristicCache,
     expression_manager: Arc<Mutex<ExpressionManager>>,
     inadmissible_numeric_heuristic_variant: bool,
     disable_numeric_reasoning: bool,
@@ -1264,7 +1269,7 @@ impl DeleteRelaxationHeuristic {
         }
         operators.sort_by(|a, b| a.action.cmp(&b.action));
 
-        let expr_goals = goals.into_iter().map(|e| e.v).collect();
+        let expr_goals = goals.into_iter().map(|e| e.v).collect::<Vec<_>>();
         let goals = convert_to_heuristic_expression(&expr_goals, &mut expression_manager)
             .map_err(map_to_python_exception)?;
         let goals = simplify_condition(
@@ -1453,7 +1458,7 @@ impl DeleteRelaxationHeuristic {
     ///
     /// * `state` - The state to evaluate.
     /// * `reachability_analysis` - If `true`, perform reachability analysis and return
-    ///     the reachable operators instead of the heuristic value.
+    ///   the reachable operators instead of the heuristic value.
     ///
     /// # Returns
     ///
@@ -1541,11 +1546,12 @@ impl DeleteRelaxationHeuristic {
             }
             for oid in lo.drain() {
                 let o: &Operator = &self.operators[oid.id];
-                let c = self.cost(&o.conditions, &costs);
                 let op_cost = operator_cost[oid.id];
-                if c.is_some() && (op_cost.is_none() || op_cost > c) {
-                    operator_cost[oid.id] = c;
-                    let c = c.unwrap();
+                let Some(c) = self.cost(&o.conditions, &costs) else {
+                    continue;
+                };
+                if op_cost.is_none_or(|cost| cost > c) {
+                    operator_cost[oid.id] = Some(c);
 
                     let mut achieved_expressions: Vec<_> =
                         o.effects.iter().map(|k| (k, o.cost + c)).collect();
@@ -1856,7 +1862,7 @@ impl FluentValueTrait for FluentAssignments<'_> {
 }
 
 impl<'a> FluentAssignments<'a> {
-    pub fn new(fluents: &Vec<usize>, values: Vec<&'a ExpressionNode>) -> Self {
+    pub fn new(fluents: &[usize], values: Vec<&'a ExpressionNode>) -> Self {
         let assignments: FxHashMap<usize, &ExpressionNode> =
             fluents.iter().cloned().zip(values).collect();
         FluentAssignments { assignments }
@@ -1874,7 +1880,7 @@ pub struct HMaxExplicit {
     operators: Vec<OperatorHmax>,
     operator_conditions_fluents: Vec<FxHashSet<usize>>,
     operator_effects_fluents: Vec<FxHashSet<usize>>,
-    internal_caching: Arc<Mutex<Option<FxHashMap<CacheKey, Option<f64>>>>>,
+    internal_caching: HeuristicCache,
 }
 
 impl HMaxExplicit {
@@ -1933,7 +1939,7 @@ impl HMaxExplicit {
             extra_fluents.insert(*a, a_extra_fluents);
         }
 
-        let mut goals = split_expression(&goals.into_iter().map(|e| e.v).collect())?;
+        let mut goals = split_expression(&goals.into_iter().map(|e| e.v).collect::<Vec<_>>())?;
         goals.extend(extra_goals);
         let goal_expressions: Vec<Expression> = goals
             .iter()
@@ -2001,8 +2007,8 @@ impl HMaxExplicit {
     fn possible_values<'a>(
         &'a self,
         exp: &'a Vec<ExpressionNode>,
-        assignments: &'a Vec<FxHashSet<ExpressionNode>>,
-        exp_fluents: &'a Vec<usize>,
+        assignments: &'a [FxHashSet<ExpressionNode>],
+        exp_fluents: &'a [usize],
     ) -> impl Iterator<Item = ExpressionNode> + 'a {
         let values: Vec<&FxHashSet<ExpressionNode>> =
             exp_fluents.iter().map(|&f| &assignments[f]).collect();
@@ -2021,7 +2027,7 @@ impl HMaxExplicit {
         &self,
         exp: &Vec<ExpressionNode>,
         exp_id: Expression,
-        assignments: &Vec<FxHashSet<ExpressionNode>>,
+        assignments: &[FxHashSet<ExpressionNode>],
         assignments_changes: &FxHashSet<usize>,
         cache_can_be_true: &mut FxHashMap<Expression, bool>,
     ) -> bool {
@@ -2054,9 +2060,9 @@ impl HMaxExplicit {
 
     fn can_be_true(
         &self,
-        expressions: &Vec<Vec<ExpressionNode>>,
-        expression_ids: &Vec<Expression>,
-        assignments: &Vec<FxHashSet<ExpressionNode>>,
+        expressions: &[Vec<ExpressionNode>],
+        expression_ids: &[Expression],
+        assignments: &[FxHashSet<ExpressionNode>],
         assignments_changes: &FxHashSet<usize>,
         cache_can_be_true: &mut FxHashMap<Expression, bool>,
     ) -> bool {
