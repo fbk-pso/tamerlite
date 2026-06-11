@@ -195,12 +195,12 @@ def skip(
             and (
                 heuristic
                 in ["custom", "hmax_no_numbers", "hff_no_numbers", "hmax_explicit"]
-                or search in ["bfs", "ehs"]
+                or search in ["bfs", "ehc"]
             )
         )
         or (
             problem.name == "farmland_2_100_1229"
-            and (search in ["dfs", "bfs", "ehs"] or heuristic == "hmax_explicit")
+            and (search in ["dfs", "bfs", "ehc"] or heuristic == "hmax_explicit")
         )
         or (problem.name == "depots_pfile1" and search in ["dfs", "bfs"])
         or (
@@ -565,7 +565,7 @@ def test_custom_heuristic(problems):
 def test_search_algorithms(problems):
     for problem in problems:
         heuristic = "hff"
-        for search_kind in ["wastar", "astar", "gbfs", "dfs", "bfs", "ehs"]:
+        for search_kind in ["wastar", "astar", "gbfs", "dfs", "bfs", "ehc"]:
             weak_equality_flags = [False]
             memory_bounded_flags = [False]
             if testing_utils.is_temporal_problem(problem):
@@ -618,7 +618,7 @@ def test_search_algorithms(problems):
                                         res.status
                                         == PlanGenerationResultStatus.SOLVED_SATISFICING
                                         or (
-                                            search_kind == "ehs"
+                                            search_kind == "ehc"
                                             and res.status
                                             == PlanGenerationResultStatus.UNSOLVABLE_INCOMPLETELY
                                         )

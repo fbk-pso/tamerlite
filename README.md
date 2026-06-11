@@ -61,7 +61,7 @@ Defines parameters for a single search strategy.
 
 | Field                                    | Type              | Description                                                                                                                                                |
 |------------------------------------------|-------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `search`                                 | `Optional[str]`   | Search algorithm to use. Supported values: `"astar"`, `"wastar"`, `"gbfs"`, `"bfs"`, `"dfs"`, `"ehs"`. Default: `"wastar"`.                                |
+| `search`                                 | `Optional[str]`   | Search algorithm to use. Supported values: `"astar"`, `"wastar"`, `"gbfs"`, `"bfs"`, `"dfs"`, `"ehc"`. Default: `"wastar"`.                                |
 | `heuristic`                              | `Optional[str]`   | Heuristic used by heuristic search algorithms. Supported values: `"hff"`, `"hadd"`, `"hmax"`, `"hmax_explicit"`, `"blind"`, `"custom"`. Default: `"hff"`.  |
 | `weight`                                 | `Optional[float]` | Heuristic weight used by weighted search variants like `wastar`. Must be between 0 and 1. Default: `0.8`.                                                  |
 | `internal_heuristic_cache`               | `bool`            | Enable internal caching within the heuristic. Default: `True`.                                                                                             |

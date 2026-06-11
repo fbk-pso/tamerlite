@@ -304,12 +304,12 @@ class TamerLite(
             search = partial(dfs_search)
         elif search_name == "bfs":
             search = partial(bfs_search)
-        elif search_name == "ehs":
+        elif search_name == "ehc":
             search = partial(ehc_search, heuristic=heuristic)
         else:
             raise NotImplementedError(
                 f"Unknown search '{search_name}'. "
-                "Supported values are: wastar, astar, gbfs, dfs, bfs, ehs."
+                "Supported values are: wastar, astar, gbfs, dfs, bfs, ehc."
             )
 
         return search_name, search  # type: ignore[return-value]
@@ -703,7 +703,7 @@ class TamerLite(
             else:
                 plan = None
                 status = up.engines.PlanGenerationResultStatus.UNSOLVABLE_INCOMPLETELY
-                solution_might_exist = search_name == "ehs"
+                solution_might_exist = search_name == "ehc"
             return (
                 up.engines.PlanGenerationResult(status, plan, self.name, metrics),
                 solution_might_exist,
