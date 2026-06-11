@@ -84,9 +84,9 @@ impl State {
             temporal_network: self.temporal_network.clone(),
             todo: self.todo.clone(),
             active_conditions: self.active_conditions.clone(),
-            g: self.g.clone(),
+            g: self.g,
             path: self.path.clone(),
-            heuristic_cache: Mutex::new(FxHashMap::with_hasher(FxBuildHasher::default())), // Cloning erases the cache
+            heuristic_cache: Mutex::new(FxHashMap::with_hasher(FxBuildHasher)), // Cloning erases the cache
         }
     }
 
@@ -97,7 +97,7 @@ impl State {
             temporal_network: self.temporal_network.clone(),
             todo: self.todo.clone(),
             active_conditions: self.active_conditions.clone(),
-            g: self.g.clone(),
+            g: self.g,
             path: self.path.clone(),
             heuristic_cache: Mutex::new(self.heuristic_cache.lock().unwrap().clone()),
         }

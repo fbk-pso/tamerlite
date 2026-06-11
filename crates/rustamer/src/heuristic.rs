@@ -21,7 +21,7 @@ use rustamer_base::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::vec::Vec;
 
-#[pyclass(frozen)]
+#[pyclass(frozen, from_py_object)]
 #[derive(Clone)]
 pub struct Heuristic {
     hdr: Option<DeleteRelaxationHeuristic>,
@@ -38,7 +38,7 @@ impl Heuristic {
             hdr: None,
             hmax_explicit: None,
             hcustom: Some(CustomHeuristic::new(callable)?),
-            cache_value_in_state: cache_value_in_state,
+            cache_value_in_state,
         })
     }
 
@@ -69,7 +69,7 @@ impl Heuristic {
             )?),
             hmax_explicit: None,
             hcustom: None,
-            cache_value_in_state: cache_value_in_state,
+            cache_value_in_state,
         })
     }
 
@@ -100,7 +100,7 @@ impl Heuristic {
             )?),
             hmax_explicit: None,
             hcustom: None,
-            cache_value_in_state: cache_value_in_state,
+            cache_value_in_state,
         })
     }
 
@@ -131,7 +131,7 @@ impl Heuristic {
             )?),
             hmax_explicit: None,
             hcustom: None,
-            cache_value_in_state: cache_value_in_state,
+            cache_value_in_state,
         })
     }
 
@@ -157,23 +157,20 @@ impl Heuristic {
                 internal_caching,
             )?),
             hcustom: None,
-            cache_value_in_state: cache_value_in_state,
+            cache_value_in_state,
         })
     }
 
     #[getter]
     pub fn name(&self) -> String {
-        if self.hdr.is_some() {
-            let h = self.hdr.as_ref().unwrap();
+        if let Some(h) = &self.hdr {
             h.name()
-        } else if self.hmax_explicit.is_some() {
-            let h = self.hmax_explicit.as_ref().unwrap();
+        } else if let Some(h) = &self.hmax_explicit {
             h.name()
-        } else if self.hcustom.is_some() {
-            let h = self.hcustom.as_ref().unwrap();
+        } else if let Some(h) = &self.hcustom {
             h.name()
         } else {
-            String::from("")
+            unreachable!("One of hdr, hmax_explicit, or hcustom must be set")
         }
     }
 
@@ -183,8 +180,7 @@ impl Heuristic {
     }
 
     pub fn reachable_actions(&self, state: &State) -> PyResult<FxHashSet<Action>> {
-        if self.hdr.is_some() {
-            let h = self.hdr.as_ref().unwrap();
+        if let Some(h) = &self.hdr {
             h.reachable_actions(state)
         } else {
             Err(PyNotImplementedError::new_err(
@@ -203,17 +199,14 @@ impl HeuristicTrait for Heuristic {
             }
         }
         let h_value = {
-            if self.hdr.is_some() {
-                let h = self.hdr.as_ref().unwrap();
+            if let Some(h) = &self.hdr {
                 h.eval(state)
-            } else if self.hmax_explicit.is_some() {
-                let h = self.hmax_explicit.as_ref().unwrap();
+            } else if let Some(h) = &self.hmax_explicit {
                 h.eval(state)
-            } else if self.hcustom.is_some() {
-                let h = self.hcustom.as_ref().unwrap();
+            } else if let Some(h) = &self.hcustom {
                 h.eval(state)
             } else {
-                Ok(Some(0.0))
+                unreachable!("One of hdr, hmax_explicit, or hcustom must be set")
             }
         };
         if self.cache_value_in_state {
@@ -222,6 +215,6 @@ impl HeuristicTrait for Heuristic {
                 heuristic_cache.insert(self.name().to_string(), h_value);
             }
         }
-        return h_value;
+        h_value
     }
 }

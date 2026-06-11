@@ -56,7 +56,7 @@ impl ExpressionManager {
     pub fn new() -> ExpressionManager {
         ExpressionManager {
             all_expressions: vec![],
-            expression2id: FxHashMap::with_hasher(FxBuildHasher::default()),
+            expression2id: FxHashMap::with_hasher(FxBuildHasher),
         }
     }
 
@@ -96,7 +96,7 @@ pub fn get_rational_from_expression_node(exp: &ExpressionNode) -> PyResult<BigRa
     }
 }
 
-#[pyclass(frozen, name = "ExpressionNode")]
+#[pyclass(frozen, name = "ExpressionNode", from_py_object)]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PyExpressionNode {
     pub v: ExpressionNode,
