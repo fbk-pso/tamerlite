@@ -96,7 +96,7 @@ pub fn get_rational_from_expression_node(exp: &ExpressionNode) -> PyResult<BigRa
     }
 }
 
-#[pyclass(frozen, name = "ExpressionNode")]
+#[pyclass(frozen, name = "ExpressionNode", from_py_object)]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PyExpressionNode {
     pub v: ExpressionNode,
