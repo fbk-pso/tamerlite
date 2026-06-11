@@ -311,3 +311,31 @@ def test_multi_automaton_matches_numeric_parameters_via_int_placeholder():
     next_progress = pruning_model.advance(progress, initialize_drawer)
     assert pruning_model.is_prunable(next_progress)
     assert next_progress.object_states == (("drawer", "drawer_0", "bad"),)
+
+
+def test_multi_automaton_plain_keeps_concrete_numeric_parameters():
+    initialize_drawer = Action(0)
+
+    pruning_model = MultiAutomatonPruningModel(
+        action_parameter_types={"initializeDrawer": ["drawer", "cardboardtype", "integer"]},
+        placeholders_by_type={"drawer": "d", "cardboardtype": "c"},
+        automata={
+            "drawer": type("Spec", (), {"placeholder": "d", "dfa": _build_dfa("initializeDrawer(*d*,cardboard_type_3,6)")})(),
+        },
+        drop_wildcards=True,
+        abstract_other_objects=False,
+    )
+    pruning_model.bind_to_planner(
+        action_by_name={
+            "initializeDrawer_drawer_0_cardboard_type_3_6": initialize_drawer,
+        },
+        objects_by_type={
+            "drawer": ["drawer_0"],
+            "cardboardtype": ["cardboard_type_3"],
+        },
+    )
+
+    progress = pruning_model.initial_state
+    next_progress = pruning_model.advance(progress, initialize_drawer)
+    assert pruning_model.is_prunable(next_progress)
+    assert next_progress.object_states == (("drawer", "drawer_0", "bad"),)

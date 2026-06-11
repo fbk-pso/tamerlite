@@ -376,7 +376,7 @@ class MultiAutomatonPruningModel:
         rendered_parameters = []
         for parameter_type, parameter_name in typed_parameters:
             if _is_numeric_parameter_type(parameter_type):
-                rendered_parameters.append("INT")
+                rendered_parameters.append("INT" if self._abstract_other_objects else parameter_name)
                 continue
 
             normalized_type = str(parameter_type).lower()
