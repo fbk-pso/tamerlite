@@ -21,7 +21,7 @@ use rustamer_base::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::vec::Vec;
 
-#[pyclass(frozen)]
+#[pyclass(frozen, from_py_object)]
 #[derive(Clone)]
 pub struct Heuristic {
     hdr: Option<DeleteRelaxationHeuristic>,

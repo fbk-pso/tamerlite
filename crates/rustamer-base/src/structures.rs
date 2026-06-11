@@ -22,7 +22,7 @@ use pyo3::prelude::*;
 use super::expressions::{ExpressionNode, PyExpressionNode};
 use super::utils::{big_rational_to_py_fraction, get_big_rational};
 
-#[pyclass(frozen)]
+#[pyclass(frozen, from_py_object)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Effect {
     pub fluent: usize,
@@ -57,7 +57,7 @@ impl Effect {
     }
 }
 
-#[pyclass(frozen)]
+#[pyclass(frozen, from_py_object)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Timing {
     start: bool,
@@ -89,7 +89,7 @@ impl Timing {
     }
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Action {
     pub idx: usize,
@@ -108,7 +108,7 @@ impl Action {
     }
 }
 
-#[pyclass(frozen)]
+#[pyclass(frozen, from_py_object)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Event {
     pub action: Action,
