@@ -134,8 +134,12 @@ See the [LICENSE](LICENSE) file for full details.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for repo layout, dev setup, the `just`
-task runner, and the release flow.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow, dev
+setup, the `just` task runner, and the release flow. All contributors must
+sign our
+[Contributor License Agreement](https://gist.github.com/alvalentini/a8c5e371be4e7e43b79035c67dc2a1ac)
+on their first pull request and agree to follow our
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Contact
 
