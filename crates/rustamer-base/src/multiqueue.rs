@@ -31,6 +31,8 @@ use super::search_space::*;
 use super::search_state::*;
 use super::Action;
 
+pub type SearchResult = (Option<Vec<Action>>, FxHashMap<String, String>);
+
 #[derive(Debug, Clone)]
 pub struct StateContainer {
     pub state: Rc<State>,
@@ -119,7 +121,7 @@ pub fn multiqueue_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     timeout: Option<f32>,
     early_termination: bool,
     weak_equality: bool,
-) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
+) -> PyResult<SearchResult> {
     let mut switch_policy = RoundRobinSwitchPolicy::new(heuristics.len());
     _multiqueue_search(
         ss,
@@ -138,7 +140,7 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
     timeout: Option<f32>,
     early_termination: bool,
     weak_equality: bool,
-) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
+) -> PyResult<SearchResult> {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
     let start = SystemTime::now();
     let init = Rc::new(ss.initial_state(None)?);
@@ -233,8 +235,8 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
                 for sh in heuristic.eval_gen_container(&candidate_containers, ss)? {
                     let (si, h) = sh?;
                     let g: f64 = candidate_containers[si].state.g;
-                    if h.is_some() {
-                        let f = *weight * h.unwrap() + (1.0 - *weight) * g;
+                    if let Some(h) = h {
+                        let f = *weight * h + (1.0 - *weight) * g;
                         let sc = candidate_containers[si].clone();
 
                         let item = PrioritizedItem {

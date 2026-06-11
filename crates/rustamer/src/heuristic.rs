@@ -163,14 +163,11 @@ impl Heuristic {
 
     #[getter]
     pub fn name(&self) -> &'static str {
-        if self.hdr.is_some() {
-            let h = self.hdr.as_ref().unwrap();
+        if let Some(h) = &self.hdr {
             h.name()
-        } else if self.hmax_explicit.is_some() {
-            let h = self.hmax_explicit.as_ref().unwrap();
+        } else if let Some(h) = &self.hmax_explicit {
             h.name()
-        } else if self.hcustom.is_some() {
-            let h = self.hcustom.as_ref().unwrap();
+        } else if let Some(h) = &self.hcustom {
             h.name()
         } else {
             unreachable!("One of hdr, hmax_explicit, or hcustom must be set")
@@ -183,8 +180,7 @@ impl Heuristic {
     }
 
     pub fn reachable_actions(&self, state: &State) -> PyResult<FxHashSet<Action>> {
-        if self.hdr.is_some() {
-            let h = self.hdr.as_ref().unwrap();
+        if let Some(h) = &self.hdr {
             h.reachable_actions(state)
         } else {
             Err(PyNotImplementedError::new_err(
@@ -203,17 +199,14 @@ impl HeuristicTrait for Heuristic {
             }
         }
         let h_value = {
-            if self.hdr.is_some() {
-                let h = self.hdr.as_ref().unwrap();
+            if let Some(h) = &self.hdr {
                 h.eval(state)
-            } else if self.hmax_explicit.is_some() {
-                let h = self.hmax_explicit.as_ref().unwrap();
+            } else if let Some(h) = &self.hmax_explicit {
                 h.eval(state)
-            } else if self.hcustom.is_some() {
-                let h = self.hcustom.as_ref().unwrap();
+            } else if let Some(h) = &self.hcustom {
                 h.eval(state)
             } else {
-                Ok(Some(0.0))
+                unreachable!("One of hdr, hmax_explicit, or hcustom must be set")
             }
         };
         if self.cache_value_in_state {
