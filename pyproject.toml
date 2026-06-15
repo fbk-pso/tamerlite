@@ -35,7 +35,7 @@ dev = [
     "mypy==2.1.0",
     "ruff==0.15.16",
     "pre-commit==4.6.0",
-    "maturin>=1.2,<2.0",
+    "maturin>=1.14.0,<2.0",
     "rustamer",
     "unified-planning @ git+https://github.com/aiplan4eu/unified-planning.git",
 ]
