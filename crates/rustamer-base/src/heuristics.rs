@@ -1115,6 +1115,14 @@ fn extract_sub_expression(
 }
 
 #[derive(Clone, Debug)]
+pub struct DeleteRelaxationHeuristicConfig {
+    pub heuristic_kind: HeuristicKind,
+    pub internal_caching: bool,
+    pub inadmissible_numeric_heuristic_variant: bool,
+    pub disable_numeric_reasoning: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct DeleteRelaxationHeuristic {
     actions: Vec<Action>,
     events: FxHashMap<Action, usize>,
@@ -1141,10 +1149,7 @@ impl DeleteRelaxationHeuristic {
         objects: FxHashMap<String, Vec<String>>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         goals: Vec<PyExpressionNode>,
-        heuristic_kind: HeuristicKind,
-        internal_caching: bool,
-        inadmissible_numeric_heuristic_variant: bool,
-        disable_numeric_reasoning: bool,
+        config: DeleteRelaxationHeuristicConfig,
     ) -> PyResult<Self> {
         let mut operators = Vec::with_capacity(events.values().map(|e| e.len()).sum());
         let mut extra_fluents: FxHashMap<Action, Vec<Expression>> =
@@ -1247,7 +1252,7 @@ impl DeleteRelaxationHeuristic {
                     cond.clone(),
                     &objects,
                     &fluent_types,
-                    disable_numeric_reasoning,
+                    config.disable_numeric_reasoning,
                     &mut expression_manager,
                 )
                 .map_err(map_to_python_exception)?
@@ -1267,7 +1272,7 @@ impl DeleteRelaxationHeuristic {
             }
             extra_fluents.insert(*a, a_extra_fluents);
         }
-        operators.sort_by(|a, b| a.action.cmp(&b.action));
+        operators.sort_by_key(|a| a.action);
 
         let expr_goals = goals.into_iter().map(|e| e.v).collect::<Vec<_>>();
         let goals = convert_to_heuristic_expression(&expr_goals, &mut expression_manager)
@@ -1276,7 +1281,7 @@ impl DeleteRelaxationHeuristic {
             &goals,
             &objects,
             &fluent_types,
-            disable_numeric_reasoning,
+            config.disable_numeric_reasoning,
             &mut expression_manager,
         )
         .map_err(map_to_python_exception)?;
@@ -1307,7 +1312,7 @@ impl DeleteRelaxationHeuristic {
                                 &mut simple_numeric_conds,
                                 &mut lt_simple_numeric_conds,
                                 &mut complex_numeric_conds,
-                                disable_numeric_reasoning,
+                                config.disable_numeric_reasoning,
                             );
                         }
 
@@ -1327,7 +1332,7 @@ impl DeleteRelaxationHeuristic {
                         &mut simple_numeric_conds,
                         &mut lt_simple_numeric_conds,
                         &mut complex_numeric_conds,
-                        disable_numeric_reasoning,
+                        config.disable_numeric_reasoning,
                     );
                 }
             }
@@ -1343,7 +1348,7 @@ impl DeleteRelaxationHeuristic {
                     fluents,
                     weights,
                     &mut max_net_effect,
-                    inadmissible_numeric_heuristic_variant,
+                    config.inadmissible_numeric_heuristic_variant,
                 ) {
                     achieved_simple_numeric_conds[o.id.id].push(*c);
                 }
@@ -1362,7 +1367,7 @@ impl DeleteRelaxationHeuristic {
         let events_len: FxHashMap<Action, usize> =
             events.into_iter().map(|(a, ev)| (a, ev.len())).collect();
 
-        let internal_caching = if internal_caching {
+        let internal_caching = if config.internal_caching {
             Some(FxHashMap::with_hasher(FxBuildHasher))
         } else {
             None
@@ -1380,11 +1385,11 @@ impl DeleteRelaxationHeuristic {
             simple_numeric_conds,
             complex_numeric_conds,
             achieved_simple_numeric_conds,
-            heuristic_kind,
+            heuristic_kind: config.heuristic_kind,
             internal_caching: Arc::new(Mutex::new(internal_caching)),
             expression_manager: Arc::new(Mutex::new(expression_manager)),
-            inadmissible_numeric_heuristic_variant,
-            disable_numeric_reasoning,
+            inadmissible_numeric_heuristic_variant: config.inadmissible_numeric_heuristic_variant,
+            disable_numeric_reasoning: config.disable_numeric_reasoning,
         };
         Ok(res)
     }

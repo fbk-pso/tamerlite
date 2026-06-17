@@ -44,6 +44,7 @@ impl Heuristic {
 
     #[staticmethod]
     #[pyo3(signature = (actions, fluent_types, objects, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant, disable_numeric_reasoning=false))]
+    #[allow(clippy::too_many_arguments)]
     pub fn hff(
         actions: Vec<Action>,
         fluent_types: Vec<String>,
@@ -62,10 +63,12 @@ impl Heuristic {
                 objects,
                 events,
                 goals,
-                HeuristicKind::HFF,
-                internal_caching,
-                inadmissible_numeric_heuristic_variant,
-                disable_numeric_reasoning,
+                DeleteRelaxationHeuristicConfig {
+                    heuristic_kind: HeuristicKind::HFF,
+                    internal_caching,
+                    inadmissible_numeric_heuristic_variant,
+                    disable_numeric_reasoning,
+                },
             )?),
             hmax_explicit: None,
             hcustom: None,
@@ -75,6 +78,7 @@ impl Heuristic {
 
     #[staticmethod]
     #[pyo3(signature = (actions, fluent_types, objects, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant, disable_numeric_reasoning=false))]
+    #[allow(clippy::too_many_arguments)]
     pub fn hadd(
         actions: Vec<Action>,
         fluent_types: Vec<String>,
@@ -93,10 +97,12 @@ impl Heuristic {
                 objects,
                 events,
                 goals,
-                HeuristicKind::HADD,
-                internal_caching,
-                inadmissible_numeric_heuristic_variant,
-                disable_numeric_reasoning,
+                DeleteRelaxationHeuristicConfig {
+                    heuristic_kind: HeuristicKind::HADD,
+                    internal_caching,
+                    inadmissible_numeric_heuristic_variant,
+                    disable_numeric_reasoning,
+                },
             )?),
             hmax_explicit: None,
             hcustom: None,
@@ -106,6 +112,7 @@ impl Heuristic {
 
     #[staticmethod]
     #[pyo3(signature = (actions, fluent_types, objects, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant, disable_numeric_reasoning=false))]
+    #[allow(clippy::too_many_arguments)]
     pub fn hmax(
         actions: Vec<Action>,
         fluent_types: Vec<String>,
@@ -124,10 +131,12 @@ impl Heuristic {
                 objects,
                 events,
                 goals,
-                HeuristicKind::HMAX,
-                internal_caching,
-                inadmissible_numeric_heuristic_variant,
-                disable_numeric_reasoning,
+                DeleteRelaxationHeuristicConfig {
+                    heuristic_kind: HeuristicKind::HMAX,
+                    internal_caching,
+                    inadmissible_numeric_heuristic_variant,
+                    disable_numeric_reasoning,
+                },
             )?),
             hmax_explicit: None,
             hcustom: None,
@@ -136,7 +145,7 @@ impl Heuristic {
     }
 
     #[staticmethod]
-    #[allow(unused_variables)]
+    #[allow(clippy::too_many_arguments, unused_variables)]
     pub fn hmax_explicit(
         actions: Vec<Action>,
         fluent_types: Vec<String>,

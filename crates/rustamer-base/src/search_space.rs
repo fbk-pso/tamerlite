@@ -185,6 +185,7 @@ pub struct SearchSpace {
 impl SearchSpace {
     #[new]
     #[pyo3(signature = (actions_duration, events, actions, compression_safe_actions, action_objects, obj_to_prev_actions_map, initial_state=None, goal=None, relevant_actions=None, deadline=None, epsilon=None))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         actions_duration: Vec<Option<PyDurationInterval>>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
@@ -394,15 +395,14 @@ impl SearchSpace {
                         .is_some_and(|is_compression_safe| is_compression_safe[action.idx])
                     && events.len() > 1
                 {
-                    let mut id = new_state.todo.remove(&action).unwrap().1;
-                    for (index, event) in events.iter().enumerate().skip(1) {
+                    let start_id = new_state.todo.remove(&action).unwrap().1;
+                    for (id, (index, event)) in (start_id..).zip(events.iter().enumerate().skip(1))
+                    {
                         let state = new_state.clone_for_child();
                         new_state.g += 1.0;
                         if !self.expand_event(&state, &mut new_state, &event.1, &index, &id)? {
                             return Ok(None);
                         }
-
-                        id += 1;
                     }
                 }
                 return Ok(Some(new_state));
@@ -496,8 +496,8 @@ impl SearchSpace {
                 }
             }
             for (a, i) in new_state.todo.iter() {
-                let mut id2 = i.1;
-                for (j, (_, e2)) in self.events[a].iter().skip(i.0).enumerate() {
+                for (id2, (j, (_, e2))) in (i.1..).zip(self.events[a].iter().skip(i.0).enumerate())
+                {
                     let e_id = (e.action, *index);
                     let e2_id = (*a, j + i.0);
                     let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, id2);
@@ -507,7 +507,6 @@ impl SearchSpace {
                     } else {
                         tn.add(&ev, &ev2, &0.0);
                     }
-                    id2 += 1;
                 }
             }
             if !tn.check() {
@@ -745,8 +744,9 @@ impl SearchSpaceTrait for SearchSpace {
                             }
                         }
                         for (a, i) in todo.iter() {
-                            let mut id2 = i.1;
-                            for (j, (_, e2)) in self.events[a].iter().skip(i.0).enumerate() {
+                            for (id2, (j, (_, e2))) in
+                                (i.1..).zip(self.events[a].iter().skip(i.0).enumerate())
+                            {
                                 let e_id = (e.action, index);
                                 let e2_id = (*a, j + i.0);
                                 let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, id2);
@@ -756,7 +756,6 @@ impl SearchSpaceTrait for SearchSpace {
                                 } else {
                                     // tn.add(&ev, &ev2, &mk_rational(0, 1));
                                 }
-                                id2 += 1;
                             }
                         }
                         event_path.push((e.clone(), id));
@@ -816,8 +815,9 @@ impl SearchSpaceTrait for SearchSpace {
                         }
                     }
                     for (a, i) in todo.iter() {
-                        let mut id2 = i.1;
-                        for (j, (_, e2)) in self.events[a].iter().skip(i.0).enumerate() {
+                        for (id2, (j, (_, e2))) in
+                            (i.1..).zip(self.events[a].iter().skip(i.0).enumerate())
+                        {
                             let e_id = (e.action, 0);
                             let e2_id = (*a, j + i.0);
                             let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, id2);
@@ -827,7 +827,6 @@ impl SearchSpaceTrait for SearchSpace {
                             } else {
                                 // tn.add(&ev, &ev2, &mk_rational(0, 1));
                             }
-                            id2 += 1;
                         }
                     }
                     event_path.push((e.clone(), id));
