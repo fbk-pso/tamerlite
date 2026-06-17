@@ -162,7 +162,7 @@ impl Heuristic {
     }
 
     #[getter]
-    pub fn name(&self) -> String {
+    pub fn name(&self) -> &'static str {
         if self.hdr.is_some() {
             let h = self.hdr.as_ref().unwrap();
             h.name()
@@ -173,7 +173,7 @@ impl Heuristic {
             let h = self.hcustom.as_ref().unwrap();
             h.name()
         } else {
-            String::from("")
+            unreachable!("One of hdr, hmax_explicit, or hcustom must be set")
         }
     }
 
@@ -219,7 +219,7 @@ impl HeuristicTrait for Heuristic {
         if self.cache_value_in_state {
             let mut heuristic_cache = state.heuristic_cache.lock().unwrap();
             if let Ok(h_value) = h_value {
-                heuristic_cache.insert(self.name().to_string(), h_value);
+                heuristic_cache.insert(self.name(), h_value);
             }
         }
         return h_value;

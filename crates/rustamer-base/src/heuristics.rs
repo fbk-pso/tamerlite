@@ -116,8 +116,8 @@ impl CustomHeuristic {
         })
     }
 
-    pub fn name(&self) -> String {
-        String::from("custom")
+    pub fn name(&self) -> &'static str {
+        "custom"
     }
 }
 
@@ -1838,16 +1838,20 @@ impl DeleteRelaxationHeuristic {
         res.last().copied().flatten()
     }
 
-    pub fn name(&self) -> String {
-        let mut name = String::from(match self.heuristic_kind {
-            HeuristicKind::HFF => "hff",
-            HeuristicKind::HADD => "hadd",
-            HeuristicKind::HMAX => "hmax",
-        });
+    pub fn name(&self) -> &'static str {
         if self.disable_numeric_reasoning {
-            name.push_str("_no_numbers");
+            match self.heuristic_kind {
+                HeuristicKind::HFF => "hff_no_numbers",
+                HeuristicKind::HADD => "hadd_no_numbers",
+                HeuristicKind::HMAX => "hmax_no_numbers",
+            }
+        } else {
+            match self.heuristic_kind {
+                HeuristicKind::HFF => "hff",
+                HeuristicKind::HADD => "hadd",
+                HeuristicKind::HMAX => "hmax",
+            }
         }
-        name
     }
 }
 
@@ -2206,7 +2210,7 @@ impl HMaxExplicit {
         None
     }
 
-    pub fn name(&self) -> String {
-        String::from("hmax_explicit")
+    pub fn name(&self) -> &'static str {
+        "hmax_explicit"
     }
 }
