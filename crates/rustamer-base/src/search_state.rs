@@ -40,7 +40,7 @@ pub struct State {
     pub active_conditions: HashMultiSet<Vec<ExpressionNode>>,
     pub g: f64,
     pub path: Option<Arc<PersistentList<(Action, usize, u32)>>>,
-    pub heuristic_cache: Mutex<FxHashMap<String, Option<f64>>>,
+    pub heuristic_cache: Mutex<FxHashMap<&'static str, Option<f64>>>,
 }
 
 #[pymethods]
