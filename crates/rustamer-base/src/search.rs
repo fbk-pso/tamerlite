@@ -187,7 +187,11 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         return Ok((Some(extract_path(&init)), metrics));
     }
 
+    // State and WeakEqState contain interior mutability only for heuristic caches.
+    // The mutable fields are ignored by Hash/Eq, so using them as HashSet keys is safe.
+    #[allow(clippy::mutable_key_type)]
     let mut visited_weak_eq_states = FxHashSet::with_hasher(FxBuildHasher);
+    #[allow(clippy::mutable_key_type)]
     let mut visited_states = FxHashSet::with_hasher(FxBuildHasher);
     if !ss.is_temporal() {
         visited_states.insert(Rc::clone(&init));
@@ -458,7 +462,12 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     };
     let mut open = VecDeque::new();
     open.push_back(init);
+
+    // State and WeakEqState contain interior mutability only for heuristic caches.
+    // The mutable fields are ignored by Hash/Eq, so using them as HashSet keys is safe.
+    #[allow(clippy::mutable_key_type)]
     let mut closed = FxHashSet::with_hasher(FxBuildHasher);
+    #[allow(clippy::mutable_key_type)]
     let mut closed_weak_eq = FxHashSet::with_hasher(FxBuildHasher);
     while let Some(state) = open.pop_front() {
         if let Some(t) = timeout {
