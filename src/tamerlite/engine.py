@@ -628,7 +628,11 @@ class TamerLite(
                     early_termination=self._params.early_termination,
                     weak_equality=self._params.weak_equality,
                 )
-                if self._params.weak_equality and path is None:
+                if (
+                    self._params.weak_equality
+                    and encoder.search_space.is_temporal
+                    and path is None
+                ):
                     updated_timeout = timeout
                     if updated_timeout is not None:
                         updated_timeout -= start
@@ -664,7 +668,7 @@ class TamerLite(
                         early_termination=self._params.early_termination,
                         weak_equality=True,
                     )
-                    if path is None:
+                    if encoder.search_space.is_temporal and path is None:
                         updated_timeout = timeout
                         if updated_timeout is not None:
                             updated_timeout -= start
