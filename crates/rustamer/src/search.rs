@@ -17,9 +17,7 @@
 
 use super::heuristic::Heuristic;
 use pyo3::prelude::*;
-use rustamer_base;
-use rustamer_base::Action;
-use rustc_hash::FxHashMap;
+use rustamer_base::SearchResult;
 
 #[pyfunction]
 #[pyo3(signature = (ss, timeout=None, early_termination=false))]
@@ -27,7 +25,7 @@ pub fn bfs_search(
     ss: &rustamer_base::SearchSpace,
     timeout: Option<f32>,
     early_termination: bool,
-) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
+) -> PyResult<SearchResult> {
     rustamer_base::bfs_search(ss, timeout, early_termination)
 }
 
@@ -37,7 +35,7 @@ pub fn dfs_search(
     ss: &rustamer_base::SearchSpace,
     timeout: Option<f32>,
     early_termination: bool,
-) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
+) -> PyResult<SearchResult> {
     rustamer_base::dfs_search(ss, timeout, early_termination)
 }
 
@@ -49,7 +47,7 @@ pub fn ehc_search(
     timeout: Option<f32>,
     early_termination: bool,
     weak_equality: bool,
-) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
+) -> PyResult<SearchResult> {
     rustamer_base::ehc_search(ss, heuristic, timeout, early_termination, weak_equality)
 }
 
@@ -62,7 +60,7 @@ pub fn wastar_search(
     timeout: Option<f32>,
     early_termination: bool,
     weak_equality: bool,
-) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
+) -> PyResult<SearchResult> {
     rustamer_base::wastar_search(
         ss,
         heuristic,
@@ -82,7 +80,7 @@ pub fn wastar_search_memory_bounded(
     timeout: Option<f32>,
     early_termination: bool,
     weak_equality: bool,
-) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
+) -> PyResult<SearchResult> {
     rustamer_base::wastar_search_memory_bounded(
         ss,
         heuristic,
@@ -101,7 +99,7 @@ pub fn astar_search(
     timeout: Option<f32>,
     early_termination: bool,
     weak_equality: bool,
-) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
+) -> PyResult<SearchResult> {
     wastar_search(
         ss,
         heuristic,
@@ -120,7 +118,7 @@ pub fn astar_search_memory_bounded(
     timeout: Option<f32>,
     early_termination: bool,
     weak_equality: bool,
-) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
+) -> PyResult<SearchResult> {
     wastar_search_memory_bounded(
         ss,
         heuristic,
@@ -138,7 +136,7 @@ pub fn gbfs_search(
     timeout: Option<f32>,
     early_termination: bool,
     weak_equality: bool,
-) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
+) -> PyResult<SearchResult> {
     wastar_search(
         ss,
         heuristic,
@@ -157,7 +155,7 @@ pub fn gbfs_search_memory_bounded(
     timeout: Option<f32>,
     early_termination: bool,
     weak_equality: bool,
-) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
+) -> PyResult<SearchResult> {
     wastar_search_memory_bounded(
         ss,
         heuristic,
@@ -176,6 +174,6 @@ pub fn multiqueue_search(
     timeout: Option<f32>,
     early_termination: bool,
     weak_equality: bool,
-) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
+) -> PyResult<SearchResult> {
     rustamer_base::multiqueue_search(ss, heuristics, timeout, early_termination, weak_equality)
 }

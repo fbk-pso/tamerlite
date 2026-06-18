@@ -32,38 +32,38 @@ pub struct TNInterpreter {
 
 impl TNInterpreter {
     pub fn new(actions: &Vec<Action>, events: &FxHashMap<Action, Vec<(Timing, Event)>>) -> Self {
-        let mut actions_ids = FxHashMap::with_hasher(FxBuildHasher::default());
-        let mut actions_ids_map_back = FxHashMap::with_hasher(FxBuildHasher::default());
+        let mut actions_ids = FxHashMap::with_hasher(FxBuildHasher);
+        let mut actions_ids_map_back = FxHashMap::with_hasher(FxBuildHasher);
         let start_plan_id = 1;
         let end_plan_id = 2;
 
         let mut next_id = 3;
         for a in actions {
             for b in [true, false] {
-                actions_ids.insert((a.clone(), b), next_id);
-                actions_ids_map_back.insert(next_id, (a.clone(), b));
+                actions_ids.insert((*a, b), next_id);
+                actions_ids_map_back.insert(next_id, (*a, b));
                 next_id += 1;
             }
         }
 
-        let mut events_ids = FxHashMap::with_hasher(FxBuildHasher::default());
-        let mut events_ids_map_back = FxHashMap::with_hasher(FxBuildHasher::default());
+        let mut events_ids = FxHashMap::with_hasher(FxBuildHasher);
+        let mut events_ids_map_back = FxHashMap::with_hasher(FxBuildHasher);
 
         for (action, events) in events {
             for (_t, e) in events {
-                events_ids.insert((action.clone(), e.pos), next_id);
-                events_ids_map_back.insert(next_id, (action.clone(), e.pos));
+                events_ids.insert((*action, e.pos), next_id);
+                events_ids_map_back.insert(next_id, (*action, e.pos));
                 next_id += 1;
             }
         }
 
         TNInterpreter {
-            actions_ids: actions_ids,
-            events_ids: events_ids,
-            actions_ids_map_back: actions_ids_map_back,
-            events_ids_map_back: events_ids_map_back,
-            start_plan_id: start_plan_id,
-            end_plan_id: end_plan_id,
+            actions_ids,
+            events_ids,
+            actions_ids_map_back,
+            events_ids_map_back,
+            start_plan_id,
+            end_plan_id,
         }
     }
 
@@ -130,10 +130,7 @@ impl TNInterpreter {
             let (action_id, outer_id) = self.unpack_u64(*id);
             let a = self.actions_ids_map_back.get(&action_id);
             if let Some((action, is_start)) = a {
-                res.push((
-                    (action.clone(), *is_start, outer_id),
-                    v.clone() * (-Q::one()),
-                ));
+                res.push(((*action, *is_start, outer_id), v.clone() * (-Q::one())));
             }
         }
         res.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -149,10 +146,7 @@ impl TNInterpreter {
             let (event_id, outer_id) = self.unpack_u64(*id);
             let a = self.events_ids_map_back.get(&event_id);
             if let Some((action, pos)) = a {
-                res.push((
-                    (action.clone(), pos.clone(), outer_id),
-                    v.clone() * (-Q::one()),
-                ));
+                res.push(((*action, *pos, outer_id), v.clone() * (-Q::one())));
             }
         }
         res.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));

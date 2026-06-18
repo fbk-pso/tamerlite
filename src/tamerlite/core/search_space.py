@@ -199,7 +199,7 @@ class MutexChecker:
         ],
     ):
         self._event_fluents = event_fluents
-        self._mutex: Dict[Tuple[Tuple[Action, int], Tuple[Action, int]], bool] = {}
+        self._cache: Dict[Tuple[Tuple[Action, int], Tuple[Action, int]], bool] = {}
 
     def __contains__(
         self, events_pair: Tuple[Tuple[Action, int], Tuple[Action, int]]
@@ -208,12 +208,12 @@ class MutexChecker:
         if a1 == a2:
             return True
 
-        are_mutex = self._mutex.get(events_pair, None)
+        are_mutex = self._cache.get(events_pair, None)
         if are_mutex is None:
             (_, a_e, a_pe, _, _) = self._event_fluents[a1.idx][i1]
             (b_p, b_e, _, _, _) = self._event_fluents[a2.idx][i2]
             are_mutex = not (b_p.isdisjoint(a_e) and a_pe.isdisjoint(b_e))
-            self._mutex[events_pair] = are_mutex
+            self._cache[events_pair] = are_mutex
         return are_mutex
 
 
@@ -225,7 +225,7 @@ class PrecedenceChecker:
         ],
     ):
         self._event_fluents = event_fluents
-        self._precedence: Dict[Tuple[Tuple[Action, int], Tuple[Action, int]], bool] = {}
+        self._cache: Dict[Tuple[Tuple[Action, int], Tuple[Action, int]], bool] = {}
 
     def __contains__(
         self, events_pair: Tuple[Tuple[Action, int], Tuple[Action, int]]
@@ -234,12 +234,12 @@ class PrecedenceChecker:
         if a1 == a2:
             return False
 
-        res = self._precedence.get(events_pair, None)
+        res = self._cache.get(events_pair, None)
         if res is None:
             (_, a_e, _, _, a_ec) = self._event_fluents[a1.idx][i1]
             (_, b_e, _, b_sc, _) = self._event_fluents[a2.idx][i2]
             res = not (a_e.isdisjoint(b_sc) and b_e.isdisjoint(a_ec))
-            self._precedence[events_pair] = res
+            self._cache[events_pair] = res
         return res
 
 

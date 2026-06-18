@@ -21,7 +21,7 @@ use rustamer_base::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::vec::Vec;
 
-#[pyclass(frozen)]
+#[pyclass(frozen, from_py_object)]
 #[derive(Clone)]
 pub struct Heuristic {
     hdr: Option<DeleteRelaxationHeuristic>,
@@ -38,12 +38,13 @@ impl Heuristic {
             hdr: None,
             hmax_explicit: None,
             hcustom: Some(CustomHeuristic::new(callable)?),
-            cache_value_in_state: cache_value_in_state,
+            cache_value_in_state,
         })
     }
 
     #[staticmethod]
     #[pyo3(signature = (actions, fluent_types, objects, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant, disable_numeric_reasoning=false))]
+    #[allow(clippy::too_many_arguments)]
     pub fn hff(
         actions: Vec<Action>,
         fluent_types: Vec<String>,
@@ -62,19 +63,22 @@ impl Heuristic {
                 objects,
                 events,
                 goals,
-                HeuristicKind::HFF,
-                internal_caching,
-                inadmissible_numeric_heuristic_variant,
-                disable_numeric_reasoning,
+                DeleteRelaxationHeuristicConfig {
+                    heuristic_kind: HeuristicKind::HFF,
+                    internal_caching,
+                    inadmissible_numeric_heuristic_variant,
+                    disable_numeric_reasoning,
+                },
             )?),
             hmax_explicit: None,
             hcustom: None,
-            cache_value_in_state: cache_value_in_state,
+            cache_value_in_state,
         })
     }
 
     #[staticmethod]
     #[pyo3(signature = (actions, fluent_types, objects, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant, disable_numeric_reasoning=false))]
+    #[allow(clippy::too_many_arguments)]
     pub fn hadd(
         actions: Vec<Action>,
         fluent_types: Vec<String>,
@@ -93,19 +97,22 @@ impl Heuristic {
                 objects,
                 events,
                 goals,
-                HeuristicKind::HADD,
-                internal_caching,
-                inadmissible_numeric_heuristic_variant,
-                disable_numeric_reasoning,
+                DeleteRelaxationHeuristicConfig {
+                    heuristic_kind: HeuristicKind::HADD,
+                    internal_caching,
+                    inadmissible_numeric_heuristic_variant,
+                    disable_numeric_reasoning,
+                },
             )?),
             hmax_explicit: None,
             hcustom: None,
-            cache_value_in_state: cache_value_in_state,
+            cache_value_in_state,
         })
     }
 
     #[staticmethod]
     #[pyo3(signature = (actions, fluent_types, objects, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant, disable_numeric_reasoning=false))]
+    #[allow(clippy::too_many_arguments)]
     pub fn hmax(
         actions: Vec<Action>,
         fluent_types: Vec<String>,
@@ -124,19 +131,21 @@ impl Heuristic {
                 objects,
                 events,
                 goals,
-                HeuristicKind::HMAX,
-                internal_caching,
-                inadmissible_numeric_heuristic_variant,
-                disable_numeric_reasoning,
+                DeleteRelaxationHeuristicConfig {
+                    heuristic_kind: HeuristicKind::HMAX,
+                    internal_caching,
+                    inadmissible_numeric_heuristic_variant,
+                    disable_numeric_reasoning,
+                },
             )?),
             hmax_explicit: None,
             hcustom: None,
-            cache_value_in_state: cache_value_in_state,
+            cache_value_in_state,
         })
     }
 
     #[staticmethod]
-    #[allow(unused_variables)]
+    #[allow(clippy::too_many_arguments, unused_variables)]
     pub fn hmax_explicit(
         actions: Vec<Action>,
         fluent_types: Vec<String>,
@@ -157,20 +166,17 @@ impl Heuristic {
                 internal_caching,
             )?),
             hcustom: None,
-            cache_value_in_state: cache_value_in_state,
+            cache_value_in_state,
         })
     }
 
     #[getter]
     pub fn name(&self) -> &'static str {
-        if self.hdr.is_some() {
-            let h = self.hdr.as_ref().unwrap();
+        if let Some(h) = &self.hdr {
             h.name()
-        } else if self.hmax_explicit.is_some() {
-            let h = self.hmax_explicit.as_ref().unwrap();
+        } else if let Some(h) = &self.hmax_explicit {
             h.name()
-        } else if self.hcustom.is_some() {
-            let h = self.hcustom.as_ref().unwrap();
+        } else if let Some(h) = &self.hcustom {
             h.name()
         } else {
             unreachable!("One of hdr, hmax_explicit, or hcustom must be set")
@@ -183,8 +189,7 @@ impl Heuristic {
     }
 
     pub fn reachable_actions(&self, state: &State) -> PyResult<FxHashSet<Action>> {
-        if self.hdr.is_some() {
-            let h = self.hdr.as_ref().unwrap();
+        if let Some(h) = &self.hdr {
             h.reachable_actions(state)
         } else {
             Err(PyNotImplementedError::new_err(
@@ -203,17 +208,14 @@ impl HeuristicTrait for Heuristic {
             }
         }
         let h_value = {
-            if self.hdr.is_some() {
-                let h = self.hdr.as_ref().unwrap();
+            if let Some(h) = &self.hdr {
                 h.eval(state)
-            } else if self.hmax_explicit.is_some() {
-                let h = self.hmax_explicit.as_ref().unwrap();
+            } else if let Some(h) = &self.hmax_explicit {
                 h.eval(state)
-            } else if self.hcustom.is_some() {
-                let h = self.hcustom.as_ref().unwrap();
+            } else if let Some(h) = &self.hcustom {
                 h.eval(state)
             } else {
-                Ok(Some(0.0))
+                unreachable!("One of hdr, hmax_explicit, or hcustom must be set")
             }
         };
         if self.cache_value_in_state {
@@ -222,6 +224,6 @@ impl HeuristicTrait for Heuristic {
                 heuristic_cache.insert(self.name(), h_value);
             }
         }
-        return h_value;
+        h_value
     }
 }

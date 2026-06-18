@@ -30,6 +30,22 @@ use super::structures::*;
 use super::tn_interpreter::TNInterpreter;
 use super::utils::*;
 
+type ScheduledAction = (Option<BigRational>, Action, Option<BigRational>);
+type PyScheduledAction = (Option<String>, Action, Option<String>);
+type MutexCache = Mutex<FxHashMap<((Action, usize), (Action, usize)), bool>>;
+type PrecedenceCache = Mutex<FxHashMap<((Action, usize), (Action, usize)), bool>>;
+type EventFluents = Vec<
+    Vec<(
+        FxHashSet<usize>,
+        FxHashSet<usize>,
+        FxHashSet<usize>,
+        FxHashSet<usize>,
+        FxHashSet<usize>,
+    )>,
+>;
+type DurationInterval = (Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool);
+type PyDurationInterval = (Vec<PyExpressionNode>, Vec<PyExpressionNode>, bool, bool);
+
 pub trait SearchSpaceTrait {
     fn is_temporal(&self) -> bool;
     fn tn_interpreter(&self) -> &TNInterpreter;
@@ -53,94 +69,75 @@ pub trait SearchSpaceTrait {
         state: &State,
         goal: Option<Vec<PyExpressionNode>>,
     ) -> PyResult<Vec<Vec<PyExpressionNode>>>;
-    fn build_plan(
-        &self,
-        path: &Vec<Action>,
-    ) -> PyResult<Vec<(Option<BigRational>, Action, Option<BigRational>)>>;
+    fn build_plan(&self, path: &[Action]) -> PyResult<Vec<ScheduledAction>>;
 }
 
 #[derive(Debug)]
 struct MutexChecker {
-    mutex: Mutex<FxHashMap<((Action, usize), (Action, usize)), bool>>,
+    cache: MutexCache,
 }
 
 impl MutexChecker {
     fn new() -> Self {
         MutexChecker {
-            mutex: Mutex::new(FxHashMap::with_hasher(FxBuildHasher::default())),
+            cache: Mutex::new(FxHashMap::with_hasher(FxBuildHasher)),
         }
     }
 
     fn check(
         &self,
         events_pair: &((Action, usize), (Action, usize)),
-        event_fluents: &Vec<
-            Vec<(
-                FxHashSet<usize>,
-                FxHashSet<usize>,
-                FxHashSet<usize>,
-                FxHashSet<usize>,
-                FxHashSet<usize>,
-            )>,
-        >,
+        event_fluents: &EventFluents,
     ) -> bool {
         let ((a1, i1), (a2, i2)) = events_pair;
         if a1 == a2 {
             return true;
         }
 
-        let mut mutex = self.mutex.lock().unwrap();
-        if let Some(are_mutex) = mutex.get(&events_pair) {
+        let mut cache = self.cache.lock().unwrap();
+        if let Some(are_mutex) = cache.get(events_pair) {
             return *are_mutex;
         }
 
         let (_, a_e, a_pe, _, _) = &event_fluents[a1.idx][*i1];
         let (b_p, b_e, _, _, _) = &event_fluents[a2.idx][*i2];
         let are_mutex = !(b_p.is_disjoint(a_e) && a_pe.is_disjoint(b_e));
-        mutex.insert(*events_pair, are_mutex);
+        cache.insert(*events_pair, are_mutex);
         are_mutex
     }
 }
 
 #[derive(Debug)]
 struct PrecedenceChecker {
-    precedence: Mutex<FxHashMap<((Action, usize), (Action, usize)), bool>>,
+    cache: PrecedenceCache,
 }
 
 impl PrecedenceChecker {
     fn new() -> Self {
         PrecedenceChecker {
-            precedence: Mutex::new(FxHashMap::with_hasher(FxBuildHasher::default())),
+            cache: Mutex::new(FxHashMap::with_hasher(FxBuildHasher)),
         }
     }
 
     fn check(
         &self,
         events_pair: &((Action, usize), (Action, usize)),
-        event_fluents: &Vec<
-            Vec<(
-                FxHashSet<usize>,
-                FxHashSet<usize>,
-                FxHashSet<usize>,
-                FxHashSet<usize>,
-                FxHashSet<usize>,
-            )>,
-        >,
+        event_fluents: &EventFluents,
     ) -> bool {
         let ((a1, i1), (a2, i2)) = events_pair;
         if a1 == a2 {
             return true;
         }
 
-        let mut precedence = self.precedence.lock().unwrap();
-        if let Some(res) = precedence.get(&events_pair) {
+        let mut cache = self.cache.lock().unwrap();
+        if let Some(res) = cache.get(events_pair) {
             return *res;
         }
 
         let (_, a_e, _, _, a_ec) = &event_fluents[a1.idx][*i1];
         let (_, b_e, _, b_sc, _) = &event_fluents[a2.idx][*i2];
         let res = !(a_e.is_disjoint(b_sc) && b_e.is_disjoint(a_ec));
-        precedence.insert(*events_pair, res);
+        cache.insert(*events_pair, res);
         res
     }
 }
@@ -155,7 +152,7 @@ pub fn py_get_fluents(expr: Vec<PyExpressionNode>) -> Vec<usize> {
         .collect()
 }
 
-fn get_fluents<'a>(expr: &'a Vec<ExpressionNode>) -> impl Iterator<Item = usize> + 'a {
+fn get_fluents<'a>(expr: &'a [ExpressionNode]) -> impl Iterator<Item = usize> + 'a {
     expr.iter().filter_map(|node| match node {
         ExpressionNode::Fluent(fluent) => Some(*fluent),
         _ => None,
@@ -165,19 +162,11 @@ fn get_fluents<'a>(expr: &'a Vec<ExpressionNode>) -> impl Iterator<Item = usize>
 #[pyclass(name = "SearchSpace")]
 #[derive(Debug)]
 pub struct SearchSpace {
-    actions_duration: Vec<Option<(Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool)>>,
+    actions_duration: Vec<Option<DurationInterval>>,
     events: FxHashMap<Action, Vec<(Timing, Event)>>,
     relevant_actions: Vec<Action>,
     compression_safe_actions: Option<Vec<bool>>,
-    event_fluents: Vec<
-        Vec<(
-            FxHashSet<usize>,
-            FxHashSet<usize>,
-            FxHashSet<usize>,
-            FxHashSet<usize>,
-            FxHashSet<usize>,
-        )>,
-    >,
+    event_fluents: EventFluents,
     mutex: MutexChecker,
     precedence: PrecedenceChecker,
     action_objects: Option<Vec<Vec<String>>>,
@@ -196,8 +185,9 @@ pub struct SearchSpace {
 impl SearchSpace {
     #[new]
     #[pyo3(signature = (actions_duration, events, actions, compression_safe_actions, action_objects, obj_to_prev_actions_map, initial_state=None, goal=None, relevant_actions=None, deadline=None, epsilon=None))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
-        actions_duration: Vec<Option<(Vec<PyExpressionNode>, Vec<PyExpressionNode>, bool, bool)>>,
+        actions_duration: Vec<Option<PyDurationInterval>>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         actions: Vec<Action>,
         compression_safe_actions: Option<Vec<bool>>,
@@ -215,9 +205,7 @@ impl SearchSpace {
             actions.clone()
         };
         let is_temporal = actions_duration.iter().any(|value| !value.is_none());
-        let converted_actions_duration: Vec<
-            Option<(Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool)>,
-        > = actions_duration
+        let converted_actions_duration: Vec<Option<DurationInterval>> = actions_duration
             .into_iter()
             .map(|value| {
                 value.map(|(vec1, vec2, b1, b2)| {
@@ -256,18 +244,18 @@ impl SearchSpace {
 
         let res = SearchSpace {
             actions_duration: converted_actions_duration,
-            events: events,
-            relevant_actions: relevant_actions,
-            compression_safe_actions: compression_safe_actions,
-            event_fluents: event_fluents,
+            events,
+            relevant_actions,
+            compression_safe_actions,
+            event_fluents,
             mutex: MutexChecker::new(),
             precedence: PrecedenceChecker::new(),
-            action_objects: action_objects,
-            obj_to_prev_actions_map: obj_to_prev_actions_map,
+            action_objects,
+            obj_to_prev_actions_map,
             initial_state: initial_state
                 .map(|inner_vec| inner_vec.into_iter().map(|v| v.v).collect()),
             goal: goal.map(|inner_vec| inner_vec.into_iter().map(|e| e.v).collect()),
-            tn_interpreter: tn_interpreter,
+            tn_interpreter,
             deadline: deadline.map(|v| rational_to_f64(&v)),
             epsilon: match &epsilon {
                 Some(x) => rational_to_f64(x),
@@ -277,7 +265,7 @@ impl SearchSpace {
                 Some(x) => x,
                 None => mk_rational(1, 100),
             },
-            is_temporal: is_temporal,
+            is_temporal,
             counter: Mutex::new(0),
         };
         Ok(res)
@@ -343,28 +331,17 @@ impl SearchSpace {
     }
 
     #[pyo3(name = "build_plan", signature = (path))]
-    fn py_build_plan(
-        &self,
-        path: Vec<Action>,
-    ) -> PyResult<Option<Vec<(Option<String>, Action, Option<String>)>>> {
+    fn py_build_plan(&self, path: Vec<Action>) -> PyResult<Option<Vec<PyScheduledAction>>> {
         let plan = self.build_plan(&path)?;
         let mut res = Vec::with_capacity(plan.len());
         for (s, a, d) in plan.into_iter() {
             let mut ss = None;
             let mut ds = None;
             if let Some(start) = s {
-                ss = Some(format!(
-                    "{}/{}",
-                    start.numer().to_string(),
-                    start.denom().to_string()
-                ));
+                ss = Some(format!("{}/{}", start.numer(), start.denom()));
             }
             if let Some(duration) = d {
-                ds = Some(format!(
-                    "{}/{}",
-                    duration.numer().to_string(),
-                    duration.denom().to_string()
-                ));
+                ds = Some(format!("{}/{}", duration.numer(), duration.denom()));
             }
             res.push((ss, a, ds));
         }
@@ -395,7 +372,7 @@ impl SearchSpace {
                     } else {
                         new_state.todo.insert(action, (index + 1, id + 1));
                     }
-                    if self.expand_event(state, &mut new_state, &e, index, id)? {
+                    if self.expand_event(state, &mut new_state, e, index, id)? {
                         return Ok(Some(new_state));
                     }
                 }
@@ -407,7 +384,7 @@ impl SearchSpace {
 
                 let mut new_state = state.clone_for_child();
                 new_state.g += 1.0;
-                if !self.open_action(state, &mut new_state, action, &events)? {
+                if !self.open_action(state, &mut new_state, action, events)? {
                     return Ok(None);
                 }
 
@@ -415,24 +392,17 @@ impl SearchSpace {
                     && self
                         .compression_safe_actions
                         .as_ref()
-                        .map_or(false, |is_compression_safe| is_compression_safe[action.idx])
+                        .is_some_and(|is_compression_safe| is_compression_safe[action.idx])
                     && events.len() > 1
                 {
-                    let mut id = new_state.todo.remove(&action).unwrap().1;
-                    for index in 1..events.len() {
+                    let start_id = new_state.todo.remove(&action).unwrap().1;
+                    for (id, (index, event)) in (start_id..).zip(events.iter().enumerate().skip(1))
+                    {
                         let state = new_state.clone_for_child();
                         new_state.g += 1.0;
-                        if !self.expand_event(
-                            &state,
-                            &mut new_state,
-                            &events[index].1,
-                            &index,
-                            &id,
-                        )? {
+                        if !self.expand_event(&state, &mut new_state, &event.1, &index, &id)? {
                             return Ok(None);
                         }
-
-                        id += 1;
                     }
                 }
                 return Ok(Some(new_state));
@@ -467,7 +437,7 @@ impl SearchSpace {
 
         // check active conditions
         for c in new_state.active_conditions.iter() {
-            let sat = match internal_evaluate(&c, state)? {
+            let sat = match internal_evaluate(c, state)? {
                 ExpressionNode::Bool(v) => v,
                 _ => {
                     return Err(PyException::new_err(
@@ -482,7 +452,7 @@ impl SearchSpace {
 
         // remove end conditions
         for c in e.end_conditions.iter() {
-            new_state.active_conditions.remove(&c);
+            new_state.active_conditions.remove(c);
         }
 
         // insert start conditions
@@ -497,7 +467,7 @@ impl SearchSpace {
 
         // check active conditions
         for c in new_state.active_conditions.iter() {
-            let sat = match internal_evaluate(&c, new_state)? {
+            let sat = match internal_evaluate(c, new_state)? {
                 ExpressionNode::Bool(v) => v,
                 _ => {
                     return Err(PyException::new_err(
@@ -526,10 +496,10 @@ impl SearchSpace {
                 }
             }
             for (a, i) in new_state.todo.iter() {
-                let mut id2 = i.1;
-                for (j, (_, e2)) in self.events[a].iter().skip(i.0).enumerate() {
+                for (id2, (j, (_, e2))) in (i.1..).zip(self.events[a].iter().skip(i.0).enumerate())
+                {
                     let e_id = (e.action, *index);
-                    let e2_id = (a.clone(), j + i.0);
+                    let e2_id = (*a, j + i.0);
                     let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, id2);
                     if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
                         let b: f64 = -self.epsilon;
@@ -537,7 +507,6 @@ impl SearchSpace {
                     } else {
                         tn.add(&ev, &ev2, &0.0);
                     }
-                    id2 += 1;
                 }
             }
             if !tn.check() {
@@ -552,7 +521,7 @@ impl SearchSpace {
         state: &State,
         new_state: &mut State,
         action: Action,
-        events: &Vec<(Timing, Event)>,
+        events: &[(Timing, Event)],
     ) -> PyResult<bool> {
         if let (Some(action_objects), Some(obj_to_prev_actions_map)) =
             (&self.action_objects, &self.obj_to_prev_actions_map)
@@ -575,7 +544,7 @@ impl SearchSpace {
         }
 
         let mut counter = self.counter.lock().unwrap();
-        let mut id = counter.clone();
+        let mut id = *counter;
         if self.is_temporal {
             // Add temporal constraints between events of the action
             let tn = new_state.temporal_network.as_mut().unwrap();
@@ -585,8 +554,8 @@ impl SearchSpace {
             let duration = self.actions_duration[action.idx].as_ref();
             let mut lb: f64 = 0.0;
             let mut ub: f64 = 0.0;
-            if duration.is_some() {
-                let d = duration.unwrap();
+            if let Some(duration) = duration {
+                let d = duration;
                 lb = -rational_to_f64(&get_rational_from_expression_node(&internal_evaluate(
                     &d.0, state,
                 )?)?);
@@ -657,7 +626,7 @@ impl SearchSpaceTrait for SearchSpace {
                 tn.add(
                     &self.tn_interpreter.end_plan_id,
                     &self.tn_interpreter.start_plan_id,
-                    &deadline,
+                    deadline,
                 );
                 tn.add(
                     &self.tn_interpreter.start_plan_id,
@@ -672,11 +641,11 @@ impl SearchSpaceTrait for SearchSpace {
         Ok(State {
             assignments: init,
             temporal_network: tn,
-            todo: FxHashMap::with_hasher(FxBuildHasher::default()),
+            todo: FxHashMap::with_hasher(FxBuildHasher),
             active_conditions: HashMultiSet::new(),
             g: 0.0,
             path: PersistentList::new(),
-            heuristic_cache: Mutex::new(FxHashMap::with_hasher(FxBuildHasher::default())),
+            heuristic_cache: Mutex::new(FxHashMap::with_hasher(FxBuildHasher)),
         })
     }
 
@@ -707,7 +676,7 @@ impl SearchSpaceTrait for SearchSpace {
                 }
             },
         };
-        match internal_evaluate(&g, state)? {
+        match internal_evaluate(g, state)? {
             ExpressionNode::Bool(v) => Ok(v),
             _ => Err(PyException::new_err(
                 "The goal is not a boolean expression!",
@@ -721,15 +690,15 @@ impl SearchSpaceTrait for SearchSpace {
         goal: Option<Vec<PyExpressionNode>>,
     ) -> PyResult<Vec<Vec<PyExpressionNode>>> {
         let goals = match goal {
-            Some(v) => split_expression(&v.into_iter().map(|e| e.v).collect())?,
+            Some(v) => split_expression(&v.into_iter().map(|e| e.v).collect::<Vec<_>>())?,
             None => match &self.goal {
-                Some(v) => split_expression(&v)?,
+                Some(v) => split_expression(v)?,
                 None => {
                     return Err(PyException::new_err("The goal must be defined somewhere!"));
                 }
             },
         };
-        let mut res: FxHashSet<_> = FxHashSet::with_hasher(FxBuildHasher::default());
+        let mut res: FxHashSet<_> = FxHashSet::with_hasher(FxBuildHasher);
         for g in goals {
             if internal_evaluate(&g, state)? == ExpressionNode::Bool(true) {
                 res.insert(g.into_iter().map(|v| PyExpressionNode { v }).collect());
@@ -738,17 +707,13 @@ impl SearchSpaceTrait for SearchSpace {
         Ok(res.into_iter().collect())
     }
 
-    fn build_plan(
-        &self,
-        path: &Vec<Action>,
-    ) -> PyResult<Vec<(Option<BigRational>, Action, Option<BigRational>)>> {
+    fn build_plan(&self, path: &[Action]) -> PyResult<Vec<ScheduledAction>> {
         if !self.is_temporal {
             return Ok(path.iter().map(|a| (None, *a, None)).collect());
         }
 
         let mut tn = DeltaSTN::new(mk_rational(0, 1));
-        let mut todo: FxHashMap<Action, (usize, u32)> =
-            FxHashMap::with_hasher(FxBuildHasher::default());
+        let mut todo: FxHashMap<Action, (usize, u32)> = FxHashMap::with_hasher(FxBuildHasher);
         let mut event_path: Vec<(Event, u32)> = Vec::new();
         let mut counter = 0;
         let mut state = self.initial_state(None)?;
@@ -779,10 +744,11 @@ impl SearchSpaceTrait for SearchSpace {
                             }
                         }
                         for (a, i) in todo.iter() {
-                            let mut id2 = i.1;
-                            for (j, (_, e2)) in self.events[a].iter().skip(i.0).enumerate() {
+                            for (id2, (j, (_, e2))) in
+                                (i.1..).zip(self.events[a].iter().skip(i.0).enumerate())
+                            {
                                 let e_id = (e.action, index);
-                                let e2_id = (a.clone(), j + i.0);
+                                let e2_id = (*a, j + i.0);
                                 let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, id2);
                                 if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
                                     let b = -self.epsilon_rational.clone();
@@ -790,7 +756,6 @@ impl SearchSpaceTrait for SearchSpace {
                                 } else {
                                     // tn.add(&ev, &ev2, &mk_rational(0, 1));
                                 }
-                                id2 += 1;
                             }
                         }
                         event_path.push((e.clone(), id));
@@ -850,10 +815,11 @@ impl SearchSpaceTrait for SearchSpace {
                         }
                     }
                     for (a, i) in todo.iter() {
-                        let mut id2 = i.1;
-                        for (j, (_, e2)) in self.events[a].iter().skip(i.0).enumerate() {
+                        for (id2, (j, (_, e2))) in
+                            (i.1..).zip(self.events[a].iter().skip(i.0).enumerate())
+                        {
                             let e_id = (e.action, 0);
-                            let e2_id = (a.clone(), j + i.0);
+                            let e2_id = (*a, j + i.0);
                             let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, id2);
                             if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
                                 let b = -self.epsilon_rational.clone();
@@ -861,7 +827,6 @@ impl SearchSpaceTrait for SearchSpace {
                             } else {
                                 // tn.add(&ev, &ev2, &mk_rational(0, 1));
                             }
-                            id2 += 1;
                         }
                     }
                     event_path.push((e.clone(), id));
@@ -874,9 +839,9 @@ impl SearchSpaceTrait for SearchSpace {
 
         let mut res = Vec::new();
         let mut start_time: FxHashMap<(Action, u32), BigRational> =
-            FxHashMap::with_hasher(FxBuildHasher::default());
+            FxHashMap::with_hasher(FxBuildHasher);
         let mut end_time: FxHashMap<(Action, u32), BigRational> =
-            FxHashMap::with_hasher(FxBuildHasher::default());
+            FxHashMap::with_hasher(FxBuildHasher);
         for (a, t) in self.tn_interpreter.get_actions_timings(&tn).iter() {
             if a.1 {
                 start_time.insert((a.0, a.2), t.clone());

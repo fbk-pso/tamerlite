@@ -9,35 +9,18 @@ repos:
       - id: check-merge-conflict
       - id: check-added-large-files
 
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.5
+  - repo: local
     hooks:
-      - id: ruff
-        args: [--fix]
-      - id: ruff-format
-
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.19.1
-    hooks:
-      - id: mypy
-        files: ^src/tamerlite/
-        additional_dependencies:
-          - "min-max-heap==1.0.1"
-          - "bloom-filter2==2.0.0"
+      - id: lint
+        name: just lint
+        entry: just lint
+        language: system
+        pass_filenames: false
 
   - repo: local
     hooks:
-      - id: cargo-fmt
-        name: cargo fmt --check
-        entry: cargo fmt --all -- --check
+      - id: typecheck
+        name: just typecheck
+        entry: just typecheck
         language: system
-        types: [rust]
-        pass_filenames: false
-      - id: cargo-clippy
-        name: cargo clippy (informational)
-        # Informational: prints warnings without failing. Tighten to
-        # `-D warnings` once the existing warning backlog is cleaned up.
-        entry: cargo clippy --workspace --all-targets -- -W warnings
-        language: system
-        types: [rust]
         pass_filenames: false
