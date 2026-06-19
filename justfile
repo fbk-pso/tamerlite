@@ -4,7 +4,7 @@ default:
     @just --list
 
 # Sync the environment from uv.lock (project + dev group + rust extra + workspace)
-install:
+install: build-rust
     uv sync --all-extras
 
 # Build and install the Rust extension in-place via maturin develop
@@ -63,6 +63,12 @@ clean-dist:
 # Uses python3 directly (stdlib only) so it doesn't re-resolve uv during a bump.
 check-versions:
     python3 ci/check_versions.py
+
+# Print rustamer and tamerlite versions and verify they match
+check-installed-versions:
+    @uv run python -c 'from importlib.metadata import version;\
+    r=version("rustamer"); t=version("tamerlite"); print(f"rustamer:  {r}"); print(f"tamerlite: {t}");\
+    assert r == t, f"Version mismatch: rustamer={r}, tamerlite={t}"; print("✓ Versions match")'
 
 # Bump version in pyproject.toml, root Cargo.toml, and the rustamer pin
 bump version:
