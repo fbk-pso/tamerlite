@@ -33,7 +33,7 @@ dev = [
     "pytest==9.1.0",
     "pytest-regressions==2.11.0",
     "mypy==2.1.0",
-    "ruff==0.15.17",
+    "ruff==0.15.18",
     "pre-commit==4.6.0",
     "maturin>=1.14.0,<2.0",
     "rustamer",
