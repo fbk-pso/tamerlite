@@ -29,7 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [test]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: actions/setup-python@v6
@@ -58,7 +58,7 @@ jobs:
         # target: [x86_64, x86, aarch64, armv7, s390x, ppc64le]
         target: [x86_64]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: |
@@ -98,7 +98,7 @@ jobs:
         # target: [x64, x86]
         target: [x64]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: |
@@ -137,7 +137,7 @@ jobs:
       matrix:
         target: [x86_64, aarch64]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: |
@@ -172,7 +172,7 @@ jobs:
       && needs.test.result == 'success'
       && (needs.stamp-dev.result == 'success' || needs.stamp-dev.result == 'skipped')
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Download stamped manifests
         if: github.ref == 'refs/heads/main'
         uses: actions/download-artifact@v8
@@ -198,7 +198,7 @@ jobs:
       && needs.test.result == 'success'
       && (needs.stamp-dev.result == 'success' || needs.stamp-dev.result == 'skipped')
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install uv
         uses: astral-sh/setup-uv@v7
         with:
@@ -305,7 +305,7 @@ jobs:
         with:
           app-id: ${{ secrets.RELEASER_APP_ID }}
           private-key: ${{ secrets.RELEASER_APP_PRIVATE_KEY }}
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           pattern: wheels-*
