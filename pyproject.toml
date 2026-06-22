@@ -30,7 +30,7 @@ rust = [
 
 [dependency-groups]
 dev = [
-    "pytest==9.1.0",
+    "pytest==9.1.1",
     "pytest-regressions==2.11.0",
     "mypy==2.1.0",
     "ruff==0.15.18",
