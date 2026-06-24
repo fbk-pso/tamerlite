@@ -16,6 +16,7 @@
 #
 
 import heapq
+import logging
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -27,6 +28,8 @@ from min_max_heap import MinMaxHeap
 
 from tamerlite.core.heuristics import Heuristic
 from tamerlite.core.search_space import Action, SearchSpaceABC, State
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -134,10 +137,13 @@ def _basic_search(
     timeout: Optional[float] = None,
     early_termination: bool = False,
 ) -> Tuple[Optional[List[Action]], Dict[str, str]]:
+    name = "bfs" if bfs else "dfs"
+    logger.info("%s: timeout=%s early_termination=%s", name, timeout, early_termination)
     st = time.time()
     init = ss.initial_state()
     open: Deque[State] = deque()
     expanded_states = 0
+    generated_states = 1
 
     if early_termination and ss.goal_reached(init):
         return extract_path(init), {
@@ -154,18 +160,37 @@ def _basic_search(
         else:
             state = open.pop()
         expanded_states += 1
+        if expanded_states % 10_000 == 0:
+            logger.debug(
+                "%s: expanded=%d generated=%d open=%d",
+                name,
+                expanded_states,
+                generated_states,
+                len(open),
+            )
         if not early_termination and ss.goal_reached(state):
+            logger.info(
+                "%s: goal found — expanded=%d depth=%s", name, expanded_states, state.g
+            )
             return extract_path(state), {
                 "expanded_states": str(expanded_states),
                 "goal_depth": str(state.g),
             }
         for succ_state in ss.get_successor_states(state):
             if early_termination and ss.goal_reached(succ_state):
+                logger.info(
+                    "%s: goal found — expanded=%d depth=%s",
+                    name,
+                    expanded_states,
+                    succ_state.g,
+                )
                 return extract_path(succ_state), {
                     "expanded_states": str(expanded_states),
                     "goal_depth": str(succ_state.g),
                 }
             open.append(succ_state)
+            generated_states += 1
+    logger.info("%s: no solution found — expanded=%d", name, expanded_states)
     return None, {"expanded_states": str(expanded_states)}
 
 
@@ -197,6 +222,13 @@ def wastar_search(
     early_termination: bool = False,
     weak_equality: bool = False,
 ) -> Tuple[Optional[List[Action]], Dict[str, str]]:
+    logger.info(
+        "wastar_search: weight=%s timeout=%s early_termination=%s weak_equality=%s",
+        weight,
+        timeout,
+        early_termination,
+        weak_equality,
+    )
     st = time.time()
     open: List[PrioritizedItem] = []
     init = ss.initial_state()
@@ -220,7 +252,19 @@ def wastar_search(
         item = heapq.heappop(open)
         state = item.state
         expanded_states += 1
+        if expanded_states % 10_000 == 0:
+            logger.debug(
+                "wastar_search: expanded=%d generated=%d open=%d",
+                expanded_states,
+                generated_states,
+                len(open),
+            )
         if not early_termination and ss.goal_reached(state):
+            logger.info(
+                "wastar_search: goal found — expanded=%d depth=%s",
+                expanded_states,
+                state.g,
+            )
             return extract_path(state), {
                 "expanded_states": str(expanded_states),
                 "goal_depth": str(state.g),
@@ -229,6 +273,11 @@ def wastar_search(
         candidate_states = []
         for succ_state in ss.get_successor_states(state):
             if early_termination and ss.goal_reached(succ_state):
+                logger.info(
+                    "wastar_search: goal found — expanded=%d depth=%s",
+                    expanded_states,
+                    succ_state.g,
+                )
                 return extract_path(succ_state), {
                     "expanded_states": str(expanded_states),
                     "goal_depth": str(succ_state.g),
@@ -248,6 +297,7 @@ def wastar_search(
                 heapq.heappush(open, PrioritizedItem(f, succ_state, generated_states))
             generated_states += 1
 
+    logger.info("wastar_search: no solution found — expanded=%d", expanded_states)
     return None, {"expanded_states": str(expanded_states)}
 
 
@@ -283,6 +333,13 @@ def wastar_search_memory_bounded(
     early_termination: bool = False,
     weak_equality: bool = False,
 ) -> Tuple[Optional[List[Action]], Dict[str, str]]:
+    logger.info(
+        "wastar_search_memory_bounded: weight=%s timeout=%s early_termination=%s weak_equality=%s",
+        weight,
+        timeout,
+        early_termination,
+        weak_equality,
+    )
     st = time.time()
     init = ss.initial_state()
     expanded_states = 0
@@ -325,7 +382,19 @@ def wastar_search_memory_bounded(
         item = open.pop()
         state = item.state
         expanded_states += 1
+        if expanded_states % 10_000 == 0:
+            logger.debug(
+                "wastar_search_memory_bounded: expanded=%d generated=%d open=%d",
+                expanded_states,
+                generated_states,
+                len(open),
+            )
         if not early_termination and ss.goal_reached(state):
+            logger.info(
+                "wastar_search_memory_bounded: goal found — expanded=%d depth=%s",
+                expanded_states,
+                state.g,
+            )
             return extract_path(state), {
                 "expanded_states": str(expanded_states),
                 "goal_depth": str(state.g),
@@ -334,6 +403,11 @@ def wastar_search_memory_bounded(
         candidate_states = []
         for succ_state in ss.get_successor_states(state):
             if early_termination and ss.goal_reached(succ_state):
+                logger.info(
+                    "wastar_search_memory_bounded: goal found — expanded=%d depth=%s",
+                    expanded_states,
+                    succ_state.g,
+                )
                 return extract_path(succ_state), {
                     "expanded_states": str(expanded_states),
                     "goal_depth": str(succ_state.g),
@@ -353,6 +427,9 @@ def wastar_search_memory_bounded(
                 open.push(PrioritizedItem(f, succ_state, generated_states))
             generated_states += 1
 
+    logger.info(
+        "wastar_search_memory_bounded: no solution found — expanded=%d", expanded_states
+    )
     return None, {"expanded_states": str(expanded_states)}
 
 
@@ -363,9 +440,16 @@ def ehc_search(
     early_termination: bool = False,
     weak_equality: bool = False,
 ) -> Tuple[Optional[List[Action]], Dict[str, str]]:
+    logger.info(
+        "ehc_search: timeout=%s early_termination=%s weak_equality=%s",
+        timeout,
+        early_termination,
+        weak_equality,
+    )
     st = time.time()
     init = ss.initial_state()
     expanded_states = 0
+    generated_states = 1
     if early_termination and ss.goal_reached(init):
         return extract_path(init), {
             "expanded_states": str(expanded_states),
@@ -377,6 +461,7 @@ def ehc_search(
     best_h = heuristic.eval(init, ss)
     if best_h is None:
         return None, {"expanded_states": str(0)}
+    logger.debug("ehc_search: initial h=%.4g", best_h)
 
     closed = set()
     while len(open) > 0:
@@ -388,6 +473,11 @@ def ehc_search(
             closed.add(state_representation(state, weak_equality))
 
         if not early_termination and ss.goal_reached(state):
+            logger.info(
+                "ehc_search: goal found — expanded=%d depth=%s",
+                expanded_states,
+                state.g,
+            )
             return extract_path(state), {
                 "expanded_states": str(expanded_states),
                 "goal_depth": str(state.g),
@@ -396,6 +486,11 @@ def ehc_search(
         candidate_states = []
         for succ_state in ss.get_successor_states(state):
             if early_termination and ss.goal_reached(succ_state):
+                logger.info(
+                    "ehc_search: goal found — expanded=%d depth=%s",
+                    expanded_states,
+                    succ_state.g,
+                )
                 return extract_path(succ_state), {
                     "expanded_states": str(expanded_states),
                     "goal_depth": str(succ_state.g),
@@ -409,13 +504,21 @@ def ehc_search(
                 candidate_states.append(succ_state)
 
         for succ_state, h in heuristic.eval_gen(candidate_states, ss):
+            generated_states += 1
             if h is not None:
                 if h < best_h:
                     best_h = h
+                    logger.debug(
+                        "ehc_search: improved h=%.4g expanded=%d generated=%d",
+                        best_h,
+                        expanded_states,
+                        generated_states,
+                    )
                     closed.clear()
                     open.clear()
                     open.append(succ_state)
                     break
                 else:
                     open.append(succ_state)
+    logger.info("ehc_search: no solution found — expanded=%d", expanded_states)
     return None, {"expanded_states": str(expanded_states)}

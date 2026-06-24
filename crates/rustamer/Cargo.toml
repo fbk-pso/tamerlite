@@ -11,4 +11,6 @@ crate-type = ["cdylib"]
 [dependencies]
 pyo3.workspace = true
 rustc-hash.workspace = true
+log.workspace = true
+pyo3-log = "0.13"
 rustamer-base = { path = "../rustamer-base" }

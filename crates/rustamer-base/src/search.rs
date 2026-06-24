@@ -15,6 +15,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 
+use log::{debug, info};
 use min_max_heap::MinMaxHeap;
 use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
@@ -128,6 +129,10 @@ impl<T: Ord> BoundedPriorityQueue<T> {
     pub fn pop(&mut self) -> Option<T> {
         self.heap.pop_max()
     }
+
+    pub fn len(&self) -> usize {
+        self.heap.len()
+    }
 }
 
 pub struct WeakEqState {
@@ -176,6 +181,10 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<SearchResult> {
+    info!(
+        "wastar_search: weight={} timeout={:?} early_termination={} weak_equality={}",
+        weight, timeout, early_termination, weak_equality
+    );
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
     let start = SystemTime::now();
     let init = Rc::new(ss.initial_state(None)?);
@@ -222,7 +231,19 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         }
         let state = current.state;
         expanded_states += 1;
+        if expanded_states % 10_000 == 0 {
+            debug!(
+                "wastar_search: expanded={} generated={} open={}",
+                expanded_states,
+                generated_states,
+                open.len()
+            );
+        }
         if !early_termination && ss.goal_reached(&state, None)? {
+            info!(
+                "wastar_search: goal found — expanded={} depth={}",
+                expanded_states, state.g
+            );
             metrics.insert("expanded_states".to_string(), expanded_states.to_string());
             metrics.insert("goal_depth".to_string(), state.g.to_string());
             return Ok((Some(extract_path(&state)), metrics));
@@ -249,6 +270,10 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
             for rs in heuristic.eval_gen(successors_iter, ss)? {
                 let (s, h) = rs?;
                 if early_termination && ss.goal_reached(&s, None)? {
+                    info!(
+                        "wastar_search: goal found — expanded={} depth={}",
+                        expanded_states, s.g
+                    );
                     metrics.insert("expanded_states".to_string(), expanded_states.to_string());
                     metrics.insert("goal_depth".to_string(), s.g.to_string());
                     return Ok((Some(extract_path(&s)), metrics));
@@ -265,6 +290,10 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
             }
         }
     }
+    info!(
+        "wastar_search: no solution found — expanded={}",
+        expanded_states
+    );
     metrics.insert("expanded_states".to_string(), expanded_states.to_string());
     Ok((None, metrics))
 }
@@ -277,6 +306,10 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<SearchResult> {
+    info!(
+        "wastar_search_memory_bounded: weight={} timeout={:?} early_termination={} weak_equality={}",
+        weight, timeout, early_termination, weak_equality
+    );
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
@@ -324,7 +357,19 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
         }
         let state = current.state;
         expanded_states += 1;
+        if expanded_states % 10_000 == 0 {
+            debug!(
+                "wastar_search_memory_bounded: expanded={} generated={} open={}",
+                expanded_states,
+                generated_states,
+                open.len()
+            );
+        }
         if !early_termination && ss.goal_reached(&state, None)? {
+            info!(
+                "wastar_search_memory_bounded: goal found — expanded={} depth={}",
+                expanded_states, state.g
+            );
             metrics.insert("expanded_states".to_string(), expanded_states.to_string());
             metrics.insert("goal_depth".to_string(), state.g.to_string());
             return Ok((Some(extract_path(&state)), metrics));
@@ -346,6 +391,10 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
             for rs in heuristic.eval_gen_owned(successors_iter, ss)? {
                 let (s, h) = rs?;
                 if early_termination && ss.goal_reached(&s, None)? {
+                    info!(
+                        "wastar_search_memory_bounded: goal found — expanded={} depth={}",
+                        expanded_states, s.g
+                    );
                     metrics.insert("expanded_states".to_string(), expanded_states.to_string());
                     metrics.insert("goal_depth".to_string(), s.g.to_string());
                     return Ok((Some(extract_path(&s)), metrics));
@@ -362,6 +411,10 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
             }
         }
     }
+    info!(
+        "wastar_search_memory_bounded: no solution found — expanded={}",
+        expanded_states
+    );
     metrics.insert("expanded_states".to_string(), expanded_states.to_string());
     Ok((None, metrics))
 }
@@ -388,11 +441,17 @@ fn basic_search<S: SearchSpaceTrait>(
     timeout: Option<f32>,
     early_termination: bool,
 ) -> PyResult<SearchResult> {
+    let name = if bfs { "bfs" } else { "dfs" };
+    info!(
+        "{}: timeout={:?} early_termination={}",
+        name, timeout, early_termination
+    );
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
     let mut open = VecDeque::new();
     let mut expanded_states = 0;
+    let mut generated_states = 1;
 
     if early_termination && ss.goal_reached(&init, None)? {
         metrics.insert("expanded_states".to_string(), expanded_states.to_string());
@@ -415,7 +474,21 @@ fn basic_search<S: SearchSpaceTrait>(
         };
 
         expanded_states += 1;
+        if expanded_states % 10_000 == 0 {
+            debug!(
+                "{}: expanded={} generated={} open={}",
+                name,
+                expanded_states,
+                generated_states,
+                open.len()
+            );
+        }
+
         if !early_termination && ss.goal_reached(&state, None)? {
+            info!(
+                "{}: goal found — expanded={} depth={}",
+                name, expanded_states, state.g
+            );
             metrics.insert("expanded_states".to_string(), expanded_states.to_string());
             metrics.insert("goal_depth".to_string(), state.g.to_string());
             return Ok((Some(extract_path(&state)), metrics));
@@ -423,14 +496,20 @@ fn basic_search<S: SearchSpaceTrait>(
             for rs in ss.get_successor_states_iter(&state) {
                 let s = rs?;
                 if early_termination && ss.goal_reached(&s, None)? {
+                    info!(
+                        "{}: goal found — expanded={} depth={}",
+                        name, expanded_states, s.g
+                    );
                     metrics.insert("expanded_states".to_string(), expanded_states.to_string());
                     metrics.insert("goal_depth".to_string(), s.g.to_string());
                     return Ok((Some(extract_path(&s)), metrics));
                 }
                 open.push_back(s);
+                generated_states += 1;
             }
         }
     }
+    info!("{}: no solution found — expanded={}", name, expanded_states);
     metrics.insert("expanded_states".to_string(), expanded_states.to_string());
     Ok((None, metrics))
 }
@@ -442,10 +521,15 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<SearchResult> {
+    info!(
+        "ehc_search: timeout={:?} early_termination={} weak_equality={}",
+        timeout, early_termination, weak_equality
+    );
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
     let start = SystemTime::now();
     let init = Rc::new(ss.initial_state(None)?);
     let mut expanded_states = 0;
+    let mut generated_states = 1;
 
     if early_termination && ss.goal_reached(&init, None)? {
         metrics.insert("expanded_states".to_string(), expanded_states.to_string());
@@ -460,6 +544,7 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
             return Ok((None, metrics));
         }
     };
+    debug!("ehc_search: initial h={:.4}", best_h);
     let mut open = VecDeque::new();
     open.push_back(init);
 
@@ -478,6 +563,10 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
 
         expanded_states += 1;
         if !early_termination && ss.goal_reached(&state, None)? {
+            info!(
+                "ehc_search: goal found — expanded={} depth={}",
+                expanded_states, state.g
+            );
             metrics.insert("expanded_states".to_string(), expanded_states.to_string());
             metrics.insert("goal_depth".to_string(), state.g.to_string());
             return Ok((Some(extract_path(&state)), metrics));
@@ -511,7 +600,12 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
             let mut new_best_found = false;
             for rs in heuristic.eval_gen(successors_iter, ss)? {
                 let (s, h) = rs?;
+                generated_states += 1;
                 if early_termination && ss.goal_reached(&s, None)? {
+                    info!(
+                        "ehc_search: goal found — expanded={} depth={}",
+                        expanded_states, s.g
+                    );
                     metrics.insert("expanded_states".to_string(), expanded_states.to_string());
                     metrics.insert("goal_depth".to_string(), s.g.to_string());
                     return Ok((Some(extract_path(&s)), metrics));
@@ -529,11 +623,19 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
                 }
             }
             if new_best_found {
+                debug!(
+                    "ehc_search: improved h={:.4} expanded={} generated={}",
+                    best_h, expanded_states, generated_states
+                );
                 closed.clear();
                 closed_weak_eq.clear();
             }
         }
     }
+    info!(
+        "ehc_search: no solution found — expanded={}",
+        expanded_states
+    );
     metrics.insert("expanded_states".to_string(), expanded_states.to_string());
     Ok((None, metrics))
 }

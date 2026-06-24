@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 pyo3.workspace = true
 rustc-hash.workspace = true
+log.workspace = true
 num-rational = "0.4.1"
 num = "0.4.1"
 multiset = "0.0.5"

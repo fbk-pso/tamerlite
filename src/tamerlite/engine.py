@@ -15,6 +15,7 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 
+import logging
 import time
 import warnings
 from dataclasses import dataclass
@@ -57,6 +58,8 @@ from tamerlite.core import (
 )
 from tamerlite.core.heuristics import Heuristic
 from tamerlite.encoder import Encoder, PlanType
+
+logger = logging.getLogger(__name__)
 
 credits = up.engines.Credits(
     "TamerLite",
@@ -360,6 +363,12 @@ class TamerLite(
         )
         original_problem = problem
 
+        logger.info(
+            "Solving '%s' (anytime): actions=%d fluents=%d",
+            ground_problem.name,
+            len(list(ground_problem.actions)),
+            len(list(ground_problem.fluents)),
+        )
         elapsed_time = time.time() - start_time
         res, _, _ = self._solve_ground_problem(
             lifted_problem,
@@ -369,6 +378,14 @@ class TamerLite(
             output_stream=output_stream,
             is_intermediate_solution=True,
         )
+        if res.plan is not None:
+            logger.info(
+                "Initial solution found in %.3fs: %s",
+                time.time() - start_time,
+                res.metrics,
+            )
+        else:
+            logger.info("No initial solution found in %.3fs", time.time() - start_time)
         yield res
         if res.plan is None:
             return
@@ -418,6 +435,7 @@ class TamerLite(
             exp = None
             deadline = None
             m, v = list(val_res.metric_evaluations.items())[0]
+            logger.info("Searching for improvement over current quality: %s", v)
             if m.is_minimize_expression_on_final_state():
                 exp = em.LT(m.expression, v)
             elif m.is_maximize_expression_on_final_state():
@@ -506,12 +524,18 @@ class TamerLite(
                     prev_res.status = (
                         up.engines.PlanGenerationResultStatus.SOLVED_OPTIMALLY
                     )
+                logger.info(
+                    "No further improvement found, terminating with status: %s",
+                    prev_res.status,
+                )
                 yield prev_res
             elif res.status == up.engines.PlanGenerationResultStatus.TIMEOUT:
                 prev_res.status = up.engines.PlanGenerationResultStatus.TIMEOUT
+                logger.info("Search timed out during improvement")
                 yield prev_res
             else:
                 assert res.plan is not None
+                logger.info("Improved solution found: %s", res.metrics)
                 yield res
 
             prev_res = up.engines.PlanGenerationResult(
@@ -539,6 +563,12 @@ class TamerLite(
             self._compile_problem(problem)
         )
         elapsed_time = time.time() - start_time
+        logger.info(
+            "Solving '%s': actions=%d fluents=%d",
+            ground_problem.name,
+            len(list(ground_problem.actions)),
+            len(list(ground_problem.fluents)),
+        )
         res, _, _ = self._solve_ground_problem(
             lifted_problem,
             ground_problem,
@@ -548,6 +578,14 @@ class TamerLite(
             output_stream=output_stream,
             is_intermediate_solution=False,
         )
+        if res.plan is not None:
+            logger.info(
+                "Solution found in %.3fs: %s", time.time() - start_time, res.metrics
+            )
+        else:
+            logger.info(
+                "No solution found in %.3fs: %s", time.time() - start_time, res.metrics
+            )
         return res
 
     def _solve_ground_problem(

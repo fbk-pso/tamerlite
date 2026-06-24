@@ -10,6 +10,7 @@ version = "0.1.0"
 [workspace.dependencies]
 pyo3 = "0.29.0"
 rustc-hash = "2.1.1"
+log = "0.4"
 
 [profile.profiling]
 inherits = "release"
