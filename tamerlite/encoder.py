@@ -143,7 +143,12 @@ class Encoder:
             self._objects[ut.name] = [o.name for o in problem.objects(ut)]
 
         if self._dfa is not None:
-            self._dfa.bind_to_planner(self._action_by_name, self._objects)
+            self._dfa.bind_to_planner(
+                self._action_by_name,
+                self._objects,
+                self._problem.initial_values,
+                self._problem.goals,
+            )
 
     @property
     def problem(self) -> Problem:
