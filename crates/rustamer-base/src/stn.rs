@@ -15,6 +15,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 
+use log::warn;
 use std::collections::VecDeque;
 use std::fs::read_to_string;
 use std::sync::Arc;
@@ -196,7 +197,6 @@ pub fn _tnsolve(fname: String) {
             continue;
         }
 
-        println!("Unmatched line: {}", line)
+        warn!("Unmatched line: {}", line)
     }
-    println!()
 }

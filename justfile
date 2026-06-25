@@ -4,8 +4,9 @@ default:
     @just --list
 
 # Sync the environment from uv.lock (project + dev group + rust extra + workspace)
-install: build-rust
+install:
     uv sync --all-extras
+    just build-rust
 
 # Build and install the Rust extension in-place via maturin develop
 build-rust:

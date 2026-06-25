@@ -16,6 +16,7 @@
 #
 
 import heapq
+import logging
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -24,6 +25,8 @@ from typing import Dict, List, Optional, Tuple
 from tamerlite.core.heuristics import Heuristic
 from tamerlite.core.search import extract_path, state_representation
 from tamerlite.core.search_space import Action, SearchSpaceABC, State
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -102,12 +105,20 @@ def _multiqueue_search(
     early_termination: bool = False,
     weak_equality: bool = False,
 ) -> Tuple[Optional[List[Action]], Dict[str, str]]:
+    logger.info(
+        "multiqueue_search: queues=%d timeout=%s early_termination=%s weak_equality=%s",
+        len(heuristics),
+        timeout,
+        early_termination,
+        weak_equality,
+    )
     st = time.time()
     opens = []
     init = ss.initial_state()
     if not ss.is_temporal or weak_equality:
         visited_states = {state_representation(init, weak_equality)}
     states_expanded = 0
+    generated_states = 1
     if early_termination and ss.goal_reached(init):
         return extract_path(init), {
             "expanded_states": str(states_expanded),
@@ -137,7 +148,19 @@ def _multiqueue_search(
         sc.expanded = True
         state = sc.state
         states_expanded += 1
+        if states_expanded % 10_000 == 0:
+            logger.debug(
+                "multiqueue_search: expanded=%d generated=%d open=%d",
+                states_expanded,
+                generated_states,
+                sum(len(o) for o in opens),
+            )
         if not early_termination and ss.goal_reached(state):
+            logger.info(
+                "multiqueue_search: goal found — expanded=%d depth=%s",
+                states_expanded,
+                state.g,
+            )
             return extract_path(state), {
                 "expanded_states": str(states_expanded),
                 "goal_depth": str(state.g),
@@ -146,7 +169,13 @@ def _multiqueue_search(
         # Here, we create a temporary list of the successor states to reuse it among multiple heuristics
         candidate_states = []
         for s in ss.get_successor_states(state):
+            generated_states += 1
             if early_termination and ss.goal_reached(s):
+                logger.info(
+                    "multiqueue_search: goal found — expanded=%d depth=%s",
+                    states_expanded,
+                    s.g,
+                )
                 return extract_path(s), {
                     "expanded_states": str(states_expanded),
                     "goal_depth": str(s.g),
@@ -169,4 +198,5 @@ def _multiqueue_search(
                     item = PrioritizedItem(f, candidate_containers[j])
                     heapq.heappush(opens[i], item)
                     switch_policy.notify_push(i, item)
+    logger.info("multiqueue_search: no solution found — expanded=%d", states_expanded)
     return None, {"expanded_states": str(states_expanded)}

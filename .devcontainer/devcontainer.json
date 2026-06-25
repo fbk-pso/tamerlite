@@ -40,6 +40,6 @@
         "DISABLE_AUTOUPDATER": "1",
         "CLAUDE_ACCEPT_DEFAULTS": "true"
     },
-    "postCreateCommand": "npm install -g @anthropic-ai/claude-code",
+    "postCreateCommand": "npm install -g @anthropic-ai/claude-code && pipx install uv && cargo install just",
     "remoteUser": "vscode"
 }
