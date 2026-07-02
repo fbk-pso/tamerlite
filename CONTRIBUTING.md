@@ -14,7 +14,7 @@ practical "how do I run X" side of the repo and the community process
 **[Developer guide](#developer-guide):**
 [Setup](#setup) ·
 [Common tasks](#common-tasks-via-just) ·
-[Test suite](#running-the-test-suite-with-up-fixtures) ·
+[Test suite](#running-the-test-suite) ·
 [Development wheels](#development-wheels)
 
 **[For maintainers](#for-maintainers):**
@@ -85,7 +85,7 @@ For non-trivial changes:
 4. Run `just precommit` locally — it must be green (this is the same
    command CI's lint job runs).
 5. Run `just test` with the UP fixtures (see
-   [Running the test suite](#running-the-test-suite-with-up-fixtures)) —
+   [Running the test suite](#running-the-test-suite)) —
    CI runs the full test matrix, so catch failures locally first. If you
    intentionally changed planner output, regenerate the
    pytest-regressions baselines in `tests/test_engine/` with
@@ -174,7 +174,7 @@ Running `just precommit` locally reproduces exactly what CI's `lint` job
 does, including the cargo fmt strict check and the (informational)
 clippy run.
 
-### Running the test suite with UP fixtures
+### Running the test suite
 
 Most tests need `unified-planning`'s `up_test_cases/` directory. `uv sync`
 installs `unified-planning` from a pinned git commit; clone the same
@@ -192,6 +192,17 @@ whenever an update to `uv.lock` moves the `unified-planning` pin
 (Dependabot does this regularly) — a mismatched checkout shows up as
 `NameError` collection failures from fixtures referencing symbols absent
 in the installed UP version.
+
+Alongside the pytest suite, CI also runs `up_test_cases`' own `report.py`
+against the `tamerlite` UP engine. To reproduce it, reuse the `up-checkout` clone
+above, register the engine, then run the report:
+
+```bash
+echo -e "[engine tamerlite]\nmodule_name: tamerlite.engine\nclass_name: TamerLite" > .up.ini
+uv run python up-checkout/up_test_cases/report.py tamerlite
+```
+
+See [test.yml](.github/workflows/test.yml) for the exact steps.
 
 ### Development wheels
 
