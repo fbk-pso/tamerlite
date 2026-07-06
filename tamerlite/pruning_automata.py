@@ -280,7 +280,7 @@ class MultiAutomatonPruningModel:
         self._object_type_by_name: Dict[str, str] = {}
         self._problem_initial_values: Dict[object, object] = {}
         self._problem_goals: tuple[object, ...] = tuple()
-        self._prefixed_initial_states: Dict[tuple[str, ...], str] = {}
+        self._prefixed_initial_states: Dict[tuple[str, ...], str | None] = {}
 
     def _coerce_spec(self, focus_label: str, spec: MultiAutomatonSpec | object) -> MultiAutomatonSpec:
         if isinstance(spec, MultiAutomatonSpec):
@@ -495,6 +495,8 @@ class MultiAutomatonPruningModel:
                 state_id = updated_states.get(entry_key)
                 if state_id is None:
                     state_id = self._prefixed_initial_state_id(focus_label, spec, focus_tuple)
+                    if state_id is None:
+                        continue
                 token = self._render_token(action_name, typed_parameters, spec, focus_tuple)
                 if token is None:
                     continue
@@ -599,11 +601,10 @@ class MultiAutomatonPruningModel:
         focus_label: str,
         spec: MultiAutomatonSpec,
         focus_tuple: tuple[str, ...],
-    ) -> str:
+    ) -> str | None:
         entry_key = (focus_label, *focus_tuple)
-        cached_state_id = self._prefixed_initial_states.get(entry_key)
-        if cached_state_id is not None:
-            return cached_state_id
+        if entry_key in self._prefixed_initial_states:
+            return self._prefixed_initial_states[entry_key]
 
         init_tokens = []
         if self._include_init_prefixes:
@@ -639,7 +640,8 @@ class MultiAutomatonPruningModel:
                 if legacy_token is not None:
                     next_state = current_state.transitions.get(legacy_token)
             if next_state is None:
-                break
+                self._prefixed_initial_states[entry_key] = None
+                return None
             current_state = next_state
 
         state_id = str(current_state.state_id)

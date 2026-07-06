@@ -624,3 +624,52 @@ def test_multi_automaton_initializes_lazy_monitor_with_init_and_goal_prefixes():
     next_progress = pruning_model.advance(progress, load)
     assert pruning_model.is_prunable(next_progress)
     assert next_progress.object_states == (("kit", "k1", "bad"),)
+
+
+def test_multi_automaton_disables_monitor_when_prefix_transition_is_missing():
+    load = Action(0)
+
+    start = DfaState("start", is_accepting=False)
+    after_init_marker = DfaState("after_init_marker", is_accepting=False)
+    after_init = DfaState("after_init", is_accepting=False)
+    bad = DfaState("bad", is_accepting=True)
+
+    start.transitions["<INIT>"] = after_init_marker
+    after_init_marker.transitions["components_on_kit(*k*,0)=c"] = after_init
+    # Intentionally omit <GOAL> / <TRACE> so prefix replay cannot complete.
+    after_init.transitions["load(r,l,c,*k*,INT)"] = bad
+
+    pruning_model = MultiAutomatonPruningModel(
+        action_parameter_types={"load": ["robot", "location", "component", "kit", "integer"]},
+        placeholders_by_type={"robot": "r", "location": "l", "component": "c", "kit": "k"},
+        automata={
+            "kit": type(
+                "Spec",
+                (),
+                {"placeholder": "k", "dfa": Dfa(start, [start, after_init_marker, after_init, bad])},
+            )(),
+        },
+        drop_wildcards=True,
+        abstract_other_objects=True,
+        include_goal_prefixes=True,
+        include_init_prefixes=True,
+    )
+    pruning_model.bind_to_planner(
+        action_by_name={"load_r0_l1_c1_k1_0": load},
+        objects_by_type={
+            "robot": ["r0"],
+            "location": ["l1"],
+            "component": ["c1"],
+            "kit": ["k1"],
+        },
+        initial_values={
+            _FakeAtom("components_on_kit", ["k1", "0"]): _FakeValue("c1", "object"),
+        },
+        goals=[_FakeGoal("completed", ["0", "k1"])],
+    )
+
+    progress = pruning_model.initial_state
+    next_progress = pruning_model.advance(progress, load)
+    assert next_progress.object_states == ()
+    assert not pruning_model.is_prunable(next_progress)
+    assert pruning_model._prefixed_initial_states[("kit", "k1")] is None
