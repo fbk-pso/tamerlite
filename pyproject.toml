@@ -75,6 +75,11 @@ select = ["E", "F", "W", "I", "UP", "B", "C4", "RUF", "PERF", "PIE", "SIM"]
 check_untyped_defs = true
 disable_error_code = ["no-redef"]
 files = ["src/tamerlite"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_return_any = true
+warn_unused_configs = true
+no_implicit_optional = true
 
 [[tool.mypy.overrides]]
 module = "tamerlite.core"

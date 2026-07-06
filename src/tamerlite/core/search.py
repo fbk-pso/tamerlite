@@ -77,10 +77,11 @@ class BoundedPriorityQueue:
         return False  # item rejected
 
     def pop(self) -> PrioritizedItem:
-        return self._heap.pop_min()
+        item: PrioritizedItem = self._heap.pop_min()
+        return item
 
     def __len__(self) -> int:
-        return self._heap.size()
+        return int(self._heap.size())
 
 
 @dataclass

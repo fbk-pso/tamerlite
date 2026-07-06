@@ -194,15 +194,15 @@ class TamerLite(
 
     @staticmethod
     def supports(problem_kind: "up.model.ProblemKind") -> bool:
-        return problem_kind <= TamerLite.supported_kind()
+        return bool(problem_kind <= TamerLite.supported_kind())
 
     @staticmethod
     def satisfies(optimality_guarantee: up.engines.OptimalityGuarantee) -> bool:
-        return optimality_guarantee == up.engines.OptimalityGuarantee.SATISFICING
+        return bool(optimality_guarantee == up.engines.OptimalityGuarantee.SATISFICING)
 
     @staticmethod
     def ensures(anytime_guarantee: up.engines.AnytimeGuarantee) -> bool:
-        return anytime_guarantee == up.engines.AnytimeGuarantee.INCREASING_QUALITY
+        return bool(anytime_guarantee == up.engines.AnytimeGuarantee.INCREASING_QUALITY)
 
     def _get_heuristic(
         self,
@@ -224,11 +224,11 @@ class TamerLite(
             def rewrite_h(search_state: search_space.State):
                 return heuristic(StateWrapper(encoder, search_state))  # type: ignore[misc]
 
-            h = CustomHeuristic(rewrite_h, cache_heuristic_in_state)  # type: ignore[assignment]
+            h = CustomHeuristic(rewrite_h, cache_heuristic_in_state)
             w = 1.0 if params.weight is None else params.weight
 
         elif h_name == "blind":
-            h = CustomHeuristic(lambda x: 0.0, cache_heuristic_in_state)  # type: ignore[assignment]
+            h = CustomHeuristic(lambda x: 0.0, cache_heuristic_in_state)
             w = 0.0
 
         else:

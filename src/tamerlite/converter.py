@@ -39,7 +39,8 @@ class Converter(DagWalker):
 
     def convert(self, expression: FNode) -> Expression:
         """Converts the given expression."""
-        return self.walk(expression)
+        result: Expression = self.walk(expression)
+        return result
 
     def walk_and(self, expression: FNode, args: list[Expression]) -> Expression:
         if len(args) == 0:

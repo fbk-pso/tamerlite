@@ -1139,7 +1139,7 @@ class DeleteRelaxationHeuristic(Heuristic):
                 for ov, ol in operands_values:
                     if ov is not None:
                         if self._heuristic_kind == HeuristicKind.HMAX:
-                            v = max(v, ov)  # type: ignore[type-var]
+                            v = max(v, ov)
                         else:
                             v += ov
                             leaves.extend(ol)

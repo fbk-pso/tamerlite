@@ -180,7 +180,7 @@ class State:
 
     def __eq__(self, oth) -> bool:
         if self.temporal_network is None:
-            return self.assignments == oth.assignments
+            return bool(self.assignments == oth.assignments)
         else:
             return False
 
@@ -618,7 +618,8 @@ class SearchSpace(SearchSpaceABC):
                     new_state = self._expand_event(state, new_state, e, index, id)
                     id += 1
 
-        return new_state
+        result: State | None = new_state
+        return result
 
     def get_successor_states(self, state: State) -> Iterator[State]:
         for action in self._relevant_actions:
