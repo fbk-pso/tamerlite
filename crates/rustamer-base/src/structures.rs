@@ -147,6 +147,11 @@ impl Event {
     }
 
     #[getter]
+    fn action(&self) -> Action {
+        self.action
+    }
+
+    #[getter]
     fn pos(&self) -> usize {
         self.pos
     }

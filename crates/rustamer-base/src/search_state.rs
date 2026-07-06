@@ -60,6 +60,7 @@ impl State {
         PersistentList::to_vec_copy(&self.path)
     }
 
+    #[pyo3(name = "get_value")]
     fn get_py_value(&self, fluent: usize) -> PyResult<PyExpressionNode> {
         let value = self
             .assignments

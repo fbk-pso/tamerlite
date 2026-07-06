@@ -151,7 +151,7 @@ else:
     )
 
     def get_fluent_value(fluent: int, state: State) -> Union[bool, int, Fraction, str]:
-        exp = state.get_py_value(fluent)
+        exp = state.get_value(fluent)
         if exp.bool_constant is not None:
             return exp.bool_constant
         elif exp.object is not None:
