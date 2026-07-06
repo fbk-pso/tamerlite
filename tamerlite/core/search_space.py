@@ -15,6 +15,9 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 
+import json
+import os
+
 from unified_planning.model import DeltaSimpleTemporalNetwork
 from dataclasses import dataclass, field
 from fractions import Fraction
@@ -510,6 +513,7 @@ class SearchSpace(SearchSpaceABC):
         actions_duration: List[Optional[Tuple[Expression, Expression, bool, bool]]],
         events: Dict[Action, List[Tuple[Timing, Event]]],
         actions: List[Action],
+        action_names: Optional[List[str]],
         action_objects: Optional[List[List[str]]],
         obj_to_prev_actions_map: Optional[Dict[str, Set[Action]]],
         initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
@@ -520,6 +524,7 @@ class SearchSpace(SearchSpaceABC):
         self._actions_duration = actions_duration
         self._events = events
         self._actions = actions
+        self._action_names = action_names or []
         self._action_objects = action_objects
         self._obj_to_prev_actions_map = obj_to_prev_actions_map
         self._initial_state = initial_state
@@ -530,6 +535,8 @@ class SearchSpace(SearchSpaceABC):
         self._dfa = dfa
         self._pruned_subtrees = 0
         self._pruned_subtrees_by_label: Dict[str, int] = {}
+        self._debug_prunes_limit = max(0, int(os.environ.get("TAMERLITE_DEBUG_PRUNES", "0") or "0"))
+        self._pruned_debug_records: List[Dict[str, object]] = []
 
         event_fluents: List[List[Tuple[Set[int], Set[int], Set[int], Set[int],
                                        Set[int]]]] = [[] for _ in actions]
@@ -551,6 +558,25 @@ class SearchSpace(SearchSpaceABC):
 
     def reset(self):
         pass
+
+    def _action_name(self, action: Action) -> str:
+        if 0 <= action.idx < len(self._action_names):
+            return self._action_names[action.idx]
+        return str(action.idx)
+
+    def _record_pruned_transition(self, state: State, action: Action, labels: Tuple[str, ...], progress: object) -> None:
+        if self._debug_prunes_limit <= 0 or len(self._pruned_debug_records) >= self._debug_prunes_limit:
+            return
+        prefix = [self._action_name(prev_action) for prev_action, _, _ in state.path]
+        self._pruned_debug_records.append(
+            {
+                "prefix": prefix,
+                "action": self._action_name(action),
+                "labels": list(labels),
+                "depth": len(prefix) + 1,
+                "progress": getattr(progress, "object_states", getattr(progress, "state_id", None)),
+            }
+        )
 
     def initial_state(
         self,
@@ -614,10 +640,13 @@ class SearchSpace(SearchSpaceABC):
 
             if self._dfa is not None and self._dfa.is_prunable(new_state.pruning_state):
                 self._pruned_subtrees += 1
+                labels: Tuple[str, ...] = ()
                 labels_fn = getattr(self._dfa, "pruning_labels", None)
                 if callable(labels_fn):
-                    for label in labels_fn(new_state.pruning_state):
+                    labels = tuple(labels_fn(new_state.pruning_state))
+                    for label in labels:
                         self._pruned_subtrees_by_label[label] = self._pruned_subtrees_by_label.get(label, 0) + 1
+                self._record_pruned_transition(state, action, labels, new_state.pruning_state)
                 continue
 
             yield new_state

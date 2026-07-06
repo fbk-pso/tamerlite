@@ -252,6 +252,8 @@ class MultiAutomatonPruningModel:
         abstract_other_objects: bool,
         include_goal_prefixes: bool = False,
         include_init_prefixes: bool = False,
+        compact_init_prefixes: bool = False,
+        drop_negative_init_predicates: bool = False,
     ):
         self._action_parameter_types = {
             action_name: list(parameter_types)
@@ -266,6 +268,8 @@ class MultiAutomatonPruningModel:
         self._abstract_other_objects = abstract_other_objects
         self._include_goal_prefixes = include_goal_prefixes
         self._include_init_prefixes = include_init_prefixes
+        self._compact_init_prefixes = compact_init_prefixes
+        self._drop_negative_init_predicates = drop_negative_init_predicates
         self._action_by_name: Dict[str, object] = {}
         self._planner_action_details: Dict[object, tuple[str, list[tuple[str, str]]]] = {}
         self._state_by_type_and_id = {
@@ -316,6 +320,10 @@ class MultiAutomatonPruningModel:
         abstract_other_objects = bool(signature.get("abstract_other_objects", False))
         include_goal_prefixes = bool(payload.get("goal_prefixes_included", False))
         include_init_prefixes = bool(payload.get("init_prefixes_included", False))
+        compact_init_prefixes = bool(payload.get("compact_init_prefixes", signature.get("compact_init_prefixes", False)))
+        drop_negative_init_predicates = bool(
+            payload.get("drop_negative_init_predicates", signature.get("drop_negative_init_predicates", False))
+        )
 
         automata = {}
         for focus_label, entry in (payload.get("automata") or {}).items():
@@ -351,6 +359,8 @@ class MultiAutomatonPruningModel:
             abstract_other_objects=abstract_other_objects,
             include_goal_prefixes=include_goal_prefixes,
             include_init_prefixes=include_init_prefixes,
+            compact_init_prefixes=compact_init_prefixes,
+            drop_negative_init_predicates=drop_negative_init_predicates,
         )
 
     @classmethod
@@ -385,6 +395,15 @@ class MultiAutomatonPruningModel:
         include_init_prefixes = bool(
             first_signature.get("init_prefixes_included", metadata_entries[0][2].get("init_prefixes_included", False))
         )
+        compact_init_prefixes = bool(
+            first_signature.get("compact_init_prefixes", metadata_entries[0][2].get("compact_init_prefixes", False))
+        )
+        drop_negative_init_predicates = bool(
+            first_signature.get(
+                "drop_negative_init_predicates",
+                metadata_entries[0][2].get("drop_negative_init_predicates", False),
+            )
+        )
 
         automata = {}
         for focus_label, dot_path, metadata in metadata_entries:
@@ -412,6 +431,8 @@ class MultiAutomatonPruningModel:
             abstract_other_objects=abstract_other_objects,
             include_goal_prefixes=include_goal_prefixes,
             include_init_prefixes=include_init_prefixes,
+            compact_init_prefixes=compact_init_prefixes,
+            drop_negative_init_predicates=drop_negative_init_predicates,
         )
 
     def bind_to_planner(
@@ -594,6 +615,8 @@ class MultiAutomatonPruningModel:
                 placeholders_by_type=self._placeholders_by_type,
                 object_type_by_name=self._object_type_by_name,
                 abstract_other_objects=self._abstract_other_objects,
+                include_negative_predicates=not self._drop_negative_init_predicates,
+                deduplicate_tokens=self._compact_init_prefixes,
             )
         goal_tokens = []
         if self._include_goal_prefixes:

@@ -120,6 +120,7 @@ class Encoder:
                 actions_duration,
                 self._events,
                 self._actions,
+                self._action_names,
                 action_objects,
                 obj_to_prev_actions_map,
                 initial_state,  # type: ignore[arg-type]
@@ -132,6 +133,7 @@ class Encoder:
                 actions_duration,
                 self._events,
                 self._actions,
+                self._action_names,
                 action_objects,
                 obj_to_prev_actions_map,
                 initial_state,  # type: ignore[arg-type]

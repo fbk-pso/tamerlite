@@ -272,3 +272,49 @@ def test_init_tokens_for_profile_abstracts_state_assignments():
     )
 
     assert tokens == ["robot_at(*r*,l)", "robot_cnt(*r*)=INT"]
+
+
+def test_init_tokens_for_profile_compact_deduplicates_and_drops_negative_booleans():
+    initial_values = {
+        FakeGoal("above", ["f1", "f2"]): FakeValue(True, "bool"),
+        FakeGoal("above", ["f3", "f2"]): FakeValue(True, "bool"),
+        FakeGoal("lift_at", ["f1"]): FakeValue(True, "bool"),
+        FakeGoal("lift_at", ["f2"]): FakeValue(False, "bool"),
+    }
+
+    tokens = init_tokens_for_profile(
+        initial_values,
+        profile_types=("floor", "floor"),
+        focus_tuple=("f1", "f2"),
+        slot_placeholders=("f1", "f2"),
+        placeholders_by_type={"floor": "f"},
+        object_type_by_name={"f1": "floor", "f2": "floor", "f3": "floor"},
+        abstract_other_objects=True,
+        include_negative_predicates=False,
+        deduplicate_tokens=True,
+    )
+
+    assert tokens == ["above(*f1*,*f2*)", "above(~f,*f2*)", "lift_at(*f1*)"]
+
+
+def test_init_tokens_for_profile_compact_can_keep_negative_booleans():
+    initial_values = {
+        FakeGoal("above", ["f1", "f2"]): FakeValue(True, "bool"),
+        FakeGoal("above", ["f3", "f2"]): FakeValue(True, "bool"),
+        FakeGoal("lift_at", ["f1"]): FakeValue(True, "bool"),
+        FakeGoal("lift_at", ["f2"]): FakeValue(False, "bool"),
+    }
+
+    tokens = init_tokens_for_profile(
+        initial_values,
+        profile_types=("floor", "floor"),
+        focus_tuple=("f1", "f2"),
+        slot_placeholders=("f1", "f2"),
+        placeholders_by_type={"floor": "f"},
+        object_type_by_name={"f1": "floor", "f2": "floor", "f3": "floor"},
+        abstract_other_objects=True,
+        include_negative_predicates=True,
+        deduplicate_tokens=True,
+    )
+
+    assert tokens == ["above(*f1*,*f2*)", "above(~f,*f2*)", "lift_at(*f1*)", "not_lift_at(*f2*)"]

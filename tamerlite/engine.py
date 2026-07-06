@@ -317,6 +317,11 @@ class TamerLite(
                         encoder.search_space._pruned_subtrees_by_label,
                         sort_keys=True,
                     )
+                if getattr(encoder.search_space, "_pruned_debug_records", None):
+                    metrics["pruned_debug_records"] = json.dumps(
+                        encoder.search_space._pruned_debug_records,
+                        sort_keys=True,
+                    )
             if plan is not None:
                 plan = encoder.build_plan(plan)  # type: ignore[arg-type]
                 plan = plan.replace_action_instances(map_back_action_instance)
