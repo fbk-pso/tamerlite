@@ -28,3 +28,5 @@ classifiers = [
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
+# PEP 561: maturin auto-detects the adjacent `rustamer.pyi` stub and ships the
+# module as a package with `__init__.pyi` + `py.typed` (see `rustamer.pyi`).
