@@ -39,7 +39,8 @@ if use_rustamer:
 if not use_rustamer:
     warnings.warn(
         "Tamerlite is using the Python core implementation instead of the Rust one. "
-        "For better performance, ensure rustamer is installed and not disabled."
+        "For better performance, ensure rustamer is installed and not disabled.",
+        stacklevel=2,
     )
     from tamerlite.core.heuristics import (
         HFF,
@@ -81,7 +82,6 @@ if not use_rustamer:
     )
 else:
     from fractions import Fraction
-    from typing import Iterator, List, Union
 
     (
         wastar_search,
@@ -111,7 +111,7 @@ else:
         rustamer_lib.Event,
         rustamer_lib.Action,
     )
-    Expression = List[rustamer_lib.ExpressionNode]
+    Expression = list[rustamer_lib.ExpressionNode]
     State = rustamer_lib.State
 
     (
@@ -150,7 +150,7 @@ else:
         rustamer_lib.Heuristic.custom,
     )
 
-    def get_fluent_value(fluent: int, state: State) -> Union[bool, int, Fraction, str]:
+    def get_fluent_value(fluent: int, state: State) -> bool | int | Fraction | str:
         exp = state.get_value(fluent)
         if exp.bool_constant is not None:
             return exp.bool_constant
@@ -163,7 +163,7 @@ else:
         else:
             raise NotImplementedError("Unreachable code")
 
-    def evaluate(exp: Expression, state: State) -> Union[bool, int, Fraction, str]:
+    def evaluate(exp: Expression, state: State) -> bool | int | Fraction | str:
         r = rustamer_lib.evaluate(exp, state)
         if r.bool_constant is not None:
             return r.bool_constant

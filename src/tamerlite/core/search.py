@@ -21,7 +21,6 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from fractions import Fraction
-from typing import Deque, Dict, List, Optional, Tuple, Union
 
 from bloom_filter2 import BloomFilter
 from min_max_heap import MinMaxHeap
@@ -107,41 +106,39 @@ class WeakEqState:
         return True
 
 
-def state_representation(
-    state: State, weak_equality: bool
-) -> Union[State, WeakEqState]:
+def state_representation(state: State, weak_equality: bool) -> State | WeakEqState:
     if weak_equality:
         return WeakEqState(state)
     return state
 
 
-def extract_path(state: State) -> List[Action]:
+def extract_path(state: State) -> list[Action]:
     return [a for a, _, _ in state.path]
 
 
 def bfs_search(
-    ss: SearchSpaceABC, timeout: Optional[float] = None, early_termination: bool = False
-) -> Tuple[Optional[List[Action]], Dict[str, str]]:
+    ss: SearchSpaceABC, timeout: float | None = None, early_termination: bool = False
+) -> tuple[list[Action] | None, dict[str, str]]:
     return _basic_search(ss, True, timeout, early_termination)
 
 
 def dfs_search(
-    ss: SearchSpaceABC, timeout: Optional[float] = None, early_termination: bool = False
-) -> Tuple[Optional[List[Action]], Dict[str, str]]:
+    ss: SearchSpaceABC, timeout: float | None = None, early_termination: bool = False
+) -> tuple[list[Action] | None, dict[str, str]]:
     return _basic_search(ss, False, timeout, early_termination)
 
 
 def _basic_search(
     ss: SearchSpaceABC,
     bfs: bool,
-    timeout: Optional[float] = None,
+    timeout: float | None = None,
     early_termination: bool = False,
-) -> Tuple[Optional[List[Action]], Dict[str, str]]:
+) -> tuple[list[Action] | None, dict[str, str]]:
     name = "bfs" if bfs else "dfs"
     logger.info("%s: timeout=%s early_termination=%s", name, timeout, early_termination)
     st = time.time()
     init = ss.initial_state()
-    open: Deque[State] = deque()
+    open: deque[State] = deque()
     expanded_states = 0
     generated_states = 1
 
@@ -155,10 +152,7 @@ def _basic_search(
     while len(open) > 0:
         if timeout is not None and time.time() - st > timeout:
             raise TimeoutError
-        if bfs:
-            state = open.popleft()
-        else:
-            state = open.pop()
+        state = open.popleft() if bfs else open.pop()
         expanded_states += 1
         if expanded_states % 10_000 == 0:
             logger.debug(
@@ -197,20 +191,20 @@ def _basic_search(
 def astar_search(
     ss: SearchSpaceABC,
     heuristic: Heuristic,
-    timeout: Optional[float] = None,
+    timeout: float | None = None,
     early_termination: bool = False,
     weak_equality: bool = False,
-) -> Tuple[Optional[List[Action]], Dict[str, str]]:
+) -> tuple[list[Action] | None, dict[str, str]]:
     return wastar_search(ss, heuristic, 0.5, timeout, early_termination, weak_equality)
 
 
 def gbfs_search(
     ss: SearchSpaceABC,
     heuristic: Heuristic,
-    timeout: Optional[float] = None,
+    timeout: float | None = None,
     early_termination: bool = False,
     weak_equality: bool = False,
-) -> Tuple[Optional[List[Action]], Dict[str, str]]:
+) -> tuple[list[Action] | None, dict[str, str]]:
     return wastar_search(ss, heuristic, 1, timeout, early_termination, weak_equality)
 
 
@@ -218,10 +212,10 @@ def wastar_search(
     ss: SearchSpaceABC,
     heuristic: Heuristic,
     weight: float = 0.5,
-    timeout: Optional[float] = None,
+    timeout: float | None = None,
     early_termination: bool = False,
     weak_equality: bool = False,
-) -> Tuple[Optional[List[Action]], Dict[str, str]]:
+) -> tuple[list[Action] | None, dict[str, str]]:
     logger.info(
         "wastar_search: weight=%s timeout=%s early_termination=%s weak_equality=%s",
         weight,
@@ -230,7 +224,7 @@ def wastar_search(
         weak_equality,
     )
     st = time.time()
-    open: List[PrioritizedItem] = []
+    open: list[PrioritizedItem] = []
     init = ss.initial_state()
     if not ss.is_temporal or weak_equality:
         visited_states = {state_representation(init, weak_equality)}
@@ -304,10 +298,10 @@ def wastar_search(
 def astar_search_memory_bounded(
     ss: SearchSpaceABC,
     heuristic: Heuristic,
-    timeout: Optional[float] = None,
+    timeout: float | None = None,
     early_termination: bool = False,
     weak_equality: bool = False,
-) -> Tuple[Optional[List[Action]], Dict[str, str]]:
+) -> tuple[list[Action] | None, dict[str, str]]:
     return wastar_search_memory_bounded(
         ss, heuristic, 0.5, timeout, early_termination, weak_equality
     )
@@ -316,10 +310,10 @@ def astar_search_memory_bounded(
 def gbfs_search_memory_bounded(
     ss: SearchSpaceABC,
     heuristic: Heuristic,
-    timeout: Optional[float] = None,
+    timeout: float | None = None,
     early_termination: bool = False,
     weak_equality: bool = False,
-) -> Tuple[Optional[List[Action]], Dict[str, str]]:
+) -> tuple[list[Action] | None, dict[str, str]]:
     return wastar_search_memory_bounded(
         ss, heuristic, 1, timeout, early_termination, weak_equality
     )
@@ -329,12 +323,13 @@ def wastar_search_memory_bounded(
     ss: SearchSpaceABC,
     heuristic: Heuristic,
     weight: float = 0.5,
-    timeout: Optional[float] = None,
+    timeout: float | None = None,
     early_termination: bool = False,
     weak_equality: bool = False,
-) -> Tuple[Optional[List[Action]], Dict[str, str]]:
+) -> tuple[list[Action] | None, dict[str, str]]:
     logger.info(
-        "wastar_search_memory_bounded: weight=%s timeout=%s early_termination=%s weak_equality=%s",
+        "wastar_search_memory_bounded: weight=%s timeout=%s "
+        "early_termination=%s weak_equality=%s",
         weight,
         timeout,
         early_termination,
@@ -436,10 +431,10 @@ def wastar_search_memory_bounded(
 def ehc_search(
     ss: SearchSpaceABC,
     heuristic: Heuristic,
-    timeout: Optional[float] = None,
+    timeout: float | None = None,
     early_termination: bool = False,
     weak_equality: bool = False,
-) -> Tuple[Optional[List[Action]], Dict[str, str]]:
+) -> tuple[list[Action] | None, dict[str, str]]:
     logger.info(
         "ehc_search: timeout=%s early_termination=%s weak_equality=%s",
         timeout,
@@ -456,7 +451,7 @@ def ehc_search(
             "goal_depth": str(init.g),
         }
 
-    open: Deque[State] = deque()
+    open: deque[State] = deque()
     open.append(init)
     best_h = heuristic.eval(init, ss)
     if best_h is None:

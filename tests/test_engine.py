@@ -15,6 +15,7 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 
+import contextlib
 import importlib
 import os
 import types
@@ -25,8 +26,8 @@ import unified_planning
 import unified_planning.test
 import unified_planning.test.examples
 import up_test_cases.builtin
-from unified_planning.engines import PlanGenerationResult, PlanGenerationResultStatus
-from unified_planning.engines.results import ValidationResult
+from unified_planning.engines import PlanGenerationResult, ValidationResult
+from unified_planning.engines import PlanGenerationResultStatus as ResultStatus
 from unified_planning.shortcuts import *
 
 import problems_generator
@@ -57,11 +58,12 @@ def problems():
         unified_planning.test.examples.get_example_problems().values()
     )
     up_test_problems = list(up_test_cases.builtin.get_test_cases().values())
-    for test_case in up_example_problems + up_test_problems:
-        if test_case.solvable and tamerlite.engine.TamerLite.supports(
-            test_case.problem.kind
-        ):
-            test_problems.append(test_case.problem)
+    test_problems.extend(
+        test_case.problem
+        for test_case in up_example_problems + up_test_problems
+        if test_case.solvable
+        and tamerlite.engine.TamerLite.supports(test_case.problem.kind)
+    )
 
     names = set()
     for problem in test_problems:
@@ -105,9 +107,7 @@ def expressions():
     with open(data_path) as f:
         data = json.load(f)
 
-    expressions = []
-    for e in data["expressions"]:
-        expressions.append((e["exp"], e["simplified_exp"]))
+    expressions = [(e["exp"], e["simplified_exp"]) for e in data["expressions"]]
     return expressions
 
 
@@ -124,10 +124,13 @@ def reload_package(package):
         for module_child in vars(module).values():
             if isinstance(module_child, types.ModuleType):
                 fn_child = getattr(module_child, "__file__", None)
-                if (fn_child is not None) and fn_child.startswith(fn_dir):
-                    if fn_child not in module_visit:
-                        module_visit.add(fn_child)
-                        reload_recursive_ex(module_child)
+                if (
+                    (fn_child is not None)
+                    and fn_child.startswith(fn_dir)
+                    and fn_child not in module_visit
+                ):
+                    module_visit.add(fn_child)
+                    reload_recursive_ex(module_child)
 
     return reload_recursive_ex(package)
 
@@ -178,8 +181,7 @@ def skip(
             problem.name == "robot_holding"
             and (
                 search in ["dfs", "bfs"]
-                or not weak_equality
-                and (heuristic == "custom" or search == "gbfs")
+                or (not weak_equality and (heuristic == "custom" or search == "gbfs"))
             )
         )
         or (problem.name == "timed_connected_locations" and search == "dfs")
@@ -317,10 +319,7 @@ def test_heuristics(problems):
                                     res: PlanGenerationResult = planner.solve(
                                         problem, timeout=None
                                     )
-                                    assert (
-                                        res.status
-                                        == PlanGenerationResultStatus.SOLVED_SATISFICING
-                                    )
+                                    assert res.status == ResultStatus.SOLVED_SATISFICING
                                     results.append(res)
                                     with PlanValidator(problem_kind=problem.kind) as v:
                                         assert v.validate(problem, res.plan)
@@ -551,10 +550,7 @@ def test_custom_heuristic(problems):
                                 res: PlanGenerationResult = planner.solve(
                                     problem, heuristic=custom_heuristic, timeout=None
                                 )
-                                assert (
-                                    res.status
-                                    == PlanGenerationResultStatus.SOLVED_SATISFICING
-                                )
+                                assert res.status == ResultStatus.SOLVED_SATISFICING
                                 results.append(res)
                                 with PlanValidator(problem_kind=problem.kind) as v:
                                     assert v.validate(problem, res.plan)
@@ -615,18 +611,14 @@ def test_search_algorithms(problems):
                                         problem, timeout=None
                                     )
                                     assert (
-                                        res.status
-                                        == PlanGenerationResultStatus.SOLVED_SATISFICING
+                                        res.status == ResultStatus.SOLVED_SATISFICING
                                         or (
                                             search_kind == "ehc"
                                             and res.status
-                                            == PlanGenerationResultStatus.UNSOLVABLE_INCOMPLETELY
+                                            == ResultStatus.UNSOLVABLE_INCOMPLETELY
                                         )
                                     )
-                                    if (
-                                        res.status
-                                        == PlanGenerationResultStatus.SOLVED_SATISFICING
-                                    ):
+                                    if res.status == ResultStatus.SOLVED_SATISFICING:
                                         results.append(res)
                                         with PlanValidator(
                                             problem_kind=problem.kind
@@ -679,10 +671,7 @@ def test_multiqueue_search(problems):
                             res: PlanGenerationResult = planner.solve(
                                 problem, timeout=None
                             )
-                            assert (
-                                res.status
-                                == PlanGenerationResultStatus.SOLVED_SATISFICING
-                            )
+                            assert res.status == ResultStatus.SOLVED_SATISFICING
                             results.append(res)
                             with PlanValidator(problem_kind=problem.kind) as v:
                                 assert v.validate(problem, res.plan)
@@ -712,8 +701,8 @@ def test_search_space(problems):
             ss: SearchSpaceABC = encoder.search_space
 
             init_state = ss.initial_state()
-            l = "python" if disable_rustamer else "rust"
-            states[l] = generate_states(
+            backend = "python" if disable_rustamer else "rust"
+            states[backend] = generate_states(
                 ss, init_state, num_states=max_generated_states(problem)
             )
 
@@ -723,8 +712,8 @@ def test_search_space(problems):
             state2 = states["rust"][i]
 
             assert len(state1.path) == len(state2.path)
-            actions1 = list(map(lambda e: encoder.get_action_name(e[0]), state1.path))
-            actions2 = list(map(lambda e: encoder.get_action_name(e[0]), state2.path))
+            actions1 = [encoder.get_action_name(e[0]) for e in state1.path]
+            actions2 = [encoder.get_action_name(e[0]) for e in state2.path]
             assert actions1 == actions2
 
             assert len(state1.todo) == len(state2.todo)
@@ -783,12 +772,13 @@ def test_anytime_planner(anytime_problems):
                     with AnytimePlanner(
                         name="tamerlite", params={"search": search}
                     ) as planner:
-                        counter = 0
-                        for res in planner.get_solutions(problem, timeout=None):
+                        for counter, res in enumerate(
+                            planner.get_solutions(problem, timeout=None)
+                        ):
                             assert res.status in {
-                                PlanGenerationResultStatus.INTERMEDIATE,
-                                PlanGenerationResultStatus.SOLVED_SATISFICING,
-                                PlanGenerationResultStatus.SOLVED_OPTIMALLY,
+                                ResultStatus.INTERMEDIATE,
+                                ResultStatus.SOLVED_SATISFICING,
+                                ResultStatus.SOLVED_OPTIMALLY,
                             }
                             prev_metric_value = None
                             with PlanValidator(problem_kind=problem.kind) as v:
@@ -800,14 +790,11 @@ def test_anytime_planner(anytime_problems):
                                     val_res.metric_evaluations is not None
                                     and len(val_res.metric_evaluations) == 1
                                 )
-                                metric_value = list(
-                                    val_res.metric_evaluations.values()
-                                )[0]
+                                metric_value = next(
+                                    iter(val_res.metric_evaluations.values())
+                                )
                                 if prev_metric_value is not None:
-                                    if (
-                                        res.status
-                                        == PlanGenerationResultStatus.INTERMEDIATE
-                                    ):
+                                    if res.status == ResultStatus.INTERMEDIATE:
                                         if is_minimization_metric:
                                             assert metric_value < prev_metric_value
                                         else:
@@ -820,8 +807,7 @@ def test_anytime_planner(anytime_problems):
                                 else:
                                     prev_metric_value = metric_value
 
-                            counter += 1
-                            if counter == max_plans:
+                            if counter + 1 == max_plans:
                                 break
 
 
@@ -860,10 +846,8 @@ def test_simplify():
     # verify that operands are in ascending order
     for i in range(num_expressions):
         for node in results[True][i]:
-            try:
+            with contextlib.suppress(AttributeError):
                 assert is_strictly_increasing(node.operands)
-            except AttributeError:
-                pass
 
 
 def test_simplify_fixed_expressions(expressions):

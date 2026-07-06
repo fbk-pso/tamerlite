@@ -15,8 +15,9 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 
+from collections.abc import Callable, Iterable
 from fractions import Fraction
-from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple, Union
+from typing import Any
 
 import unified_planning as up
 from unified_planning.model import Fluent, FNode, Object, Problem, TimepointKind, Type
@@ -43,7 +44,7 @@ from tamerlite.core.search_space import SearchSpaceABC
 
 
 def extract_objects(exp: FNode) -> Iterable[Object]:
-    stack: List[FNode] = [exp]
+    stack: list[FNode] = [exp]
     while len(stack) > 0:
         exp = stack.pop()
         if exp.is_object_exp():
@@ -53,7 +54,7 @@ def extract_objects(exp: FNode) -> Iterable[Object]:
 
 
 def extract_fluents(exp: FNode) -> Iterable[Fluent]:
-    stack: List[FNode] = [exp]
+    stack: list[FNode] = [exp]
     while len(stack) > 0:
         exp = stack.pop()
         if exp.is_fluent_exp():
@@ -62,8 +63,8 @@ def extract_fluents(exp: FNode) -> Iterable[Fluent]:
             stack.extend(exp.args)
 
 
-def extract_and_arguments(expressions: List[FNode]) -> Iterable[FNode]:
-    stack: List[FNode] = list(expressions)
+def extract_and_arguments(expressions: list[FNode]) -> Iterable[FNode]:
+    stack: list[FNode] = list(expressions)
     while len(stack) > 0:
         exp = stack.pop()
         if exp.is_and():
@@ -72,9 +73,7 @@ def extract_and_arguments(expressions: List[FNode]) -> Iterable[FNode]:
             yield exp
 
 
-PlanType = List[
-    Tuple[Optional[Union[Fraction, str]], Action, Optional[Union[Fraction, str]]]
-]
+PlanType = list[tuple[Fraction | str | None, Action, Fraction | str | None]]
 
 
 class Encoder:
@@ -88,12 +87,12 @@ class Encoder:
         self,
         problem: Problem,
         lifted_problem: Problem,
-        map_back_action_instance: Callable[[ActionInstance], Optional[ActionInstance]],
+        map_back_action_instance: Callable[[ActionInstance], ActionInstance | None],
         symmetry_breaking: bool,
         compression_safe_actions: bool,
         relevance_analysis: bool,
         full: bool = True,
-        deadline: Optional[Fraction] = None,
+        deadline: Fraction | None = None,
     ):
         self._problem = problem
         self._lifted_problem = lifted_problem
@@ -106,7 +105,7 @@ class Encoder:
         self._nnf = Nnf(problem.environment)
 
         fluent_types = {}
-        for f in problem.initial_values.keys():
+        for f in problem.initial_values:
             if f.type.is_bool_type():
                 t = "bool"
             elif f.type.is_int_type():
@@ -118,22 +117,22 @@ class Encoder:
             else:
                 raise NotImplementedError
             fluent_types[self._convert_fluent(f)] = t
-        self._fluents: List[str] = sorted(fluent_types.keys())
-        self._fluent_ids = dict((f, i) for i, f in enumerate(self._fluents))
+        self._fluents: list[str] = sorted(fluent_types.keys())
+        self._fluent_ids = {f: i for i, f in enumerate(self._fluents)}
         self._fluent_types = [fluent_types[f] for f in self._fluents]
 
         self._converter = Converter(problem, self._fluent_ids)
-        self._action_names: List[str] = sorted(
+        self._action_names: list[str] = sorted(
             action.name for action in problem.actions
         )
-        self._action_by_name: Dict[str, Action] = {
+        self._action_by_name: dict[str, Action] = {
             name: Action(index) for index, name in enumerate(self._action_names)
         }
-        self._actions: List[Action] = [
+        self._actions: list[Action] = [
             self._action_by_name[name] for name in self._action_names
         ]
-        actions_duration_map: Dict[
-            str, Optional[Tuple[Expression, Expression, bool, bool]]
+        actions_duration_map: dict[
+            str, tuple[Expression, Expression, bool, bool] | None
         ] = {}
         self._is_temporal = False
         for a in problem.actions:
@@ -166,7 +165,8 @@ class Encoder:
                     self._compute_obj_to_prev_actions_map()
                 )
                 if len(obj_to_prev_actions_map) == 0:
-                    # Symmetry breaking is not beneficial because there are no equivalent objects
+                    # Symmetry breaking is not beneficial because there are no
+                    # equivalent objects
                     action_objects = None
                     obj_to_prev_actions_map = None
 
@@ -205,19 +205,17 @@ class Encoder:
     def problem(self) -> Problem:
         return self._problem
 
-    def initial_state(self, initial_values: Dict[FNode, FNode]) -> Expression:
+    def initial_state(self, initial_values: dict[FNode, FNode]) -> Expression:
         initial_state_values = {}
         for f, v in initial_values.items():
             initial_state_values[self._convert_fluent(f)] = self._convert_expression(v)[
                 0
             ]
 
-        initial_state = []
-        for f in self._fluents:
-            initial_state.append(initial_state_values[f])
+        initial_state = [initial_state_values[f] for f in self._fluents]
         return initial_state  # type: ignore[return-value]
 
-    def _compute_relevant_actions(self) -> List[Action]:
+    def _compute_relevant_actions(self) -> list[Action]:
         events = {a: e for a, e in self.events.items() if a in self.applicable_actions}
         heuristic = HMax(
             self.actions,
@@ -234,8 +232,8 @@ class Encoder:
             for a in heuristic.reachable_actions(self._search_space.initial_state())
         }
 
-        actions_affecting_fluent: Dict[int, Set[int]] = {}
-        action_to_condition_fluents: Dict[int, Set[int]] = {}
+        actions_affecting_fluent: dict[int, set[int]] = {}
+        action_to_condition_fluents: dict[int, set[int]] = {}
         for a, le in events.items():
             if a.idx not in reachable_actions:
                 continue
@@ -248,7 +246,7 @@ class Encoder:
                     else:
                         actions_affecting_fluent[eff.fluent].add(a.idx)
 
-                for cond in list(e.end_conditions) + [e.conditions]:
+                for cond in [*list(e.end_conditions), e.conditions]:
                     action_to_condition_fluents[a.idx].update(get_fluents(cond))
 
         checked_fluents = [False] * len(self._fluents)
@@ -256,7 +254,7 @@ class Encoder:
         for f in stack:
             checked_fluents[f] = True
 
-        relevant_actions: Set[int] = set()
+        relevant_actions: set[int] = set()
         while len(stack) > 0 and len(relevant_actions) < len(
             action_to_condition_fluents
         ):
@@ -272,7 +270,7 @@ class Encoder:
 
     def _compute_obj_to_prev_actions_map(
         self,
-    ) -> Tuple[List[List[str]], Dict[str, Set[Action]]]:
+    ) -> tuple[list[list[str]], dict[str, set[Action]]]:
         """
         This method produces two outputs:
             1. A list of lists of object names, where each inner list corresponds
@@ -292,8 +290,8 @@ class Encoder:
             for i, obj in enumerate(group):
                 prev_equivalent_object[obj] = None if i == 0 else group[i - 1]
 
-        obj_to_actions_map: Dict[Object, Set[Action]] = {}
-        action_objects: List[List[str]] = [[]] * len(self.actions)
+        obj_to_actions_map: dict[Object, set[Action]] = {}
+        action_objects: list[list[str]] = [[]] * len(self.actions)
         for action in self._problem.actions:
             ai = self._map_back_action_instance(action())
             assert ai is not None
@@ -313,7 +311,7 @@ class Encoder:
 
         return action_objects, obj_to_prev_actions_map
 
-    def _compute_equivalent_objects(self) -> List[List[Object]]:
+    def _compute_equivalent_objects(self) -> list[list[Object]]:
         """
         Compute groups of equivalent objects in the problem.
 
@@ -327,14 +325,14 @@ class Encoder:
             self._extract_goal_obj_to_fluent_map()
         )
 
-        objects: Dict[Type, List[Object]] = {}
+        objects: dict[Type, list[Object]] = {}
         for obj in self._problem.all_objects:
             if obj.type not in objects:
                 objects[obj.type] = []
             objects[obj.type].append(obj)
 
         groups = []
-        for type, objs in objects.items():
+        for objs in objects.values():
             grouped = [False] * len(objs)
             for i, obj1 in enumerate(objs):
                 if grouped[i]:
@@ -362,7 +360,7 @@ class Encoder:
 
         return groups
 
-    def _extract_domain_objects(self) -> Set[Object]:
+    def _extract_domain_objects(self) -> set[Object]:
         """
         Extract all objects that appear in the problem's domain.
 
@@ -370,7 +368,7 @@ class Encoder:
             Set[Object]: A set of all objects that appear in the domain.
         """
 
-        domain_objects: Set[Object] = set()
+        domain_objects: set[Object] = set()
         for a in self._lifted_problem.actions:
             if isinstance(a, up.model.InstantaneousAction):
                 for p in a.preconditions:
@@ -383,10 +381,10 @@ class Encoder:
             elif isinstance(a, up.model.DurativeAction):
                 domain_objects.update(extract_objects(a.duration.lower))
                 domain_objects.update(extract_objects(a.duration.upper))
-                for interval, cl in a.conditions.items():
+                for cl in a.conditions.values():
                     for c in cl:
                         domain_objects.update(extract_objects(c))
-                for t, el in a.effects.items():
+                for el in a.effects.values():
                     for e in el:
                         if e.is_conditional():
                             domain_objects.update(extract_objects(e.condition))
@@ -396,7 +394,7 @@ class Encoder:
 
     def _extract_goal_obj_to_fluent_map(
         self,
-    ) -> Tuple[Dict[Object, Set[Tuple[Fluent, Tuple[Object], Any]]], bool]:
+    ) -> tuple[dict[Object, set[tuple[Fluent, tuple[Object], Any]]], bool]:
         """
         Build a mapping from objects to goal fluents they appear in.
 
@@ -406,7 +404,7 @@ class Encoder:
                 - A boolean indicating whether the goal expression is a conjunction.
         """
 
-        obj_to_fluent_map: Dict[Object, Set[Tuple[Fluent, Tuple[Object], Any]]] = {
+        obj_to_fluent_map: dict[Object, set[tuple[Fluent, tuple[Object], Any]]] = {
             obj: set() for obj in self._problem.all_objects
         }
 
@@ -436,7 +434,7 @@ class Encoder:
                 return True
 
         is_conjunction = True
-        stack: List[FNode] = list(self._problem.goals)
+        stack: list[FNode] = list(self._problem.goals)
         while len(stack) > 0:
             exp = stack.pop()
             if exp.is_fluent_exp():
@@ -477,7 +475,7 @@ class Encoder:
         self,
         obj1: Object,
         obj2: Object,
-        goal_obj_to_fluent_map: Dict[Object, Set[Tuple[Fluent, Tuple[Object], Any]]],
+        goal_obj_to_fluent_map: dict[Object, set[tuple[Fluent, tuple[Object], Any]]],
         goal_exp_is_conjunction: bool,
     ) -> bool:
         """
@@ -486,7 +484,8 @@ class Encoder:
         Args:
             obj1 (Object): The first object to compare.
             obj2 (Object): The second object to compare.
-            goal_obj_to_fluent_map (Dict[Object, Set[Tuple[Fluent, Tuple[Object], Any]]]):
+            goal_obj_to_fluent_map
+                (Dict[Object, Set[Tuple[Fluent, Tuple[Object], Any]]]):
                 Mapping from objects to the goal fluents they appear in.
             goal_exp_is_conjunction (bool):
                 Flag indicating whether the goal expression is a conjunction.
@@ -500,7 +499,8 @@ class Encoder:
                 # the two objects appear in a different number of goal fluents
                 return False
 
-            # for each goal fluent involving obj1, ensure the corresponding fluent exists for obj2
+            # for each goal fluent involving obj1, ensure the corresponding
+            # fluent exists for obj2
             for fluent, objs1, v in goal_obj_to_fluent_map[obj1]:
                 objs2 = list(objs1)
                 for i, obj in enumerate(objs1):
@@ -513,7 +513,8 @@ class Encoder:
             len(goal_obj_to_fluent_map[obj1]) == 0
             and len(goal_obj_to_fluent_map[obj2]) == 0
         ):
-            # the goal is not a conjunction and at least one of the objects appears in it
+            # the goal is not a conjunction and at least one of the objects
+            # appears in it
             return False
 
         # For each fluent with an explicit initial value, swap obj1 and obj2 in its
@@ -545,7 +546,7 @@ class Encoder:
 
         return True
 
-    def _compute_compression_safe_actions(self) -> List[bool]:
+    def _compute_compression_safe_actions(self) -> list[bool]:
         actions = [False] * len(self.action_names)
         fluent_to_conditions, complex_condition_fluents = self._extract_conditions()
         for action_name in self.action_names:
@@ -562,9 +563,9 @@ class Encoder:
 
         return actions
 
-    def _extract_conditions(self) -> Tuple[Dict[Fluent, Set[bool]], Set[Fluent]]:
-        fluent_to_conditions: Dict[Fluent, Set[bool]] = {}
-        complex_condition_fluents: Set[Fluent] = set()
+    def _extract_conditions(self) -> tuple[dict[Fluent, set[bool]], set[Fluent]]:
+        fluent_to_conditions: dict[Fluent, set[bool]] = {}
+        complex_condition_fluents: set[Fluent] = set()
         for action in self._problem.actions:
             action_conditions = (
                 list(action.conditions.values())
@@ -599,8 +600,8 @@ class Encoder:
     def _end_conditions_contained_in_overall_conditions(
         self, action: "up.model.Action"
     ) -> bool:
-        end_conditions: Set[FNode] = set()
-        overall_conditions: Set[FNode] = set()
+        end_conditions: set[FNode] = set()
+        overall_conditions: set[FNode] = set()
         for interval, conditions in action.conditions.items():
             if (
                 interval.lower == interval.upper
@@ -622,8 +623,8 @@ class Encoder:
     def _effects_interfere_with_conditions(
         self,
         action: "up.model.Action",
-        fluent_to_conditions: Dict[Fluent, Set[bool]],
-        complex_condition_fluents: Set[Fluent],
+        fluent_to_conditions: dict[Fluent, set[bool]],
+        complex_condition_fluents: set[Fluent],
     ) -> bool:
         for timing, effects in action.effects.items():
             if timing.timepoint.kind == TimepointKind.START and timing.delay == 0:
@@ -643,7 +644,7 @@ class Encoder:
 
         return False
 
-    def goals(self, goals: List[FNode]) -> Expression:
+    def goals(self, goals: list[FNode]) -> Expression:
         return self._convert_expression(
             self._problem.environment.expression_manager.And(goals)
         )
@@ -653,53 +654,53 @@ class Encoder:
         return self._search_space
 
     @property
-    def fluents(self) -> List[str]:
+    def fluents(self) -> list[str]:
         return self._fluents
 
     @property
-    def fluent_ids(self) -> Dict[str, int]:
+    def fluent_ids(self) -> dict[str, int]:
         return self._fluent_ids
 
     @property
-    def fluent_types(self) -> List[str]:
+    def fluent_types(self) -> list[str]:
         return self._fluent_types
 
     @property
-    def objects(self) -> Dict[str, List[str]]:
+    def objects(self) -> dict[str, list[str]]:
         return self._objects
 
     @property
-    def events(self) -> Dict[Action, List[Tuple[Timing, Event]]]:
+    def events(self) -> dict[Action, list[tuple[Timing, Event]]]:
         return self._events
 
     @property
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         return self._actions
 
     @property
-    def action_names(self) -> List[str]:
+    def action_names(self) -> list[str]:
         return self._action_names
 
     @property
-    def action_by_name(self) -> Dict[str, Action]:
+    def action_by_name(self) -> dict[str, Action]:
         return self._action_by_name
 
     @property
-    def applicable_actions(self) -> List[Action]:
+    def applicable_actions(self) -> list[Action]:
         return self._applicable_actions
 
     @property
-    def relevant_actions(self) -> Optional[List[Action]]:
+    def relevant_actions(self) -> list[Action] | None:
         return self._relevant_actions
 
     @property
-    def compression_safe_actions(self) -> List[Action]:
+    def compression_safe_actions(self) -> list[Action]:
         if self._compression_safe_actions is None:
             return []
         return [a for a in self._actions if self._compression_safe_actions[a.idx]]
 
     @property
-    def goal(self) -> Optional[Expression]:
+    def goal(self) -> Expression | None:
         return self._goal
 
     def get_action(self, name: str) -> Action:
@@ -718,10 +719,10 @@ class Encoder:
             self._compression_safe_actions
         )
 
-    def build_plan(self, path: List[Action]) -> Plan:
+    def build_plan(self, path: list[Action]) -> Plan:
         plan = self.search_space.build_plan(path)
         if self._is_temporal:
-            assert all(map(lambda e: e[0] is not None, plan))
+            assert all(e[0] is not None for e in plan)
             return TimeTriggeredPlan(
                 [
                     (
@@ -749,10 +750,10 @@ class Encoder:
     def _convert_timing(self, timing: "up.model.Timing") -> Timing:
         return Timing(timing.is_from_start(), timing.delay)
 
-    def _convert_effects(self, effects: List["up.model.Effect"]) -> List[Effect]:
+    def _convert_effects(self, effects: list["up.model.Effect"]) -> list[Effect]:
         env = self._problem.environment
         em = env.expression_manager
-        fluent_to_effects: Dict[FNode, FNode] = {}
+        fluent_to_effects: dict[FNode, FNode] = {}
         for effect in effects:
             if effect.fluent not in fluent_to_effects:
                 fluent_to_effects[effect.fluent] = [[], [], []]
@@ -781,7 +782,8 @@ class Encoder:
                 if len(assign_effects) == 1:
                     value = assign_effects[0]
                 elif not is_bool_type:
-                    # NOTE: If multiple numeric assignment effects are present, they are assumed to be identical
+                    # NOTE: If multiple numeric assignment effects are present,
+                    # they are assumed to be identical
                     value = assign_effects[0]
                     for v in assign_effects:
                         assert value == v
@@ -790,7 +792,7 @@ class Encoder:
                     non_constant_assignments = 0
                     for v in assign_effects:
                         if v.is_bool_constant():
-                            if v.bool_constant_value() == True:
+                            if v.bool_constant_value():
                                 value = v
                                 non_constant_assignments = 0
                                 break
@@ -800,16 +802,17 @@ class Encoder:
 
                     if non_constant_assignments > 1:
                         raise Exception(
-                            "TamerLite does not support multiple non-constant boolean assignment effects on the same fluent."
+                            "TamerLite does not support multiple non-constant "
+                            "boolean assignment effects on the same fluent."
                         )
             else:
                 if len(inc_effects) > 0:
                     if len(dec_effects) > 0:
                         value = em.Minus(
-                            em.Plus([fluent] + inc_effects), em.Plus(dec_effects)
+                            em.Plus([fluent, *inc_effects]), em.Plus(dec_effects)
                         )
                     else:
-                        value = em.Plus([fluent] + inc_effects)
+                        value = em.Plus([fluent, *inc_effects])
                 else:
                     value = em.Minus(fluent, em.Plus(dec_effects))
 
@@ -822,28 +825,28 @@ class Encoder:
     def _build_events(self):
         env = self._problem.environment
         em = env.expression_manager
-        self._events: Dict[Action, List[Tuple[Timing, Event]]] = {}
+        self._events: dict[Action, list[tuple[Timing, Event]]] = {}
         applicable_actions = set()
         for a in self._problem.actions:
             if isinstance(a, up.model.DurativeAction):
-                from_start: Dict[Any, Any] = {}
-                from_end: Dict[Any, Any] = {}
+                from_start: dict[Any, Any] = {}
+                from_end: dict[Any, Any] = {}
                 action_events = []
                 is_applicable = True
                 for i, lc in a.conditions.items():
-                    l = i.lower
-                    u = i.upper
-                    if l == u:  # conditions
-                        action_events.append((l.delay, l, 1, lc))
+                    lower = i.lower
+                    upper = i.upper
+                    if lower == upper:  # conditions
+                        action_events.append((lower.delay, lower, 1, lc))
                     else:
                         # lower: start conditions
                         if not i.is_left_open():
-                            action_events.append((l.delay, l, 1, lc))
-                        action_events.append((l.delay, l, 2, [em.And(lc)]))
+                            action_events.append((lower.delay, lower, 1, lc))
+                        action_events.append((lower.delay, lower, 2, [em.And(lc)]))
                         # upper: end conditions
                         if not i.is_right_open():
-                            action_events.append((u.delay, u, 1, lc))
-                        action_events.append((u.delay, u, 3, [em.And(lc)]))
+                            action_events.append((upper.delay, upper, 1, lc))
+                        action_events.append((upper.delay, upper, 3, [em.And(lc)]))
                     is_applicable = (
                         is_applicable
                         and not self._simplifier.simplify(em.And(lc)).is_false()
@@ -887,7 +890,8 @@ class Encoder:
                         from_end.clear()
                     else:
                         raise Exception(
-                            "TamerLite does not support ICE from start and from end inside the same action!"
+                            "TamerLite does not support ICE from start and from "
+                            "end inside the same action!"
                         )
 
                 self._events[self.get_action(a.name)] = []
@@ -924,8 +928,8 @@ class Encoder:
                             self.get_action(a.name),
                             0,
                             self._convert_expression(em.And(a.preconditions)),
-                            tuple(),
-                            tuple(),
+                            (),
+                            (),
                             te,
                         ),
                     )

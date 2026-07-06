@@ -62,14 +62,7 @@ target-version = "py310"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I"]
-ignore = [
-    "E501",  # line length handled by formatter
-    "E402",  # module-import-not-at-top — used intentionally in places
-    "E712",  # `v == True` distinguishes a literal bool from other values
-    "E731",  # lambda-assignment — tolerated
-    "E741",  # ambiguous variable name (l, O, I) — tolerated in math-heavy code
-]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "RUF", "PERF", "PIE", "SIM"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401", "F403"]

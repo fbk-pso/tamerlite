@@ -18,10 +18,11 @@
 import logging
 import time
 import warnings
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import partial
-from typing import IO, Callable, Dict, Iterator, List, Optional, Tuple, Union
+from typing import IO
 
 import unified_planning as up
 import unified_planning.engines
@@ -68,7 +69,8 @@ credits = up.engines.Credits(
     "https://github.com/fbk-pso/tamerlite",
     "GPLv3",
     "Heuristic search-based temporal planner.",
-    "Heuristic search-based temporal planner designed to address planning problems with rich temporal dynamics.",
+    "Heuristic search-based temporal planner designed to address planning "
+    "problems with rich temporal dynamics.",
 )
 
 
@@ -91,18 +93,18 @@ class StateWrapper(State):
         elif x.type.is_user_type():
             return self.em.ObjectExp(self.problem.object(v))
         else:
-            raise NotImplementedError("Unknown value type for expression %s" % x)
+            raise NotImplementedError(f"Unknown value type for expression {x}")
 
 
 @dataclass(frozen=True)
 class HeuristicParams:
-    heuristic: Optional[str] = None
-    weight: Optional[float] = None
+    heuristic: str | None = None
+    weight: float | None = None
 
 
 @dataclass(frozen=True)
 class SearchParams(HeuristicParams):
-    search: Optional[str] = None
+    search: str | None = None
     internal_heuristic_cache: bool = True
     inadmissible_numeric_heuristic_variant: bool = False
     early_termination: bool = False
@@ -115,7 +117,7 @@ class SearchParams(HeuristicParams):
 
 @dataclass(frozen=True)
 class MultiqueueParams:
-    queues: List[HeuristicParams]
+    queues: list[HeuristicParams]
     internal_heuristic_cache: bool = True
     inadmissible_numeric_heuristic_variant: bool = False
     early_termination: bool = False
@@ -130,7 +132,10 @@ class TamerLite(
     unified_planning.engines.mixins.OneshotPlannerMixin,
     unified_planning.engines.mixins.AnytimePlannerMixin,
 ):
-    def __init__(self, search: Union[SearchParams, MultiqueueParams] = SearchParams()):
+    def __init__(
+        self,
+        search: SearchParams | MultiqueueParams = SearchParams(),  # noqa: B008  # frozen (immutable) dataclass, safe as default
+    ):
         unified_planning.engines.Engine.__init__(self)
         up.engines.mixins.OneshotPlannerMixin.__init__(self)
         self._params = search
@@ -140,7 +145,7 @@ class TamerLite(
         return "TamerLite"
 
     @staticmethod
-    def get_credits(**kwargs) -> Optional[up.engines.Credits]:
+    def get_credits(**kwargs) -> up.engines.Credits | None:
         return credits
 
     @staticmethod
@@ -202,12 +207,12 @@ class TamerLite(
     def _get_heuristic(
         self,
         params: HeuristicParams,
-        heuristic: Optional[Callable[[State], Optional[float]]],
+        heuristic: Callable[[State], float | None] | None,
         encoder: Encoder,
         inadmissible_numeric_heuristic_variant: bool,
         internal_heuristic_cache: bool,
         cache_heuristic_in_state: bool = False,
-    ) -> Tuple[Heuristic, float]:
+    ) -> tuple[Heuristic, float]:
         assert encoder.goal is not None
         if params.heuristic is None:
             h_name = "custom" if heuristic is not None else "hff"
@@ -263,17 +268,17 @@ class TamerLite(
 
     def _get_search(
         self,
-        search_name: Optional[str],
+        search_name: str | None,
         heuristic: Heuristic,
         weight: float,
         incomplete_memory_bounded_search: bool,
         weak_equality: bool,
         is_temporal: bool,
-    ) -> Tuple[
+    ) -> tuple[
         str,
         Callable[
-            [search_space.SearchSpaceABC, Optional[float], bool],
-            Tuple[Optional[PlanType], Dict[str, str]],
+            [search_space.SearchSpaceABC, float | None, bool],
+            tuple[PlanType | None, dict[str, str]],
         ],
     ]:
         if (
@@ -283,7 +288,8 @@ class TamerLite(
             and weak_equality
         ):
             warnings.warn(
-                "Memory-bounded search does not support weak equality correctly."
+                "Memory-bounded search does not support weak equality correctly.",
+                stacklevel=2,
             )
 
         if search_name is None or search_name == "wastar":
@@ -336,18 +342,19 @@ class TamerLite(
             ground_problem = compilation_res.problem
             lifted_problem = problem
 
-        map_back_action_instance = lambda ai: undefined_map_back_action_instance(
-            ground_map_back_action_instance(ai)
-        )
+        def map_back_action_instance(ai):
+            return undefined_map_back_action_instance(
+                ground_map_back_action_instance(ai)
+            )
 
         return lifted_problem, ground_problem, map_back_action_instance
 
     def _get_solutions_with_params(
         self,
         problem: "up.model.AbstractProblem",
-        timeout: Optional[float] = None,
-        output_stream: Optional[IO[str]] = None,
-        warm_start_plan: Optional["up.plans.Plan"] = None,
+        timeout: float | None = None,
+        output_stream: IO[str] | None = None,
+        warm_start_plan: up.plans.Plan | None = None,
         **kwargs,
     ) -> Iterator["up.engines.results.PlanGenerationResult"]:
         assert isinstance(problem, up.model.Problem)
@@ -423,6 +430,7 @@ class TamerLite(
         prev_res = up.engines.PlanGenerationResult(
             res.status, res.plan, res.engine_name, res.metrics, res.log_messages
         )
+        ground_problem_actions = {a.name: a for a in ground_problem.actions}
         while res.status == up.engines.PlanGenerationResultStatus.INTERMEDIATE:
             val_res = validate_plan(original_problem, res.plan)
             assert val_res
@@ -434,7 +442,7 @@ class TamerLite(
             problem = ground_problem.clone()
             exp = None
             deadline = None
-            m, v = list(val_res.metric_evaluations.items())[0]
+            m, v = next(iter(val_res.metric_evaluations.items()))
             logger.info("Searching for improvement over current quality: %s", v)
             if m.is_minimize_expression_on_final_state():
                 exp = em.LT(m.expression, v)
@@ -450,11 +458,12 @@ class TamerLite(
                         a.add_increase_effect(plan_length, 1)
                     else:
                         raise NotImplementedError(
-                            "Only instantaneous actions supported for plan length metric"
+                            "Only instantaneous actions supported for plan "
+                            "length metric"
                         )
                 exp = em.LT(plan_length, v)
             elif m.is_minimize_action_costs():
-                m = list(problem.quality_metrics)[0]
+                m = next(iter(problem.quality_metrics))
                 actions_cost = up.model.Fluent(
                     get_fresh_name(problem, "actions_cost"),
                     tm.RealType(lower_bound=0.0),
@@ -486,12 +495,10 @@ class TamerLite(
             else:
                 assert deadline is not None
 
-            ground_problem_actions = {a.name: a for a in ground_problem.actions}
-
             def new_map_back_action_instance(
                 ai: ActionInstance,
-            ) -> Optional[ActionInstance]:
-                action = ground_problem_actions.get(ai.action.name, None)
+            ) -> ActionInstance | None:
+                action = ground_problem_actions.get(ai.action.name)
                 if action is not None:
                     return map_back_action_instance(action())
                 return None
@@ -545,17 +552,17 @@ class TamerLite(
     def _get_solutions(
         self,
         problem: "up.model.AbstractProblem",
-        timeout: Optional[float] = None,
-        output_stream: Optional[IO[str]] = None,
+        timeout: float | None = None,
+        output_stream: IO[str] | None = None,
     ) -> Iterator[up.engines.results.PlanGenerationResult]:
         return self._get_solutions_with_params(problem, timeout, output_stream)
 
     def _solve(
         self,
         problem: "up.model.AbstractProblem",
-        heuristic: Optional[Callable[[State], Optional[float]]] = None,
-        timeout: Optional[float] = None,
-        output_stream: Optional[IO[str]] = None,
+        heuristic: Callable[[State], float | None] | None = None,
+        timeout: float | None = None,
+        output_stream: IO[str] | None = None,
     ) -> "up.engines.results.PlanGenerationResult":
         assert isinstance(problem, up.model.Problem)
         start_time = time.time()
@@ -592,13 +599,13 @@ class TamerLite(
         self,
         problem: "up.model.Problem",
         ground_problem: "up.model.Problem",
-        map_back_action_instance: Callable[[ActionInstance], Optional[ActionInstance]],
-        heuristic: Optional[Callable[[State], Optional[float]]] = None,
-        timeout: Optional[float] = None,
-        output_stream: Optional[IO[str]] = None,
-        deadline: Optional[Fraction] = None,
+        map_back_action_instance: Callable[[ActionInstance], ActionInstance | None],
+        heuristic: Callable[[State], float | None] | None = None,
+        timeout: float | None = None,
+        output_stream: IO[str] | None = None,
+        deadline: Fraction | None = None,
         is_intermediate_solution: bool = False,
-    ) -> Tuple["up.engines.results.PlanGenerationResult", bool, bool]:
+    ) -> tuple["up.engines.results.PlanGenerationResult", bool, bool]:
         try:
             encoder = Encoder(
                 ground_problem,
@@ -620,8 +627,8 @@ class TamerLite(
                 or encoder.is_any_action_compression_safe()
             )
             if are_all_actions_compression_safe:
-                # Compile a temporal planning problem, where all actions are safe to compress,
-                # into an equivalent classical planning problem
+                # Compile a temporal planning problem, where all actions are
+                # safe to compress, into an equivalent classical planning problem
                 t2s_compiler = TimedToSequential()
                 t2s_compiler.skip_checks = True
                 compilation_res = t2s_compiler.compile(ground_problem)
@@ -629,8 +636,8 @@ class TamerLite(
 
                 def new_map_back_action_instance(
                     ai: ActionInstance,
-                ) -> Optional[ActionInstance]:
-                    action = ground_problem_actions.get(ai.action.name, None)
+                ) -> ActionInstance | None:
+                    action = ground_problem_actions.get(ai.action.name)
                     if action is not None:
                         return map_back_action_instance(action())
                     return None
