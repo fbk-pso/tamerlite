@@ -165,6 +165,7 @@ def wastar_search(
     timeout: Optional[float] = None,
     early_termination: bool = False,
     weak_equality: bool = False,
+    max_len: Optional[float] = None,
 ):
     st = time.time()
     open: List[PrioritizedItem] = []
@@ -183,18 +184,31 @@ def wastar_search(
     if init_h is None:
         return None, {"expanded_states": str(0)}
     heapq.heappush(open, PrioritizedItem(init_h, init))
+    plans = []
+    if max_len is not None:            
+        assert timeout is not None
     while open:
+        if max_len is not None and time.time() - st > timeout:
+            raise TimeoutError({"expanded_states": str(expanded_states), "plans": plans})
         if timeout is not None and time.time() - st > timeout:
             raise TimeoutError
         item = heapq.heappop(open)
         state = item.state
         expanded_states += 1
         if not early_termination and ss.goal_reached(state):
-            return ss.build_plan(state), {
-                "expanded_states": str(expanded_states),
-                "goal_depth": str(state.g),
-                "len_plan": len([a for a, _, _ in state.path])
-            }
+            path = [a for a, _, _ in state.path]
+            if max_len is not None: 
+                if len(path) <= max_len:
+                    print(f"{len(plans)}) Found plan of length {len(path)}")
+                    plans.append(path)
+                    if max_len == float("inf"):
+                        max_len = len(path)
+            else:
+                return ss.build_plan(state), {
+                    "expanded_states": str(expanded_states),
+                    "goal_depth": str(state.g),
+                    "len_plan": len([a for a, _, _ in state.path])
+                }
 
         candidate_states = []
         for succ_state in ss.get_successor_states(state):
@@ -217,8 +231,8 @@ def wastar_search(
             if h is not None:
                 f = (1 - weight) * succ_state.g + weight * h
                 heapq.heappush(open, PrioritizedItem(f, succ_state))
-
-    return None, {"expanded_states": str(expanded_states)}
+    res = {"expanded_states": str(expanded_states)} if max_len is None else {"expanded_states": str(expanded_states), "plans": plans}
+    return None , res
 
 
 def ehc_search(

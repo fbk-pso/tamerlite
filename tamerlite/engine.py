@@ -84,6 +84,7 @@ class SearchParams(HeuristicParams):
     weak_equality: bool = False
     symmetry_breaking: bool = True
     dfa: object = None
+    max_len : Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -307,8 +308,14 @@ class TamerLite(
                         encoder.search_space,
                         timeout=timeout,
                         early_termination=self._params.early_termination,
+                        max_len=self._params.max_len
                     )
-
+            if "plans" in metrics:
+                traces = []
+                for plan in metrics["plans"]:
+                    plan = [encoder.get_action_name(a) for a in plan]
+                    traces.append(plan)
+                metrics["plans"] = traces
             metrics["heuristic"] = self._params.heuristic
             if self._params.dfa is not None:
                 metrics["pruned_states"] = encoder.search_space._pruned_subtrees
@@ -329,6 +336,14 @@ class TamerLite(
             else:
                 status = up.engines.PlanGenerationResultStatus.UNSOLVABLE_INCOMPLETELY
             return up.engines.PlanGenerationResult(status, plan, self.name, metrics)
-        except TimeoutError:
+        except TimeoutError as e:
             status = up.engines.PlanGenerationResultStatus.TIMEOUT
+            if self._params.max_len is not None:
+                metrics = e.args[0]
+                traces = []
+                for plan in metrics["plans"]:
+                    plan = [encoder.get_action_name(a) for a in plan]
+                    traces.append(plan)
+                metrics["plans"] = traces
+                return up.engines.PlanGenerationResult(status, None, self.name, metrics)
             return up.engines.PlanGenerationResult(status, None, self.name)
