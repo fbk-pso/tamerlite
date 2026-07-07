@@ -243,7 +243,7 @@ def resolve_domain_specs(args: argparse.Namespace) -> list[dict[str, Path | str]
         return [
             {
                 "domain": domain_name,
-                "traces_path": benchmark_dir / "traces.csv",
+                "traces_path": benchmark_dir / "training" / "traces.csv",
                 "instances_dir": config["benchmark_root"] / "training" / "instances_sets" / "set_1" / "testing_set",
                 "output_group": benchmark_dir.parent.name,
             }
