@@ -46,7 +46,7 @@ def parse_args() -> argparse.Namespace:
         "--benchmark-dir",
         type=Path,
         default=None,
-        help="Path to one benchmark directory containing traces.csv, e.g. /storage/PSO/.../<group>/<benchmark>.",
+        help="Path to one benchmark directory with training/traces.csv and training/instances_sets/set_1/testing_set/.",
     )
     parser.add_argument(
         "--domains",
@@ -237,9 +237,6 @@ def resolve_domain_specs(args: argparse.Namespace) -> list[dict[str, Path | str]
     if args.benchmark_dir is not None:
         benchmark_dir = args.benchmark_dir.resolve()
         domain_name = benchmark_dir.name
-        if domain_name not in DOMAIN_CONFIGS:
-            raise SystemExit(f"Unsupported benchmark name inferred from --benchmark-dir: {domain_name}")
-        config = DOMAIN_CONFIGS[domain_name]
         return [
             {
                 "domain": domain_name,
