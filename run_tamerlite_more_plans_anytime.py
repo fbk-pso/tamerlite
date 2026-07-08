@@ -4,6 +4,8 @@
 
 # early_termination must be false
 
+import os
+
 from unified_planning.shortcuts import *
 from unified_planning.io import ANMLReader
 from unified_planning.engines import PlanGenerationResultStatus
@@ -16,7 +18,12 @@ import argparse
 from pathlib import Path
 import csv
 
-get_environment().credits_stream = None  # suppress credits header
+os.environ.setdefault("DISABLE_RUSTAMER", "1")
+env = get_environment()
+env.credits_stream = None
+env.factory.add_engine("tamerlite", "tamerlite.engine", "TamerLite")
+
+# get_environment().credits_stream = None  # suppress credits header
 
 def solve_and_summarize(
     problem_file, heuristic=None, timeout=30, max_len=None
