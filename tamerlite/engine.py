@@ -312,9 +312,9 @@ class TamerLite(
                     )
             if "plans" in metrics:
                 traces = []
-                for plan in metrics["plans"]:
-                    plan = [encoder.get_action_name(a) for a in plan]
-                    traces.append(plan)
+                for p in metrics["plans"]:
+                    p = [encoder.get_action_name(a) for a in p]
+                    traces.append(p)
                 metrics["plans"] = traces
             metrics["heuristic"] = self._params.heuristic
             if self._params.dfa is not None:
@@ -341,9 +341,9 @@ class TamerLite(
             if self._params.max_len is not None:
                 metrics = e.args[0]
                 traces = []
-                for plan in metrics["plans"]:
-                    plan = [encoder.get_action_name(a) for a in plan]
-                    traces.append(plan)
+                for p in metrics["plans"]:
+                    p = [encoder.get_action_name(a) for a in p]
+                    traces.append(p)
                 metrics["plans"] = traces
                 return up.engines.PlanGenerationResult(status, None, self.name, metrics)
             return up.engines.PlanGenerationResult(status, None, self.name)
