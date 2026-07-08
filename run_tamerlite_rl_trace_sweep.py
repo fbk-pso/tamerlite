@@ -114,11 +114,6 @@ def parse_args() -> argparse.Namespace:
         help="Directory where Slurm job scripts will be written. Defaults to <output-root>/slurm.",
     )
     parser.add_argument(
-        "--slurm-time",
-        default="00:10:00",
-        help="Slurm wall clock limit for each generated job.",
-    )
-    parser.add_argument(
         "--slurm-mem",
         default="4G",
         help="Slurm memory request for each generated job.",
@@ -205,7 +200,6 @@ def write_slurm_job(
     command: list[str],
     log_path: Path,
     job_name: str,
-    slurm_time: str,
     slurm_mem: str,
     slurm_cpus_per_task: int,
     slurm_partition: str | None,
@@ -214,7 +208,6 @@ def write_slurm_job(
         "#!/bin/bash",
         f"#SBATCH --job-name={job_name}",
         f"#SBATCH --output={log_path}",
-        f"#SBATCH --time={slurm_time}",
         f"#SBATCH --mem={slurm_mem}",
         f"#SBATCH --cpus-per-task={slurm_cpus_per_task}",
     ]
@@ -341,7 +334,6 @@ def main() -> int:
                         command=command,
                         log_path=log_path,
                         job_name=job_name,
-                        slurm_time=args.slurm_time,
                         slurm_mem=args.slurm_mem,
                         slurm_cpus_per_task=args.slurm_cpus_per_task,
                         slurm_partition=args.slurm_partition,
