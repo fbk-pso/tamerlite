@@ -223,9 +223,11 @@ def wastar_search(
                 state_repr = state_representation(succ_state, weak_equality)
                 if state_repr not in visited_states:
                     visited_states.add(state_repr)
-                    candidate_states.append(succ_state)
+                    if max_len is None or succ_state.g <= max_len:
+                        candidate_states.append(succ_state)
             else:
-                candidate_states.append(succ_state)
+                if max_len is None or succ_state.g <= max_len:
+                    candidate_states.append(succ_state)
 
         for succ_state, h in heuristic.eval_gen(candidate_states, ss):
             if h is not None:
