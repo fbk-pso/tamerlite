@@ -7,7 +7,7 @@
 import os
 
 from unified_planning.shortcuts import *
-from unified_planning.io import ANMLReader
+from unified_planning.io import ANMLReader, PDDLReader
 from unified_planning.engines import PlanGenerationResultStatus
 from unified_planning.plans import PlanKind
 
@@ -28,7 +28,12 @@ env.factory.add_engine("tamerlite", "tamerlite.engine", "TamerLite")
 def solve_and_summarize(
     problem_file, heuristic=None, timeout=30, max_len=None
 ):
-    problem = ANMLReader().parse_problem(str(problem_file))
+    if problem_file.endswith(".anml"):
+        problem = ANMLReader().parse_problem(str(problem_file))
+    elif problem_file.endswith(".pddl"):
+        problem = PDDLReader().parse_problem(str(problem_file))
+    else:
+        raise ValueError("Unsupported problem file format")
 
     params = SearchParams(
         search="wastar",
