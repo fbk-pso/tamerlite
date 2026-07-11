@@ -32,6 +32,57 @@ use super::search_state::*;
 use super::structures::Action;
 use super::utils::PersistentList;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SearchLimitReason {
+    Timeout,
+    MaxExpandedStates,
+}
+
+impl SearchLimitReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Timeout => "timeout",
+            Self::MaxExpandedStates => "max_expanded_states",
+        }
+    }
+}
+
+fn search_limit_error(reason: SearchLimitReason, expanded_states: usize) -> PyErr {
+    let reason = reason.as_str();
+    let error = PyTimeoutError::new_err("Timeout");
+    Python::attach(|py| {
+        error.value(py).setattr("reason", reason)?;
+        error.value(py).setattr("expanded_states", expanded_states)
+    })
+    .expect("TimeoutError instances support structured search-limit attributes");
+    error
+}
+
+pub(crate) fn check_search_limits(
+    start: &SystemTime,
+    timeout: Option<f32>,
+    expanded_states: usize,
+    max_expanded_states: Option<usize>,
+) -> PyResult<()> {
+    if let Some(timeout) = timeout {
+        if start.elapsed().unwrap().as_secs_f32() > timeout {
+            return Err(search_limit_error(
+                SearchLimitReason::Timeout,
+                expanded_states,
+            ));
+        }
+    }
+    if let Some(max_expanded_states) = max_expanded_states {
+        if expanded_states >= max_expanded_states {
+            return Err(search_limit_error(
+                SearchLimitReason::MaxExpandedStates,
+                expanded_states,
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 struct PrioritizedItem {
     heuristic: f64,
@@ -146,16 +197,7 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         state: init,
     });
     while let Some(current) = open.pop() {
-        if let Some(t) = timeout {
-            if start.elapsed().unwrap().as_secs_f32() > t {
-                return Err(PyTimeoutError::new_err("Timeout"));
-            }
-        }
-        if let Some(m) = max_expanded_states {
-            if expanded_states >= m {
-                return Err(PyTimeoutError::new_err("Timeout"));
-            }
-        }
+        check_search_limits(&start, timeout, expanded_states, max_expanded_states)?;
         let state = current.state;
         expanded_states += 1;
         if !early_termination && ss.goal_reached(&state, None)? {
@@ -245,16 +287,7 @@ fn basic_search<S: SearchSpaceTrait>(
     open.push_back(init);
 
     while !open.is_empty() {
-        if let Some(t) = timeout {
-            if start.elapsed().unwrap().as_secs_f32() > t {
-                return Err(PyTimeoutError::new_err("Timeout"));
-            }
-        }
-        if let Some(m) = max_expanded_states {
-            if expanded_states >= m {
-                return Err(PyTimeoutError::new_err("Timeout"));
-            }
-        }
+        check_search_limits(&start, timeout, expanded_states, max_expanded_states)?;
 
         let state = if bfs {
             open.pop_front().unwrap()
@@ -314,16 +347,7 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     let mut closed = FxHashSet::with_hasher(FxBuildHasher::default());
     let mut closed_weak_eq = FxHashSet::with_hasher(FxBuildHasher::default());
     while let Some(state) = open.pop_front() {
-        if let Some(t) = timeout {
-            if start.elapsed().unwrap().as_secs_f32() > t {
-                return Err(PyTimeoutError::new_err("Timeout"));
-            }
-        }
-        if let Some(m) = max_expanded_states {
-            if expanded_states >= m {
-                return Err(PyTimeoutError::new_err("Timeout"));
-            }
-        }
+        check_search_limits(&start, timeout, expanded_states, max_expanded_states)?;
 
         expanded_states += 1;
         if !early_termination && ss.goal_reached(&state, None)? {
@@ -388,4 +412,51 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     }
     metrics.insert("expanded_states".to_string(), expanded_states.to_string());
     Ok((None, metrics))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_search_limits;
+    use pyo3::exceptions::PyTimeoutError;
+    use pyo3::prelude::*;
+    use std::time::SystemTime;
+
+    fn assert_search_limit(error: PyErr, reason: &str, expanded_states: usize) {
+        Python::attach(|py| {
+            assert!(error.is_instance_of::<PyTimeoutError>(py));
+            assert_eq!(error.value(py).to_string(), "Timeout");
+            assert_eq!(
+                error
+                    .value(py)
+                    .getattr("reason")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                reason
+            );
+            assert_eq!(
+                error
+                    .value(py)
+                    .getattr("expanded_states")
+                    .unwrap()
+                    .extract::<usize>()
+                    .unwrap(),
+                expanded_states
+            );
+        });
+    }
+
+    #[test]
+    fn max_expanded_states_error_preserves_progress() {
+        Python::initialize();
+        let error = check_search_limits(&SystemTime::now(), None, 7, Some(7)).unwrap_err();
+        assert_search_limit(error, "max_expanded_states", 7);
+    }
+
+    #[test]
+    fn timeout_error_preserves_progress() {
+        Python::initialize();
+        let error = check_search_limits(&SystemTime::now(), Some(-1.0), 3, None).unwrap_err();
+        assert_search_limit(error, "timeout", 3);
+    }
 }

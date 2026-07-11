@@ -22,7 +22,6 @@ use std::{collections::BinaryHeap, vec::Vec};
 
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
-use pyo3::exceptions::PyTimeoutError;
 use pyo3::prelude::*;
 
 use super::heuristics::*;
@@ -180,16 +179,7 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
 
     let mut i = 0;
     loop {
-        if let Some(t) = timeout {
-            if start.elapsed().unwrap().as_secs_f32() > t {
-                return Err(PyTimeoutError::new_err("Timeout"));
-            }
-        }
-        if let Some(m) = max_expanded_states {
-            if expanded_states >= m {
-                return Err(PyTimeoutError::new_err("Timeout"));
-            }
-        }
+        check_search_limits(&start, timeout, expanded_states, max_expanded_states)?;
         // If one of the queues is empty, then all the others are (logically) empty too
         if opens[i].is_empty() {
             break;

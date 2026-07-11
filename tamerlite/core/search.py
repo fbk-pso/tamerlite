@@ -73,6 +73,13 @@ def extract_path(state: State) -> List[Action]:
     return [a for a, _, _ in state.path]
 
 
+def _search_limit_error(reason: str, expanded_states: int) -> TimeoutError:
+    error = TimeoutError()
+    error.reason = reason  # type: ignore[attr-defined]
+    error.expanded_states = expanded_states  # type: ignore[attr-defined]
+    return error
+
+
 def _check_search_limits(
     st: float,
     timeout: Optional[float],
@@ -80,9 +87,9 @@ def _check_search_limits(
     max_expanded_states: Optional[int],
 ) -> None:
     if timeout is not None and time.time() - st > timeout:
-        raise TimeoutError
+        raise _search_limit_error("timeout", expanded_states)
     if max_expanded_states is not None and expanded_states >= max_expanded_states:
-        raise TimeoutError
+        raise _search_limit_error("max_expanded_states", expanded_states)
 
 
 def bfs_search(

@@ -25,6 +25,13 @@ from unified_planning.shortcuts import Problem
 import tamerlite.engine as engine_module
 
 
+def _search_limit_error(reason, expanded_states):
+    error = TimeoutError("search limit")
+    error.reason = reason
+    error.expanded_states = expanded_states
+    return error
+
+
 class _FakeEncoder:
     def __init__(self, *args, **kwargs):
         self.search_space = SimpleNamespace(is_temporal=True)
@@ -228,6 +235,51 @@ def test_timeout_in_either_phase_returns_timeout(monkeypatch, use_multiqueue):
     )
     assert strong_timeout.status == PlanGenerationResultStatus.TIMEOUT
     assert strong_calls == [(True, 10.0, 100), (False, 10.0, 70)]
+
+
+@pytest.mark.parametrize("use_multiqueue", [False, True])
+def test_structured_weak_limit_preserves_progress(monkeypatch, use_multiqueue):
+    monkeypatch.setattr(engine_module.time, "monotonic", lambda: 100.0)
+
+    result, calls = _run_planner(
+        monkeypatch,
+        use_multiqueue=use_multiqueue,
+        outcomes=(_search_limit_error("max_expanded_states", 100),),
+    )
+
+    assert result.status == PlanGenerationResultStatus.TIMEOUT
+    assert calls == [(True, 10.0, 100)]
+    assert result.metrics == {
+        "expanded_states": "100",
+        "search_limit_reason": "max_expanded_states",
+    }
+
+
+@pytest.mark.parametrize("use_multiqueue", [False, True])
+def test_structured_strong_limit_preserves_fallback_progress(
+    monkeypatch, use_multiqueue
+):
+    monkeypatch.setattr(engine_module.time, "monotonic", lambda: 100.0)
+
+    result, calls = _run_planner(
+        monkeypatch,
+        use_multiqueue=use_multiqueue,
+        outcomes=(
+            (None, {"expanded_states": "30"}),
+            _search_limit_error("max_expanded_states", 70),
+        ),
+    )
+
+    assert result.status == PlanGenerationResultStatus.TIMEOUT
+    assert calls == [(True, 10.0, 100), (False, 10.0, 70)]
+    assert result.metrics == {
+        "expanded_states": "100",
+        "search_limit_reason": "max_expanded_states",
+        "weak_equality_fallback_attempted": "1",
+        "weak_equality_fallback_solved": "0",
+        "weak_expanded_states": "30",
+        "strong_expanded_states": "70",
+    }
 
 
 def test_remaining_timeout_is_never_negative(monkeypatch):

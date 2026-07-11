@@ -279,6 +279,43 @@ class TamerLite(
         )
         return metrics
 
+    @staticmethod
+    def _search_limit_metrics(error: TimeoutError) -> Optional[Dict[str, str]]:
+        """Recover structured progress from a Python or Rust search limit."""
+        reason = getattr(error, "reason", None)
+        expanded_states = getattr(error, "expanded_states", None)
+        if not isinstance(reason, str) or not reason:
+            return None
+        if isinstance(expanded_states, bool) or not isinstance(
+            expanded_states, (int, str)
+        ):
+            return None
+        try:
+            expanded_states = int(expanded_states)
+        except (TypeError, ValueError):
+            return None
+        if expanded_states < 0:
+            return None
+        return {
+            "expanded_states": str(expanded_states),
+            "search_limit_reason": reason,
+        }
+
+    def _search_limit_result(
+        self,
+        error: TimeoutError,
+        weak_metrics: Optional[Dict[str, str]] = None,
+    ) -> "up.engines.results.PlanGenerationResult":
+        metrics = self._search_limit_metrics(error)
+        if metrics is not None and weak_metrics is not None:
+            metrics = self._fallback_metrics(weak_metrics, metrics, False)
+        return up.engines.PlanGenerationResult(
+            up.engines.PlanGenerationResultStatus.TIMEOUT,
+            None,
+            self.name,
+            metrics,
+        )
+
     def _solve(
         self,
         problem: "up.model.AbstractProblem",
@@ -357,14 +394,17 @@ class TamerLite(
                     updated_max_expanded_states = self._remaining_expanded_budget(
                         self._params.max_expanded_states, weak_metrics
                     )
-                    path, strong_metrics = multiqueue_search(
-                        encoder.search_space,
-                        heuristics,
-                        updated_timeout,
-                        updated_max_expanded_states,
-                        early_termination=self._params.early_termination,
-                        weak_equality=False,
-                    )
+                    try:
+                        path, strong_metrics = multiqueue_search(
+                            encoder.search_space,
+                            heuristics,
+                            updated_timeout,
+                            updated_max_expanded_states,
+                            early_termination=self._params.early_termination,
+                            weak_equality=False,
+                        )
+                    except TimeoutError as error:
+                        return self._search_limit_result(error, weak_metrics)
                     metrics = self._fallback_metrics(
                         weak_metrics, strong_metrics, path is not None
                     )
@@ -392,13 +432,16 @@ class TamerLite(
                         updated_max_expanded_states = self._remaining_expanded_budget(
                             self._params.max_expanded_states, weak_metrics
                         )
-                        path, strong_metrics = search(  # type: ignore
-                            encoder.search_space,
-                            timeout=updated_timeout,
-                            max_expanded_states=updated_max_expanded_states,
-                            early_termination=self._params.early_termination,
-                            weak_equality=False,
-                        )
+                        try:
+                            path, strong_metrics = search(  # type: ignore
+                                encoder.search_space,
+                                timeout=updated_timeout,
+                                max_expanded_states=updated_max_expanded_states,
+                                early_termination=self._params.early_termination,
+                                weak_equality=False,
+                            )
+                        except TimeoutError as error:
+                            return self._search_limit_result(error, weak_metrics)
                         metrics = self._fallback_metrics(
                             weak_metrics, strong_metrics, path is not None
                         )
@@ -428,6 +471,5 @@ class TamerLite(
                 plan = None
                 status = up.engines.PlanGenerationResultStatus.UNSOLVABLE_INCOMPLETELY
             return up.engines.PlanGenerationResult(status, plan, self.name, metrics)
-        except TimeoutError:
-            status = up.engines.PlanGenerationResultStatus.TIMEOUT
-            return up.engines.PlanGenerationResult(status, None, self.name)
+        except TimeoutError as error:
+            return self._search_limit_result(error)
