@@ -36,6 +36,14 @@ from tamerlite.core import HFF, HAdd, HMax, HMaxExplicit, CustomHeuristic
 from tamerlite.core.heuristics import Heuristic
 from tamerlite.encoder import Encoder, PlanType
 
+
+def _remaining_timeout(timeout: Optional[float], start_time: float) -> Optional[float]:
+    """Return the non-negative timeout left after a completed search phase."""
+    if timeout is None:
+        return None
+    return max(0.0, timeout - (time.monotonic() - start_time))
+
+
 credits = up.engines.Credits(
     "TamerLite",
     "FBK PSO Unit",
@@ -84,6 +92,7 @@ class SearchParams(HeuristicParams):
     weak_equality: bool = False
     symmetry_breaking: bool = True
     compression_safe_actions: bool = True
+    weak_equality_fallback: bool = True
 
 
 @dataclass(frozen=True)
@@ -95,13 +104,13 @@ class MultiqueueParams:
     weak_equality: bool = False
     symmetry_breaking: bool = True
     compression_safe_actions: bool = True
+    weak_equality_fallback: bool = True
 
 
 class TamerLite(
     unified_planning.engines.Engine,
     unified_planning.engines.mixins.OneshotPlannerMixin,
 ):
-
     def __init__(self, search: Union[SearchParams, MultiqueueParams] = SearchParams()):
         unified_planning.engines.Engine.__init__(self)
         up.engines.mixins.OneshotPlannerMixin.__init__(self)
@@ -246,8 +255,29 @@ class TamerLite(
     ) -> Optional[int]:
         if max_expanded_states is None:
             return None
-        used = int(metrics.get("expanded_states", 0))
+        used = int(metrics["expanded_states"])
         return max(0, max_expanded_states - used)
+
+    @staticmethod
+    def _fallback_metrics(
+        weak_metrics: Dict[str, str],
+        strong_metrics: Dict[str, str],
+        fallback_solved: bool,
+    ) -> Dict[str, str]:
+        """Combine weak and strong search work after a fallback attempt."""
+        weak_expanded = int(weak_metrics["expanded_states"])
+        strong_expanded = int(strong_metrics["expanded_states"])
+        metrics = dict(strong_metrics)
+        metrics.update(
+            {
+                "expanded_states": str(weak_expanded + strong_expanded),
+                "weak_equality_fallback_attempted": "1",
+                "weak_equality_fallback_solved": "1" if fallback_solved else "0",
+                "weak_expanded_states": str(weak_expanded),
+                "strong_expanded_states": str(strong_expanded),
+            }
+        )
+        return metrics
 
     def _solve(
         self,
@@ -308,7 +338,7 @@ class TamerLite(
                     )
                     heuristics.append((h, w))
 
-                start = time.time()
+                start = time.monotonic()
                 path, metrics = multiqueue_search(
                     encoder.search_space,
                     heuristics,
@@ -317,20 +347,26 @@ class TamerLite(
                     early_termination=self._params.early_termination,
                     weak_equality=self._params.weak_equality,
                 )
-                if self._params.weak_equality and path is None:
-                    updated_timeout = timeout
+                if (
+                    self._params.weak_equality
+                    and self._params.weak_equality_fallback
+                    and path is None
+                ):
+                    weak_metrics = metrics
+                    updated_timeout = _remaining_timeout(timeout, start)
                     updated_max_expanded_states = self._remaining_expanded_budget(
-                        self._params.max_expanded_states, metrics
+                        self._params.max_expanded_states, weak_metrics
                     )
-                    if updated_timeout is not None:
-                        updated_timeout -= start
-                    path, metrics = multiqueue_search(
+                    path, strong_metrics = multiqueue_search(
                         encoder.search_space,
                         heuristics,
                         updated_timeout,
                         updated_max_expanded_states,
                         early_termination=self._params.early_termination,
                         weak_equality=False,
+                    )
+                    metrics = self._fallback_metrics(
+                        weak_metrics, strong_metrics, path is not None
                     )
             else:
                 h, w = self._get_heuristic(
@@ -342,7 +378,7 @@ class TamerLite(
                 search_name, search = self._get_search(self._params.search, h, w)
 
                 if self._params.weak_equality and search_name not in ("dfs", "bfs"):
-                    start = time.time()
+                    start = time.monotonic()
                     path, metrics = search(  # type: ignore
                         encoder.search_space,
                         timeout=timeout,
@@ -350,19 +386,21 @@ class TamerLite(
                         early_termination=self._params.early_termination,
                         weak_equality=True,
                     )
-                    if path is None:
-                        updated_timeout = timeout
+                    if self._params.weak_equality_fallback and path is None:
+                        weak_metrics = metrics
+                        updated_timeout = _remaining_timeout(timeout, start)
                         updated_max_expanded_states = self._remaining_expanded_budget(
-                            self._params.max_expanded_states, metrics
+                            self._params.max_expanded_states, weak_metrics
                         )
-                        if updated_timeout is not None:
-                            updated_timeout -= start
-                        path, metrics = search(  # type: ignore
+                        path, strong_metrics = search(  # type: ignore
                             encoder.search_space,
                             timeout=updated_timeout,
                             max_expanded_states=updated_max_expanded_states,
                             early_termination=self._params.early_termination,
                             weak_equality=False,
+                        )
+                        metrics = self._fallback_metrics(
+                            weak_metrics, strong_metrics, path is not None
                         )
                 else:
                     path, metrics = search(  # type: ignore
