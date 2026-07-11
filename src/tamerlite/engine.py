@@ -61,6 +61,14 @@ from tamerlite.encoder import Encoder, PlanType
 
 logger = logging.getLogger(__name__)
 
+
+def _remaining_timeout(timeout: Optional[float], start_time: float) -> Optional[float]:
+    """Return the non-negative timeout left after a completed search phase."""
+    if timeout is None:
+        return None
+    return max(0.0, timeout - (time.monotonic() - start_time))
+
+
 credits = up.engines.Credits(
     "TamerLite",
     "FBK PSO Unit",
@@ -658,7 +666,7 @@ class TamerLite(
                     )
                     heuristics.append((h, w))
 
-                start = time.time()
+                start = time.monotonic()
                 path, metrics = multiqueue_search(
                     encoder.search_space,
                     heuristics,
@@ -671,9 +679,12 @@ class TamerLite(
                     and encoder.search_space.is_temporal
                     and path is None
                 ):
-                    updated_timeout = timeout
-                    if updated_timeout is not None:
-                        updated_timeout -= start
+                    updated_timeout = _remaining_timeout(timeout, start)
+                    logger.info(
+                        "Weak-equality multiqueue search found no plan; retrying "
+                        "with strong equality and timeout=%s",
+                        updated_timeout,
+                    )
                     path, metrics = multiqueue_search(
                         encoder.search_space,
                         heuristics,
@@ -699,7 +710,7 @@ class TamerLite(
                 )
 
                 if self._params.weak_equality and search_name not in ("dfs", "bfs"):
-                    start = time.time()
+                    start = time.monotonic()
                     path, metrics = search(  # type: ignore
                         encoder.search_space,
                         timeout=timeout,
@@ -707,9 +718,12 @@ class TamerLite(
                         weak_equality=True,
                     )
                     if encoder.search_space.is_temporal and path is None:
-                        updated_timeout = timeout
-                        if updated_timeout is not None:
-                            updated_timeout -= start
+                        updated_timeout = _remaining_timeout(timeout, start)
+                        logger.info(
+                            "Weak-equality search found no plan; retrying with "
+                            "strong equality and timeout=%s",
+                            updated_timeout,
+                        )
                         path, metrics = search(  # type: ignore
                             encoder.search_space,
                             timeout=updated_timeout,
