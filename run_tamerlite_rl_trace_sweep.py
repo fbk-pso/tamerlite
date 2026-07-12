@@ -98,6 +98,14 @@ def parse_args() -> argparse.Namespace:
         help="Base directory used to build the default output path.",
     )
     parser.add_argument(
+        "--use-runner-default-max-len",
+        action="store_true",
+        help=(
+            "Do not derive per-instance max length from RL traces. "
+            "Pass --max_len inf to the runner for every instance."
+        ),
+    )
+    parser.add_argument(
         "--skip-existing",
         action="store_true",
         help="Skip runs whose output CSV already exists.",
@@ -179,7 +187,7 @@ def build_command(
     output_path: Path,
     max_len: int | None,
 ) -> list[str]:
-    return [
+    command = [
         python_exe,
         str(runner_path),
         "--problem",
@@ -190,9 +198,10 @@ def build_command(
         str(timeout),
         "--output",
         str(output_path),
-        "--max_len",
-        "inf" if max_len is None else str(max_len),
     ]
+    if max_len is not None:
+        command.extend(["--max_len", str(max_len)])
+    return command
 
 
 def write_slurm_job(
@@ -273,10 +282,13 @@ def main() -> int:
         output_root = resolve_output_root(args, output_group, domain_name)
         slurm_dir = args.slurm_dir.resolve() if args.slurm_dir is not None else (output_root / "slurm").resolve()
 
-        ensure_exists(traces_path, f"{domain_name} traces.csv")
         ensure_exists(instances_dir, f"{domain_name} instances directory")
 
-        optimal_lengths = solved_lengths_by_problem(traces_path)
+        if args.use_runner_default_max_len:
+            optimal_lengths: dict[int, int] = {}
+        else:
+            ensure_exists(traces_path, f"{domain_name} traces.csv")
+            optimal_lengths = solved_lengths_by_problem(traces_path)
         problem_files = list_problem_files(instances_dir)
         if not problem_files:
             raise SystemExit(f"No problem_*.anml files found in {instances_dir}")
@@ -291,8 +303,16 @@ def main() -> int:
             for problem_id, problem_path in problem_files:
                 output_path = heuristic_output_dir / f"problem_{problem_id}.csv"
                 log_path = heuristic_output_dir / f"problem_{problem_id}.log"
-                max_len = optimal_lengths.get(problem_id)
-                max_len_source = "rl_trace_optimal" if max_len is not None else "fallback_inf"
+                if args.use_runner_default_max_len:
+                    max_len = float("inf")
+                    max_len_source = "forced_inf"
+                else:
+                    max_len = optimal_lengths.get(problem_id)
+                    if max_len is not None:
+                        max_len_source = "rl_trace_optimal"
+                    else:
+                        max_len = float("inf")
+                        max_len_source = "fallback_inf"
                 job_path = slurm_dir / heuristic / f"problem_{problem_id}.sbatch"
                 job_name = f"tamer_{domain_name}_{heuristic}_{problem_id}"
 
@@ -316,7 +336,7 @@ def main() -> int:
                         "traces": str(traces_path),
                         "output": str(output_path),
                         "log": str(log_path),
-                        "max_len": "inf" if max_len is None else str(max_len),
+                        "max_len": str(max_len),
                         "max_len_source": max_len_source,
                         "slurm_job": str(job_path) if args.emit_slurm_jobs else "",
                     }
@@ -392,10 +412,13 @@ def main() -> int:
             print(f"Wrote submit script: {submit_all_path}")
 
         fallback_count = sum(1 for row in manifest_rows if row["max_len_source"] == "fallback_inf")
+        forced_inf_count = sum(1 for row in manifest_rows if row["max_len_source"] == "forced_inf")
         print(f"Wrote manifest: {manifest_path}")
         print(f"Output root: {output_root}")
         print(f"Runs planned: {len(manifest_rows)}")
         print(f"Fallback max_len=inf runs: {fallback_count}")
+        if forced_inf_count:
+            print(f"Forced max_len=inf runs: {forced_inf_count}")
 
     return 0
 
