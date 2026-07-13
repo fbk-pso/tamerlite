@@ -34,6 +34,22 @@ updates:
       - "dependencies"
       - "rust"
 
+  # rust-toolchain.toml channel pin (rustc/cargo version).
+  - package-ecosystem: "rust-toolchain"
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Europe/Rome
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "rust"
+
   # Pinned action versions in .github/workflows/. Batched into a single PR per
   # week to cut review noise.
   - package-ecosystem: github-actions

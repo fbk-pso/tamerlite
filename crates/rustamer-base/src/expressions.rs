@@ -150,7 +150,7 @@ impl PyExpressionNode {
     }
 
     fn __repr__(&self) -> String {
-        format!("{:?}", &self.v)
+        format!("{:?}", self.v)
     }
 }
 
