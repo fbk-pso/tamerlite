@@ -244,7 +244,7 @@ class PrecedenceChecker:
 
 
 def get_fluent_value(fluent: int, state: State) -> Union[bool, int, Fraction, str]:
-    return state.assignments[fluent]
+    return state.get_value(fluent)
 
 
 def evaluate(exp: Expression, state: State) -> Union[bool, int, Fraction, str]:
