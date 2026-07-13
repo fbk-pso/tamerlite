@@ -48,3 +48,22 @@ def test_split_trace_accepts_pipe_and_tuple_formats():
         "move(x,y)",
         "to-tray_item3_right2_bot2",
     )
+
+
+def test_read_domain_symbols_adds_integer_pseudo_type_for_numeric_parameters(tmp_path: Path):
+    domain_path = tmp_path / "domain.anml"
+    domain_path.write_text(
+        """
+type drawer;
+action initializeDrawer(drawer d, integer slots) {
+   [ start ] true;
+};
+instance drawer drawer_0;
+""".strip(),
+        encoding="utf-8",
+    )
+
+    _, object_type_labels, _, action_parameter_types = read_domain_symbols(domain_path)
+
+    assert object_type_labels == ["drawer", "integer"]
+    assert action_parameter_types["initializeDrawer"] == ["drawer", "integer"]

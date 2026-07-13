@@ -22,7 +22,7 @@ def test_unary_selector_returns_one_profile_per_type():
     ]
 
 
-def test_action_signature_selector_uses_non_numeric_action_signatures():
+def test_action_signature_selector_keeps_integer_profiles():
     context = build_selection_context(
         object_type_labels=["robot", "pallet", "position"],
         action_parameter_types={
@@ -35,6 +35,51 @@ def test_action_signature_selector_uses_non_numeric_action_signatures():
 
     assert select_action_signature_profiles(context) == [
         ("robot", "pallet", "position"),
+        ("position", "integer"),
+    ]
+
+
+def test_action_signature_selector_drops_integer_profiles_when_disabled():
+    context = build_selection_context(
+        object_type_labels=["robot", "pallet", "position", "integer"],
+        action_parameter_types={
+            "move": ["robot", "pallet", "position"],
+            "initialize": ["position", "integer"],
+        },
+        object_type_by_name={},
+        include_integer_profiles=False,
+    )
+
+    assert select_action_signature_profiles(context) == [
+        ("robot", "pallet", "position"),
+        ("position",),
+    ]
+
+
+def test_unary_selector_includes_integer_pseudo_type():
+    context = build_selection_context(
+        object_type_labels=["robot", "integer", "position"],
+        action_parameter_types={},
+        object_type_by_name={},
+    )
+
+    assert select_unary_profiles(context) == [
+        ("robot",),
+        ("integer",),
+        ("position",),
+    ]
+
+
+def test_unary_selector_excludes_integer_pseudo_type_when_disabled():
+    context = build_selection_context(
+        object_type_labels=["robot", "integer", "position"],
+        action_parameter_types={},
+        object_type_by_name={},
+        include_integer_profiles=False,
+    )
+
+    assert select_unary_profiles(context) == [
+        ("robot",),
         ("position",),
     ]
 

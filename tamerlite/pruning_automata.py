@@ -11,7 +11,12 @@ from aalpy.automata.Dfa import Dfa
 from aalpy.utils import load_automaton_from_file
 
 try:
-    from trace_conversion_utils import _is_numeric_parameter_type, canonicalize_identifier, split_ground_action
+    from trace_conversion_utils import (
+        _is_numeric_parameter_type,
+        canonical_parameter_type,
+        canonicalize_identifier,
+        split_ground_action,
+    )
     from goal_trace_utils import add_state_trace_markers, goal_tokens_for_profile, init_tokens_for_profile
 except ModuleNotFoundError:
     REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -21,7 +26,12 @@ except ModuleNotFoundError:
     ):
         if str(candidate) not in sys.path:
             sys.path.insert(0, str(candidate))
-    from trace_conversion_utils import _is_numeric_parameter_type, canonicalize_identifier, split_ground_action
+    from trace_conversion_utils import (
+        _is_numeric_parameter_type,
+        canonical_parameter_type,
+        canonicalize_identifier,
+        split_ground_action,
+    )
     from goal_trace_utils import add_state_trace_markers, goal_tokens_for_profile, init_tokens_for_profile
 
 
@@ -471,6 +481,7 @@ class MultiAutomatonPruningModel:
         self._problem_initial_values = dict(initial_values or {})
         self._problem_goals = tuple(goals or ())
         self._prefixed_initial_states = {}
+        numeric_values_by_type: Dict[str, set[int]] = {}
 
         for action_name, action in self._action_by_name.items():
             parsed_name, typed_parameters = split_ground_action(
@@ -479,6 +490,22 @@ class MultiAutomatonPruningModel:
                 object_type_by_name=self._object_type_by_name,
             )
             self._planner_action_details[action] = (parsed_name, typed_parameters)
+            for parameter_type, parameter_name in typed_parameters:
+                normalized_type = canonical_parameter_type(parameter_type)
+                if not _is_numeric_parameter_type(parameter_type):
+                    continue
+                try:
+                    numeric_value = int(str(parameter_name))
+                except ValueError:
+                    continue
+                numeric_values_by_type.setdefault(normalized_type, set()).add(numeric_value)
+
+        for numeric_type, values in numeric_values_by_type.items():
+            if not values:
+                continue
+            min_value = min(values)
+            max_value = max(values)
+            self._objects_by_type[numeric_type] = tuple(str(value) for value in range(min_value, max_value + 1))
 
         for spec in self._automata.values():
             for state in spec.dfa.states:
@@ -574,21 +601,21 @@ class MultiAutomatonPruningModel:
             focus_object: slot_placeholder
             for focus_object, slot_placeholder in zip(focus_tuple, spec.slot_placeholders)
         }
-        focus_types = set(spec.profile_types)
+        focus_types = {canonical_parameter_type(current) for current in spec.profile_types}
         parameter_names = [parameter_name for _, parameter_name in typed_parameters]
         if not any(focus_object in parameter_names for focus_object in focus_tuple):
             return None if self._drop_wildcards else "*"
 
         rendered_parameters = []
         for parameter_type, parameter_name in typed_parameters:
-            if _is_numeric_parameter_type(parameter_type):
-                rendered_parameters.append("INT" if self._abstract_other_objects else parameter_name)
-                continue
-
-            normalized_type = str(parameter_type).lower()
+            normalized_type = canonical_parameter_type(parameter_type)
             placeholder = self._placeholders_by_type.get(normalized_type, normalized_type[:1])
             if parameter_name in focus_parameter_to_slot:
                 rendered_parameters.append(f"*{focus_parameter_to_slot[parameter_name]}*")
+            elif _is_numeric_parameter_type(parameter_type) and self._abstract_other_objects and normalized_type in focus_types:
+                rendered_parameters.append(f"~{placeholder}")
+            elif _is_numeric_parameter_type(parameter_type) and self._abstract_other_objects:
+                rendered_parameters.append("INT")
             elif self._abstract_other_objects and normalized_type in focus_types:
                 rendered_parameters.append(f"~{placeholder}")
             elif self._abstract_other_objects:
@@ -675,12 +702,13 @@ class MultiAutomatonPruningModel:
         typed_parameters: Sequence[tuple[str, str]],
         spec: MultiAutomatonSpec,
     ) -> tuple[tuple[str, ...], ...]:
-        action_object_names = {
+        profile_types = {canonical_parameter_type(current) for current in spec.profile_types}
+        action_focus_values = {
             parameter_name
             for parameter_type, parameter_name in typed_parameters
-            if not _is_numeric_parameter_type(parameter_type)
+            if canonical_parameter_type(parameter_type) in profile_types
         }
-        if not action_object_names:
+        if not action_focus_values:
             return ()
 
         domains_by_slot: list[tuple[str, ...]] = []
@@ -694,7 +722,7 @@ class MultiAutomatonPruningModel:
 
         def backtrack(slot_index: int, current: list[str]) -> None:
             if slot_index == len(domains_by_slot):
-                if not action_object_names.intersection(current):
+                if not action_focus_values.intersection(current):
                     return
                 tuples.append(tuple(current))
                 return

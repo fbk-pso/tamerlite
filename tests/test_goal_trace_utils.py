@@ -223,6 +223,25 @@ def test_profile_goal_tokens_include_zero_arity_global_equalities():
     assert tokens == ["goal_progress=INT"]
 
 
+def test_profile_goal_tokens_support_integer_focus_and_other_integers():
+    goals = [
+        FakeGoal("at_level", [FakeValue(2, "int")]),
+        FakeGoal("at_level", [FakeValue(3, "int")]),
+    ]
+
+    tokens = goal_tokens_for_profile(
+        goals,
+        profile_types=("integer",),
+        focus_tuple=("2",),
+        slot_placeholders=("i",),
+        placeholders_by_type={"integer": "i"},
+        object_type_by_name={},
+        abstract_other_objects=True,
+    )
+
+    assert tokens == ["at_level(*i*)"]
+
+
 def test_goal_token_extraction_rejects_unsupported_goal_forms():
     with pytest.raises(ValueError, match="Unsupported goal expression"):
         goal_tokens_for_single_abstract([FakeUnsupportedGoal("or(served(p1),served(p2))")])

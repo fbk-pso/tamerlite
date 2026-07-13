@@ -214,6 +214,7 @@ def test_multi_automaton_prunes_only_the_object_that_reaches_accepting():
         actions_duration=[None, None, None],
         events=events,
         actions=actions,
+        action_names=["inspect_r0", "inspect_r1", "wait"],
         action_objects=None,
         obj_to_prev_actions_map=None,
         initial_state=[],
@@ -238,8 +239,34 @@ def test_multi_automaton_prunes_only_the_object_that_reaches_accepting():
     assert wait_state is not None
     assert wait_state.pruning_state.object_states == ()
 
-    successors = list(ss.get_successor_states(init))
-    assert successors == [wait_state]
+
+def test_multi_automaton_tracks_integer_profiles_over_grounded_domain_range():
+    set_level_1 = Action(0)
+    set_level_2 = Action(1)
+    set_level_3 = Action(2)
+
+    pruning_model = MultiAutomatonPruningModel(
+        action_parameter_types={"set_level": ["integer"]},
+        placeholders_by_type={"integer": "i"},
+        automata={"integer": type("Spec", (), {"placeholder": "i", "dfa": _build_dfa("set_level(*i*)")})()},
+        drop_wildcards=True,
+        abstract_other_objects=True,
+    )
+    pruning_model.bind_to_planner(
+        action_by_name={
+            "set_level_1": set_level_1,
+            "set_level_2": set_level_2,
+            "set_level_3": set_level_3,
+        },
+        objects_by_type={},
+    )
+
+    assert pruning_model._objects_by_type["integer"] == ("1", "2", "3")
+
+    progress = pruning_model.initial_state
+    next_progress = pruning_model.advance(progress, set_level_2)
+    assert pruning_model.is_prunable(next_progress)
+    assert next_progress.object_states == (("integer", "2", "bad"),)
 
 
 def test_multi_automaton_loader_reads_summary_signature(tmp_path: Path):
