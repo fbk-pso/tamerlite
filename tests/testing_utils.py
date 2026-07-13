@@ -17,7 +17,6 @@
 
 import ast
 import random
-from typing import List
 
 from unified_planning.model import Problem
 
@@ -49,18 +48,14 @@ def compile_problem(problem: Problem):
         ground_problem = compilation_res.problem
         lifted_problem = problem
 
-    map_back_action_instance = lambda ai: undefined_map_back_action_instance(
-        ground_map_back_action_instance(ai)
-    )
+    def map_back_action_instance(ai):
+        return undefined_map_back_action_instance(ground_map_back_action_instance(ai))
 
     return lifted_problem, ground_problem, map_back_action_instance
 
 
-def is_strictly_increasing(l: List):
-    for i in range(len(l) - 1):
-        if l[i] >= l[i + 1]:
-            return False
-    return True
+def is_strictly_increasing(values: list):
+    return all(values[i] < values[i + 1] for i in range(len(values) - 1))
 
 
 def is_temporal_problem(problem: Problem):
@@ -74,10 +69,7 @@ def is_numeric_problem(problem: Problem):
 def construct_numeric_exp_rec(offset=0, depth=0) -> tuple:
     kinds = ["int", "rational", "fluent", "+", "-", "*", "/"]
 
-    if depth == 0:
-        r = random.randint(0, 1)
-    else:
-        r = random.randint(0, len(kinds) - 1)
+    r = random.randint(0, 1) if depth == 0 else random.randint(0, len(kinds) - 1)
 
     kind = kinds[r]
     if kind == "int":
@@ -97,7 +89,7 @@ def construct_numeric_exp_rec(offset=0, depth=0) -> tuple:
 
     res = ()
     operands = []
-    for i in range(num_operands):
+    for _i in range(num_operands):
         sub_exp = construct_numeric_exp_rec(offset + len(res), depth - 1)
         res += sub_exp
         operands.append(offset + len(res) - 1)
@@ -108,10 +100,7 @@ def construct_numeric_exp_rec(offset=0, depth=0) -> tuple:
 def construct_exp_rec(offset=0, depth=0) -> tuple:
     kinds = ["bool", "fluent", "and", "or", "not", "==", "<=", "<"]
 
-    if depth == 0:
-        r = random.randint(0, 1)
-    else:
-        r = random.randint(0, len(kinds) - 1)
+    r = random.randint(0, 1) if depth == 0 else random.randint(0, len(kinds) - 1)
 
     kind = kinds[r]
     if kind == "bool":
@@ -127,7 +116,7 @@ def construct_exp_rec(offset=0, depth=0) -> tuple:
 
     res = ()
     operands = []
-    for i in range(num_operands):
+    for _i in range(num_operands):
         if kind in ["<=", "<", "=="]:
             sub_exp = construct_numeric_exp_rec(offset + len(res), depth - 1)
         else:
@@ -140,7 +129,7 @@ def construct_exp_rec(offset=0, depth=0) -> tuple:
 
 def construct_expressions(
     num_expressions: int, max_depth: int, random_seed: int = 0
-) -> List[Expression]:
+) -> list[Expression]:
     random.seed(random_seed)
     return [
         construct_exp_rec(offset=0, depth=max_depth) for _ in range(num_expressions)

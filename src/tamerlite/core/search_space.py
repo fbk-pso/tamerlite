@@ -16,9 +16,9 @@
 #
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from fractions import Fraction
-from typing import Dict, Iterator, List, Optional, Set, Tuple, Union
 
 from unified_planning.model import DeltaSimpleTemporalNetwork
 
@@ -26,7 +26,7 @@ from unified_planning.model import DeltaSimpleTemporalNetwork
 @dataclass(eq=True, frozen=True)
 class OperatorNode:
     kind: str
-    operands: Tuple[int, ...]
+    operands: tuple[int, ...]
 
 
 @dataclass(eq=True, frozen=True)
@@ -34,11 +34,11 @@ class FluentNode:
     fluent: int
 
 
-ExpressionNode = Union[OperatorNode, FluentNode, bool, int, Fraction, str]
-Expression = Tuple[ExpressionNode, ...]
+ExpressionNode = OperatorNode | FluentNode | bool | int | Fraction | str
+Expression = tuple[ExpressionNode, ...]
 
 
-def make_operator_node(kind: str, operands: Tuple[int, ...]) -> ExpressionNode:
+def make_operator_node(kind: str, operands: tuple[int, ...]) -> ExpressionNode:
     return OperatorNode(kind, operands)
 
 
@@ -63,7 +63,7 @@ def make_fluent_node(fluent: int) -> ExpressionNode:
 
 
 def shift_expression(exp: Expression, offset: int) -> Expression:
-    res: List[ExpressionNode] = []
+    res: list[ExpressionNode] = []
     for e in exp:
         if isinstance(e, OperatorNode):
             res.append(OperatorNode(e.kind, tuple([o + offset for o in e.operands])))
@@ -72,13 +72,13 @@ def shift_expression(exp: Expression, offset: int) -> Expression:
     return tuple(res)
 
 
-def split_expression(exp: Expression) -> Tuple[Expression, ...]:
-    if not isinstance(exp[-1], OperatorNode) or not exp[-1].kind == "and":
+def split_expression(exp: Expression) -> tuple[Expression, ...]:
+    if not isinstance(exp[-1], OperatorNode) or exp[-1].kind != "and":
         return (exp,)
     res = []
     last = 0
     for i in exp[-1].operands:
-        new_exp: List[ExpressionNode] = []
+        new_exp: list[ExpressionNode] = []
         for e in exp[last : i + 1]:
             if isinstance(e, OperatorNode):
                 new_operands = tuple([j - last for j in e.operands])
@@ -124,12 +124,17 @@ class Event:
     action: Action
     pos: int
     conditions: Expression
-    start_conditions: Tuple[Expression, ...]
-    end_conditions: Tuple[Expression, ...]
-    effects: Tuple[Effect, ...]
+    start_conditions: tuple[Expression, ...]
+    end_conditions: tuple[Expression, ...]
+    effects: tuple[Effect, ...]
 
     def __repr__(self):
-        return f"Event(action={self.action}, pos={self.pos}, conditions={self.conditions}, start_conditions={self.start_conditions}, end_conditions={self.end_conditions}, effects={self.effects})"
+        return (
+            f"Event(action={self.action}, pos={self.pos}, "
+            f"conditions={self.conditions}, "
+            f"start_conditions={self.start_conditions}, "
+            f"end_conditions={self.end_conditions}, effects={self.effects})"
+        )
 
 
 class MultiSet:
@@ -147,7 +152,7 @@ class MultiSet:
 
     def clone(self):
         n = MultiSet()
-        n._elements = {k: v for k, v in self._elements.items()}
+        n._elements = dict(self._elements.items())
         return n
 
     def add(self, e):
@@ -162,24 +167,24 @@ class MultiSet:
 
 @dataclass
 class State:
-    assignments: List[Union[bool, int, Fraction, str]]
-    temporal_network: Optional[DeltaSimpleTemporalNetwork]
-    todo: Dict[Action, Tuple[int, int]]
+    assignments: list[bool | int | Fraction | str]
+    temporal_network: DeltaSimpleTemporalNetwork | None
+    todo: dict[Action, tuple[int, int]]
     active_conditions: MultiSet
     g: int
-    path: List[Tuple[Action, int, int]]
-    heuristic_cache: Dict[str, Optional[float]] = field(default_factory=dict)
+    path: list[tuple[Action, int, int]]
+    heuristic_cache: dict[str, float | None] = field(default_factory=dict)
 
     def __hash__(self) -> int:
         return hash(tuple(self.assignments))
 
     def __eq__(self, oth) -> bool:
         if self.temporal_network is None:
-            return self.assignments == oth.assignments
+            return bool(self.assignments == oth.assignments)
         else:
             return False
 
-    def get_value(self, fluent: int) -> Union[bool, int, Fraction, str]:
+    def get_value(self, fluent: int) -> bool | int | Fraction | str:
         return self.assignments[fluent]
 
     def clone(self):
@@ -194,15 +199,15 @@ class State:
 class MutexChecker:
     def __init__(
         self,
-        event_fluents: List[
-            List[Tuple[Set[int], Set[int], Set[int], Set[int], Set[int]]]
+        event_fluents: list[
+            list[tuple[set[int], set[int], set[int], set[int], set[int]]]
         ],
     ):
         self._event_fluents = event_fluents
-        self._cache: Dict[Tuple[Tuple[Action, int], Tuple[Action, int]], bool] = {}
+        self._cache: dict[tuple[tuple[Action, int], tuple[Action, int]], bool] = {}
 
     def __contains__(
-        self, events_pair: Tuple[Tuple[Action, int], Tuple[Action, int]]
+        self, events_pair: tuple[tuple[Action, int], tuple[Action, int]]
     ) -> bool:
         (a1, i1), (a2, i2) = events_pair
         if a1 == a2:
@@ -220,15 +225,15 @@ class MutexChecker:
 class PrecedenceChecker:
     def __init__(
         self,
-        event_fluents: List[
-            List[Tuple[Set[int], Set[int], Set[int], Set[int], Set[int]]]
+        event_fluents: list[
+            list[tuple[set[int], set[int], set[int], set[int], set[int]]]
         ],
     ):
         self._event_fluents = event_fluents
-        self._cache: Dict[Tuple[Tuple[Action, int], Tuple[Action, int]], bool] = {}
+        self._cache: dict[tuple[tuple[Action, int], tuple[Action, int]], bool] = {}
 
     def __contains__(
-        self, events_pair: Tuple[Tuple[Action, int], Tuple[Action, int]]
+        self, events_pair: tuple[tuple[Action, int], tuple[Action, int]]
     ) -> bool:
         (a1, i1), (a2, i2) = events_pair
         if a1 == a2:
@@ -243,14 +248,14 @@ class PrecedenceChecker:
         return res
 
 
-def get_fluent_value(fluent: int, state: State) -> Union[bool, int, Fraction, str]:
+def get_fluent_value(fluent: int, state: State) -> bool | int | Fraction | str:
     return state.get_value(fluent)
 
 
-def evaluate(exp: Expression, state: State) -> Union[bool, int, Fraction, str]:
-    res: List[ExpressionNode] = []
+def evaluate(exp: Expression, state: State) -> bool | int | Fraction | str:
+    res: list[ExpressionNode] = []
     for e in exp:
-        if isinstance(e, bool) or isinstance(e, int) or isinstance(e, Fraction):
+        if isinstance(e, (bool, int, Fraction)):
             res.append(e)
         elif isinstance(e, FluentNode):
             res.append(state.assignments[e.fluent])
@@ -281,7 +286,7 @@ def evaluate(exp: Expression, state: State) -> Union[bool, int, Fraction, str]:
             elif e.kind == "<":
                 res.append(res[e.operands[0]] < res[e.operands[1]])  # type: ignore[operator]
             elif e.kind == "+":
-                v: Union[int, Fraction] = 0
+                v: int | Fraction = 0
                 for i in e.operands:
                     v += res[i]  # type: ignore[operator]
                 res.append(v)
@@ -294,24 +299,20 @@ def evaluate(exp: Expression, state: State) -> Union[bool, int, Fraction, str]:
                 res.append(v)
             elif e.kind == "/":
                 res.append(Fraction(res[e.operands[0]], res[e.operands[1]]))  # type: ignore[arg-type]
-    assert (
-        isinstance(res[-1], bool)
-        or isinstance(res[-1], int)
-        or isinstance(res[-1], Fraction)
-        or isinstance(res[-1], str)
-    )
+    assert isinstance(res[-1], (bool, int, Fraction, str))
     return res[-1]
 
 
 def simplify(
-    exp: Expression, assignments: Dict[int, Union[bool, int, Fraction, str]]
+    exp: Expression, assignments: dict[int, bool | int | Fraction | str]
 ) -> Expression:
     """This function simplifies the given expression using the given assignments"""
 
-    # We iterate over the expression elements and we store the simplified value in the res vector
-    res: List[ExpressionNode] = []
+    # We iterate over the expression elements and we store the simplified value
+    # in the res vector
+    res: list[ExpressionNode] = []
     for e in exp:
-        if isinstance(e, bool) or isinstance(e, int):
+        if isinstance(e, (bool, int)):
             res.append(e)
         elif isinstance(e, Fraction):
             if e.denominator == 1:
@@ -319,7 +320,7 @@ def simplify(
             else:
                 res.append(e)
         elif isinstance(e, FluentNode):
-            v = assignments.get(e.fluent, None)
+            v = assignments.get(e.fluent)
             if v is None:
                 res.append(e)
             else:
@@ -367,7 +368,7 @@ def simplify(
                     else:
                         res.append(OperatorNode("or", tuple(operands)))
             elif e.kind == "not":
-                v: Union[bool, OperatorNode, FluentNode] = res[e.operands[0]]
+                v: bool | OperatorNode | FluentNode = res[e.operands[0]]
                 if isinstance(v, bool):
                     res.append(not v)
                 else:
@@ -376,8 +377,8 @@ def simplify(
                 v1 = res[e.operands[0]]
                 v2 = res[e.operands[1]]
                 if v1 == v2 or (
-                    (isinstance(v1, int) or isinstance(v1, Fraction))
-                    and (isinstance(v2, int) or isinstance(v2, Fraction))
+                    (isinstance(v1, (int, Fraction)))
+                    and (isinstance(v2, (int, Fraction)))
                 ):
                     res.append(v1 == v2)
                 else:
@@ -385,10 +386,10 @@ def simplify(
             elif e.kind in ["<=", "<", "-", "/"]:
                 v1 = res[e.operands[0]]
                 v2 = res[e.operands[1]]
-                if (isinstance(v1, int) or isinstance(v1, Fraction)) and (
-                    isinstance(v2, int) or isinstance(v2, Fraction)
+                if (isinstance(v1, (int, Fraction))) and (
+                    isinstance(v2, (int, Fraction))
                 ):
-                    r: Union[bool, int, Fraction]
+                    r: bool | int | Fraction
                     if e.kind == "<=":
                         r = v1 <= v2
                     elif e.kind == "<":
@@ -409,7 +410,7 @@ def simplify(
                 operands = []
                 for i in e.operands:
                     v1 = res[i]
-                    if isinstance(v1, int) or isinstance(v1, Fraction):
+                    if isinstance(v1, (int, Fraction)):
                         if e.kind == "+":
                             v += v1
                         else:
@@ -434,19 +435,13 @@ def simplify(
                         res.append(OperatorNode(e.kind, tuple(operands)))
 
     # Keep only the nodes reachable from the root using a depth-first search
-    final_res: List[ExpressionNode] = []
+    final_res: list[ExpressionNode] = []
     stack = [(len(res) - 1, False)]
     operands_stack = []
     while len(stack) > 0:
         idx, processed = stack.pop()
         e = res[idx]
-        if (
-            isinstance(e, bool)
-            or isinstance(e, int)
-            or isinstance(e, Fraction)
-            or isinstance(e, FluentNode)
-            or isinstance(e, str)
-        ):
+        if isinstance(e, (bool, int, Fraction, FluentNode, str)):
             operands_stack.append(len(final_res))
             final_res.append(e)
         else:
@@ -457,8 +452,7 @@ def simplify(
                 final_res.append(OperatorNode(e.kind, tuple(operands)))
             else:
                 stack.append((idx, True))
-                for i in e.operands[::-1]:
-                    stack.append((i, False))
+                stack.extend((i, False) for i in e.operands[::-1])
 
     return tuple(final_res)
 
@@ -476,12 +470,12 @@ class SearchSpaceABC(ABC):
     @abstractmethod
     def initial_state(
         self,
-        initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
+        initial_state: list[bool | int | Fraction | str] | None = None,
     ) -> State:
         pass
 
     @abstractmethod
-    def get_successor_state(self, state: State, action: Action) -> Optional[State]:
+    def get_successor_state(self, state: State, action: Action) -> State | None:
         pass
 
     @abstractmethod
@@ -489,36 +483,36 @@ class SearchSpaceABC(ABC):
         pass
 
     @abstractmethod
-    def goal_reached(self, state: State, goal: Optional[Expression] = None) -> bool:
+    def goal_reached(self, state: State, goal: Expression | None = None) -> bool:
         pass
 
     @abstractmethod
     def subgoals_sat(
-        self, state: State, goal: Optional[Expression] = None
-    ) -> Set[Expression]:
+        self, state: State, goal: Expression | None = None
+    ) -> set[Expression]:
         pass
 
     @abstractmethod
     def build_plan(
-        self, path: List[Action]
-    ) -> List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]:
+        self, path: list[Action]
+    ) -> list[tuple[Fraction | None, Action, Fraction | None]]:
         pass
 
 
 class SearchSpace(SearchSpaceABC):
     def __init__(
         self,
-        actions_duration: List[Optional[Tuple[Expression, Expression, bool, bool]]],
-        events: Dict[Action, List[Tuple[Timing, Event]]],
-        actions: List[Action],
-        compression_safe_actions: Optional[List[bool]],
-        action_objects: Optional[List[List[str]]],
-        obj_to_prev_actions_map: Optional[Dict[str, Set[Action]]],
-        initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
-        goal: Optional[Expression] = None,
-        relevant_actions: Optional[List[Action]] = None,
-        deadline: Optional[Fraction] = None,
-        epsilon: Optional[Fraction] = None,
+        actions_duration: list[tuple[Expression, Expression, bool, bool] | None],
+        events: dict[Action, list[tuple[Timing, Event]]],
+        actions: list[Action],
+        compression_safe_actions: list[bool] | None,
+        action_objects: list[list[str]] | None,
+        obj_to_prev_actions_map: dict[str, set[Action]] | None,
+        initial_state: list[bool | int | Fraction | str] | None = None,
+        goal: Expression | None = None,
+        relevant_actions: list[Action] | None = None,
+        deadline: Fraction | None = None,
+        epsilon: Fraction | None = None,
     ):
         self._actions_duration = actions_duration
         self._events = events
@@ -537,14 +531,14 @@ class SearchSpace(SearchSpaceABC):
         self._is_temporal = any(v is not None for v in actions_duration)
         self._counter = 0
 
-        event_fluents: List[
-            List[Tuple[Set[int], Set[int], Set[int], Set[int], Set[int]]]
+        event_fluents: list[
+            list[tuple[set[int], set[int], set[int], set[int], set[int]]]
         ] = [[] for _ in actions]
         for a, le in self._events.items():
             for _, e in le:
                 a_p = set(get_fluents(e.conditions))
                 a_p.update(x for eff in e.effects for x in get_fluents(eff.value))
-                a_e = set(eff.fluent for eff in e.effects)
+                a_e = {eff.fluent for eff in e.effects}
                 a_pe = a_p.union(a_e)
                 a_sc = {f for c in e.start_conditions for f in get_fluents(c)}
                 a_ec = {f for c in e.end_conditions for f in get_fluents(c)}
@@ -557,11 +551,11 @@ class SearchSpace(SearchSpaceABC):
         return self._is_temporal
 
     @property
-    def relevant_actions(self) -> List[Action]:
+    def relevant_actions(self) -> list[Action]:
         return self._relevant_actions
 
     @relevant_actions.setter
-    def relevant_actions(self, relevant_actions: List[Action]):
+    def relevant_actions(self, relevant_actions: list[Action]):
         self._relevant_actions = relevant_actions
 
     def reset(self):
@@ -569,7 +563,7 @@ class SearchSpace(SearchSpaceABC):
 
     def initial_state(
         self,
-        initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
+        initial_state: list[bool | int | Fraction | str] | None = None,
     ) -> State:
         if self._is_temporal:
             tn = DeltaSimpleTemporalNetwork()
@@ -585,16 +579,17 @@ class SearchSpace(SearchSpaceABC):
         if initial_state is not None:
             return State(initial_state, tn, {}, MultiSet(), 0, [])
         else:
-            # `initial_state` can be None if the initial state was already provided when instantiating the class
+            # `initial_state` can be None if the initial state was already
+            # provided when instantiating the class
             assert self._initial_state is not None
             return State(self._initial_state, tn, {}, MultiSet(), 0, [])
 
-    def get_successor_state(self, state: State, action: Action) -> Optional[State]:
+    def get_successor_state(self, state: State, action: Action) -> State | None:
         return self.get_successor_state_with_compression(state, action, True)
 
     def get_successor_state_with_compression(
         self, state: State, action: Action, enable_compression_safe_actions: bool
-    ) -> Optional[State]:
+    ) -> State | None:
         events = self._events[action]
         new_state = state.clone()
         new_state.g = state.g + 1
@@ -623,7 +618,8 @@ class SearchSpace(SearchSpaceABC):
                     new_state = self._expand_event(state, new_state, e, index, id)
                     id += 1
 
-        return new_state
+        result: State | None = new_state
+        return result
 
     def get_successor_states(self, state: State) -> Iterator[State]:
         for action in self._relevant_actions:
@@ -631,25 +627,27 @@ class SearchSpace(SearchSpaceABC):
             if new_state:
                 yield new_state
 
-    def goal_reached(self, state: State, goal: Optional[Expression] = None) -> bool:
+    def goal_reached(self, state: State, goal: Expression | None = None) -> bool:
         if len(state.todo) > 0:
             return False
         if goal is not None:
             res = evaluate(goal, state)
         else:
-            # `goal` can be None if the goal was already provided when instantiating the class
+            # `goal` can be None if the goal was already provided when
+            # instantiating the class
             assert self._goal is not None
             res = evaluate(self._goal, state)
         assert isinstance(res, bool)
         return res
 
     def subgoals_sat(
-        self, state: State, goal: Optional[Expression] = None
-    ) -> Set[Expression]:
+        self, state: State, goal: Expression | None = None
+    ) -> set[Expression]:
         if goal is not None:
             goals = split_expression(goal)
         else:
-            # `goal` can be None if the goal was already provided when instantiating the class
+            # `goal` can be None if the goal was already provided when
+            # instantiating the class
             assert self._goal is not None
             goals = split_expression(self._goal)
         res = set()
@@ -660,7 +658,7 @@ class SearchSpace(SearchSpaceABC):
 
     def _expand_event(
         self, state: State, new_state: State, e: Event, index: int, id: int
-    ) -> Optional[State]:
+    ) -> State | None:
         new_state.path.append((e.action, e.pos, id))
         # check conditions
         if not evaluate(e.conditions, state):
@@ -723,8 +721,8 @@ class SearchSpace(SearchSpaceABC):
         state: State,
         new_state: State,
         action: Action,
-        events: List[Tuple[Timing, Event]],
-    ) -> Optional[State]:
+        events: list[tuple[Timing, Event]],
+    ) -> State | None:
         if (
             self._action_objects is not None
             and self._obj_to_prev_actions_map is not None
@@ -743,21 +741,21 @@ class SearchSpace(SearchSpaceABC):
             end = (action, False, self._counter)
             self._counter += 1
             duration = self._actions_duration[action.idx]
-            l: Union[int, Fraction]
-            u: Union[int, Fraction]
+            lower: int | Fraction
+            upper: int | Fraction
             if duration is None:
-                l, u = 0, 0
+                lower, upper = 0, 0
             else:
-                l = evaluate(duration[0], state)  # type: ignore[assignment]
-                assert isinstance(l, int) or isinstance(l, Fraction)
+                lower = evaluate(duration[0], state)  # type: ignore[assignment]
+                assert isinstance(lower, (int, Fraction))
                 if duration[2]:
-                    l += self._epsilon
-                u = evaluate(duration[1], state)  # type: ignore[assignment]
-                assert isinstance(u, int) or isinstance(u, Fraction)
+                    lower += self._epsilon
+                upper = evaluate(duration[1], state)  # type: ignore[assignment]
+                assert isinstance(upper, (int, Fraction))
                 if duration[3]:
-                    u -= self._epsilon
+                    upper -= self._epsilon
             new_state.temporal_network.insert_interval(
-                start, end, left_bound=l, right_bound=u
+                start, end, left_bound=lower, right_bound=upper
             )
             new_state.temporal_network.add(self._start_plan, start, 0)
             new_state.temporal_network.add(end, self._end_plan, -self._epsilon)
@@ -780,14 +778,14 @@ class SearchSpace(SearchSpaceABC):
         return self._expand_event(state, new_state, events[0][1], 0, id)
 
     def build_plan(
-        self, path: List[Action]
-    ) -> List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]:
+        self, path: list[Action]
+    ) -> list[tuple[Fraction | None, Action, Fraction | None]]:
         if not self.is_temporal:
             return [(None, a, None) for a in path]
 
         tn = DeltaSimpleTemporalNetwork()
-        todo: Dict[Action, Tuple[int, int]] = {}
-        event_path: List[Tuple[Event, int]] = []
+        todo: dict[Action, tuple[int, int]] = {}
+        event_path: list[tuple[Event, int]] = []
         counter = 0
         state = self.initial_state()
         for action in path:
@@ -827,18 +825,18 @@ class SearchSpace(SearchSpaceABC):
                 end = (action, False, counter)
                 counter += 1
                 duration = self._actions_duration[action.idx]
-                lb: Union[int, Fraction]
-                ub: Union[int, Fraction]
+                lb: int | Fraction
+                ub: int | Fraction
                 if duration is None:
                     lb = 0
                     ub = 0
                 else:
-                    l = evaluate(duration[0], state)
-                    u = evaluate(duration[1], state)
-                    assert isinstance(l, int) or isinstance(l, Fraction)
-                    assert isinstance(u, int) or isinstance(u, Fraction)
-                    lb = -l
-                    ub = u
+                    lower = evaluate(duration[0], state)
+                    upper = evaluate(duration[1], state)
+                    assert isinstance(lower, (int, Fraction))
+                    assert isinstance(upper, (int, Fraction))
+                    lb = -lower
+                    ub = upper
                     if duration[2]:
                         lb -= self._epsilon
                     if duration[3]:
@@ -883,9 +881,9 @@ class SearchSpace(SearchSpaceABC):
                 if len(action_events) > 1:
                     todo[action] = (1, id + 1)
 
-        res: List[Tuple[Optional[Fraction], Action, Optional[Fraction]]] = []
-        start_time: Dict[Tuple[Action, int], Fraction] = {}
-        end_time: Dict[Tuple[Action, int], Fraction] = {}
+        res: list[tuple[Fraction | None, Action, Fraction | None]] = []
+        start_time: dict[tuple[Action, int], Fraction] = {}
+        end_time: dict[tuple[Action, int], Fraction] = {}
         for ev, t in tn.distances.items():
             if not isinstance(ev[1], bool):
                 continue
@@ -897,10 +895,7 @@ class SearchSpace(SearchSpaceABC):
 
         for a_id, st in start_time.items():
             et = end_time[a_id]
-            if (et - st) == 0:
-                d = None
-            else:
-                d = et - st
+            d = None if et - st == 0 else et - st
             res.append((st, a_id[0], d))
 
         res.sort()

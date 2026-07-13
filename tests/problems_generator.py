@@ -314,8 +314,8 @@ def get_problem_hierarchical_types() -> Problem:
     problem.add_objects([truck1, van1, pkg1, fragile1, loc1, loc2, loc3])
 
     # Fluents
-    at_vehicle = Fluent("at_vehicle", BoolType(), v=Vehicle, l=Location)
-    at_package = Fluent("at_package", BoolType(), p=Package, l=Location)
+    at_vehicle = Fluent("at_vehicle", BoolType(), v=Vehicle, loc=Location)
+    at_package = Fluent("at_package", BoolType(), p=Package, loc=Location)
 
     # Object fluent (function returning a Vehicle)
     carrier = Fluent("carrier", Vehicle, p=Package)
@@ -336,7 +336,7 @@ def get_problem_hierarchical_types() -> Problem:
     p = Variable("p", Package)
     l_from = Variable("l_from", Location)
     l_to = Variable("l_to", Location)
-    l = Variable("l", Location)
+    loc = Variable("loc", Location)
 
     move = InstantaneousAction("move", v=Vehicle, l_from=Location, l_to=Location)
     v = move.parameter("v")
@@ -347,24 +347,24 @@ def get_problem_hierarchical_types() -> Problem:
     move.add_effect(at_vehicle(v, l_from), False)
     move.add_effect(at_vehicle(v, l_to), True)
 
-    load = InstantaneousAction("load", p=Package, v=Vehicle, l=Location)
+    load = InstantaneousAction("load", p=Package, v=Vehicle, loc=Location)
     p = load.parameter("p")
     v = load.parameter("v")
-    l = load.parameter("l")
+    loc = load.parameter("loc")
 
-    load.add_precondition(at_package(p, l))
-    load.add_precondition(at_vehicle(v, l))
-    load.add_effect(at_package(p, l), False)
+    load.add_precondition(at_package(p, loc))
+    load.add_precondition(at_vehicle(v, loc))
+    load.add_effect(at_package(p, loc), False)
     load.add_effect(carrier(p), v)
 
-    unload = InstantaneousAction("unload", p=Package, v=Vehicle, l=Location)
+    unload = InstantaneousAction("unload", p=Package, v=Vehicle, loc=Location)
     p = unload.parameter("p")
     v = unload.parameter("v")
-    l = unload.parameter("l")
+    loc = unload.parameter("loc")
 
     unload.add_precondition(Equals(carrier(p), v))
-    unload.add_precondition(at_vehicle(v, l))
-    unload.add_effect(at_package(p, l), True)
+    unload.add_precondition(at_vehicle(v, loc))
+    unload.add_effect(at_package(p, loc), True)
 
     problem.add_actions([move, load, unload])
 

@@ -20,7 +20,6 @@ import logging
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
 
 from tamerlite.core.heuristics import Heuristic
 from tamerlite.core.search import extract_path, state_representation
@@ -57,17 +56,14 @@ class MQSwitchPolicy(ABC):
     def switching_policy(self, i: int) -> int:
         """Given the number of expansions done so far, return the index of the
         next queue to use."""
-        pass
 
-    def notify_push(self, i: int, item: PrioritizedItem) -> None:
+    def notify_push(self, i: int, item: PrioritizedItem) -> None:  # noqa: B027  # optional no-op hook
         """Called by algorithm to notify the policy that an item has been pushed
         to queue i."""
-        pass
 
-    def notify_pop(self, i: int, item: PrioritizedItem) -> None:
+    def notify_pop(self, i: int, item: PrioritizedItem) -> None:  # noqa: B027  # optional no-op hook
         """Called by algorithm to notify the policy that an item has been
         removed from queue i (and marked as expanded in all other queues)."""
-        pass
 
 
 class RoundRobinSwitchPolicy(MQSwitchPolicy):
@@ -82,11 +78,11 @@ class RoundRobinSwitchPolicy(MQSwitchPolicy):
 
 def multiqueue_search(
     ss: SearchSpaceABC,
-    heuristics: List[Tuple[Heuristic, float]],
-    timeout: Optional[float] = None,
+    heuristics: list[tuple[Heuristic, float]],
+    timeout: float | None = None,
     early_termination: bool = False,
     weak_equality: bool = False,
-) -> Tuple[Optional[List[Action]], Dict[str, str]]:
+) -> tuple[list[Action] | None, dict[str, str]]:
     return _multiqueue_search(
         ss=ss,
         heuristics=heuristics,
@@ -99,12 +95,12 @@ def multiqueue_search(
 
 def _multiqueue_search(
     ss: SearchSpaceABC,
-    heuristics: List[Tuple[Heuristic, float]],
+    heuristics: list[tuple[Heuristic, float]],
     switch_policy: MQSwitchPolicy,
-    timeout: Optional[float] = None,
+    timeout: float | None = None,
     early_termination: bool = False,
     weak_equality: bool = False,
-) -> Tuple[Optional[List[Action]], Dict[str, str]]:
+) -> tuple[list[Action] | None, dict[str, str]]:
     logger.info(
         "multiqueue_search: queues=%d timeout=%s early_termination=%s weak_equality=%s",
         len(heuristics),
@@ -127,7 +123,7 @@ def _multiqueue_search(
 
     item = PrioritizedItem(0.0, StateContainer(init, False))
     for i, _ in enumerate(heuristics):
-        open: List[PrioritizedItem] = []
+        open: list[PrioritizedItem] = []
         heapq.heappush(open, item)
         opens.append(open)
         switch_policy.notify_push(i, item)
@@ -166,7 +162,8 @@ def _multiqueue_search(
                 "goal_depth": str(state.g),
             }
 
-        # Here, we create a temporary list of the successor states to reuse it among multiple heuristics
+        # Here, we create a temporary list of the successor states to reuse it
+        # among multiple heuristics
         candidate_states = []
         for s in ss.get_successor_states(state):
             generated_states += 1
