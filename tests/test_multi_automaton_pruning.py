@@ -673,3 +673,99 @@ def test_multi_automaton_disables_monitor_when_prefix_transition_is_missing():
     assert next_progress.object_states == ()
     assert not pruning_model.is_prunable(next_progress)
     assert pruning_model._prefixed_initial_states[("kit", "k1")] is None
+
+
+def test_multi_automaton_keeps_monitor_active_by_default_on_missing_relevant_trace_transition():
+    load = Action(0)
+    inspect = Action(1)
+
+    start = DfaState("start", is_accepting=False)
+    after_load = DfaState("after_load", is_accepting=False)
+    bad = DfaState("bad", is_accepting=True)
+
+    start.transitions["load(r,l,c,*k*,INT)"] = after_load
+    after_load.transitions["load(r,l,c,*k*,INT)"] = bad
+
+    pruning_model = MultiAutomatonPruningModel(
+        action_parameter_types={
+            "load": ["robot", "location", "component", "kit", "integer"],
+            "inspect": ["robot", "location", "component", "kit", "integer"],
+        },
+        placeholders_by_type={"robot": "r", "location": "l", "component": "c", "kit": "k"},
+        automata={
+            "kit": type("Spec", (), {"placeholder": "k", "dfa": Dfa(start, [start, after_load, bad])})(),
+        },
+        drop_wildcards=True,
+        abstract_other_objects=True,
+    )
+    pruning_model.bind_to_planner(
+        action_by_name={
+            "load_r0_l1_c1_k1_0": load,
+            "inspect_r0_l1_c1_k1_0": inspect,
+        },
+        objects_by_type={
+            "robot": ["r0"],
+            "location": ["l1"],
+            "component": ["c1"],
+            "kit": ["k1"],
+        },
+    )
+
+    after_first = pruning_model.advance(pruning_model.initial_state, load)
+    assert after_first.object_states == (("kit", "k1", "after_load"),)
+
+    after_missing = pruning_model.advance(after_first, inspect)
+    assert after_missing.object_states == (("kit", "k1", "after_load"),)
+    assert not pruning_model.is_prunable(after_missing)
+
+
+def test_multi_automaton_can_disable_active_monitor_on_missing_relevant_trace_transition():
+    load = Action(0)
+    inspect = Action(1)
+
+    start = DfaState("start", is_accepting=False)
+    after_load = DfaState("after_load", is_accepting=False)
+    bad = DfaState("bad", is_accepting=True)
+
+    start.transitions["load(r,l,c,*k*,INT)"] = after_load
+    after_load.transitions["load(r,l,c,*k*,INT)"] = bad
+
+    pruning_model = MultiAutomatonPruningModel(
+        action_parameter_types={
+            "load": ["robot", "location", "component", "kit", "integer"],
+            "inspect": ["robot", "location", "component", "kit", "integer"],
+        },
+        placeholders_by_type={"robot": "r", "location": "l", "component": "c", "kit": "k"},
+        automata={
+            "kit": type("Spec", (), {"placeholder": "k", "dfa": Dfa(start, [start, after_load, bad])})(),
+        },
+        drop_wildcards=True,
+        abstract_other_objects=True,
+        disable_monitor_on_demand=True,
+    )
+    pruning_model.bind_to_planner(
+        action_by_name={
+            "load_r0_l1_c1_k1_0": load,
+            "inspect_r0_l1_c1_k1_0": inspect,
+        },
+        objects_by_type={
+            "robot": ["r0"],
+            "location": ["l1"],
+            "component": ["c1"],
+            "kit": ["k1"],
+        },
+    )
+
+    after_first = pruning_model.advance(pruning_model.initial_state, load)
+    assert after_first.object_states == (("kit", "k1", "after_load"),)
+
+    after_missing = pruning_model.advance(after_first, inspect)
+    assert after_missing.object_states == (
+        ("kit", "k1", MultiAutomatonPruningModel._DISABLED_MONITOR_STATE_ID),
+    )
+    assert not pruning_model.is_prunable(after_missing)
+
+    after_retry = pruning_model.advance(after_missing, load)
+    assert after_retry.object_states == (
+        ("kit", "k1", MultiAutomatonPruningModel._DISABLED_MONITOR_STATE_ID),
+    )

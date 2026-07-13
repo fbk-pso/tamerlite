@@ -242,6 +242,8 @@ class DfaPruningModel:
 
 
 class MultiAutomatonPruningModel:
+    _DISABLED_MONITOR_STATE_ID = "__disabled_monitor__"
+
     def __init__(
         self,
         action_parameter_types: Mapping[str, Sequence[str]],
@@ -254,6 +256,7 @@ class MultiAutomatonPruningModel:
         include_init_prefixes: bool = False,
         compact_init_prefixes: bool = False,
         drop_negative_init_predicates: bool = False,
+        disable_monitor_on_demand: bool = False,
     ):
         self._action_parameter_types = {
             action_name: list(parameter_types)
@@ -270,6 +273,7 @@ class MultiAutomatonPruningModel:
         self._include_init_prefixes = include_init_prefixes
         self._compact_init_prefixes = compact_init_prefixes
         self._drop_negative_init_predicates = drop_negative_init_predicates
+        self._disable_monitor_on_demand = disable_monitor_on_demand
         self._action_by_name: Dict[str, object] = {}
         self._planner_action_details: Dict[object, tuple[str, list[tuple[str, str]]]] = {}
         self._state_by_type_and_id = {
@@ -310,7 +314,12 @@ class MultiAutomatonPruningModel:
         )
 
     @classmethod
-    def from_summary_file(cls, summary_path: str | Path) -> "MultiAutomatonPruningModel":
+    def from_summary_file(
+        cls,
+        summary_path: str | Path,
+        *,
+        disable_monitor_on_demand: bool = False,
+    ) -> "MultiAutomatonPruningModel":
         summary_file = Path(summary_path)
         payload = json.loads(summary_file.read_text(encoding="utf-8"))
         signature = payload.get("signature") or {}
@@ -361,10 +370,16 @@ class MultiAutomatonPruningModel:
             include_init_prefixes=include_init_prefixes,
             compact_init_prefixes=compact_init_prefixes,
             drop_negative_init_predicates=drop_negative_init_predicates,
+            disable_monitor_on_demand=disable_monitor_on_demand,
         )
 
     @classmethod
-    def from_automata_root(cls, automata_root: str | Path) -> "MultiAutomatonPruningModel":
+    def from_automata_root(
+        cls,
+        automata_root: str | Path,
+        *,
+        disable_monitor_on_demand: bool = False,
+    ) -> "MultiAutomatonPruningModel":
         root = Path(automata_root)
         if not root.is_dir():
             raise FileNotFoundError(f"Multi automata root does not exist: {root}")
@@ -433,6 +448,7 @@ class MultiAutomatonPruningModel:
             include_init_prefixes=include_init_prefixes,
             compact_init_prefixes=compact_init_prefixes,
             drop_negative_init_predicates=drop_negative_init_predicates,
+            disable_monitor_on_demand=disable_monitor_on_demand,
         )
 
     def bind_to_planner(
@@ -493,6 +509,8 @@ class MultiAutomatonPruningModel:
             for focus_tuple in candidate_focus_tuples:
                 entry_key = (focus_label, *focus_tuple)
                 state_id = updated_states.get(entry_key)
+                if state_id == self._DISABLED_MONITOR_STATE_ID:
+                    continue
                 if state_id is None:
                     state_id = self._prefixed_initial_state_id(focus_label, spec, focus_tuple)
                     if state_id is None:
@@ -508,6 +526,8 @@ class MultiAutomatonPruningModel:
                     if legacy_token is not None:
                         next_state = current_state.transitions.get(legacy_token)
                 if next_state is None:
+                    if self._disable_monitor_on_demand:
+                        updated_states[entry_key] = self._DISABLED_MONITOR_STATE_ID
                     continue
                 updated_states[entry_key] = str(next_state.state_id)
 
@@ -533,6 +553,8 @@ class MultiAutomatonPruningModel:
                 if not progress_entry or progress_entry[0] != focus_label:
                     continue
                 state_id = progress_entry[-1]
+                if state_id == self._DISABLED_MONITOR_STATE_ID:
+                    continue
                 if self._state_by_type_and_id[focus_label][state_id].is_accepting:
                     accepting_focus_types.add(focus_label)
                     break
