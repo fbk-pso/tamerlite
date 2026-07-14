@@ -43,6 +43,7 @@ class SingleAutomatonProgress:
 @dataclass(frozen=True)
 class MultiAutomatonProgress:
     object_states: tuple[tuple[str, ...], ...]
+    global_trace_tokens: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -516,7 +517,7 @@ class MultiAutomatonPruningModel:
 
     @property
     def initial_state(self) -> MultiAutomatonProgress:
-        return MultiAutomatonProgress(tuple())
+        return MultiAutomatonProgress(tuple(), tuple())
 
     def advance(self, progress: MultiAutomatonProgress, action: object) -> MultiAutomatonProgress:
         parsed = self._planner_action_details.get(action)
@@ -524,12 +525,43 @@ class MultiAutomatonPruningModel:
             return progress
 
         action_name, typed_parameters = parsed
+        global_trace_tokens = {
+            focus_label: tuple(tokens)
+            for focus_label, tokens in progress.global_trace_tokens
+        }
         updated_states = {
             tuple(progress_entry[:-1]): progress_entry[-1]
             for progress_entry in progress.object_states
         }
 
         for focus_label, spec in self._automata.items():
+            global_token = self._render_global_token(action_name, typed_parameters, spec)
+            if global_token is not None:
+                history = list(global_trace_tokens.get(focus_label, ()))
+                history.append(global_token)
+                global_trace_tokens[focus_label] = tuple(history)
+                active_entries = [
+                    entry_key
+                    for entry_key in updated_states
+                    if entry_key and entry_key[0] == focus_label
+                ]
+                for entry_key in active_entries:
+                    state_id = updated_states[entry_key]
+                    if state_id == self._DISABLED_MONITOR_STATE_ID:
+                        continue
+                    current_state = self._state_by_type_and_id[focus_label][state_id]
+                    next_state = current_state.transitions.get(global_token)
+                    if next_state is None:
+                        legacy_token = self._legacy_same_type_token(global_token, spec)
+                        if legacy_token is not None:
+                            next_state = current_state.transitions.get(legacy_token)
+                    if next_state is None:
+                        if self._disable_monitor_on_demand:
+                            updated_states[entry_key] = self._DISABLED_MONITOR_STATE_ID
+                        continue
+                    updated_states[entry_key] = str(next_state.state_id)
+                continue
+
             candidate_focus_tuples = self._candidate_focus_tuples(typed_parameters, spec)
             if not candidate_focus_tuples:
                 continue
@@ -539,7 +571,12 @@ class MultiAutomatonPruningModel:
                 if state_id == self._DISABLED_MONITOR_STATE_ID:
                     continue
                 if state_id is None:
-                    state_id = self._prefixed_initial_state_id(focus_label, spec, focus_tuple)
+                    state_id = self._prefixed_initial_state_id(
+                        focus_label,
+                        spec,
+                        focus_tuple,
+                        global_trace_tokens.get(focus_label, ()),
+                    )
                     if state_id is None:
                         continue
                 token = self._render_token(action_name, typed_parameters, spec, focus_tuple)
@@ -564,7 +601,8 @@ class MultiAutomatonPruningModel:
                     (*entry_key, state_id)
                     for entry_key, state_id in updated_states.items()
                 )
-            )
+            ),
+            tuple(sorted((focus_label, tuple(tokens)) for focus_label, tokens in global_trace_tokens.items())),
         )
 
     def is_prunable(self, progress: MultiAutomatonProgress | None) -> bool:
@@ -588,7 +626,29 @@ class MultiAutomatonPruningModel:
         return tuple(sorted(accepting_focus_types))
 
     def progress_key(self, progress: MultiAutomatonProgress | None):
-        return None if progress is None else progress.object_states
+        return None if progress is None else (progress.object_states, progress.global_trace_tokens)
+
+    def _render_global_token(
+        self,
+        action_name: str,
+        typed_parameters: Sequence[tuple[str, str]],
+        spec: MultiAutomatonSpec,
+    ) -> str | None:
+        if not typed_parameters:
+            return canonicalize_identifier(action_name)
+
+        if not all(_is_numeric_parameter_type(parameter_type) for parameter_type, _ in typed_parameters):
+            return None
+
+        focus_types = {canonical_parameter_type(current) for current in spec.profile_types}
+        if "integer" in focus_types:
+            return None
+
+        rendered_parameters = [
+            "INT" if self._abstract_other_objects else parameter_name
+            for _, parameter_name in typed_parameters
+        ]
+        return canonicalize_identifier(f"{action_name}({','.join(rendered_parameters)})")
 
     def _render_token(
         self,
@@ -650,8 +710,9 @@ class MultiAutomatonPruningModel:
         focus_label: str,
         spec: MultiAutomatonSpec,
         focus_tuple: tuple[str, ...],
+        global_trace_tokens: Sequence[str] = (),
     ) -> str | None:
-        entry_key = (focus_label, *focus_tuple)
+        entry_key = (focus_label, *focus_tuple, "|", *tuple(global_trace_tokens))
         if entry_key in self._prefixed_initial_states:
             return self._prefixed_initial_states[entry_key]
 
@@ -681,7 +742,7 @@ class MultiAutomatonPruningModel:
             )
 
         current_state = spec.dfa.initial_state
-        for token in add_state_trace_markers(init_tokens, goal_tokens, ()):
+        for token in add_state_trace_markers(init_tokens, goal_tokens, tuple(global_trace_tokens)):
             normalized_token = _normalize_transition_token(token)
             next_state = current_state.transitions.get(normalized_token)
             if next_state is None:

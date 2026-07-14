@@ -206,7 +206,9 @@ class State:
         if self.pruning_state is None:
             return None
         if hasattr(self.pruning_state, "object_states"):
-            return tuple(self.pruning_state.object_states)
+            object_states = tuple(self.pruning_state.object_states)
+            global_trace_tokens = tuple(getattr(self.pruning_state, "global_trace_tokens", ()))
+            return (object_states, global_trace_tokens)
         if hasattr(self.pruning_state, "state_id"):
             return self.pruning_state.state_id
         return self.pruning_state

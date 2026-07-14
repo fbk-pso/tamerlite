@@ -31,6 +31,7 @@ def test_action_signature_selector_keeps_integer_profiles():
             "repeat_move": ["robot", "pallet", "position"],
         },
         object_type_by_name={},
+        include_integer_profiles=True,
     )
 
     assert select_action_signature_profiles(context) == [
@@ -61,6 +62,7 @@ def test_unary_selector_includes_integer_pseudo_type():
         object_type_labels=["robot", "integer", "position"],
         action_parameter_types={},
         object_type_by_name={},
+        include_integer_profiles=True,
     )
 
     assert select_unary_profiles(context) == [

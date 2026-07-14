@@ -269,6 +269,66 @@ def test_multi_automaton_tracks_integer_profiles_over_grounded_domain_range():
     assert next_progress.object_states == (("integer", "2", "bad"),)
 
 
+def test_multi_automaton_replays_global_integer_only_actions_for_late_object_monitor_start():
+    prepare_unload_0 = Action(0)
+    inspect_r0 = Action(1)
+
+    start = DfaState("start", is_accepting=False)
+    after_prepare = DfaState("after_prepare", is_accepting=False)
+    bad = DfaState("bad", is_accepting=True)
+    start.transitions["prepare_unload(INT)"] = after_prepare
+    after_prepare.transitions["inspect(*r*)"] = bad
+
+    pruning_model = MultiAutomatonPruningModel(
+        action_parameter_types={"prepare_unload": ["integer"], "inspect": ["robot"]},
+        placeholders_by_type={"robot": "r", "integer": "i"},
+        automata={"robot": type("Spec", (), {"placeholder": "r", "dfa": Dfa(start, [start, after_prepare, bad])})()},
+        drop_wildcards=True,
+        abstract_other_objects=True,
+    )
+    pruning_model.bind_to_planner(
+        action_by_name={"prepare_unload_0": prepare_unload_0, "inspect_r0": inspect_r0},
+        objects_by_type={"robot": ["r0"]},
+    )
+
+    progress = pruning_model.initial_state
+    after_prepare_progress = pruning_model.advance(progress, prepare_unload_0)
+    after_inspect = pruning_model.advance(after_prepare_progress, inspect_r0)
+
+    assert pruning_model.is_prunable(after_inspect)
+    assert after_inspect.object_states == (("robot", "r0", "bad"),)
+
+
+def test_multi_automaton_replays_parameterless_actions_for_late_monitor_start():
+    wait = Action(0)
+    inspect_r0 = Action(1)
+
+    start = DfaState("start", is_accepting=False)
+    after_wait = DfaState("after_wait", is_accepting=False)
+    bad = DfaState("bad", is_accepting=True)
+    start.transitions["wait"] = after_wait
+    after_wait.transitions["inspect(*r*)"] = bad
+
+    pruning_model = MultiAutomatonPruningModel(
+        action_parameter_types={"wait": [], "inspect": ["robot"]},
+        placeholders_by_type={"robot": "r"},
+        automata={"robot": type("Spec", (), {"placeholder": "r", "dfa": Dfa(start, [start, after_wait, bad])})()},
+        drop_wildcards=True,
+        abstract_other_objects=True,
+    )
+    pruning_model.bind_to_planner(
+        action_by_name={"wait": wait, "inspect_r0": inspect_r0},
+        objects_by_type={"robot": ["r0"]},
+    )
+
+    progress = pruning_model.initial_state
+    after_wait_progress = pruning_model.advance(progress, wait)
+    after_inspect = pruning_model.advance(after_wait_progress, inspect_r0)
+
+    assert pruning_model.is_prunable(after_inspect)
+    assert after_inspect.object_states == (("robot", "r0", "bad"),)
+
+
 def test_multi_automaton_loader_reads_summary_signature(tmp_path: Path):
     automaton_dir = tmp_path / "robot"
     automaton_dir.mkdir(parents=True)
@@ -699,7 +759,7 @@ def test_multi_automaton_disables_monitor_when_prefix_transition_is_missing():
     next_progress = pruning_model.advance(progress, load)
     assert next_progress.object_states == ()
     assert not pruning_model.is_prunable(next_progress)
-    assert pruning_model._prefixed_initial_states[("kit", "k1")] is None
+    assert pruning_model._prefixed_initial_states[("kit", "k1", "|")] is None
 
 
 def test_multi_automaton_keeps_monitor_active_by_default_on_missing_relevant_trace_transition():
