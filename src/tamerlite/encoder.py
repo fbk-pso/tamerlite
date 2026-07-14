@@ -104,8 +104,9 @@ class Encoder:
         self._qrm = ExpressionQuantifiersRemover(problem.environment)
         self._nnf = Nnf(problem.environment)
 
+        self._initial_values = problem.initial_values
         fluent_types = {}
-        for f in problem.initial_values:
+        for f in self._initial_values:
             if f.type.is_bool_type():
                 t = "bool"
             elif f.type.is_int_type():
@@ -157,7 +158,7 @@ class Encoder:
         obj_to_prev_actions_map = None
         self._compression_safe_actions = None
         if full:
-            initial_state = self.initial_state(problem.initial_values)
+            initial_state = self.initial_state(self._initial_values)
             self._goal = self.goals(problem.goals)
 
             if symmetry_breaking:
@@ -321,8 +322,8 @@ class Encoder:
         """
 
         domain_objects = self._extract_domain_objects()
-        goal_obj_to_fluent_map, goal_exp_is_conjunction = (
-            self._extract_goal_obj_to_fluent_map()
+        goal_obj_to_expression_map, goal_exp_is_conjunction = (
+            self._extract_goal_obj_to_expression_map()
         )
 
         objects: dict[Type, list[Object]] = {}
@@ -351,7 +352,7 @@ class Encoder:
                         continue
 
                     if self._are_equivalent_objects(
-                        obj1, obj2, goal_obj_to_fluent_map, goal_exp_is_conjunction
+                        obj1, obj2, goal_obj_to_expression_map, goal_exp_is_conjunction
                     ):
                         grouped[j] = True
                         groups[-1].append(obj2)
@@ -392,90 +393,61 @@ class Encoder:
                         domain_objects.update(extract_objects(e.value))
         return domain_objects
 
-    def _extract_goal_obj_to_fluent_map(
+    def _extract_goal_obj_to_expression_map(
         self,
-    ) -> tuple[dict[Object, set[tuple[Fluent, tuple[Object], Any]]], bool]:
+    ) -> tuple[dict[Object, set[FNode]], bool]:
         """
-        Build a mapping from objects to goal fluents they appear in.
+        Build a mapping from objects to goal expressions they appear in.
 
         Returns:
-            Tuple[Dict[Object, Set[Tuple[Fluent, Tuple[Object], Any]]], bool]:
-                - A dictionary mapping each object to the set of associated fluents.
-                - A boolean indicating whether the goal expression is a conjunction.
+            A dictionary mapping each object to its associated goal expressions and
+            a boolean indicating whether the goal is a conjunction of supported
+            literals.
         """
 
-        obj_to_fluent_map: dict[Object, set[tuple[Fluent, tuple[Object], Any]]] = {
+        obj_to_expression_map: dict[Object, set[FNode]] = {
             obj: set() for obj in self._problem.all_objects
         }
 
-        def extract_fluent_equals_constant_exp(
-            arg1: FNode, arg2: FNode, is_negated: bool
-        ) -> bool:
-            fluent_exp = None
-            if arg1.is_fluent_exp() and arg2.is_constant():
-                fluent_exp = arg1
-                v = arg2.constant_value()
-            elif arg2.is_fluent_exp() and arg1.is_constant():
-                fluent_exp = arg2
-                v = arg1.constant_value()
+        def is_fluent_equals_constant_exp(exp: FNode) -> bool:
+            arg1, arg2 = exp.args
+            return bool(
+                (arg1.is_fluent_exp() and arg2.is_constant())
+                or (arg2.is_fluent_exp() and arg1.is_constant())
+            )
 
-            if fluent_exp is None:
-                return False
-            else:
-                if is_negated:
-                    v = (v, False)
-                fluent = fluent_exp.fluent()
-                objs = tuple(
-                    arg.object() for arg in fluent_exp.args if arg.is_object_exp()
-                )
-                for obj in objs:
-                    obj_to_fluent_map[obj].add((fluent, objs, v))
-
-                return True
+        def add_expression(exp: FNode) -> None:
+            for obj in set(extract_objects(exp)):
+                obj_to_expression_map[obj].add(exp)
 
         is_conjunction = True
         stack: list[FNode] = list(self._problem.goals)
         while len(stack) > 0:
             exp = stack.pop()
-            if exp.is_fluent_exp():
-                fluent = exp.fluent()
-                objs = tuple(arg.object() for arg in exp.args if arg.is_object_exp())
-                for obj in objs:
-                    obj_to_fluent_map[obj].add((fluent, objs, True))
-
-            elif exp.is_not() and exp.args[0].is_fluent_exp():
-                exp = exp.args[0]
-                fluent = exp.fluent()
-                objs = tuple(arg.object() for arg in exp.args if arg.is_object_exp())
-                for obj in objs:
-                    obj_to_fluent_map[obj].add((fluent, objs, False))
-
-            elif exp.is_equals():
-                arg1, arg2 = exp.args
-                if not extract_fluent_equals_constant_exp(arg1, arg2, False):
-                    is_conjunction = False
-                    stack.extend(exp.args)
-
-            elif exp.is_not() and exp.args[0].is_equals():
-                arg1, arg2 = exp.args[0].args
-                if not extract_fluent_equals_constant_exp(arg1, arg2, True):
-                    is_conjunction = False
-                    stack.extend(exp.args)
-
-            elif exp.is_and():
+            if exp.is_and():
                 stack.extend(exp.args)
-
+            elif (
+                exp.is_fluent_exp()
+                or (exp.is_not() and exp.args[0].is_fluent_exp())
+                or (exp.is_equals() and is_fluent_equals_constant_exp(exp))
+                or (
+                    exp.is_not()
+                    and exp.args[0].is_equals()
+                    and is_fluent_equals_constant_exp(exp.args[0])
+                )
+            ):
+                add_expression(exp)
             else:
                 is_conjunction = False
-                stack.extend(exp.args)
+                add_expression(exp)
 
-        return obj_to_fluent_map, is_conjunction
+        return obj_to_expression_map, is_conjunction
 
     def _are_equivalent_objects(
         self,
         obj1: Object,
         obj2: Object,
-        goal_obj_to_fluent_map: dict[Object, set[tuple[Fluent, tuple[Object], Any]]],
+        goal_obj_to_expression_map: dict[Object, set[FNode]],
         goal_exp_is_conjunction: bool,
     ) -> bool:
         """
@@ -484,9 +456,8 @@ class Encoder:
         Args:
             obj1 (Object): The first object to compare.
             obj2 (Object): The second object to compare.
-            goal_obj_to_fluent_map
-                (Dict[Object, Set[Tuple[Fluent, Tuple[Object], Any]]]):
-                Mapping from objects to the goal fluents they appear in.
+            goal_obj_to_expression_map:
+                Mapping from objects to the goal expressions they appear in.
             goal_exp_is_conjunction (bool):
                 Flag indicating whether the goal expression is a conjunction.
 
@@ -494,55 +465,36 @@ class Encoder:
             bool: True if the objects are equivalent; False otherwise.
         """
 
+        obj1_exp = self._problem.environment.expression_manager.ObjectExp(obj1)
+        obj2_exp = self._problem.environment.expression_manager.ObjectExp(obj2)
+        substitutions = {obj1_exp: obj2_exp, obj2_exp: obj1_exp}
+        substituter = self._problem.environment.substituter
+
         if goal_exp_is_conjunction:
-            if len(goal_obj_to_fluent_map[obj1]) != len(goal_obj_to_fluent_map[obj2]):
-                # the two objects appear in a different number of goal fluents
+            if len(goal_obj_to_expression_map[obj1]) != len(
+                goal_obj_to_expression_map[obj2]
+            ):
+                # the two objects appear in a different number of goal expressions
                 return False
 
-            # for each goal fluent involving obj1, ensure the corresponding
-            # fluent exists for obj2
-            for fluent, objs1, v in goal_obj_to_fluent_map[obj1]:
-                objs2 = list(objs1)
-                for i, obj in enumerate(objs1):
-                    if obj == obj1:
-                        objs2[i] = obj2
-                if (fluent, tuple(objs2), v) not in goal_obj_to_fluent_map[obj2]:
+            for goal_exp in goal_obj_to_expression_map[obj1]:
+                swapped_goal_exp = substituter.substitute(goal_exp, substitutions)
+                if swapped_goal_exp not in goal_obj_to_expression_map[obj2]:
                     return False
 
         elif not (
-            len(goal_obj_to_fluent_map[obj1]) == 0
-            and len(goal_obj_to_fluent_map[obj2]) == 0
+            len(goal_obj_to_expression_map[obj1]) == 0
+            and len(goal_obj_to_expression_map[obj2]) == 0
         ):
             # the goal is not a conjunction and at least one of the objects
             # appears in it
             return False
 
-        # For each fluent with an explicit initial value, swap obj1 and obj2 in its
-        # arguments and verify that the resulting fluent has the same initial value
-        obj1_exp = self._problem.environment.expression_manager.ObjectExp(obj1)
-        obj2_exp = self._problem.environment.expression_manager.ObjectExp(obj2)
-        for fluent_exp, value_exp in self._problem.explicit_initial_values.items():
-            fluent = fluent_exp.fluent()
-            if fluent.arity == 0:
-                continue
-
-            new_args = list(fluent_exp.args)
-            args_changed = False
-            for i, arg in enumerate(new_args):
-                if arg.is_object_exp():
-                    if arg == obj1_exp:
-                        new_args[i] = obj2_exp
-                        args_changed = True
-                    elif arg == obj2_exp:
-                        new_args[i] = obj1_exp
-                        args_changed = True
-
-            if args_changed:
-                new_fluent_exp = self._problem.environment.expression_manager.FluentExp(
-                    fluent, new_args
-                )
-                if self._problem.initial_value(new_fluent_exp) != value_exp:
-                    return False
+        for fluent_exp, value_exp in self._initial_values.items():
+            swapped_fluent_exp = substituter.substitute(fluent_exp, substitutions)
+            swapped_value_exp = substituter.substitute(value_exp, substitutions)
+            if self._initial_values.get(swapped_fluent_exp) != swapped_value_exp:
+                return False
 
         return True
 
