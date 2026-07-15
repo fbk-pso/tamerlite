@@ -267,6 +267,7 @@ class MultiAutomatonPruningModel:
         include_init_prefixes: bool = False,
         compact_init_prefixes: bool = False,
         drop_negative_init_predicates: bool = False,
+        const_actions_enabled: bool = False,
         disable_monitor_on_demand: bool = False,
     ):
         self._action_parameter_types = {
@@ -284,6 +285,7 @@ class MultiAutomatonPruningModel:
         self._include_init_prefixes = include_init_prefixes
         self._compact_init_prefixes = compact_init_prefixes
         self._drop_negative_init_predicates = drop_negative_init_predicates
+        self._const_actions_enabled = const_actions_enabled
         self._disable_monitor_on_demand = disable_monitor_on_demand
         self._action_by_name: Dict[str, object] = {}
         self._planner_action_details: Dict[object, tuple[str, list[tuple[str, str]]]] = {}
@@ -344,6 +346,7 @@ class MultiAutomatonPruningModel:
         drop_negative_init_predicates = bool(
             payload.get("drop_negative_init_predicates", signature.get("drop_negative_init_predicates", False))
         )
+        const_actions_enabled = bool(payload.get("const_actions_enabled", signature.get("const_actions_enabled", False)))
 
         automata = {}
         for focus_label, entry in (payload.get("automata") or {}).items():
@@ -381,6 +384,7 @@ class MultiAutomatonPruningModel:
             include_init_prefixes=include_init_prefixes,
             compact_init_prefixes=compact_init_prefixes,
             drop_negative_init_predicates=drop_negative_init_predicates,
+            const_actions_enabled=const_actions_enabled,
             disable_monitor_on_demand=disable_monitor_on_demand,
         )
 
@@ -430,6 +434,9 @@ class MultiAutomatonPruningModel:
                 metadata_entries[0][2].get("drop_negative_init_predicates", False),
             )
         )
+        const_actions_enabled = bool(
+            first_signature.get("const_actions_enabled", metadata_entries[0][2].get("const_actions_enabled", False))
+        )
 
         automata = {}
         for focus_label, dot_path, metadata in metadata_entries:
@@ -459,6 +466,7 @@ class MultiAutomatonPruningModel:
             include_init_prefixes=include_init_prefixes,
             compact_init_prefixes=compact_init_prefixes,
             drop_negative_init_predicates=drop_negative_init_predicates,
+            const_actions_enabled=const_actions_enabled,
             disable_monitor_on_demand=disable_monitor_on_demand,
         )
 
@@ -634,6 +642,8 @@ class MultiAutomatonPruningModel:
         typed_parameters: Sequence[tuple[str, str]],
         spec: MultiAutomatonSpec,
     ) -> str | None:
+        if not self._const_actions_enabled:
+            return None
         if not typed_parameters:
             return canonicalize_identifier(action_name)
 

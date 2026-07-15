@@ -338,12 +338,25 @@ class TamerLite(
             return up.engines.PlanGenerationResult(status, plan, self.name, metrics)
         except TimeoutError as e:
             status = up.engines.PlanGenerationResultStatus.TIMEOUT
+            metrics = e.args[0] if e.args and isinstance(e.args[0], dict) else {}
+            metrics["heuristic"] = self._params.heuristic
+            if self._params.dfa is not None:
+                metrics["pruned_states"] = encoder.search_space._pruned_subtrees
+                if getattr(encoder.search_space, "_pruned_subtrees_by_label", None):
+                    metrics["pruned_states_by_label"] = json.dumps(
+                        encoder.search_space._pruned_subtrees_by_label,
+                        sort_keys=True,
+                    )
+                if getattr(encoder.search_space, "_pruned_debug_records", None):
+                    metrics["pruned_debug_records"] = json.dumps(
+                        encoder.search_space._pruned_debug_records,
+                        sort_keys=True,
+                    )
             if self._params.max_len is not None:
-                metrics = e.args[0]
                 traces = []
                 for p in metrics["plans"]:
                     p = [encoder.get_action_name(a) for a in p]
                     traces.append(p)
                 metrics["plans"] = traces
                 return up.engines.PlanGenerationResult(status, None, self.name, metrics)
-            return up.engines.PlanGenerationResult(status, None, self.name)
+            return up.engines.PlanGenerationResult(status, None, self.name, metrics)

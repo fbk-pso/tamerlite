@@ -129,7 +129,7 @@ def _multiqueue_search(
 
     while True:
         if timeout is not None and time.time() - st > timeout:
-            raise TimeoutError
+            raise TimeoutError({"expanded_states": str(states_expanded)})
         if any(len(o) == 0 for o in opens):
             break
 

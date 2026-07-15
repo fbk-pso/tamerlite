@@ -111,7 +111,7 @@ def _basic_search(
 
     while len(open) > 0:
         if timeout is not None and time.time() - st > timeout:
-            raise TimeoutError
+            raise TimeoutError({"expanded_states": str(expanded_states)})
         if bfs:
             state = open.popleft()
         else:
@@ -191,7 +191,7 @@ def wastar_search(
         if max_len is not None and time.time() - st > timeout:
             raise TimeoutError({"expanded_states": str(expanded_states), "plans": plans})
         if timeout is not None and time.time() - st > timeout:
-            raise TimeoutError
+            raise TimeoutError({"expanded_states": str(expanded_states)})
         item = heapq.heappop(open)
         state = item.state
         expanded_states += 1
@@ -265,7 +265,7 @@ def ehc_search(
     closed = set()
     while len(open) > 0:
         if timeout is not None and time.time() - st > timeout:
-            raise TimeoutError
+            raise TimeoutError({"expanded_states": str(expanded_states)})
         state = open.popleft()
         expanded_states += 1
         if not ss.is_temporal or weak_equality:
