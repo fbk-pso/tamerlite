@@ -374,6 +374,33 @@ class MultiAutomatonPruningModel:
                 dfa=dfa,
             )
 
+        # Keep summary.json as the primary source of method-level metadata, but if it
+        # is stale/incomplete, merge in any missing automata discovered on disk.
+        for metadata_path in sorted(summary_file.parent.rglob("automaton.metadata.json")):
+            dot_path = metadata_path.with_name("automaton.dot")
+            if not dot_path.exists():
+                continue
+            metadata_payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata = metadata_payload.get("metadata") or {}
+            focus_label = str(metadata.get("focus_type") or metadata_path.parent.name)
+            if focus_label in automata:
+                continue
+            metadata_signature = metadata.get("signature") or {}
+            focus_profile = metadata_signature.get("focus_profile") or metadata.get("focus_profile") or [focus_label]
+            slot_placeholders = (
+                metadata_signature.get("slot_placeholders")
+                or metadata.get("slot_placeholders")
+                or [metadata_signature.get("placeholder", metadata.get("placeholder", focus_label))]
+            )
+            dfa = load_automaton_from_file(str(dot_path), automaton_type="dfa")
+            automata[focus_label] = MultiAutomatonSpec(
+                focus_label=focus_label,
+                profile_types=tuple(str(current) for current in focus_profile),
+                placeholder=str(metadata_signature.get("placeholder", metadata.get("placeholder", focus_label))),
+                slot_placeholders=tuple(str(current) for current in slot_placeholders),
+                dfa=dfa,
+            )
+
         return cls(
             action_parameter_types=action_parameter_types,
             placeholders_by_type=placeholders_by_type,
