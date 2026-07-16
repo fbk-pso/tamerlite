@@ -137,7 +137,7 @@ def _basic_search(
 ) -> tuple[list[Action] | None, dict[str, str]]:
     name = "bfs" if bfs else "dfs"
     logger.info("%s: timeout=%s early_termination=%s", name, timeout, early_termination)
-    st = time.time()
+    st = time.monotonic()
     init = ss.initial_state()
     open: deque[State] = deque()
     expanded_states = 0
@@ -151,7 +151,7 @@ def _basic_search(
     open.append(init)
 
     while len(open) > 0:
-        if timeout is not None and time.time() - st > timeout:
+        if timeout is not None and time.monotonic() - st > timeout:
             raise TimeoutError
         state = open.popleft() if bfs else open.pop()
         expanded_states += 1
@@ -224,7 +224,7 @@ def wastar_search(
         early_termination,
         weak_equality,
     )
-    st = time.time()
+    st = time.monotonic()
     open: list[PrioritizedItem] = []
     init = ss.initial_state()
     if not ss.is_temporal or weak_equality:
@@ -242,7 +242,7 @@ def wastar_search(
         return None, {"expanded_states": str(0)}
     heapq.heappush(open, PrioritizedItem(init_h, init, 0))
     while open:
-        if timeout is not None and time.time() - st > timeout:
+        if timeout is not None and time.monotonic() - st > timeout:
             raise TimeoutError
         item = heapq.heappop(open)
         state = item.state
@@ -336,7 +336,7 @@ def wastar_search_memory_bounded(
         early_termination,
         weak_equality,
     )
-    st = time.time()
+    st = time.monotonic()
     init = ss.initial_state()
     expanded_states = 0
     generated_states = 1
@@ -373,7 +373,7 @@ def wastar_search_memory_bounded(
     open = BoundedPriorityQueue(QUEUE_BOUND)
     open.push(PrioritizedItem(init_h, init, generated_states))
     while len(open) > 0:
-        if timeout is not None and time.time() - st > timeout:
+        if timeout is not None and time.monotonic() - st > timeout:
             raise TimeoutError
         item = open.pop()
         state = item.state
@@ -442,7 +442,7 @@ def ehc_search(
         early_termination,
         weak_equality,
     )
-    st = time.time()
+    st = time.monotonic()
     init = ss.initial_state()
     expanded_states = 0
     generated_states = 1
@@ -461,7 +461,7 @@ def ehc_search(
 
     closed = set()
     while len(open) > 0:
-        if timeout is not None and time.time() - st > timeout:
+        if timeout is not None and time.monotonic() - st > timeout:
             raise TimeoutError
         state = open.popleft()
         expanded_states += 1
