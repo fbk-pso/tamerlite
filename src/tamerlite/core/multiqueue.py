@@ -108,7 +108,7 @@ def _multiqueue_search(
         early_termination,
         weak_equality,
     )
-    st = time.time()
+    st = time.monotonic()
     opens = []
     init = ss.initial_state()
     if not ss.is_temporal or weak_equality:
@@ -129,7 +129,7 @@ def _multiqueue_search(
         switch_policy.notify_push(i, item)
 
     while True:
-        if timeout is not None and time.time() - st > timeout:
+        if timeout is not None and time.monotonic() - st > timeout:
             raise TimeoutError
         if any(len(o) == 0 for o in opens):
             break

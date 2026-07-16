@@ -361,7 +361,7 @@ class TamerLite(
         if len(problem.quality_metrics) > 1:
             raise NotImplementedError("Multiple quality metrics are not supported")
 
-        start_time = time.time()
+        start_time = time.monotonic()
         em = problem.environment.expression_manager
         tm = problem.environment.type_manager
 
@@ -376,7 +376,7 @@ class TamerLite(
             len(list(ground_problem.actions)),
             len(list(ground_problem.fluents)),
         )
-        elapsed_time = time.time() - start_time
+        elapsed_time = time.monotonic() - start_time
         res, _, _ = self._solve_ground_problem(
             lifted_problem,
             ground_problem,
@@ -388,11 +388,13 @@ class TamerLite(
         if res.plan is not None:
             logger.info(
                 "Initial solution found in %.3fs: %s",
-                time.time() - start_time,
+                time.monotonic() - start_time,
                 res.metrics,
             )
         else:
-            logger.info("No initial solution found in %.3fs", time.time() - start_time)
+            logger.info(
+                "No initial solution found in %.3fs", time.monotonic() - start_time
+            )
         yield res
         if res.plan is None:
             return
@@ -503,7 +505,7 @@ class TamerLite(
                     return map_back_action_instance(action())
                 return None
 
-            elapsed_time = time.time() - start_time
+            elapsed_time = time.monotonic() - start_time
             res, solution_might_exist, is_any_action_compression_safe = (
                 self._solve_ground_problem(
                     lifted_problem,
@@ -565,11 +567,11 @@ class TamerLite(
         output_stream: IO[str] | None = None,
     ) -> "up.engines.results.PlanGenerationResult":
         assert isinstance(problem, up.model.Problem)
-        start_time = time.time()
+        start_time = time.monotonic()
         lifted_problem, ground_problem, map_back_action_instance = (
             self._compile_problem(problem)
         )
-        elapsed_time = time.time() - start_time
+        elapsed_time = time.monotonic() - start_time
         logger.info(
             "Solving '%s': actions=%d fluents=%d",
             ground_problem.name,
@@ -587,11 +589,15 @@ class TamerLite(
         )
         if res.plan is not None:
             logger.info(
-                "Solution found in %.3fs: %s", time.time() - start_time, res.metrics
+                "Solution found in %.3fs: %s",
+                time.monotonic() - start_time,
+                res.metrics,
             )
         else:
             logger.info(
-                "No solution found in %.3fs: %s", time.time() - start_time, res.metrics
+                "No solution found in %.3fs: %s",
+                time.monotonic() - start_time,
+                res.metrics,
             )
         return res
 
@@ -665,7 +671,7 @@ class TamerLite(
                     )
                     heuristics.append((h, w))
 
-                start = time.time()
+                start = time.monotonic()
                 path, metrics = multiqueue_search(
                     encoder.search_space,
                     heuristics,
@@ -706,7 +712,7 @@ class TamerLite(
                 )
 
                 if self._params.weak_equality and search_name not in ("dfs", "bfs"):
-                    start = time.time()
+                    start = time.monotonic()
                     path, metrics = search(  # type: ignore
                         encoder.search_space,
                         timeout=timeout,
