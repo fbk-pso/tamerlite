@@ -684,9 +684,12 @@ class TamerLite(
                     and encoder.search_space.is_temporal
                     and path is None
                 ):
-                    updated_timeout = timeout
-                    if updated_timeout is not None:
-                        updated_timeout -= start
+                    updated_timeout = _remaining_timeout(timeout, start)
+                    logger.info(
+                        "Weak-equality multiqueue search found no plan; retrying "
+                        "with weak_equality=False and timeout=%s",
+                        updated_timeout,
+                    )
                     path, metrics = multiqueue_search(
                         encoder.search_space,
                         heuristics,
@@ -720,9 +723,12 @@ class TamerLite(
                         weak_equality=True,
                     )
                     if encoder.search_space.is_temporal and path is None:
-                        updated_timeout = timeout
-                        if updated_timeout is not None:
-                            updated_timeout -= start
+                        updated_timeout = _remaining_timeout(timeout, start)
+                        logger.info(
+                            "Weak-equality search found no plan; retrying "
+                            "with weak_equality=False and timeout=%s",
+                            updated_timeout,
+                        )
                         path, metrics = search(  # type: ignore
                             encoder.search_space,
                             timeout=updated_timeout,
@@ -771,3 +777,10 @@ class TamerLite(
                 True,
                 is_any_action_compression_safe,
             )
+
+
+def _remaining_timeout(timeout: float | None, start_time: float) -> float | None:
+    """Return the non-negative timeout left after a completed search phase."""
+    if timeout is None:
+        return None
+    return max(0.0, timeout - (time.monotonic() - start_time))
