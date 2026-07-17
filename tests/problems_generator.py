@@ -629,3 +629,60 @@ def get_problem_default_value_object_asymmetry() -> Problem:
     problem.add_fluent(g, default_initial_value=x)
     problem.set_initial_value(g(x), y)
     return problem
+
+
+def get_problem_goal_taint_partial() -> Problem:
+    T = UserType("T")
+    p1, p2, p3, p4 = (Object(n, T) for n in ["p1", "p2", "p3", "p4"])
+    f = Fluent("f", BoolType(), x=T)
+    g = Fluent("g", BoolType(), x=T)
+    h = Fluent("h", BoolType(), x=T)
+
+    problem = Problem("goal_taint_partial")
+    problem.add_objects([p1, p2, p3, p4])
+    problem.add_fluent(f, default_initial_value=False)
+    problem.add_fluent(g, default_initial_value=False)
+    problem.add_fluent(h, default_initial_value=False)
+    # Or(...) is an unrecognized goal shape: it taints p1 and p4 (the objects
+    # it references), but must not affect p2/p3, which only appear in
+    # recognized (plain fluent) goal conjuncts and remain genuinely symmetric.
+    problem.add_goal(Or(f(p1), g(p4)))
+    problem.add_goal(h(p2))
+    problem.add_goal(h(p3))
+    return problem
+
+
+def get_problem_goal_taint_equals_fluent_fluent() -> Problem:
+    T = UserType("T")
+    a, b = Object("a", T), Object("b", T)
+    fl = Fluent("fl", IntType(), x=T)
+    fr = Fluent("fr", IntType(), x=T)
+
+    problem = Problem("goal_taint_equals_fluent_fluent")
+    problem.add_objects([a, b])
+    problem.add_fluent(fl, default_initial_value=0)
+    problem.add_fluent(fr, default_initial_value=0)
+    # Equals(fluent, fluent) (neither side a constant) is an unrecognized
+    # shape: it must taint a and b as a single opaque conjunct, not be
+    # decomposed into independent "fl(a) must hold"/"fr(b) must hold"
+    # literals (which would be a different, wrong constraint).
+    problem.add_goal(Equals(fl(a), fr(b)))
+    return problem
+
+
+def get_problem_anytime_symmetric_delivery() -> Problem:
+    Pkg = UserType("Pkg")
+    p1, p2, p3 = Object("p1", Pkg), Object("p2", Pkg), Object("p3", Pkg)
+
+    delivered = Fluent("delivered", BoolType(), p=Pkg)
+    deliver = InstantaneousAction("deliver", p=Pkg)
+    deliver.add_effect(delivered(deliver.parameter("p")), True)
+
+    problem = Problem("anytime_symmetric_delivery")
+    problem.add_objects([p1, p2, p3])
+    problem.add_fluent(delivered, default_initial_value=False)
+    problem.add_action(deliver)
+    problem.add_goal(delivered(p1))
+    problem.add_goal(delivered(p2))
+    problem.add_goal(delivered(p3))
+    return problem

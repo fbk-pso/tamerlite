@@ -960,3 +960,92 @@ def test_symmetry_breaking_default_value_objects():
     )
     groups = encoder._compute_equivalent_objects()
     assert [{obj.name for obj in group} for group in groups] == [{"x"}, {"y"}, {"z"}]
+
+
+def test_symmetry_breaking_goal_taint_is_per_object():
+    """
+    An unrecognized goal conjunct (one _extract_goal_obj_to_fluent_map doesn't
+    know how to precisely reason about) must only exclude the objects it
+    actually references from equivalence, not every object in the problem.
+    This is what makes symmetry breaking still useful when the goal contains
+    e.g. an injected quality-bound literal that doesn't mention the objects
+    being compared, as happens on every re-solve of TamerLite's anytime loop
+    (e.g. LT(plan_length, v) for the auto-added
+    MinimizeSequentialPlanLength metric).
+    """
+
+    def groups_for(problem):
+        lifted_problem, ground_problem, map_back_action_instance = (
+            testing_utils.compile_problem(problem)
+        )
+        encoder = Encoder(
+            ground_problem,
+            lifted_problem,
+            map_back_action_instance,
+            symmetry_breaking=False,
+            compression_safe_actions=False,
+            relevance_analysis=False,
+        )
+        return [
+            {obj.name for obj in group}
+            for group in encoder._compute_equivalent_objects()
+        ]
+
+    # Partial taint: an Or(...) goal conjunct is unrecognized and taints the
+    # objects it references (p1, p4), but must not affect p2/p3, which only
+    # appear in recognized (plain fluent) goal conjuncts and remain
+    # genuinely symmetric.
+    groups = groups_for(problems_generator.get_problem_goal_taint_partial())
+    assert {"p2", "p3"} in groups
+    assert {"p1"} in groups
+    assert {"p4"} in groups
+
+    # Equals(fluent, fluent) (neither side a constant) is also an
+    # unrecognized shape and must taint its objects as one opaque unit, not
+    # be decomposed into independent per-fluent literals -- doing so would
+    # assign the wrong meaning (Equals(fl(a), fr(b)) only requires the two
+    # values to match, e.g. both zero; it does not require either to hold
+    # any specific value on its own).
+    groups = groups_for(
+        problems_generator.get_problem_goal_taint_equals_fluent_fluent()
+    )
+    assert groups == [{"a"}, {"b"}]
+
+    # End-to-end regression: TamerLite's anytime loop injects a quality-bound
+    # literal into the goal on every re-solve after the first. Before the
+    # per-object taint fix, that single unrecognized literal flipped a global
+    # "is the goal a conjunction of recognized literals" flag, which made
+    # every object in the problem -- even ones nowhere near the injected
+    # literal -- ineligible for equivalence. Verify the equivalence classes
+    # for genuinely symmetric objects survive across a real anytime re-solve.
+    orig_compute_equivalent_objects = (
+        tamerlite.encoder.Encoder._compute_equivalent_objects
+    )
+    observed_groups: list[list[set[str]]] = []
+
+    def instrumented(self):
+        result = orig_compute_equivalent_objects(self)
+        observed_groups.append([{obj.name for obj in group} for group in result])
+        return result
+
+    tamerlite.encoder.Encoder._compute_equivalent_objects = instrumented
+    try:
+        anytime_problem = problems_generator.get_problem_anytime_symmetric_delivery()
+        search = tamerlite.SearchParams(
+            search="wastar",
+            heuristic="hadd",
+            symmetry_breaking=True,
+            compression_safe_actions=False,
+        )
+        planner = tamerlite.engine.TamerLite(search)
+        for i, _ in enumerate(planner.get_solutions(anytime_problem, timeout=5)):
+            if i >= 1:
+                break
+    finally:
+        tamerlite.encoder.Encoder._compute_equivalent_objects = (
+            orig_compute_equivalent_objects
+        )
+
+    assert len(observed_groups) >= 2
+    for pkg_groups in observed_groups[:2]:
+        assert {"p1", "p2", "p3"} in pkg_groups

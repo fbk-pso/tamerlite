@@ -321,10 +321,10 @@ class Encoder:
             list contains objects that are equivalent to each other.
         """
 
-        non_equivalent_objects = self._extract_domain_objects()
-        goal_obj_to_fluent_map, goal_exp_is_conjunction = (
+        goal_obj_to_fluent_map, goal_tainted_objects = (
             self._extract_goal_obj_to_fluent_map()
         )
+        non_equivalent_objects = self._extract_domain_objects() | goal_tainted_objects
         obj_to_init_assignments = self._compute_obj_to_init_assignments_map()
 
         objects: dict[Type, list[Object]] = {}
@@ -359,7 +359,6 @@ class Encoder:
                         obj1,
                         obj2,
                         goal_obj_to_fluent_map,
-                        goal_exp_is_conjunction,
                         obj_to_init_assignments,
                     ):
                         grouped[j] = True
@@ -431,14 +430,28 @@ class Encoder:
 
     def _extract_goal_obj_to_fluent_map(
         self,
-    ) -> tuple[dict[Object, set[tuple[Fluent, tuple[Object], Any]]], bool]:
+    ) -> tuple[dict[Object, set[tuple[Fluent, tuple[Object], Any]]], set[Object]]:
         """
         Build a mapping from objects to goal fluents they appear in.
 
+        The goal (`problem.goals`, and recursively any nested conjunction) is
+        decomposed into individual conjuncts. A conjunct is precisely
+        understood only if it has one of 4 recognized shapes: a fluent, a
+        negated fluent, a fluent compared to a constant, or its negation.
+        Objects appearing in any OTHER conjunct (of unrecognized shape, e.g. a
+        disjunction, an implication, or a comparison between two fluents) are
+        collected into a separate "tainted" set instead of being registered in
+        the map: we don't know how to verify that swapping them preserves that
+        conjunct, so they must be excluded from equivalence altogether -- but
+        this must not affect objects that only ever appear in recognized
+        conjuncts elsewhere in the goal.
+
         Returns:
-            Tuple[Dict[Object, Set[Tuple[Fluent, Tuple[Object], Any]]], bool]:
-                - A dictionary mapping each object to the set of associated fluents.
-                - A boolean indicating whether the goal expression is a conjunction.
+            Tuple[Dict[Object, Set[Tuple[Fluent, Tuple[Object], Any]]], Set[Object]]:
+                - A dictionary mapping each object to the set of associated
+                  recognized-conjunct entries.
+                - The set of objects appearing in some unrecognized conjunct,
+                  who must be excluded from equivalence.
         """
 
         obj_to_fluent_map: dict[Object, set[tuple[Fluent, tuple[Object], Any]]] = {
@@ -477,7 +490,7 @@ class Encoder:
 
                 return True
 
-        is_conjunction = True
+        tainted_objects: set[Object] = set()
         stack: list[FNode] = list(self._problem.goals)
         while len(stack) > 0:
             exp = stack.pop()
@@ -497,30 +510,26 @@ class Encoder:
             elif exp.is_equals():
                 arg1, arg2 = exp.args
                 if not extract_fluent_equals_constant_exp(arg1, arg2, False):
-                    is_conjunction = False
-                    stack.extend(exp.args)
+                    tainted_objects.update(extract_objects(exp))
 
             elif exp.is_not() and exp.args[0].is_equals():
                 arg1, arg2 = exp.args[0].args
                 if not extract_fluent_equals_constant_exp(arg1, arg2, True):
-                    is_conjunction = False
-                    stack.extend(exp.args)
+                    tainted_objects.update(extract_objects(exp))
 
             elif exp.is_and():
                 stack.extend(exp.args)
 
             else:
-                is_conjunction = False
-                stack.extend(exp.args)
+                tainted_objects.update(extract_objects(exp))
 
-        return obj_to_fluent_map, is_conjunction
+        return obj_to_fluent_map, tainted_objects
 
     def _are_equivalent_objects(
         self,
         obj1: Object,
         obj2: Object,
         goal_obj_to_fluent_map: dict[Object, set[tuple[Fluent, tuple[Object], Any]]],
-        goal_exp_is_conjunction: bool,
         obj_to_init_assignments: dict[Object, list[tuple[FNode, FNode]]],
     ) -> bool:
         """
@@ -534,10 +543,13 @@ class Encoder:
             obj2 (Object): The second object to compare.
             goal_obj_to_fluent_map
                 (Dict[Object, Set[Tuple[Fluent, Tuple[Object], Any]]]):
-                Mapping from objects to the goal fluents they appear in
-                (as an argument or as the compared value).
-            goal_exp_is_conjunction (bool):
-                Flag indicating whether the goal expression is a conjunction.
+                Mapping from objects to the recognized goal fluents they
+                appear in (as an argument or as the compared value). Objects
+                appearing in an unrecognized goal conjunct are excluded from
+                equivalence before reaching this method (see
+                `_extract_goal_obj_to_fluent_map`), so this map can be trusted
+                to precisely and completely describe every goal constraint
+                that could possibly distinguish obj1/obj2.
             obj_to_init_assignments (Dict[Object, List[Tuple[FNode, FNode]]]):
                 Mapping from objects to the initial-value assignments
                 (explicit or default) they appear in (as an argument or as
@@ -557,27 +569,18 @@ class Encoder:
                 return transpose(v)
             return v
 
-        if goal_exp_is_conjunction:
-            if len(goal_obj_to_fluent_map[obj1]) != len(goal_obj_to_fluent_map[obj2]):
-                # the two objects appear in a different number of goal fluents
-                return False
-
-            # for each goal fluent involving obj1, ensure the corresponding
-            # fluent (with obj1/obj2 swapped in both the arguments and the
-            # compared value) exists for obj2
-            for fluent, objs1, v in goal_obj_to_fluent_map[obj1]:
-                objs2 = tuple(transpose(obj) for obj in objs1)
-                v2 = transpose_value(v)
-                if (fluent, objs2, v2) not in goal_obj_to_fluent_map[obj2]:
-                    return False
-
-        elif not (
-            len(goal_obj_to_fluent_map[obj1]) == 0
-            and len(goal_obj_to_fluent_map[obj2]) == 0
-        ):
-            # the goal is not a conjunction and at least one of the objects
-            # appears in it
+        if len(goal_obj_to_fluent_map[obj1]) != len(goal_obj_to_fluent_map[obj2]):
+            # the two objects appear in a different number of goal fluents
             return False
+
+        # for each goal fluent involving obj1, ensure the corresponding
+        # fluent (with obj1/obj2 swapped in both the arguments and the
+        # compared value) exists for obj2
+        for fluent, objs1, v in goal_obj_to_fluent_map[obj1]:
+            objs2 = tuple(transpose(obj) for obj in objs1)
+            v2 = transpose_value(v)
+            if (fluent, objs2, v2) not in goal_obj_to_fluent_map[obj2]:
+                return False
 
         # For each initial-value assignment (explicit or default) involving
         # obj1 or obj2 (as an argument or as the value), swap obj1 and obj2
