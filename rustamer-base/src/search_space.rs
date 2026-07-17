@@ -183,17 +183,19 @@ pub struct SearchSpace {
 #[pymethods]
 impl SearchSpace {
     #[new]
-    #[pyo3(signature = (actions_duration, events, actions, action_objects, obj_to_prev_actions_map, initial_state=None, goal=None, epsilon=None))]
+    #[pyo3(signature = (actions_duration, events, actions, action_names, action_objects, obj_to_prev_actions_map, initial_state=None, goal=None, epsilon=None))]
     fn new(
         actions_duration: Vec<Option<(Vec<PyExpressionNode>, Vec<PyExpressionNode>, bool, bool)>>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         actions: Vec<Action>,
+        action_names: Option<Vec<String>>,
         action_objects: Option<Vec<Vec<String>>>,
         obj_to_prev_actions_map: Option<FxHashMap<String, FxHashSet<Action>>>,
         initial_state: Option<Vec<PyExpressionNode>>,
         goal: Option<Vec<PyExpressionNode>>,
         #[pyo3(from_py_with = get_option_big_rational)] epsilon: Option<BigRational>,
     ) -> PyResult<Self> {
+        let _ = action_names;
         let is_temporal = actions_duration.iter().any(|value| !value.is_none());
         let converted_actions_duration: Vec<
             Option<(Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool)>,

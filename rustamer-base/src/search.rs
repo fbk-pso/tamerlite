@@ -30,6 +30,16 @@ use super::heuristics::*;
 use super::search_space::*;
 use super::search_state::*;
 use super::structures::Action;
+use super::utils::PersistentList;
+
+pub type Plan = Vec<(Option<String>, Action, Option<String>)>;
+
+pub struct WastarSearchResult {
+    pub plan: Option<Plan>,
+    pub metrics: FxHashMap<String, String>,
+    pub plans: Option<Vec<Vec<Action>>>,
+    pub timed_out: bool,
+}
 
 #[derive(Debug)]
 struct PrioritizedItem {
@@ -131,10 +141,8 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     timeout: Option<f32>,
     early_termination: bool,
     weak_equality: bool,
-) -> PyResult<(
-    Option<Vec<(Option<String>, Action, Option<String>)>>,
-    FxHashMap<String, String>,
-)> {
+    max_len: Option<f64>,
+) -> PyResult<WastarSearchResult> {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
     let start = SystemTime::now();
     let init = Rc::new(ss.initial_state(None)?);
@@ -142,7 +150,12 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     if early_termination && ss.goal_reached(&init, None)? {
         metrics.insert("expanded_states".to_string(), expanded_states.to_string());
         metrics.insert("goal_depth".to_string(), init.g.to_string());
-        return build_plan(ss, &init).map(|plan| (plan, metrics));
+        return build_plan(ss, &init).map(|plan| WastarSearchResult {
+            plan,
+            metrics,
+            plans: None,
+            timed_out: false,
+        });
     }
 
     let mut visited_weak_eq_states = FxHashSet::with_hasher(FxBuildHasher::default());
@@ -159,7 +172,12 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         Some(v) => v,
         None => {
             metrics.insert("expanded_states".to_string(), 0.to_string());
-            return Ok((None, metrics));
+            return Ok(WastarSearchResult {
+                plan: None,
+                metrics,
+                plans: max_len.map(|_| Vec::new()),
+                timed_out: false,
+            });
         }
     };
     let mut open = BinaryHeap::new();
@@ -167,19 +185,48 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         heuristic: init_h,
         state: init,
     });
+    let mut plans = Vec::new();
+    let mut current_max_len = max_len;
     while let Some(current) = open.pop() {
         if let Some(t) = timeout {
             if start.elapsed().unwrap().as_secs_f32() > t {
+                if max_len.is_some() {
+                    metrics.insert("expanded_states".to_string(), expanded_states.to_string());
+                    return Ok(WastarSearchResult {
+                        plan: None,
+                        metrics,
+                        plans: Some(plans),
+                        timed_out: true,
+                    });
+                }
                 return Err(PyTimeoutError::new_err("Timeout"));
             }
         }
         let state = current.state;
         expanded_states += 1;
         if !early_termination && ss.goal_reached(&state, None)? {
-            metrics.insert("expanded_states".to_string(), expanded_states.to_string());
-            metrics.insert("goal_depth".to_string(), state.g.to_string());
-            return build_plan(ss, &state).map(|plan| (plan, metrics));
-        } else {
+            if let Some(bound) = current_max_len {
+                let path = PersistentList::to_vec_copy(&state.path);
+                if (path.len() as f64) <= bound {
+                    println!("{}) Found plan of length {}", plans.len(), path.len());
+                    plans.push(path.into_iter().map(|(action, _, _)| action).collect());
+                    if bound.is_infinite() {
+                        current_max_len = Some(plans.last().unwrap().len() as f64);
+                    }
+                }
+            } else {
+                metrics.insert("expanded_states".to_string(), expanded_states.to_string());
+                metrics.insert("goal_depth".to_string(), state.g.to_string());
+                return build_plan(ss, &state).map(|plan| WastarSearchResult {
+                    plan,
+                    metrics,
+                    plans: None,
+                    timed_out: false,
+                });
+            }
+        }
+
+        {
             let successors_iter = ss
                 .get_successor_states_iter(&state)
                 .filter_map(|rs| match rs {
@@ -194,7 +241,8 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
                         } else {
                             true
                         };
-                        keep.then_some(Ok(s))
+                        let within_bound = current_max_len.map_or(true, |bound| s.g <= bound);
+                        (keep && within_bound).then_some(Ok(s))
                     }
                     Err(e) => Some(Err(e)),
                 });
@@ -204,7 +252,12 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
                 if early_termination && ss.goal_reached(&s, None)? {
                     metrics.insert("expanded_states".to_string(), expanded_states.to_string());
                     metrics.insert("goal_depth".to_string(), s.g.to_string());
-                    return build_plan(ss, &s).map(|plan| (plan, metrics));
+                    return build_plan(ss, &s).map(|plan| WastarSearchResult {
+                        plan,
+                        metrics,
+                        plans: None,
+                        timed_out: false,
+                    });
                 }
                 match h {
                     Some(v) => {
@@ -220,7 +273,12 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         }
     }
     metrics.insert("expanded_states".to_string(), expanded_states.to_string());
-    Ok((None, metrics))
+    Ok(WastarSearchResult {
+        plan: None,
+        metrics,
+        plans: max_len.map(|_| plans),
+        timed_out: false,
+    })
 }
 
 pub fn bfs_search<S: SearchSpaceTrait>(

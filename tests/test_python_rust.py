@@ -121,6 +121,36 @@ def reload_tamerlite(disable_rustamer: bool):
     reload_package(tamerlite)
 
 
+def test_rust_wastar_anytime_results_and_timeout_metrics():
+    reload_tamerlite(False)
+    rustamer = importlib.import_module("tamerlite.core").rustamer_lib
+
+    true = rustamer.make_bool_constant_node(True)
+    search_space = rustamer.SearchSpace([], {}, [], None, None, None, [], [true])
+    heuristic = rustamer.Heuristic.custom(lambda state: 0.0, False)
+
+    plan, metrics = rustamer.wastar_search(
+        search_space,
+        heuristic,
+        0.8,
+        timeout=1.0,
+        max_len=float("inf"),
+    )
+    assert plan is None
+    assert metrics["plans"] == [[]]
+    assert metrics["expanded_states"] == "1"
+
+    with pytest.raises(TimeoutError) as exc_info:
+        rustamer.wastar_search(
+            search_space,
+            heuristic,
+            0.8,
+            timeout=0.0,
+            max_len=float("inf"),
+        )
+    assert exc_info.value.args == ({"expanded_states": "0", "plans": []},)
+
+
 def skip(
     problem,
     search,

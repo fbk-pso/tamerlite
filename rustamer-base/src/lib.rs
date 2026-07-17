@@ -29,6 +29,8 @@ mod utils;
 
 pub use search::{
     wastar_search,
+    Plan,
+    WastarSearchResult,
     ehc_search,
     bfs_search,
     dfs_search,
