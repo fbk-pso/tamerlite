@@ -11,7 +11,8 @@
         "ghcr.io/va-h/devcontainers-features/uv:1": {
             "version": "latest"
         },
-        "ghcr.io/guiyomh/features/just:0": {}
+        "ghcr.io/guiyomh/features/just:0": {},
+        "ghcr.io/devcontainers/features/github-cli:1": {}
     },
     "mounts": [
         "source=${localEnv:HOME}/.claude.json,target=/home/vscode/.claude.json,type=bind,consistency=cached",
