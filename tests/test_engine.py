@@ -862,3 +862,101 @@ def test_simplify_fixed_expressions(expressions):
             if not disable_rustamer:
                 simplified_exp = str(list(parse_expression(simplified_exp)))
             assert str(simplify(exp, {})) == simplified_exp
+
+
+def test_symmetry_breaking_object_valued_fluents():
+    """
+    Symmetry breaking must not conflate two objects that are only distinguished by
+    appearing as the *value* of an object-valued fluent (as opposed to a fluent
+    argument), whether in the initial state (explicit or default) or in the goal.
+    """
+
+    problems = [
+        problems_generator.get_problem_object_value_symmetry_initial(),
+        problems_generator.get_problem_object_value_symmetry_goal(),
+    ]
+    for problem in problems:
+        for disable_rustamer in [True, False]:
+            reload_tamerlite(disable_rustamer)
+
+            for symmetry_breaking in [True, False]:
+                search = tamerlite.SearchParams(
+                    search="wastar",
+                    heuristic="hadd",
+                    symmetry_breaking=symmetry_breaking,
+                    compression_safe_actions=False,
+                )
+                with OneshotPlanner(
+                    name="tamerlite", params={"search": search}
+                ) as planner:
+                    planner: tamerlite.engine.TamerLite
+                    res: PlanGenerationResult = planner.solve(problem, timeout=None)
+                    assert res.status == ResultStatus.SOLVED_SATISFICING
+                    with PlanValidator(problem_kind=problem.kind) as v:
+                        assert v.validate(problem, res.plan)
+
+
+def test_symmetry_breaking_retains_legitimate_symmetry():
+    """
+    Complement to `test_symmetry_breaking_object_valued_fluents`: objects that
+    are genuinely symmetric via an object-valued fluent (swapping them
+    preserves the initial state) must still be grouped together.
+    """
+
+    problem = problems_generator.get_problem_object_value_symmetry_retained()
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    encoder = Encoder(
+        ground_problem,
+        lifted_problem,
+        map_back_action_instance,
+        symmetry_breaking=False,
+        compression_safe_actions=False,
+        relevance_analysis=False,
+    )
+    groups = encoder._compute_equivalent_objects()
+    assert {"a", "b"} in [{obj.name for obj in group} for group in groups]
+
+
+def test_symmetry_breaking_default_value_objects():
+    """
+    An object used as a fluent's *default* value is not automatically
+    non-equivalent to everything else: if every other grounding of that
+    fluent is consistent with the swap, the objects are still symmetric
+    (e.g. with only two objects of that type, `f` defaulting to `o1` and
+    `f(o2)` explicitly set to `o2` is a genuine symmetry). But a default that
+    is also shared by some *other*, unrelated object's grounding does break
+    the symmetry (a third object silently falling through to the same
+    default is enough to distinguish the pair).
+    """
+
+    problem = problems_generator.get_problem_default_value_object_symmetry()
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    encoder = Encoder(
+        ground_problem,
+        lifted_problem,
+        map_back_action_instance,
+        symmetry_breaking=False,
+        compression_safe_actions=False,
+        relevance_analysis=False,
+    )
+    groups = encoder._compute_equivalent_objects()
+    assert {"o1", "o2"} in [{obj.name for obj in group} for group in groups]
+
+    asymmetric_problem = problems_generator.get_problem_default_value_object_asymmetry()
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(asymmetric_problem)
+    )
+    encoder = Encoder(
+        ground_problem,
+        lifted_problem,
+        map_back_action_instance,
+        symmetry_breaking=False,
+        compression_safe_actions=False,
+        relevance_analysis=False,
+    )
+    groups = encoder._compute_equivalent_objects()
+    assert [{obj.name for obj in group} for group in groups] == [{"x"}, {"y"}, {"z"}]

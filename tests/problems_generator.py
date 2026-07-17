@@ -546,3 +546,86 @@ def get_problem_temporal_flight_maximize_fuel() -> Problem:
     fuel_used = problem.fluent("fuel_used")
     problem.add_quality_metric(MaximizeExpressionOnFinalState(fuel_used))
     return problem
+
+
+def get_problem_object_value_symmetry_initial() -> Problem:
+    Token = UserType("Token")
+    Slot = UserType("Slot")
+    a, b, s = Object("a", Token), Object("b", Token), Object("s", Slot)
+
+    selected = Fluent("selected", Token, slot=Slot)
+    done = Fluent("done", BoolType())
+
+    finish = InstantaneousAction("finish", token=Token)
+    token = finish.parameter("token")
+    finish.add_precondition(Equals(selected(s), token))
+    finish.add_effect(selected(s), token)
+    finish.add_effect(done, True)
+
+    problem = Problem("object_value_symmetry_initial")
+    problem.add_objects([a, b, s])
+    problem.add_fluent(selected)
+    problem.add_fluent(done, default_initial_value=False)
+    problem.set_initial_value(selected(s), b)
+    problem.add_action(finish)
+    problem.add_goal(done)
+    return problem
+
+
+def get_problem_object_value_symmetry_goal() -> Problem:
+    Token = UserType("Token")
+    Slot = UserType("Slot")
+    a, b, c = Object("a", Token), Object("b", Token), Object("c", Token)
+    s = Object("s", Slot)
+
+    selected = Fluent("selected", Token, slot=Slot)
+
+    finish = InstantaneousAction("finish", token=Token)
+    token = finish.parameter("token")
+    finish.add_precondition(Equals(selected(s), c))
+    finish.add_effect(selected(s), token)
+
+    problem = Problem("object_value_symmetry_goal")
+    problem.add_objects([a, b, c, s])
+    problem.add_fluent(selected)
+    problem.set_initial_value(selected(s), c)
+    problem.add_action(finish)
+    problem.add_goal(Equals(selected(s), b))
+    return problem
+
+
+def get_problem_object_value_symmetry_retained() -> Problem:
+    Token = UserType("Token")
+    a, b = Object("a", Token), Object("b", Token)
+    nxt = Fluent("nxt", Token, x=Token)
+
+    problem = Problem("object_value_symmetry_retained")
+    problem.add_objects([a, b])
+    problem.add_fluent(nxt)
+    problem.set_initial_value(nxt(a), b)
+    problem.set_initial_value(nxt(b), a)
+    return problem
+
+
+def get_problem_default_value_object_symmetry() -> Problem:
+    Token = UserType("Token")
+    o1, o2 = Object("o1", Token), Object("o2", Token)
+    f = Fluent("f", Token, x=Token)
+
+    problem = Problem("default_value_object_symmetry")
+    problem.add_objects([o1, o2])
+    problem.add_fluent(f, default_initial_value=o1)
+    problem.set_initial_value(f(o2), o2)
+    return problem
+
+
+def get_problem_default_value_object_asymmetry() -> Problem:
+    Token = UserType("Token")
+    x, y, z = Object("x", Token), Object("y", Token), Object("z", Token)
+    g = Fluent("g", Token, p=Token)
+
+    problem = Problem("default_value_object_asymmetry")
+    problem.add_objects([x, y, z])
+    problem.add_fluent(g, default_initial_value=x)
+    problem.set_initial_value(g(x), y)
+    return problem

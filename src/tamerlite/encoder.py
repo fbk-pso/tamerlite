@@ -104,8 +104,9 @@ class Encoder:
         self._qrm = ExpressionQuantifiersRemover(problem.environment)
         self._nnf = Nnf(problem.environment)
 
+        self._problem_initial_values = problem.initial_values
         fluent_types = {}
-        for f in problem.initial_values:
+        for f in self._problem_initial_values:
             if f.type.is_bool_type():
                 t = "bool"
             elif f.type.is_int_type():
@@ -157,7 +158,7 @@ class Encoder:
         obj_to_prev_actions_map = None
         self._compression_safe_actions = None
         if full:
-            initial_state = self.initial_state(problem.initial_values)
+            initial_state = self.initial_state(self._problem_initial_values)
             self._goal = self.goals(problem.goals)
 
             if symmetry_breaking:
@@ -320,10 +321,11 @@ class Encoder:
             list contains objects that are equivalent to each other.
         """
 
-        domain_objects = self._extract_domain_objects()
+        non_equivalent_objects = self._extract_domain_objects()
         goal_obj_to_fluent_map, goal_exp_is_conjunction = (
             self._extract_goal_obj_to_fluent_map()
         )
+        obj_to_init_assignments = self._compute_obj_to_init_assignments_map()
 
         objects: dict[Type, list[Object]] = {}
         for obj in self._problem.all_objects:
@@ -341,17 +343,24 @@ class Encoder:
                 grouped[i] = True
                 groups.append([obj1])
 
-                if obj1 in domain_objects:
+                if obj1 in non_equivalent_objects:
                     # treat all domain objects as non-equivalent objects
                     continue
 
                 for j in range(i + 1, len(objs)):
-                    obj2 = objs[j]
                     if grouped[j]:
                         continue
 
+                    obj2 = objs[j]
+                    if obj2 in non_equivalent_objects:
+                        continue
+
                     if self._are_equivalent_objects(
-                        obj1, obj2, goal_obj_to_fluent_map, goal_exp_is_conjunction
+                        obj1,
+                        obj2,
+                        goal_obj_to_fluent_map,
+                        goal_exp_is_conjunction,
+                        obj_to_init_assignments,
                     ):
                         grouped[j] = True
                         groups[-1].append(obj2)
@@ -392,6 +401,34 @@ class Encoder:
                         domain_objects.update(extract_objects(e.value))
         return domain_objects
 
+    def _compute_obj_to_init_assignments_map(
+        self,
+    ) -> dict[Object, list[tuple[FNode, FNode]]]:
+        """
+        Build a mapping from each object to the initial-value assignments it
+        participates in, either as a fluent argument or as the assigned value.
+
+        Uses `initial_values` (the complete grounded initial state, defaults
+        included) rather than `explicit_initial_values`, so that an object
+        used only as a fluent's default value is checked precisely by
+        transposition in `_are_equivalent_objects` instead of needing to be
+        conservatively excluded from equivalence altogether.
+
+        Returns:
+            Dict[Object, List[Tuple[FNode, FNode]]]: Mapping from objects to
+            the list of (fluent expression, value expression) assignments they
+            appear in.
+        """
+
+        obj_to_assignments: dict[Object, list[tuple[FNode, FNode]]] = {}
+        for fluent_exp, value_exp in self._problem_initial_values.items():
+            objs = {arg.object() for arg in fluent_exp.args if arg.is_object_exp()}
+            if value_exp.is_object_exp():
+                objs.add(value_exp.object())
+            for obj in objs:
+                obj_to_assignments.setdefault(obj, []).append((fluent_exp, value_exp))
+        return obj_to_assignments
+
     def _extract_goal_obj_to_fluent_map(
         self,
     ) -> tuple[dict[Object, set[tuple[Fluent, tuple[Object], Any]]], bool]:
@@ -412,11 +449,14 @@ class Encoder:
             arg1: FNode, arg2: FNode, is_negated: bool
         ) -> bool:
             fluent_exp = None
+            value_exp = None
             if arg1.is_fluent_exp() and arg2.is_constant():
                 fluent_exp = arg1
+                value_exp = arg2
                 v = arg2.constant_value()
             elif arg2.is_fluent_exp() and arg1.is_constant():
                 fluent_exp = arg2
+                value_exp = arg1
                 v = arg1.constant_value()
 
             if fluent_exp is None:
@@ -428,7 +468,11 @@ class Encoder:
                 objs = tuple(
                     arg.object() for arg in fluent_exp.args if arg.is_object_exp()
                 )
-                for obj in objs:
+                entry_objs = set(objs)
+                assert value_exp is not None
+                if value_exp.is_object_exp():
+                    entry_objs.add(value_exp.object())
+                for obj in entry_objs:
                     obj_to_fluent_map[obj].add((fluent, objs, v))
 
                 return True
@@ -477,22 +521,41 @@ class Encoder:
         obj2: Object,
         goal_obj_to_fluent_map: dict[Object, set[tuple[Fluent, tuple[Object], Any]]],
         goal_exp_is_conjunction: bool,
+        obj_to_init_assignments: dict[Object, list[tuple[FNode, FNode]]],
     ) -> bool:
         """
-        Determine whether two objects are equivalent in the problem.
+        Determine whether two objects are equivalent in the problem, i.e.
+        whether swapping them everywhere (as fluent arguments and as
+        object-valued fluent values) leaves the goal and initial state
+        unchanged.
 
         Args:
             obj1 (Object): The first object to compare.
             obj2 (Object): The second object to compare.
             goal_obj_to_fluent_map
                 (Dict[Object, Set[Tuple[Fluent, Tuple[Object], Any]]]):
-                Mapping from objects to the goal fluents they appear in.
+                Mapping from objects to the goal fluents they appear in
+                (as an argument or as the compared value).
             goal_exp_is_conjunction (bool):
                 Flag indicating whether the goal expression is a conjunction.
+            obj_to_init_assignments (Dict[Object, List[Tuple[FNode, FNode]]]):
+                Mapping from objects to the initial-value assignments
+                (explicit or default) they appear in (as an argument or as
+                the value).
 
         Returns:
             bool: True if the objects are equivalent; False otherwise.
         """
+
+        def transpose(x: Object) -> Object:
+            return obj2 if x == obj1 else obj1 if x == obj2 else x
+
+        def transpose_value(v: Any) -> Any:
+            if isinstance(v, tuple):
+                return (transpose_value(v[0]), v[1])
+            if isinstance(v, Object):
+                return transpose(v)
+            return v
 
         if goal_exp_is_conjunction:
             if len(goal_obj_to_fluent_map[obj1]) != len(goal_obj_to_fluent_map[obj2]):
@@ -500,13 +563,12 @@ class Encoder:
                 return False
 
             # for each goal fluent involving obj1, ensure the corresponding
-            # fluent exists for obj2
+            # fluent (with obj1/obj2 swapped in both the arguments and the
+            # compared value) exists for obj2
             for fluent, objs1, v in goal_obj_to_fluent_map[obj1]:
-                objs2 = list(objs1)
-                for i, obj in enumerate(objs1):
-                    if obj == obj1:
-                        objs2[i] = obj2
-                if (fluent, tuple(objs2), v) not in goal_obj_to_fluent_map[obj2]:
+                objs2 = tuple(transpose(obj) for obj in objs1)
+                v2 = transpose_value(v)
+                if (fluent, objs2, v2) not in goal_obj_to_fluent_map[obj2]:
                     return False
 
         elif not (
@@ -517,32 +579,33 @@ class Encoder:
             # appears in it
             return False
 
-        # For each fluent with an explicit initial value, swap obj1 and obj2 in its
-        # arguments and verify that the resulting fluent has the same initial value
+        # For each initial-value assignment (explicit or default) involving
+        # obj1 or obj2 (as an argument or as the value), swap obj1 and obj2
+        # throughout and verify that the resulting assignment still holds.
         obj1_exp = self._problem.environment.expression_manager.ObjectExp(obj1)
         obj2_exp = self._problem.environment.expression_manager.ObjectExp(obj2)
-        for fluent_exp, value_exp in self._problem.explicit_initial_values.items():
-            fluent = fluent_exp.fluent()
-            if fluent.arity == 0:
+
+        def swap_exp(exp: FNode) -> FNode:
+            if exp == obj1_exp:
+                return obj2_exp
+            if exp == obj2_exp:
+                return obj1_exp
+            return exp
+
+        seen_fluent_exps: set[FNode] = set()
+        assignments = obj_to_init_assignments.get(
+            obj1, []
+        ) + obj_to_init_assignments.get(obj2, [])
+        for fluent_exp, value_exp in assignments:
+            if fluent_exp in seen_fluent_exps:
                 continue
+            seen_fluent_exps.add(fluent_exp)
 
-            new_args = list(fluent_exp.args)
-            args_changed = False
-            for i, arg in enumerate(new_args):
-                if arg.is_object_exp():
-                    if arg == obj1_exp:
-                        new_args[i] = obj2_exp
-                        args_changed = True
-                    elif arg == obj2_exp:
-                        new_args[i] = obj1_exp
-                        args_changed = True
-
-            if args_changed:
-                new_fluent_exp = self._problem.environment.expression_manager.FluentExp(
-                    fluent, new_args
-                )
-                if self._problem.initial_value(new_fluent_exp) != value_exp:
-                    return False
+            new_fluent_exp = self._problem.environment.expression_manager.FluentExp(
+                fluent_exp.fluent(), [swap_exp(arg) for arg in fluent_exp.args]
+            )
+            if self._problem.initial_value(new_fluent_exp) != swap_exp(value_exp):
+                return False
 
         return True
 
