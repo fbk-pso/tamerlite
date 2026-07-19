@@ -29,6 +29,7 @@ mod utils;
 
 pub use search::{
     wastar_search,
+    wastar_search_memory_bounded,
     Plan,
     WastarSearchResult,
     ehc_search,

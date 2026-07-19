@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from functools import partial
 import json
 import time
+import warnings
 import unified_planning as up
 import unified_planning.engines
 import unified_planning.engines.mixins
@@ -29,6 +30,7 @@ from aalpy.automata.Dfa import Dfa
 
 from tamerlite.core import search_space
 from tamerlite.core import wastar_search, astar_search, gbfs_search
+from tamerlite.core import wastar_search_memory_bounded, astar_search_memory_bounded, gbfs_search_memory_bounded
 from tamerlite.core import bfs_search, dfs_search, ehc_search
 from tamerlite.core import multiqueue_search
 from tamerlite.core import evaluate, make_fluent_node
@@ -85,6 +87,7 @@ class SearchParams(HeuristicParams):
     symmetry_breaking: bool = True
     dfa: object = None
     max_len : Optional[float] = None
+    incomplete_memory_bounded_search: bool = False
 
 
 @dataclass(frozen=True)
@@ -210,21 +213,46 @@ class TamerLite(
         return h, w
 
     def _get_search(
-        self, params: SearchParams, heuristic: Heuristic, weight: float
+        self, params: SearchParams, heuristic: Heuristic, weight: float, is_temporal: bool
     ) -> Tuple[
             str,
             Callable[
                 [search_space.SearchSpaceABC, Optional[float], bool],
                 Tuple[Optional[PlanType], Dict[str, str]],
             ],
+            bool,
     ]:
         s = "wastar" if params.search is None else params.search
+        memory_bounded = params.incomplete_memory_bounded_search
+        supports_max_len = False
+
+        if (
+            s in ("wastar", "astar", "gbfs")
+            and memory_bounded
+            and is_temporal
+            and params.weak_equality
+        ):
+            warnings.warn(
+                "Memory-bounded search does not support weak equality correctly.",
+                stacklevel=2,
+            )
+
         if s == "wastar":
-            search = partial(wastar_search, heuristic=heuristic, weight=weight)
+            if memory_bounded:
+                search = partial(wastar_search_memory_bounded, heuristic=heuristic, weight=weight)
+            else:
+                search = partial(wastar_search, heuristic=heuristic, weight=weight)
+            supports_max_len = True
         elif s == "astar":
-            search = partial(astar_search, heuristic=heuristic)
+            if memory_bounded:
+                search = partial(astar_search_memory_bounded, heuristic=heuristic)
+            else:
+                search = partial(astar_search, heuristic=heuristic)
         elif s == "gbfs":
-            search = partial(gbfs_search, heuristic=heuristic)
+            if memory_bounded:
+                search = partial(gbfs_search_memory_bounded, heuristic=heuristic)
+            else:
+                search = partial(gbfs_search, heuristic=heuristic)
         elif s == "dfs":
             search = partial(dfs_search)
         elif s == "bfs":
@@ -232,7 +260,7 @@ class TamerLite(
         elif s == "ehs":
             search = partial(ehc_search, heuristic=heuristic)
 
-        return s, search  # type: ignore[return-value]
+        return s, search, supports_max_len  # type: ignore[return-value]
 
     def _solve(
         self,
@@ -283,7 +311,9 @@ class TamerLite(
                     )
             else:
                 h, w = self._get_heuristic(self._params, heuristic, encoder)
-                search_name, search = self._get_search(self._params, h, w)
+                search_name, search, supports_max_len = self._get_search(
+                    self._params, h, w, encoder.search_space.is_temporal
+                )
 
                 if self._params.weak_equality and search_name not in ("dfs", "bfs"):
                     start = time.time()
@@ -304,12 +334,13 @@ class TamerLite(
                             weak_equality=False,
                         )
                 else:
-                    plan, metrics = search(  # type: ignore
-                        encoder.search_space,
-                        timeout=timeout,
-                        early_termination=self._params.early_termination,
-                        max_len=self._params.max_len
-                    )
+                    kwargs = {
+                        "timeout": timeout,
+                        "early_termination": self._params.early_termination,
+                    }
+                    if supports_max_len:
+                        kwargs["max_len"] = self._params.max_len
+                    plan, metrics = search(encoder.search_space, **kwargs)  # type: ignore
             if "plans" in metrics:
                 traces = []
                 for p in metrics["plans"]:
@@ -352,11 +383,10 @@ class TamerLite(
                         encoder.search_space._pruned_debug_records,
                         sort_keys=True,
                     )
-            if self._params.max_len is not None:
+            if "plans" in metrics:
                 traces = []
                 for p in metrics["plans"]:
                     p = [encoder.get_action_name(a) for a in p]
                     traces.append(p)
                 metrics["plans"] = traces
-                return up.engines.PlanGenerationResult(status, None, self.name, metrics)
             return up.engines.PlanGenerationResult(status, None, self.name, metrics)
