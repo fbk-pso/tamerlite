@@ -16,7 +16,7 @@
 #
 
 
-from unified_planning.model import AbstractProblem, FNode
+from unified_planning.model import FNode, Problem
 from unified_planning.model.walkers import DagWalker
 
 from tamerlite.core import (
@@ -32,7 +32,7 @@ from tamerlite.core import (
 
 
 class Converter(DagWalker):
-    def __init__(self, problem: AbstractProblem, fluent_ids: dict[str, int]):
+    def __init__(self, problem: Problem, fluent_ids: dict[str, int]):
         DagWalker.__init__(self)
         self._fluent_ids = fluent_ids
         self.static_fluents = problem.get_static_fluents()
@@ -192,7 +192,7 @@ class Converter(DagWalker):
         self, expression: FNode, args: list[Expression]
     ) -> Expression:
         assert len(args) == 0
-        return (make_int_constant_node(expression.constant_value()),)
+        return (make_int_constant_node(expression.int_constant_value()),)
 
     def walk_implies(self, expression: FNode, args: list[Expression]) -> Expression:
         raise NotImplementedError

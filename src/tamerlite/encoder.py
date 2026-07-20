@@ -17,10 +17,11 @@
 
 from collections.abc import Callable, Iterable
 from fractions import Fraction
-from typing import Any
+from typing import Any, cast
 
 import unified_planning as up
 from unified_planning.model import Fluent, FNode, Object, Problem, TimepointKind, Type
+from unified_planning.model.types import _UserType
 from unified_planning.model.walkers import ExpressionQuantifiersRemover, Nnf
 from unified_planning.plans import (
     ActionInstance,
@@ -114,7 +115,7 @@ class Encoder:
             elif f.type.is_real_type():
                 t = "real"
             elif f.type.is_user_type():
-                t = f.type.name
+                t = cast(_UserType, f.type).name
             else:
                 raise NotImplementedError
             fluent_types[self._convert_fluent(f)] = t
@@ -194,7 +195,9 @@ class Encoder:
         )
         self._objects = {}
         for ut in problem.user_types:
-            self._objects[ut.name] = [o.name for o in problem.objects(ut)]
+            self._objects[cast(_UserType, ut).name] = [
+                o.name for o in problem.objects(ut)
+            ]
 
         self._relevant_actions = None
         if full and relevance_analysis:
@@ -430,7 +433,7 @@ class Encoder:
 
     def _extract_goal_obj_to_fluent_map(
         self,
-    ) -> tuple[dict[Object, set[tuple[Fluent, tuple[Object], Any]]], set[Object]]:
+    ) -> tuple[dict[Object, set[tuple[Fluent, tuple[Object, ...], Any]]], set[Object]]:
         """
         Build a mapping from objects to goal fluents they appear in.
 
@@ -447,14 +450,15 @@ class Encoder:
         conjuncts elsewhere in the goal.
 
         Returns:
-            Tuple[Dict[Object, Set[Tuple[Fluent, Tuple[Object], Any]]], Set[Object]]:
+            Tuple[Dict[Object, Set[Tuple[Fluent, Tuple[Object, ...], Any]]],
+            Set[Object]]:
                 - A dictionary mapping each object to the set of associated
                   recognized-conjunct entries.
                 - The set of objects appearing in some unrecognized conjunct,
                   who must be excluded from equivalence.
         """
 
-        obj_to_fluent_map: dict[Object, set[tuple[Fluent, tuple[Object], Any]]] = {
+        obj_to_fluent_map: dict[Object, set[tuple[Fluent, tuple[Object, ...], Any]]] = {
             obj: set() for obj in self._problem.all_objects
         }
 
@@ -475,8 +479,7 @@ class Encoder:
             if fluent_exp is None:
                 return False
             else:
-                if is_negated:
-                    v = (v, False)
+                value = (v, False) if is_negated else v
                 fluent = fluent_exp.fluent()
                 objs = tuple(
                     arg.object() for arg in fluent_exp.args if arg.is_object_exp()
@@ -486,7 +489,7 @@ class Encoder:
                 if value_exp.is_object_exp():
                     entry_objs.add(value_exp.object())
                 for obj in entry_objs:
-                    obj_to_fluent_map[obj].add((fluent, objs, v))
+                    obj_to_fluent_map[obj].add((fluent, objs, value))
 
                 return True
 
@@ -529,7 +532,9 @@ class Encoder:
         self,
         obj1: Object,
         obj2: Object,
-        goal_obj_to_fluent_map: dict[Object, set[tuple[Fluent, tuple[Object], Any]]],
+        goal_obj_to_fluent_map: dict[
+            Object, set[tuple[Fluent, tuple[Object, ...], Any]]
+        ],
         obj_to_init_assignments: dict[Object, list[tuple[FNode, FNode]]],
     ) -> bool:
         """
@@ -542,7 +547,7 @@ class Encoder:
             obj1 (Object): The first object to compare.
             obj2 (Object): The second object to compare.
             goal_obj_to_fluent_map
-                (Dict[Object, Set[Tuple[Fluent, Tuple[Object], Any]]]):
+                (Dict[Object, Set[Tuple[Fluent, Tuple[Object, ...], Any]]]):
                 Mapping from objects to the recognized goal fluents they
                 appear in (as an argument or as the compared value). Objects
                 appearing in an unrecognized goal conjunct are excluded from
@@ -633,11 +638,12 @@ class Encoder:
         fluent_to_conditions: dict[Fluent, set[bool]] = {}
         complex_condition_fluents: set[Fluent] = set()
         for action in self._problem.actions:
-            action_conditions = (
-                list(action.conditions.values())
-                if isinstance(action, up.model.DurativeAction)
-                else [action.preconditions]
-            )
+            action_conditions: list[list[FNode]]
+            if isinstance(action, up.model.DurativeAction):
+                action_conditions = list(action.conditions.values())
+            else:
+                assert isinstance(action, up.model.InstantaneousAction)
+                action_conditions = [action.preconditions]
             for conds in action_conditions:
                 for c in extract_and_arguments(conds):
                     f = None
@@ -657,14 +663,14 @@ class Encoder:
 
         return fluent_to_conditions, complex_condition_fluents
 
-    def _has_intermediate_conditions(self, action: "up.model.Action") -> bool:
+    def _has_intermediate_conditions(self, action: "up.model.DurativeAction") -> bool:
         return any(
             interval.lower.delay != 0 or interval.upper.delay != 0
             for interval in action.conditions
         )
 
     def _end_conditions_contained_in_overall_conditions(
-        self, action: "up.model.Action"
+        self, action: "up.model.DurativeAction"
     ) -> bool:
         end_conditions: set[FNode] = set()
         overall_conditions: set[FNode] = set()
@@ -688,7 +694,7 @@ class Encoder:
 
     def _effects_interfere_with_conditions(
         self,
-        action: "up.model.Action",
+        action: "up.model.DurativeAction",
         fluent_to_conditions: dict[Fluent, set[bool]],
         complex_condition_fluents: set[Fluent],
     ) -> bool:
@@ -814,12 +820,12 @@ class Encoder:
         return self._converter.convert(expression)
 
     def _convert_timing(self, timing: "up.model.Timing") -> Timing:
-        return Timing(timing.is_from_start(), timing.delay)
+        return Timing(timing.is_from_start(), Fraction(timing.delay))
 
     def _convert_effects(self, effects: list["up.model.Effect"]) -> list[Effect]:
         env = self._problem.environment
         em = env.expression_manager
-        fluent_to_effects: dict[FNode, FNode] = {}
+        fluent_to_effects: dict[FNode, list[list[FNode]]] = {}
         for effect in effects:
             if effect.fluent not in fluent_to_effects:
                 fluent_to_effects[effect.fluent] = [[], [], []]
@@ -883,8 +889,8 @@ class Encoder:
                     value = em.Minus(fluent, em.Plus(dec_effects))
 
             f = self.fluent_ids[self._convert_fluent(fluent)]
-            v = self._convert_expression(value)
-            converted_effects.append(Effect(f, v))
+            converted_value = self._convert_expression(value)
+            converted_effects.append(Effect(f, converted_value))
 
         return converted_effects
 
@@ -897,7 +903,9 @@ class Encoder:
             if isinstance(a, up.model.DurativeAction):
                 from_start: dict[Any, Any] = {}
                 from_end: dict[Any, Any] = {}
-                action_events = []
+                action_events: list[
+                    tuple[int | Fraction, up.model.Timing, int, list]
+                ] = []
                 is_applicable = True
                 for i, lc in a.conditions.items():
                     lower = i.lower
@@ -938,13 +946,13 @@ class Encoder:
                             has_ice_from_end = True
 
                 if has_ice_from_start and has_ice_from_end:
-                    lower, upper = a.duration.lower, a.duration.upper
+                    dur_lower, dur_upper = a.duration.lower, a.duration.upper
                     if (
-                        lower.is_constant()
-                        and upper.is_constant()
-                        and lower.constant_value() == upper.constant_value()
+                        dur_lower.is_constant()
+                        and dur_upper.is_constant()
+                        and dur_lower.constant_value() == dur_upper.constant_value()
                     ):
-                        duration = lower.constant_value()
+                        duration = dur_lower.constant_value()
                         for d in from_end:
                             t, lc, lsc, lec, le = from_end[d]
                             d_from_start = duration + d
@@ -964,32 +972,33 @@ class Encoder:
                 pos = 0
                 for d in sorted(from_start):
                     t, lc, lsc, lec, le = from_start[d]
-                    t = self._convert_timing(t)
+                    conv_t = self._convert_timing(t)
                     c = self._convert_expression(em.And(lc))
                     tsc = tuple([self._convert_expression(sc) for sc in lsc])
                     tec = tuple([self._convert_expression(ec) for ec in lec])
                     te = tuple(self._convert_effects(le))
                     self._events[self.get_action(a.name)].append(
-                        (t, Event(self.get_action(a.name), pos, c, tsc, tec, te))
+                        (conv_t, Event(self.get_action(a.name), pos, c, tsc, tec, te))
                     )
                     pos += 1
                 for d in sorted(from_end):
                     t, lc, lsc, lec, le = from_end[d]
-                    t = self._convert_timing(t)
+                    conv_t = self._convert_timing(t)
                     c = self._convert_expression(em.And(lc))
                     tsc = tuple([self._convert_expression(sc) for sc in lsc])
                     tec = tuple([self._convert_expression(ec) for ec in lec])
                     te = tuple(self._convert_effects(le))
                     self._events[self.get_action(a.name)].append(
-                        (t, Event(self.get_action(a.name), pos, c, tsc, tec, te))
+                        (conv_t, Event(self.get_action(a.name), pos, c, tsc, tec, te))
                     )
                     pos += 1
             else:
-                t = Timing(True, Fraction(0))
+                assert isinstance(a, up.model.InstantaneousAction)
+                conv_t = Timing(True, Fraction(0))
                 te = tuple(self._convert_effects(a.effects))
                 self._events[self.get_action(a.name)] = [
                     (
-                        t,
+                        conv_t,
                         Event(
                             self.get_action(a.name),
                             0,

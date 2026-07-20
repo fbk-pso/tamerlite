@@ -807,7 +807,9 @@ class SearchSpace(SearchSpaceABC):
                         b = -self._epsilon
                         tn.add((e2.action, e2.pos, id2), (e.action, e.pos, id), b)
                     elif ((e2.action, e2.pos), (e.action, e.pos)) in self._precedence:
-                        tn.add((e2.action, e2.pos, id2), (e.action, e.pos, id), 0)
+                        tn.add(
+                            (e2.action, e2.pos, id2), (e.action, e.pos, id), Fraction(0)
+                        )
 
                 for a, i in todo.items():
                     id2 = i[1]
@@ -825,18 +827,18 @@ class SearchSpace(SearchSpaceABC):
                 end = (action, False, counter)
                 counter += 1
                 duration = self._actions_duration[action.idx]
-                lb: int | Fraction
-                ub: int | Fraction
+                lb: Fraction
+                ub: Fraction
                 if duration is None:
-                    lb = 0
-                    ub = 0
+                    lb = Fraction(0)
+                    ub = Fraction(0)
                 else:
                     lower = evaluate(duration[0], state)
                     upper = evaluate(duration[1], state)
                     assert isinstance(lower, (int, Fraction))
                     assert isinstance(upper, (int, Fraction))
-                    lb = -lower
-                    ub = upper
+                    lb = Fraction(-lower)
+                    ub = Fraction(upper)
                     if duration[2]:
                         lb -= self._epsilon
                     if duration[3]:
@@ -865,7 +867,7 @@ class SearchSpace(SearchSpaceABC):
                         b = -self._epsilon
                         tn.add(ev2, ev, b)
                     elif ((e2.action, e2.pos), (e.action, e.pos)) in self._precedence:
-                        tn.add(ev2, ev, 0)
+                        tn.add(ev2, ev, Fraction(0))
 
                 for a, i in todo.items():
                     id2 = i[1]
@@ -884,14 +886,14 @@ class SearchSpace(SearchSpaceABC):
         res: list[tuple[Fraction | None, Action, Fraction | None]] = []
         start_time: dict[tuple[Action, int], Fraction] = {}
         end_time: dict[tuple[Action, int], Fraction] = {}
-        for ev, t in tn.distances.items():
+        for ev, dist in tn.distances.items():
             if not isinstance(ev[1], bool):
                 continue
 
             if ev[1]:
-                start_time[(ev[0], ev[2])] = -t
+                start_time[(ev[0], ev[2])] = -dist
             else:
-                end_time[(ev[0], ev[2])] = -t
+                end_time[(ev[0], ev[2])] = -dist
 
         for a_id, st in start_time.items():
             et = end_time[a_id]
