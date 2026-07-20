@@ -76,6 +76,12 @@ def extract_and_arguments(expressions: list[FNode]) -> Iterable[FNode]:
 
 PlanType = list[tuple[Fraction | str | None, Action, Fraction | str | None]]
 
+# Value recorded for a fluent appearing in a goal conjunct: the raw constant
+# (bool/int/Fraction/Object), or a `(value, False)` pair marking a negated
+# fluent-equals-constant comparison.
+ConstantValue = bool | int | Fraction | Object
+GoalFluentValue = ConstantValue | tuple[ConstantValue, bool]
+
 
 class Encoder:
     """
@@ -433,7 +439,10 @@ class Encoder:
 
     def _extract_goal_obj_to_fluent_map(
         self,
-    ) -> tuple[dict[Object, set[tuple[Fluent, tuple[Object, ...], Any]]], set[Object]]:
+    ) -> tuple[
+        dict[Object, set[tuple[Fluent, tuple[Object, ...], GoalFluentValue]]],
+        set[Object],
+    ]:
         """
         Build a mapping from objects to goal fluents they appear in.
 
@@ -450,7 +459,7 @@ class Encoder:
         conjuncts elsewhere in the goal.
 
         Returns:
-            Tuple[Dict[Object, Set[Tuple[Fluent, Tuple[Object, ...], Any]]],
+            Tuple[Dict[Object, Set[Tuple[Fluent, Tuple[Object, ...], GoalFluentValue]]],
             Set[Object]]:
                 - A dictionary mapping each object to the set of associated
                   recognized-conjunct entries.
@@ -458,9 +467,9 @@ class Encoder:
                   who must be excluded from equivalence.
         """
 
-        obj_to_fluent_map: dict[Object, set[tuple[Fluent, tuple[Object, ...], Any]]] = {
-            obj: set() for obj in self._problem.all_objects
-        }
+        obj_to_fluent_map: dict[
+            Object, set[tuple[Fluent, tuple[Object, ...], GoalFluentValue]]
+        ] = {obj: set() for obj in self._problem.all_objects}
 
         def extract_fluent_equals_constant_exp(
             arg1: FNode, arg2: FNode, is_negated: bool
@@ -533,7 +542,7 @@ class Encoder:
         obj1: Object,
         obj2: Object,
         goal_obj_to_fluent_map: dict[
-            Object, set[tuple[Fluent, tuple[Object, ...], Any]]
+            Object, set[tuple[Fluent, tuple[Object, ...], GoalFluentValue]]
         ],
         obj_to_init_assignments: dict[Object, list[tuple[FNode, FNode]]],
     ) -> bool:
@@ -547,7 +556,7 @@ class Encoder:
             obj1 (Object): The first object to compare.
             obj2 (Object): The second object to compare.
             goal_obj_to_fluent_map
-                (Dict[Object, Set[Tuple[Fluent, Tuple[Object, ...], Any]]]):
+                (Dict[Object, Set[Tuple[Fluent, Tuple[Object, ...], GoalFluentValue]]]):
                 Mapping from objects to the recognized goal fluents they
                 appear in (as an argument or as the compared value). Objects
                 appearing in an unrecognized goal conjunct are excluded from
@@ -567,12 +576,13 @@ class Encoder:
         def transpose(x: Object) -> Object:
             return obj2 if x == obj1 else obj1 if x == obj2 else x
 
-        def transpose_value(v: Any) -> Any:
+        def transpose_constant(c: ConstantValue) -> ConstantValue:
+            return transpose(c) if isinstance(c, Object) else c
+
+        def transpose_value(v: GoalFluentValue) -> GoalFluentValue:
             if isinstance(v, tuple):
-                return (transpose_value(v[0]), v[1])
-            if isinstance(v, Object):
-                return transpose(v)
-            return v
+                return (transpose_constant(v[0]), v[1])
+            return transpose_constant(v)
 
         if len(goal_obj_to_fluent_map[obj1]) != len(goal_obj_to_fluent_map[obj2]):
             # the two objects appear in a different number of goal fluents
