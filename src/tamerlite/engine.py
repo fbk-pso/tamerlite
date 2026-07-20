@@ -22,7 +22,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import partial
-from typing import IO
+from typing import IO, cast
 
 import unified_planning as up
 import unified_planning.engines
@@ -85,13 +85,13 @@ class StateWrapper(State):
         key = (make_fluent_node(self.encoder.fluent_ids[str(x)]),)
         v = evaluate(key, self.search_state)
         if x.type.is_bool_type():
-            return self.em.Bool(v)
+            return self.em.Bool(cast(bool, v))
         elif x.type.is_int_type():
-            return self.em.Int(v)
+            return self.em.Int(cast(int, v))
         elif x.type.is_real_type():
-            return self.em.Real(v)
+            return self.em.Real(cast(Fraction, v))
         elif x.type.is_user_type():
-            return self.em.ObjectExp(self.problem.object(v))
+            return self.em.ObjectExp(self.problem.object(cast(str, v)))
         else:
             raise NotImplementedError(f"Unknown value type for expression {x}")
 
@@ -323,7 +323,13 @@ class TamerLite(
 
         return search_name, search  # type: ignore[return-value]
 
-    def _compile_problem(self, problem: "up.model.AbstractProblem"):
+    def _compile_problem(
+        self, problem: "up.model.Problem"
+    ) -> tuple[
+        "up.model.Problem",
+        "up.model.Problem",
+        Callable[[ActionInstance], ActionInstance | None],
+    ]:
         with problem.environment.factory.Compiler(
             compilation_kind="UNDEFINED_INITIAL_NUMERIC_REMOVING",
             problem_kind=problem.kind,
@@ -332,14 +338,14 @@ class TamerLite(
             undefined_map_back_action_instance = (
                 compilation_res.map_back_action_instance
             )
-            problem = compilation_res.problem
+            problem = cast("up.model.Problem", compilation_res.problem)
 
         with problem.environment.factory.Compiler(
             compilation_kind="GROUNDING", problem_kind=problem.kind
         ) as compiler:
             compilation_res = compiler.compile(problem)
             ground_map_back_action_instance = compilation_res.map_back_action_instance
-            ground_problem = compilation_res.problem
+            ground_problem = cast("up.model.Problem", compilation_res.problem)
             lifted_problem = problem
 
         def map_back_action_instance(ai):
@@ -399,6 +405,7 @@ class TamerLite(
         if res.plan is None:
             return
 
+        quality_metric: up.model.metrics.PlanQualityMetric | None
         if len(ground_problem.quality_metrics) == 0:
             if res.plan.kind == PlanKind.SEQUENTIAL_PLAN:
                 quality_metric = up.model.metrics.MinimizeSequentialPlanLength()
@@ -411,6 +418,7 @@ class TamerLite(
         else:
             quality_metric = None
 
+        validator: SequentialPlanValidator | TimeTriggeredPlanValidator
         if res.plan.kind == PlanKind.SEQUENTIAL_PLAN:
             validator = SequentialPlanValidator()
         elif res.plan.kind == PlanKind.TIME_TRIGGERED_PLAN:
@@ -419,7 +427,7 @@ class TamerLite(
             raise AssertionError(f"Unknown plan type {res.plan.kind}")
 
         def validate_plan(
-            problem: up.model.AbstractProblem, plan: up.plans.Plan
+            problem: "up.model.Problem", plan: up.plans.Plan
         ) -> up.engines.results.ValidationResult:
             if quality_metric is not None:
                 problem.add_quality_metric(quality_metric)
@@ -441,15 +449,21 @@ class TamerLite(
                 and len(val_res.metric_evaluations) == 1
             ), "Expected metric evaluations for plan validation result"
 
-            problem = ground_problem.clone()
+            problem = cast("up.model.Problem", ground_problem.clone())
             exp = None
             deadline = None
             m, v = next(iter(val_res.metric_evaluations.items()))
             logger.info("Searching for improvement over current quality: %s", v)
             if m.is_minimize_expression_on_final_state():
-                exp = em.LT(m.expression, v)
+                exp = em.LT(
+                    cast(up.model.metrics.MinimizeExpressionOnFinalState, m).expression,
+                    v,
+                )
             elif m.is_maximize_expression_on_final_state():
-                exp = em.GT(m.expression, v)
+                exp = em.GT(
+                    cast(up.model.metrics.MaximizeExpressionOnFinalState, m).expression,
+                    v,
+                )
             elif m.is_minimize_sequential_plan_length():
                 plan_length = up.model.Fluent(
                     get_fresh_name(problem, "plan_length"), tm.IntType(0)
@@ -465,7 +479,10 @@ class TamerLite(
                         )
                 exp = em.LT(plan_length, v)
             elif m.is_minimize_action_costs():
-                m = next(iter(problem.quality_metrics))
+                m = cast(
+                    up.model.metrics.MinimizeActionCosts,
+                    next(iter(problem.quality_metrics)),
+                )
                 actions_cost = up.model.Fluent(
                     get_fresh_name(problem, "actions_cost"),
                     tm.RealType(lower_bound=0.0),
@@ -649,7 +666,7 @@ class TamerLite(
                     return None
 
                 encoder = Encoder(
-                    compilation_res.problem,
+                    cast("up.model.Problem", compilation_res.problem),
                     problem,
                     new_map_back_action_instance,
                     self._params.symmetry_breaking,
