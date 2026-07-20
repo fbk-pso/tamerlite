@@ -158,6 +158,7 @@ class TamerLite(
         supported_kind.set_expression_duration("STATIC_FLUENTS_IN_DURATIONS")
         supported_kind.set_expression_duration("FLUENTS_IN_DURATIONS")
         supported_kind.set_expression_duration("INT_TYPE_DURATIONS")
+        supported_kind.set_expression_duration("REAL_TYPE_DURATIONS")
         supported_kind.set_numbers("DISCRETE_NUMBERS")
         supported_kind.set_numbers("CONTINUOUS_NUMBERS")
         supported_kind.set_problem_type("SIMPLE_NUMERIC_PLANNING")
@@ -189,6 +190,10 @@ class TamerLite(
         supported_kind.set_quality_metrics("FINAL_VALUE")
         supported_kind.set_quality_metrics("MAKESPAN")
         supported_kind.set_quality_metrics("PLAN_LENGTH")
+        supported_kind.set_actions_cost_kind("INT_NUMBERS_IN_ACTIONS_COST")
+        supported_kind.set_actions_cost_kind("REAL_NUMBERS_IN_ACTIONS_COST")
+        supported_kind.set_actions_cost_kind("STATIC_FLUENTS_IN_ACTIONS_COST")
+        supported_kind.set_actions_cost_kind("FLUENTS_IN_ACTIONS_COST")
         supported_kind.set_initial_state("UNDEFINED_INITIAL_NUMERIC")
         return supported_kind
 
