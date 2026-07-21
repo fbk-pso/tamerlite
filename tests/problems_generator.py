@@ -283,7 +283,7 @@ def get_problem_satellite() -> Problem:
     problem_directory = pathlib.Path(__file__).resolve().parent / "pddl" / "Satellite"
     domain = problem_directory / "domain.pddl"
     instance = problem_directory / "instance.pddl"
-    problem = reader.parse_problem(domain, instance)
+    problem = reader.parse_problem(str(domain), str(instance))
     return problem
 
 
@@ -332,12 +332,6 @@ def get_problem_hierarchical_types() -> Problem:
     problem.set_initial_value(at_package(fragile1, loc3), True)
 
     # Actions
-    v = Variable("v", Vehicle)
-    p = Variable("p", Package)
-    l_from = Variable("l_from", Location)
-    l_to = Variable("l_to", Location)
-    loc = Variable("loc", Location)
-
     move = InstantaneousAction("move", v=Vehicle, l_from=Location, l_to=Location)
     v = move.parameter("v")
     l_from = move.parameter("l_from")
