@@ -12,9 +12,9 @@ install:
 build-rust:
     uv run --no-sync maturin develop --release --manifest-path crates/rustamer/Cargo.toml
 
-# Run pytest. Set PYTHONPATH externally for extra fixtures (e.g. up_test_cases).
+# Run pytest in parallel (pytest-xdist). Set PYTHONPATH externally for extra fixtures (e.g. up_test_cases).
 test:
-    uv run pytest tests/ -v
+    uv run pytest tests/ -n auto
 
 # Run all lint and formatting checks (Python + Rust). Fails if any issues are found.
 lint:
