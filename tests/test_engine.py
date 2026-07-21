@@ -204,7 +204,15 @@ def skip(
             problem.name == "farmland_2_100_1229"
             and (search in ["dfs", "bfs", "ehc"] or heuristic == "hmax_explicit")
         )
-        or (problem.name == "depots_pfile1" and search in ["dfs", "bfs"])
+        or (
+            problem.name in ["depots_pfile1", "depots_pfile10"]
+            and search in ["dfs", "bfs"]
+        )
+        or (
+            problem.name == "depots_pfile1"
+            and search in ["wastar", "astar", "gbfs", "multiqueue"]
+            and not weak_equality
+        )
         or (
             problem.name == "universal_existential_linear_conditions"
             and search == "dfs"
