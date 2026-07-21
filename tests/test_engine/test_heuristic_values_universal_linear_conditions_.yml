@@ -1,0 +1,60 @@
+hadd:
+- 2
+- null
+- 0
+- 0
+- null
+hadd_inadmissible:
+- 2
+- null
+- 0
+- 0
+- null
+hadd_no_numbers:
+- 2
+- 1
+- 0
+- 0
+- 1
+hff:
+- 2
+- null
+- 0
+- 0
+- null
+hff_inadmissible:
+- 2
+- null
+- 0
+- 0
+- null
+hff_no_numbers:
+- 0
+- 0
+- 0
+- 0
+- 0
+hmax:
+- 1
+- null
+- 0
+- 0
+- null
+hmax_explicit:
+- 1
+- null
+- 0
+- 0
+- null
+hmax_inadmissible:
+- 1
+- null
+- 0
+- 0
+- null
+hmax_no_numbers:
+- 1
+- 1
+- 0
+- 0
+- 1

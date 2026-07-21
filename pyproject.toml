@@ -32,6 +32,7 @@ rust = [
 dev = [
     "pytest==9.1.1",
     "pytest-regressions==2.11.0",
+    "pytest-xdist==3.8.0",
     "mypy==2.3.0",
     "ruff==0.15.22",
     "pre-commit==4.6.0",
