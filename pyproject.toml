@@ -82,9 +82,5 @@ warn_unused_configs = true
 no_implicit_optional = true
 
 [[tool.mypy.overrides]]
-module = "tamerlite.core"
-ignore_errors = true
-
-[[tool.mypy.overrides]]
-module = ["unified_planning.*", "min_max_heap", "bloom_filter2"]
+module = ["min_max_heap", "bloom_filter2"]
 ignore_missing_imports = true
