@@ -178,6 +178,14 @@ def skip(
     disable_rustamer,
     internal_heuristic_cache,
 ):
+    """Whether this parametrization should be skipped.
+
+    Every rule below is a performance prune, not a correctness exclusion: on the
+    heaviest instances these combinations run for minutes under an unbounded
+    (timeout=None) search and/or exhaust available memory, dominating the suite's
+    wall-clock. Each search/heuristic involved is still exercised on many other
+    problems, so dropping these specific combinations costs little coverage.
+    """
     return (
         (problem.name == "robot_fluent_of_user_type" and search == "dfs")
         or (problem.name == "robot_loader" and search == "dfs")
@@ -246,18 +254,6 @@ def skip(
             problem.name == "universal_existential_linear_conditions"
             and search == "dfs"
         )
-        # --- Performance prunes ---------------------------------------------
-        # A handful of (problem x search/heuristic) combinations on the
-        # heaviest instances each run for minutes under an unbounded
-        # (timeout=None) search and dominate the suite's wall-clock. The
-        # search/heuristic involved is still exercised on many other problems,
-        # so dropping these specific combos costs little coverage. Every rule
-        # below only targets searches/heuristics that test_heuristic_values
-        # never uses (ehc/bfs/astar/custom) or fires only for
-        # weak_equality=False, so the heuristic-value regression baselines
-        # (evaluated at weak_equality=True on wastar) are left untouched.
-        # (depots_pfile1's expensive solves are dropped at collection time via
-        # EXPENSIVE_SOLVE_EXCLUDE, not here, so its kept baselines stay intact.)
         or (
             problem.name == "RoboLogistics"
             and (search == "bfs" or heuristic == "custom")
