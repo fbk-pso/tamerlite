@@ -174,14 +174,11 @@ class State:
     heuristic_cache: Dict[str, Optional[float]] = field(default_factory=dict)
 
     def __hash__(self) -> int:
-        return hash((tuple(self.assignments), self._pruning_state_key()))
+        return hash(tuple(self.assignments))
 
     def __eq__(self, oth) -> bool:
         if self.temporal_network is None:
-            return (
-                self.assignments == oth.assignments
-                and self._pruning_state_key() == oth._pruning_state_key()
-            )
+            return self.assignments == oth.assignments
         else:
             return False
 
