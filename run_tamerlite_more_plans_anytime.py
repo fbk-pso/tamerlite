@@ -33,6 +33,7 @@ def solve_and_summarize(
         heuristic=heuristic,
         weight=0.8,
         max_len=max_len,
+        incomplete_memory_bounded_search=True,
     )   
 
     with OneshotPlanner(name="tamerlite", params={"search": params}) as planner:

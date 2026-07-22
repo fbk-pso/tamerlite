@@ -151,6 +151,59 @@ def test_rust_wastar_anytime_results_and_timeout_metrics():
     assert exc_info.value.args == ({"expanded_states": "0", "plans": []},)
 
 
+def test_rust_wastar_memory_bounded_anytime_results_and_timeout_metrics():
+    reload_tamerlite(False)
+    rustamer = importlib.import_module("tamerlite.core").rustamer_lib
+
+    true = rustamer.make_bool_constant_node(True)
+    search_space = rustamer.SearchSpace([], {}, [], None, None, None, [], [true])
+    heuristic = rustamer.Heuristic.custom(lambda state: 0.0, False)
+
+    plan, metrics = rustamer.wastar_search_memory_bounded(
+        search_space,
+        heuristic,
+        0.8,
+        timeout=1.0,
+        max_len=float("inf"),
+    )
+    assert plan is None
+    assert metrics["plans"] == [[]]
+    assert metrics["expanded_states"] == "1"
+
+    with pytest.raises(TimeoutError) as exc_info:
+        rustamer.wastar_search_memory_bounded(
+            search_space,
+            heuristic,
+            0.8,
+            timeout=0.0,
+            max_len=float("inf"),
+        )
+    assert exc_info.value.args == ({"expanded_states": "0", "plans": []},)
+
+
+def test_rust_memory_bounded_search_basic_and_timeout():
+    reload_tamerlite(False)
+    rustamer = importlib.import_module("tamerlite.core").rustamer_lib
+
+    true = rustamer.make_bool_constant_node(True)
+    search_space = rustamer.SearchSpace([], {}, [], None, None, None, [], [true])
+    heuristic = rustamer.Heuristic.custom(lambda state: 0.0, False)
+
+    for search in (
+        rustamer.wastar_search_memory_bounded,
+        rustamer.astar_search_memory_bounded,
+        rustamer.gbfs_search_memory_bounded,
+    ):
+        kwargs = {"weight": 0.8} if search is rustamer.wastar_search_memory_bounded else {}
+        plan, metrics = search(search_space, heuristic, timeout=1.0, **kwargs)
+        assert plan == []
+        assert metrics["expanded_states"] == "1"
+        assert int(metrics["goal_depth"]) == 0
+
+        with pytest.raises(TimeoutError):
+            search(search_space, heuristic, timeout=0.0, **kwargs)
+
+
 def skip(
     problem,
     search,

@@ -134,6 +134,119 @@ fn run_wastar_search(
 }
 
 #[pyfunction]
+#[pyo3(signature = (ss, heuristic, weight, timeout=None, early_termination=false, weak_equality=false, max_len=None))]
+pub fn wastar_search_memory_bounded(
+    py: Python<'_>,
+    ss: &rustamer_base::SearchSpace,
+    heuristic: &Heuristic,
+    weight: f64,
+    timeout: Option<f32>,
+    early_termination: bool,
+    weak_equality: bool,
+    max_len: Option<f64>,
+) -> PyResult<(Option<rustamer_base::Plan>, Py<PyDict>)> {
+    run_wastar_search_memory_bounded(
+        py,
+        ss,
+        heuristic,
+        weight,
+        timeout,
+        early_termination,
+        weak_equality,
+        max_len,
+    )
+}
+
+fn run_wastar_search_memory_bounded(
+    py: Python<'_>,
+    ss: &rustamer_base::SearchSpace,
+    heuristic: &Heuristic,
+    weight: f64,
+    timeout: Option<f32>,
+    early_termination: bool,
+    weak_equality: bool,
+    max_len: Option<f64>,
+) -> PyResult<(Option<rustamer_base::Plan>, Py<PyDict>)> {
+    if max_len.is_some() && timeout.is_none() {
+        return Err(PyValueError::new_err(
+            "timeout must be provided when max_len is set",
+        ));
+    }
+    if max_len.is_some() && early_termination {
+        return Err(PyValueError::new_err(
+            "early_termination must be false when max_len is set",
+        ));
+    }
+
+    let result = rustamer_base::wastar_search_memory_bounded(
+        ss,
+        heuristic,
+        weight,
+        timeout,
+        early_termination,
+        weak_equality,
+        max_len,
+    )?;
+    let metrics = PyDict::new(py);
+    for (key, value) in result.metrics {
+        metrics.set_item(key, value)?;
+    }
+    if let Some(plans) = result.plans {
+        metrics.set_item("plans", plans)?;
+    }
+    let metrics = metrics.unbind();
+    if result.timed_out {
+        Err(PyTimeoutError::new_err(metrics))
+    } else {
+        Ok((result.plan, metrics))
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (ss, heuristic, timeout=None, early_termination=false, weak_equality=false))]
+pub fn astar_search_memory_bounded(
+    py: Python<'_>,
+    ss: &rustamer_base::SearchSpace,
+    heuristic: &Heuristic,
+    timeout: Option<f32>,
+    early_termination: bool,
+    weak_equality: bool,
+) -> PyResult<(Option<rustamer_base::Plan>, Py<PyDict>)> {
+    run_wastar_search_memory_bounded(
+        py,
+        ss,
+        heuristic,
+        0.5,
+        timeout,
+        early_termination,
+        weak_equality,
+        None,
+    )
+}
+
+#[pyfunction]
+#[pyo3(signature = (ss, heuristic, timeout=None, early_termination=false, weak_equality=false))]
+pub fn gbfs_search_memory_bounded(
+    py: Python<'_>,
+    ss: &rustamer_base::SearchSpace,
+    heuristic: &Heuristic,
+    timeout: Option<f32>,
+    early_termination: bool,
+    weak_equality: bool,
+) -> PyResult<(Option<rustamer_base::Plan>, Py<PyDict>)> {
+    run_wastar_search_memory_bounded(
+        py,
+        ss,
+        heuristic,
+        1.0,
+        timeout,
+        early_termination,
+        weak_equality,
+        None,
+    )
+}
+
+#[pyfunction]
 #[pyo3(signature = (ss, heuristic, timeout=None, early_termination=false, weak_equality=false))]
 pub fn astar_search(
     py: Python<'_>,

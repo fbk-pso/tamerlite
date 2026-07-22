@@ -71,6 +71,7 @@ Defines parameters for a single search strategy.
 | `heuristic`                | `Optional[str]`   | The heuristic function to use. Supported values: `"hff"`, `"hadd"`, `"hmax"`, `"hmax_explicit"`, `"blind"`, `"custom"`. Default: `"hff"`. |
 | `weight`                   | `Optional[float]` | A numeric value between 0 and 1 used by weighted search variants like `wastar`. Default: `0.8`. |
 | `internal_heuristic_cache` | `Optional[bool]`  | Enables internal caching within the heuristic if set to `True`. Default: `True`. |
+| `incomplete_memory_bounded_search` | `bool`    | Use incomplete memory-bounded variants of `"wastar"`, `"astar"`, and `"gbfs"`. These bound the open list to a fixed capacity and use a probabilistic (Bloom filter) visited-state set instead of an exact one, trading completeness/optimality for a hard memory ceiling. Only available with the Rust core (`rustamer`). Default: `False`. |
 
 ---
 

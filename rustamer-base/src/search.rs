@@ -21,6 +21,9 @@ use std::rc::Rc;
 use std::time::SystemTime;
 use std::{collections::BinaryHeap, vec::Vec};
 
+use fastbloom::BloomFilter;
+use foldhash::fast::RandomState;
+use min_max_heap::MinMaxHeap;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use pyo3::exceptions::PyTimeoutError;
@@ -270,6 +273,257 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
                     None => {}
                 }
             }
+        }
+    }
+    metrics.insert("expanded_states".to_string(), expanded_states.to_string());
+    Ok(WastarSearchResult {
+        plan: None,
+        metrics,
+        plans: max_len.map(|_| plans),
+        timed_out: false,
+    })
+}
+
+/// Fixed capacity of the open list used by the memory-bounded searches.
+/// Once full, a new state is only admitted if it is strictly better than the
+/// current worst state in the queue, which is then evicted.
+const MEMORY_BOUNDED_QUEUE_BOUND: usize = 400_000;
+/// Expected number of items for the Bloom filter used to (probabilistically)
+/// deduplicate visited states in the memory-bounded searches.
+const MEMORY_BOUNDED_BLOOM_ITEMS: usize = 20_000_000;
+/// Target false-positive rate for the Bloom filter above.
+const MEMORY_BOUNDED_BLOOM_FP_RATE: f64 = 1e-4;
+
+struct BoundedPrioritizedItem {
+    heuristic: f64,
+    state: State,
+    idx: usize,
+}
+
+impl PartialEq for BoundedPrioritizedItem {
+    fn eq(&self, _other: &Self) -> bool {
+        false
+    }
+}
+
+impl Eq for BoundedPrioritizedItem {}
+
+impl PartialOrd for BoundedPrioritizedItem {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for BoundedPrioritizedItem {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        if self.heuristic < other.heuristic {
+            std::cmp::Ordering::Greater
+        } else if self.heuristic > other.heuristic {
+            std::cmp::Ordering::Less
+        } else if self.state.todo.len() < other.state.todo.len() {
+            std::cmp::Ordering::Greater
+        } else if self.state.todo.len() > other.state.todo.len() {
+            std::cmp::Ordering::Less
+        } else if self.idx < other.idx {
+            std::cmp::Ordering::Greater
+        } else {
+            std::cmp::Ordering::Less
+        }
+    }
+}
+
+/// A priority queue with a fixed capacity: once full, pushing a new item only
+/// succeeds if the item is strictly better than the current worst item in the
+/// queue, which is evicted to make room. This bounds the queue's memory usage
+/// at the cost of completeness, since worse states are permanently discarded
+/// instead of being kept around for later expansion.
+struct BoundedPriorityQueue<T: Ord> {
+    heap: MinMaxHeap<T>,
+    bound: usize,
+}
+
+impl<T: Ord> BoundedPriorityQueue<T> {
+    fn with_bound(bound: usize) -> Self {
+        assert!(bound > 0, "bound must be positive");
+        Self {
+            heap: MinMaxHeap::with_capacity(bound),
+            bound,
+        }
+    }
+
+    /// Push an item only if the heap is under capacity, or the item is
+    /// better than the current minimum. Returns false if the item was rejected.
+    fn push(&mut self, item: T) -> bool {
+        if self.heap.len() < self.bound {
+            self.heap.push(item);
+            return true;
+        }
+
+        // Heap is full: peek the current minimum
+        let min = self.heap.peek_min().unwrap();
+        if &item <= min {
+            // New item is worse than or equal to the worst in the heap: reject it
+            return false;
+        }
+
+        // Item is better than the worst: evict the worst and insert the new one
+        self.heap.replace_min(item);
+        true
+    }
+
+    fn pop(&mut self) -> Option<T> {
+        self.heap.pop_max()
+    }
+}
+
+/// Memory-bounded variant of [`wastar_search`], trading completeness for a
+/// hard memory ceiling. Two changes from the unbounded search:
+/// - the open list is a [`BoundedPriorityQueue`] instead of an unbounded
+///   `BinaryHeap`, so once full, only strictly-better-than-worst states are
+///   admitted and worse ones are permanently discarded;
+/// - the visited-state set (when used) is a probabilistic Bloom filter
+///   instead of an exact hash set, so a genuinely new state may rarely be
+///   (incorrectly) treated as already visited.
+/// Both changes mean this search may miss a solution that the unbounded
+/// search would find. It is intended for large/non-temporal problems whose
+/// relaxed state space can otherwise grow without bound.
+/// Like [`wastar_search`], `max_len` still enables the anytime, multi-plan
+/// mode: the search keeps expanding states (including past goal states)
+/// looking for further plans of length at most `max_len`, up to `timeout`.
+pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
+    ss: &S,
+    heuristic: &H,
+    weight: f64,
+    timeout: Option<f32>,
+    early_termination: bool,
+    weak_equality: bool,
+    max_len: Option<f64>,
+) -> PyResult<WastarSearchResult> {
+    let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
+    let start = SystemTime::now();
+    let init = ss.initial_state(None)?;
+    let mut expanded_states = 0;
+    let mut generated_states: usize = 1;
+
+    if early_termination && ss.goal_reached(&init, None)? {
+        metrics.insert("expanded_states".to_string(), expanded_states.to_string());
+        metrics.insert("goal_depth".to_string(), init.g.to_string());
+        return build_plan(ss, &init).map(|plan| WastarSearchResult {
+            plan,
+            metrics,
+            plans: None,
+            timed_out: false,
+        });
+    }
+
+    let mut visited_states: Option<BloomFilter<RandomState>> =
+        if !ss.is_temporal() || weak_equality {
+            let mut visited_states = BloomFilter::with_false_pos(MEMORY_BOUNDED_BLOOM_FP_RATE)
+                .hasher(RandomState::default())
+                .expected_items(MEMORY_BOUNDED_BLOOM_ITEMS);
+            visited_states.insert(&init.assignments);
+            Some(visited_states)
+        } else {
+            None
+        };
+
+    let init_h = match heuristic.eval(&init, ss)? {
+        Some(v) => v,
+        None => {
+            metrics.insert("expanded_states".to_string(), 0.to_string());
+            return Ok(WastarSearchResult {
+                plan: None,
+                metrics,
+                plans: max_len.map(|_| Vec::new()),
+                timed_out: false,
+            });
+        }
+    };
+
+    let mut open = BoundedPriorityQueue::with_bound(MEMORY_BOUNDED_QUEUE_BOUND);
+    open.push(BoundedPrioritizedItem {
+        heuristic: init_h,
+        state: init,
+        idx: 0,
+    });
+
+    let mut plans = Vec::new();
+    let mut current_max_len = max_len;
+    while let Some(current) = open.pop() {
+        if let Some(t) = timeout {
+            if start.elapsed().unwrap().as_secs_f32() > t {
+                if max_len.is_some() {
+                    metrics.insert("expanded_states".to_string(), expanded_states.to_string());
+                    return Ok(WastarSearchResult {
+                        plan: None,
+                        metrics,
+                        plans: Some(plans),
+                        timed_out: true,
+                    });
+                }
+                return Err(PyTimeoutError::new_err("Timeout"));
+            }
+        }
+        let state = current.state;
+        expanded_states += 1;
+        if !early_termination && ss.goal_reached(&state, None)? {
+            if let Some(bound) = current_max_len {
+                let path = PersistentList::to_vec_copy(&state.path);
+                if (path.len() as f64) <= bound {
+                    println!("{}) Found plan of length {}", plans.len(), path.len());
+                    plans.push(path.into_iter().map(|(action, _, _)| action).collect());
+                    if bound.is_infinite() {
+                        current_max_len = Some(plans.last().unwrap().len() as f64);
+                    }
+                }
+            } else {
+                metrics.insert("expanded_states".to_string(), expanded_states.to_string());
+                metrics.insert("goal_depth".to_string(), state.g.to_string());
+                return build_plan(ss, &state).map(|plan| WastarSearchResult {
+                    plan,
+                    metrics,
+                    plans: None,
+                    timed_out: false,
+                });
+            }
+        }
+
+        let successors_iter = ss
+            .get_successor_states_iter(&state)
+            .filter_map(|rs| match rs {
+                Ok(s) => {
+                    let keep = if let Some(ref mut visited) = visited_states {
+                        !visited.insert(&s.assignments)
+                    } else {
+                        true
+                    };
+                    let within_bound = current_max_len.map_or(true, |bound| s.g <= bound);
+                    (keep && within_bound).then_some(Ok(s))
+                }
+                Err(e) => Some(Err(e)),
+            });
+
+        for rs in heuristic.eval_gen_owned(successors_iter, ss)? {
+            let (s, h) = rs?;
+            if early_termination && ss.goal_reached(&s, None)? {
+                metrics.insert("expanded_states".to_string(), expanded_states.to_string());
+                metrics.insert("goal_depth".to_string(), s.g.to_string());
+                return build_plan(ss, &s).map(|plan| WastarSearchResult {
+                    plan,
+                    metrics,
+                    plans: None,
+                    timed_out: false,
+                });
+            }
+            if let Some(v) = h {
+                let f = weight * v + (1.0 - weight) * s.g;
+                open.push(BoundedPrioritizedItem {
+                    heuristic: f,
+                    state: s,
+                    idx: generated_states,
+                });
+            }
+            generated_states += 1;
         }
     }
     metrics.insert("expanded_states".to_string(), expanded_states.to_string());

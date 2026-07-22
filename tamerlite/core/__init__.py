@@ -44,6 +44,17 @@ if not use_rustamer:
     from tamerlite.core.search import wastar_search, astar_search, gbfs_search
     from tamerlite.core.search import bfs_search, dfs_search, ehc_search
     from tamerlite.core.multiqueue import multiqueue_search
+
+    def _memory_bounded_search_unavailable(*args, **kwargs):
+        raise NotImplementedError(
+            "incomplete_memory_bounded_search is only available with the Rust "
+            "core (rustamer). It has no pure-Python implementation; install "
+            "and enable rustamer to use it."
+        )
+
+    wastar_search_memory_bounded = _memory_bounded_search_unavailable
+    astar_search_memory_bounded = _memory_bounded_search_unavailable
+    gbfs_search_memory_bounded = _memory_bounded_search_unavailable
     from tamerlite.core.search_space import SearchSpace, get_fluent_value
     from tamerlite.core.heuristics import (
         HFF,
@@ -71,6 +82,11 @@ else:
         rustamer_lib.wastar_search,
         rustamer_lib.astar_search,
         rustamer_lib.gbfs_search,
+    )
+    wastar_search_memory_bounded, astar_search_memory_bounded, gbfs_search_memory_bounded = (
+        rustamer_lib.wastar_search_memory_bounded,
+        rustamer_lib.astar_search_memory_bounded,
+        rustamer_lib.gbfs_search_memory_bounded,
     )
     ehc_search, bfs_search, dfs_search = (
         rustamer_lib.ehc_search,
