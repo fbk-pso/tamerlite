@@ -87,7 +87,7 @@ def construct_numeric_exp_rec(offset=0, depth=0) -> tuple:
     if kind in ["+", "*"]:
         num_operands = random.randint(2, 4)
 
-    res = ()
+    res: tuple = ()
     operands = []
     for _i in range(num_operands):
         sub_exp = construct_numeric_exp_rec(offset + len(res), depth - 1)
@@ -114,7 +114,7 @@ def construct_exp_rec(offset=0, depth=0) -> tuple:
     elif kind in ["and", "or"]:
         num_operands = random.randint(2, 5)
 
-    res = ()
+    res: tuple = ()
     operands = []
     for _i in range(num_operands):
         if kind in ["<=", "<", "=="]:
@@ -136,12 +136,17 @@ def construct_expressions(
     ]
 
 
+def _const_value(node: ast.expr):
+    assert isinstance(node, ast.Constant)
+    return node.value
+
+
 def parse_expression_rec(node):
     if isinstance(node, ast.Tuple):
         return tuple(parse_expression_rec(e) for e in node.elts)
 
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
-        return make_int_constant_node(-node.operand.value)
+        return make_int_constant_node(-_const_value(node.operand))
 
     if isinstance(node, ast.Constant):
         value = node.value
@@ -151,7 +156,7 @@ def parse_expression_rec(node):
             return make_int_constant_node(value)
         if isinstance(value, str):
             return make_object_node(value)
-        raise TypeError(f"Unsupported literal: {value}")
+        raise TypeError(f"Unsupported literal: {value!r}")
 
     if isinstance(node, ast.Name):
         if node.id in ("True", "False"):
@@ -159,25 +164,28 @@ def parse_expression_rec(node):
         return make_object_node(node.id)
 
     if isinstance(node, ast.Call):
+        assert isinstance(node.func, ast.Name)
         fname = node.func.id
 
         if fname == "Fraction":
-            a = node.args[0]
-            if isinstance(a, ast.UnaryOp) and isinstance(a.op, ast.USub):
-                a = -a.operand.value
+            a_node = node.args[0]
+            if isinstance(a_node, ast.UnaryOp) and isinstance(a_node.op, ast.USub):
+                numerator = -_const_value(a_node.operand)
             else:
-                a = a.value
-            b = node.args[1].value
-            return make_rational_constant_node(a, b)
+                numerator = _const_value(a_node)
+            denominator = _const_value(node.args[1])
+            return make_rational_constant_node(numerator, denominator)
 
         if fname == "FluentNode":
-            kwargs = {kw.arg: kw.value.value for kw in node.keywords}
+            kwargs = {kw.arg: _const_value(kw.value) for kw in node.keywords}
             return make_fluent_node(kwargs["fluent"])
 
         if fname == "OperatorNode":
             kwargs = {kw.arg: kw.value for kw in node.keywords}
-            kind = kwargs["kind"].value
-            operands = tuple(o.value for o in kwargs["operands"].elts)
+            kind = _const_value(kwargs["kind"])
+            operands_node = kwargs["operands"]
+            assert isinstance(operands_node, (ast.Tuple, ast.List))
+            operands = tuple(_const_value(o) for o in operands_node.elts)
             return make_operator_node(kind, operands)
 
     raise ValueError(f"Unknown node: {fname}")

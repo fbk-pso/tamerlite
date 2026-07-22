@@ -19,6 +19,7 @@ import contextlib
 import importlib
 import os
 import types
+from collections.abc import Callable
 from functools import partial
 
 import pytest
@@ -75,15 +76,16 @@ def _build_problems():
         and tamerlite.engine.TamerLite.supports(test_case.problem.kind)
     )
 
-    names = set()
+    names: set[str | None] = {None}
     for problem in test_problems:
         if problem.name in names:
             # name duplicated
             i = 0
-            new_name = problem.name
+            base_name = problem.name if problem.name is not None else ""
+            new_name = base_name + str(i)
             while new_name in names:
-                new_name = problem.name + str(i)
                 i += 1
+                new_name = base_name + str(i)
             problem.name = new_name
         names.add(problem.name)
 
@@ -306,6 +308,7 @@ def check_metrics_equality(results: List[PlanGenerationResult]):
     for i in range(len(results) - 1):
         res1: PlanGenerationResult = results[i]
         res2: PlanGenerationResult = results[i + 1]
+        assert res1.metrics is not None and res2.metrics is not None
         assert len(res1.metrics) == len(res2.metrics)
         assert int(res1.metrics["expanded_states"]) == int(
             res2.metrics["expanded_states"]
@@ -454,14 +457,16 @@ def test_heuristic_fixed_values():
                 state = ss.get_successor_state(
                     states[-1], encoder.get_action(action_name)
                 )
+                assert state is not None
                 states.append(state)
 
-            for heuristic_class, heuristic_name in [
+            heuristic_classes: list[tuple[Callable[..., Heuristic], str]] = [
                 (HFF, "hff"),
                 (HAdd, "hadd"),
                 (HMax, "hmax"),
                 (HMaxExplicit, "hmax_explicit"),
-            ]:
+            ]
+            for heuristic_class, heuristic_name in heuristic_classes:
                 for internal_caching in [True, False]:
                     heuristic: Heuristic = heuristic_class(
                         encoder.actions,
@@ -483,7 +488,7 @@ def test_heuristic_fixed_values():
 
 @pytest.mark.parametrize("problem", PROBLEMS, ids=[p.name for p in PROBLEMS])
 def test_heuristic_values(problem, data_regression):
-    values = {}
+    values: dict[str, list[int | None]] = {}
     for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
         from tamerlite.core import HFF, HAdd, HMax, HMaxExplicit
@@ -505,7 +510,7 @@ def test_heuristic_values(problem, data_regression):
         states = generate_states(
             ss, init_state, num_states=max_generated_states(problem)
         )
-        for heuristic_class, heuristic_name in [
+        heuristic_classes: list[tuple[Callable[..., Heuristic], str]] = [
             (HFF, "hff"),
             (HAdd, "hadd"),
             (HMax, "hmax"),
@@ -513,7 +518,8 @@ def test_heuristic_values(problem, data_regression):
             (partial(HAdd, disable_numeric_reasoning=True), "hadd_no_numbers"),
             (partial(HMax, disable_numeric_reasoning=True), "hmax_no_numbers"),
             (HMaxExplicit, "hmax_explicit"),
-        ]:
+        ]
+        for heuristic_class, heuristic_name in heuristic_classes:
             inadmissible_numeric_heuristic_flags = [False]
             if testing_utils.is_numeric_problem(problem) and heuristic_name in {
                 "hff",
@@ -915,7 +921,10 @@ def test_anytime_planner(problem, weak_equality, symmetry_breaking, disable_rust
 
 def test_simplify():
     num_expressions = 100
-    results = {True: [None] * num_expressions, False: [None] * num_expressions}
+    results: dict[bool, list] = {
+        True: [None] * num_expressions,
+        False: [None] * num_expressions,
+    }
     for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
         reload_package(testing_utils)
@@ -1130,7 +1139,9 @@ def test_symmetry_breaking_goal_taint_is_per_object():
         observed_groups.append([{obj.name for obj in group} for group in result])
         return result
 
-    tamerlite.encoder.Encoder._compute_equivalent_objects = instrumented
+    tamerlite.encoder.Encoder._compute_equivalent_objects = (  # type: ignore[method-assign]
+        instrumented
+    )
     try:
         anytime_problem = problems_generator.get_problem_anytime_symmetric_delivery()
         search = tamerlite.SearchParams(
@@ -1144,7 +1155,7 @@ def test_symmetry_breaking_goal_taint_is_per_object():
             if i >= 1:
                 break
     finally:
-        tamerlite.encoder.Encoder._compute_equivalent_objects = (
+        tamerlite.encoder.Encoder._compute_equivalent_objects = (  # type: ignore[method-assign]
             orig_compute_equivalent_objects
         )
 
