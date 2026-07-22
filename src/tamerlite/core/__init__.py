@@ -19,6 +19,18 @@ import importlib
 import os
 import sys
 import warnings
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # `Expression`/`State` are bound at runtime below to whichever backend is
+    # active (pure-Python or the dynamically-imported `rustamer` extension),
+    # so the checker can't resolve them as types in that position. Both
+    # backends expose an identical interface; alias to distinct names here
+    # (only used, quoted, in the annotations below) purely for the checker --
+    # reusing `Expression`/`State` themselves would collide with their real
+    # runtime (re)assignment and confuse the checker just the same.
+    from tamerlite.core.search_space import Expression as _ExpressionT
+    from tamerlite.core.search_space import State as _StateT
 
 use_rustamer = True
 if "DISABLE_RUSTAMER" in os.environ:
@@ -67,6 +79,7 @@ if not use_rustamer:
         Event,
         Expression,
         SearchSpace,
+        State,
         Timing,
         evaluate,
         get_fluent_value,
@@ -150,7 +163,7 @@ else:
         rustamer_lib.Heuristic.custom,
     )
 
-    def get_fluent_value(fluent: int, state: State) -> bool | int | Fraction | str:
+    def get_fluent_value(fluent: int, state: "_StateT") -> bool | int | Fraction | str:
         exp = state.get_value(fluent)
         if exp.bool_constant is not None:
             return exp.bool_constant
@@ -163,7 +176,7 @@ else:
         else:
             raise NotImplementedError("Unreachable code")
 
-    def evaluate(exp: Expression, state: State) -> bool | int | Fraction | str:
+    def evaluate(exp: "_ExpressionT", state: "_StateT") -> bool | int | Fraction | str:
         r = rustamer_lib.evaluate(exp, state)
         if r.bool_constant is not None:
             return r.bool_constant
