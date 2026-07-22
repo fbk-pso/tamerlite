@@ -404,7 +404,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rustamer"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "log",
  "pyo3",
@@ -415,7 +415,7 @@ dependencies = [
 
 [[package]]
 name = "rustamer-base"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fastbloom",
  "foldhash",
