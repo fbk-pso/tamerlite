@@ -71,12 +71,16 @@ check-installed-versions:
     r=version("rustamer"); t=version("tamerlite"); print(f"rustamer:  {r}"); print(f"tamerlite: {t}");\
     assert r == t, f"Version mismatch: rustamer={r}, tamerlite={t}"; print("✓ Versions match")'
 
-# Bump version in pyproject.toml, root Cargo.toml, and the rustamer pin
+# Bump version everywhere (pyproject.toml, root Cargo.toml, rustamer crate pyproject, rustamer pin) and refresh both lockfiles
 bump version:
     sed -i 's/^version = ".*"/version = "{{version}}"/' pyproject.toml
     sed -i 's/^version = ".*"/version = "{{version}}"/' Cargo.toml
+    sed -i 's/^version = ".*"/version = "{{version}}"/' crates/rustamer/pyproject.toml
     sed -i 's/"rustamer==.*"/"rustamer=={{version}}"/' pyproject.toml
     just check-versions
+    # re-sync the rustamer/rustamer-base version entries in Cargo.lock (bump only
+    # edits Cargo.toml; without this the committed lock stays at the old version).
+    cargo update --workspace
     uv lock
     @echo "Now: git commit -am 'release: v{{version}}' && git tag v{{version}} && git push --follow-tags"
 
