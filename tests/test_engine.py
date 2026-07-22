@@ -885,10 +885,7 @@ def test_anytime_planner(problem, weak_equality, symmetry_breaking, disable_rust
     ):
         return
 
-    with AnytimePlanner(
-        name="tamerlite",
-        params={"search": search},  # type: ignore[dict-item]
-    ) as planner:
+    with AnytimePlanner(name="tamerlite", params={"search": search}) as planner:
         for counter, res in enumerate(planner.get_solutions(problem, timeout=None)):
             assert res.status in {
                 ResultStatus.INTERMEDIATE,
