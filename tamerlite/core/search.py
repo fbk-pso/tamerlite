@@ -29,14 +29,14 @@ from fractions import Fraction
 class PrioritizedItem:
     heuristic: float
     state: State
+    idx: int
 
     def __lt__(self, other):
-        if self.heuristic < other.heuristic:
-            return True
-        if self.heuristic > other.heuristic:
-            return False
-        return len(self.state.todo) < len(other.state.todo)
-
+        return (self.heuristic, len(self.state.todo), self.idx) < (
+            other.heuristic,
+            len(other.state.todo),
+            other.idx,
+        )
 
 @dataclass
 class WeakEqState:
@@ -172,6 +172,7 @@ def wastar_search(
     if not ss.is_temporal or weak_equality:
         visited_states = {state_representation(init, weak_equality)}
     expanded_states = 0
+    generated_states = 1
     if early_termination and ss.goal_reached(init):
         return ss.build_plan(init), {
             "expanded_states": str(expanded_states),
@@ -182,7 +183,7 @@ def wastar_search(
     init_h = heuristic.eval(init, ss)
     if init_h is None:
         return None, {"expanded_states": str(0)}
-    heapq.heappush(open, PrioritizedItem(init_h, init))
+    heapq.heappush(open, PrioritizedItem(init_h, init, 0))
     plans = []
     if max_len is not None:            
         assert timeout is not None
@@ -210,6 +211,7 @@ def wastar_search(
                 }
 
         candidate_states = []
+        candidate_indices: Dict[int, int] = {}
         for succ_state in ss.get_successor_states(state):
             if early_termination and ss.goal_reached(succ_state):
                 return ss.build_plan(succ_state), {
@@ -223,15 +225,22 @@ def wastar_search(
                 if state_repr not in visited_states:
                     visited_states.add(state_repr)
                     if max_len is None or succ_state.g <= max_len:
+                        candidate_indices[id(succ_state)] = generated_states
+                        generated_states += 1
                         candidate_states.append(succ_state)
             else:
                 if max_len is None or succ_state.g <= max_len:
+                    candidate_indices[id(succ_state)] = generated_states
+                    generated_states += 1
                     candidate_states.append(succ_state)
 
         for succ_state, h in heuristic.eval_gen(candidate_states, ss):
             if h is not None:
                 f = (1 - weight) * succ_state.g + weight * h
-                heapq.heappush(open, PrioritizedItem(f, succ_state))
+                heapq.heappush(
+                    open,
+                    PrioritizedItem(f, succ_state, candidate_indices[id(succ_state)]),
+                )
     res = {"expanded_states": str(expanded_states)} if max_len is None else {"expanded_states": str(expanded_states), "plans": plans}
     return None , res
 
