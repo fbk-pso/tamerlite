@@ -5,7 +5,7 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 license = "GPL-3.0-only"
-version = "0.1.0"
+version = "0.1.1"
 
 [workspace.dependencies]
 pyo3 = "0.29.0"
