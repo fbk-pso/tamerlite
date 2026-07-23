@@ -53,7 +53,7 @@ uv run pre-commit install  # one-time
 | `just build` | Produce both `tamerlite` and `rustamer` wheels + sdists into `./dist/` |
 | `just build-python` | Only the `tamerlite` wheel (used by CI's `tamerlite` publish job) |
 | `just build-rust-wheel` | Only the `rustamer` wheel + sdist for current interpreter |
-| `just test` | `uv run pytest tests/ -v` — set `PYTHONPATH=up-checkout/up_test_cases` if you need the UP fixtures |
+| `just test` | `uv run pytest tests/ -n auto` — runs in parallel via pytest-xdist; set `PYTHONPATH=up-checkout/up_test_cases` if you need the UP fixtures |
 | `just lint` | Ruff (check + format --check) + cargo fmt --check + cargo clippy (informational, -W warnings) |
 | `just format` | Ruff format + ruff --fix + cargo fmt --all |
 | `just typecheck` | `uv run mypy` (config in `pyproject.toml`, scope `src/tamerlite`) |
