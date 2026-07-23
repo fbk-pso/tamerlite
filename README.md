@@ -75,7 +75,7 @@ Defines parameters for a single search strategy.
 
 ### `MultiqueueParams`
 
-Defines a multi-queue search strategy composed of multiple `SearchParams`.
+Defines a multi-queue search strategy composed of multiple `HeuristicParams`.
 
 | Field                                    | Type                    | Description                                                                                                                                                |
 |------------------------------------------|-------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -106,8 +106,8 @@ Or using multiple queues:
 
 ```python
 multi_params = MultiqueueParams(queues=[
-    SearchParams(heuristic="hadd", weight=0.8),
-    SearchParams(heuristic="hmax", weight=0.5),
+    HeuristicParams(heuristic="hadd", weight=0.8),
+    HeuristicParams(heuristic="hmax", weight=0.5),
 ])
 
 with OneshotPlanner(name="tamerlite", params={"search": multi_params}) as planner:
