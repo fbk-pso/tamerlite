@@ -16,7 +16,6 @@
 //
 
 use im::Vector;
-use multiset::HashMultiSet;
 use pyo3::{exceptions::PyException, prelude::*};
 use rustc_hash::{FxBuildHasher, FxHashMap};
 use std::hash::{Hash, Hasher};
@@ -27,6 +26,7 @@ use std::{
 
 use super::expressions::*;
 use super::expressions_utils::*;
+use super::multiset::HashMultiSet;
 use super::stn::DeltaSTN;
 use super::structures::Action;
 use super::utils::*;

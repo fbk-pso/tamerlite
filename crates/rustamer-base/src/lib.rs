@@ -19,6 +19,7 @@ mod expressions;
 mod expressions_utils;
 mod heuristics;
 mod multiqueue;
+mod multiset;
 mod search;
 mod search_space;
 mod search_state;
