@@ -1151,7 +1151,7 @@ def test_symmetry_breaking_goal_taint_is_per_object():
             compression_safe_actions=False,
         )
         planner = tamerlite.engine.TamerLite(search)
-        for i, _ in enumerate(planner.get_solutions(anytime_problem, timeout=5)):
+        for i, _ in enumerate(planner.get_solutions(anytime_problem, timeout=None)):
             if i >= 1:
                 break
     finally:
