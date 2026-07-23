@@ -21,12 +21,17 @@ use rustamer_base::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::vec::Vec;
 
+#[derive(Clone)]
+enum HeuristicVariant {
+    DeleteRelaxation(DeleteRelaxationHeuristic),
+    HMaxExplicit(HMaxExplicit),
+    Custom(CustomHeuristic),
+}
+
 #[pyclass(frozen, from_py_object)]
 #[derive(Clone)]
 pub struct Heuristic {
-    hdr: Option<DeleteRelaxationHeuristic>,
-    hmax_explicit: Option<HMaxExplicit>,
-    hcustom: Option<CustomHeuristic>,
+    variant: HeuristicVariant,
     cache_value_in_state: bool,
 }
 
@@ -35,9 +40,7 @@ impl Heuristic {
     #[staticmethod]
     pub fn custom(callable: Py<PyAny>, cache_value_in_state: bool) -> PyResult<Self> {
         Ok(Heuristic {
-            hdr: None,
-            hmax_explicit: None,
-            hcustom: Some(CustomHeuristic::new(callable)?),
+            variant: HeuristicVariant::Custom(CustomHeuristic::new(callable)?),
             cache_value_in_state,
         })
     }
@@ -57,7 +60,7 @@ impl Heuristic {
         disable_numeric_reasoning: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
-            hdr: Some(DeleteRelaxationHeuristic::new(
+            variant: HeuristicVariant::DeleteRelaxation(DeleteRelaxationHeuristic::new(
                 actions,
                 fluent_types,
                 objects,
@@ -70,8 +73,6 @@ impl Heuristic {
                     disable_numeric_reasoning,
                 },
             )?),
-            hmax_explicit: None,
-            hcustom: None,
             cache_value_in_state,
         })
     }
@@ -91,7 +92,7 @@ impl Heuristic {
         disable_numeric_reasoning: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
-            hdr: Some(DeleteRelaxationHeuristic::new(
+            variant: HeuristicVariant::DeleteRelaxation(DeleteRelaxationHeuristic::new(
                 actions,
                 fluent_types,
                 objects,
@@ -104,8 +105,6 @@ impl Heuristic {
                     disable_numeric_reasoning,
                 },
             )?),
-            hmax_explicit: None,
-            hcustom: None,
             cache_value_in_state,
         })
     }
@@ -125,7 +124,7 @@ impl Heuristic {
         disable_numeric_reasoning: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
-            hdr: Some(DeleteRelaxationHeuristic::new(
+            variant: HeuristicVariant::DeleteRelaxation(DeleteRelaxationHeuristic::new(
                 actions,
                 fluent_types,
                 objects,
@@ -138,8 +137,6 @@ impl Heuristic {
                     disable_numeric_reasoning,
                 },
             )?),
-            hmax_explicit: None,
-            hcustom: None,
             cache_value_in_state,
         })
     }
@@ -157,29 +154,23 @@ impl Heuristic {
         inadmissible_numeric_heuristic_variant: bool,
     ) -> PyResult<Self> {
         Ok(Heuristic {
-            hdr: None,
-            hmax_explicit: Some(HMaxExplicit::new(
+            variant: HeuristicVariant::HMaxExplicit(HMaxExplicit::new(
                 actions,
                 fluent_types,
                 events,
                 goals,
                 internal_caching,
             )?),
-            hcustom: None,
             cache_value_in_state,
         })
     }
 
     #[getter]
     pub fn name(&self) -> &'static str {
-        if let Some(h) = &self.hdr {
-            h.name()
-        } else if let Some(h) = &self.hmax_explicit {
-            h.name()
-        } else if let Some(h) = &self.hcustom {
-            h.name()
-        } else {
-            unreachable!("One of hdr, hmax_explicit, or hcustom must be set")
+        match &self.variant {
+            HeuristicVariant::DeleteRelaxation(h) => h.name(),
+            HeuristicVariant::HMaxExplicit(h) => h.name(),
+            HeuristicVariant::Custom(h) => h.name(),
         }
     }
 
@@ -189,12 +180,11 @@ impl Heuristic {
     }
 
     pub fn reachable_actions(&self, state: &State) -> PyResult<FxHashSet<Action>> {
-        if let Some(h) = &self.hdr {
-            h.reachable_actions(state)
-        } else {
-            Err(PyNotImplementedError::new_err(
-                "reachable_actions is not available: hdr is None",
-            ))
+        match &self.variant {
+            HeuristicVariant::DeleteRelaxation(h) => h.reachable_actions(state),
+            _ => Err(PyNotImplementedError::new_err(
+                "reachable_actions is only available for delete-relaxation heuristics",
+            )),
         }
     }
 }
@@ -207,16 +197,10 @@ impl HeuristicTrait for Heuristic {
                 return Ok(*h_value);
             }
         }
-        let h_value = {
-            if let Some(h) = &self.hdr {
-                h.eval(state)
-            } else if let Some(h) = &self.hmax_explicit {
-                h.eval(state)
-            } else if let Some(h) = &self.hcustom {
-                h.eval(state)
-            } else {
-                unreachable!("One of hdr, hmax_explicit, or hcustom must be set")
-            }
+        let h_value = match &self.variant {
+            HeuristicVariant::DeleteRelaxation(h) => h.eval(state),
+            HeuristicVariant::HMaxExplicit(h) => h.eval(state),
+            HeuristicVariant::Custom(h) => h.eval(state),
         };
         if self.cache_value_in_state {
             let mut heuristic_cache = state.heuristic_cache.lock().unwrap();
