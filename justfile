@@ -18,15 +18,15 @@ test:
 
 # Run all lint and formatting checks (Python + Rust). Fails if any issues are found.
 lint:
-    uv run ruff check src tests ci
-    uv run ruff format --check src tests ci
+    uv run ruff check src tests ci crates
+    uv run ruff format --check src tests ci crates
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets -- -D warnings
 
 # Apply Python and Rust formatters and auto-fix lint issues where possible
 format:
-    uv run ruff format src tests ci
-    uv run ruff check --fix src tests ci
+    uv run ruff format src tests ci crates
+    uv run ruff check --fix src tests ci crates
     cargo fmt --all
     cargo clippy --workspace --all-targets --fix --allow-dirty --allow-staged
 

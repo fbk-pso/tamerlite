@@ -161,5 +161,5 @@ Both `github-release` and `dev-release` jobs authenticate with an **installation
 - **`tests/` is outside `src/`** (modern best practice).
 - `Cargo.lock` is **committed** — uncommon for libraries but right for a workspace shipping a cdylib wheel.
 - The justfile's `check-versions` recipe calls `python3` directly (not `uv run`) so it doesn't trigger a uv resolve mid-bump.
-- Ruff is scoped to `src tests ci`.
+- Ruff is scoped to `src tests ci crates`.
 - `clippy` is informational (`-W warnings`) until the ~27-warning backlog on `rustamer-base` is cleaned up; switch to `-D warnings` in [justfile](justfile) + [.pre-commit-config.yaml](.pre-commit-config.yaml) when ready.
