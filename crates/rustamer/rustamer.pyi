@@ -22,7 +22,7 @@ class ExpressionNode:
     @property
     def fluent(self) -> Optional[int]: ...
     @property
-    def object(self) -> Optional[str]: ...
+    def object(self) -> Optional[int]: ...
     @property
     def bool_constant(self) -> Optional[bool]: ...
     @property
@@ -127,7 +127,7 @@ class Heuristic:
     def hff(
         actions: list[Action],
         fluent_types: list[str],
-        objects: dict[str, list[str]],
+        objects: dict[str, list[int]],
         events: dict[Action, list[tuple[Timing, Event]]],
         goals: list[ExpressionNode],
         internal_caching: bool,
@@ -139,7 +139,7 @@ class Heuristic:
     def hadd(
         actions: list[Action],
         fluent_types: list[str],
-        objects: dict[str, list[str]],
+        objects: dict[str, list[int]],
         events: dict[Action, list[tuple[Timing, Event]]],
         goals: list[ExpressionNode],
         internal_caching: bool,
@@ -151,7 +151,7 @@ class Heuristic:
     def hmax(
         actions: list[Action],
         fluent_types: list[str],
-        objects: dict[str, list[str]],
+        objects: dict[str, list[int]],
         events: dict[Action, list[tuple[Timing, Event]]],
         goals: list[ExpressionNode],
         internal_caching: bool,
@@ -163,7 +163,7 @@ class Heuristic:
     def hmax_explicit(
         actions: list[Action],
         fluent_types: list[str],
-        objects: dict[str, list[str]],
+        objects: dict[str, list[int]],
         events: dict[Action, list[tuple[Timing, Event]]],
         goals: list[ExpressionNode],
         internal_caching: bool,
@@ -181,7 +181,7 @@ def make_operator_node(kind: str, operands: tuple[int, ...]) -> ExpressionNode: 
 def make_bool_constant_node(v: bool) -> ExpressionNode: ...
 def make_int_constant_node(v: int) -> ExpressionNode: ...
 def make_rational_constant_node(numerator: int, denominator: int) -> ExpressionNode: ...
-def make_object_node(name: str) -> ExpressionNode: ...
+def make_object_node(oid: int) -> ExpressionNode: ...
 def make_fluent_node(fluent: int) -> ExpressionNode: ...
 def shift_expression(exp: Expression, offset: int) -> Expression: ...
 def get_fluents(exp: Expression) -> list[int]: ...

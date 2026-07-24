@@ -244,7 +244,7 @@ fn get_event_conditions(
 fn build_operator_condition(
     conditions: &Vec<Vec<ExpressionNode>>,
     extra_fluent: ExpressionNode,
-    objects: &FxHashMap<String, Vec<String>>,
+    objects: &FxHashMap<String, Vec<usize>>,
     fluent_types: &[String],
     disable_numeric_reasoning: bool,
     expression_manager: &mut ExpressionManager,
@@ -375,7 +375,7 @@ fn convert_to_heuristic_expression(
 /// an arithmetic error.
 fn simplify_condition(
     condition: &HeuristicExpression,
-    objects: &FxHashMap<String, Vec<String>>,
+    objects: &FxHashMap<String, Vec<usize>>,
     fluent_types: &[String],
     disable_numeric_reasoning: bool,
     expression_manager: &mut ExpressionManager,
@@ -599,7 +599,7 @@ fn inverted_operands(
 /// of the form `fluent != object`.
 fn simplify_fluent_not_equals_object_expression(
     expr: &Expression,
-    objects: &FxHashMap<String, Vec<String>>,
+    objects: &FxHashMap<String, Vec<usize>>,
     fluent_types: &[String],
     expression_manager: &mut ExpressionManager,
 ) -> Option<HeuristicExpression> {
@@ -619,7 +619,7 @@ fn simplify_fluent_not_equals_object_expression(
         .map(|obj| {
             let leaf_expr = expression_manager.put(&vec![
                 ExpressionNode::Fluent(*f),
-                ExpressionNode::Object(obj.clone()),
+                ExpressionNode::Object(*obj),
                 ExpressionNode::Equals(0, 1),
             ]);
             HeuristicExpressionNode::Leaf(leaf_expr)
@@ -1146,7 +1146,7 @@ impl DeleteRelaxationHeuristic {
     pub fn new(
         actions: Vec<Action>,
         fluent_types: Vec<String>,
-        objects: FxHashMap<String, Vec<String>>,
+        objects: FxHashMap<String, Vec<usize>>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         goals: Vec<PyExpressionNode>,
         config: DeleteRelaxationHeuristicConfig,
@@ -1239,7 +1239,7 @@ impl DeleteRelaxationHeuristic {
                             for o in objects[&t].iter() {
                                 effects.push(expression_manager.put(&vec![
                                     ExpressionNode::Fluent(eff.fluent),
-                                    ExpressionNode::Object(o.to_string()),
+                                    ExpressionNode::Object(*o),
                                     make_operator("==".to_string(), vec![0, 1])?,
                                 ]));
                             }

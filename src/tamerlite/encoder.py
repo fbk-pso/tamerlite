@@ -129,7 +129,10 @@ class Encoder:
         self._fluent_ids = {f: i for i, f in enumerate(self._fluents)}
         self._fluent_types = [fluent_types[f] for f in self._fluents]
 
-        self._converter = Converter(problem, self._fluent_ids)
+        self._object_names: list[str] = sorted(o.name for o in problem.all_objects)
+        self._object_ids = {name: i for i, name in enumerate(self._object_names)}
+
+        self._converter = Converter(problem, self._fluent_ids, self._object_ids)
         self._action_names: list[str] = sorted(
             action.name for action in problem.actions
         )
@@ -202,7 +205,7 @@ class Encoder:
         self._objects = {}
         for ut in problem.user_types:
             self._objects[cast(_UserType, ut).name] = [
-                o.name for o in problem.objects(ut)
+                self._object_ids[o.name] for o in problem.objects(ut)
             ]
 
         self._relevant_actions = None
@@ -748,8 +751,16 @@ class Encoder:
         return self._fluent_types
 
     @property
-    def objects(self) -> dict[str, list[str]]:
+    def objects(self) -> dict[str, list[int]]:
         return self._objects
+
+    @property
+    def object_ids(self) -> dict[str, int]:
+        return self._object_ids
+
+    @property
+    def object_names(self) -> list[str]:
+        return self._object_names
 
     @property
     def events(self) -> dict[Action, list[tuple[Timing, Event]]]:

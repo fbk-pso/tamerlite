@@ -26,7 +26,7 @@ from bloom_filter2 import BloomFilter
 from min_max_heap import MinMaxHeap
 
 from tamerlite.core.heuristics import Heuristic
-from tamerlite.core.search_space import Action, SearchSpaceABC, State
+from tamerlite.core.search_space import Action, ObjectNode, SearchSpaceABC, State
 
 logger = logging.getLogger(__name__)
 
@@ -355,8 +355,8 @@ def wastar_search_memory_bounded(
                 key.append(f"{v}")
             elif isinstance(v, Fraction):
                 key.append(f"{v.numerator}/{v.denominator}")
-            elif isinstance(v, str):
-                key.append(v)
+            elif isinstance(v, ObjectNode):
+                key.append(f"{v.object}")
         return "|".join(key).encode("utf-8")
 
     if not ss.is_temporal or weak_equality:

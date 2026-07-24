@@ -154,14 +154,12 @@ def parse_expression_rec(node):
             return make_bool_constant_node(value)
         if isinstance(value, int):
             return make_int_constant_node(value)
-        if isinstance(value, str):
-            return make_object_node(value)
         raise TypeError(f"Unsupported literal: {value!r}")
 
     if isinstance(node, ast.Name):
         if node.id in ("True", "False"):
             return make_bool_constant_node(node.id == "True")
-        return make_object_node(node.id)
+        raise ValueError(f"Unknown name: {node.id}")
 
     if isinstance(node, ast.Call):
         assert isinstance(node.func, ast.Name)
@@ -179,6 +177,10 @@ def parse_expression_rec(node):
         if fname == "FluentNode":
             kwargs = {kw.arg: _const_value(kw.value) for kw in node.keywords}
             return make_fluent_node(kwargs["fluent"])
+
+        if fname == "ObjectNode":
+            kwargs = {kw.arg: _const_value(kw.value) for kw in node.keywords}
+            return make_object_node(kwargs["object"])
 
         if fname == "OperatorNode":
             kwargs = {kw.arg: kw.value for kw in node.keywords}

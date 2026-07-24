@@ -16,6 +16,8 @@
 # stub-local imports (PEP 484); it must list every name importable from
 # `tamerlite.core`.
 
+from fractions import Fraction
+
 from tamerlite.core.heuristics import HFF, CustomHeuristic, HAdd, HMax, HMaxExplicit
 from tamerlite.core.multiqueue import multiqueue_search
 from tamerlite.core.search import (
@@ -37,8 +39,6 @@ from tamerlite.core.search_space import (
     SearchSpace,
     State,
     Timing,
-    evaluate,
-    get_fluent_value,
     get_fluents,
     make_bool_constant_node,
     make_fluent_node,
@@ -49,6 +49,15 @@ from tamerlite.core.search_space import (
     shift_expression,
     simplify,
 )
+
+# `evaluate`/`get_fluent_value` are NOT literal re-exports at runtime:
+# `core/__init__.py` wraps each backend's raw evaluator to unwrap an
+# object-valued result down to its plain `int` id at this boundary (both
+# backends keep the tagged/`ObjectNode` form internally). Give them their own
+# signature here instead of importing the `search_space` originals, whose
+# return type still includes `ObjectNode`.
+def evaluate(exp: Expression, state: State) -> bool | int | Fraction: ...
+def get_fluent_value(fluent: int, state: State) -> bool | int | Fraction: ...
 
 __all__ = [
     "HFF",

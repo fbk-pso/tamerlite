@@ -91,7 +91,9 @@ class StateWrapper(State):
         elif x.type.is_real_type():
             return self.em.Real(cast(Fraction, v))
         elif x.type.is_user_type():
-            return self.em.ObjectExp(self.problem.object(cast(str, v)))
+            return self.em.ObjectExp(
+                self.problem.object(self.encoder.object_names[cast(int, v)])
+            )
         else:
             raise NotImplementedError(f"Unknown value type for expression {x}")
 
