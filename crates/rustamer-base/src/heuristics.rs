@@ -205,7 +205,7 @@ impl Hash for OperatorHmax {
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 struct CacheKey {
-    values: Vec<ExpressionNode>,
+    values: im::Vector<ExpressionNode>,
     todo_values: Vec<usize>,
 }
 
@@ -1426,7 +1426,7 @@ impl DeleteRelaxationHeuristic {
     pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
         let mut internal_caching = self.internal_caching.lock().unwrap();
         if let Some(internal_caching) = internal_caching.as_mut() {
-            let values: Vec<ExpressionNode> = state.assignments.iter().cloned().collect();
+            let values = state.assignments.clone();
             let todo_values: Vec<usize> = self
                 .actions
                 .iter()
@@ -2092,7 +2092,7 @@ impl HMaxExplicit {
     pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
         let mut internal_caching = self.internal_caching.lock().unwrap();
         if let Some(internal_caching) = internal_caching.as_mut() {
-            let values: Vec<ExpressionNode> = state.assignments.iter().cloned().collect();
+            let values = state.assignments.clone();
             let todo_values: Vec<usize> = self
                 .actions
                 .iter()
