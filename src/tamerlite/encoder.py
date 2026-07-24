@@ -175,7 +175,7 @@ class Encoder:
                 action_objects, obj_to_prev_actions_map = (
                     self._compute_obj_to_prev_actions_map()
                 )
-                if len(obj_to_prev_actions_map) == 0:
+                if not any(obj_to_prev_actions_map):
                     # Symmetry breaking is not beneficial because there are no
                     # equivalent objects
                     action_objects = None
@@ -283,18 +283,19 @@ class Encoder:
 
     def _compute_obj_to_prev_actions_map(
         self,
-    ) -> tuple[list[list[str]], dict[str, set[Action]]]:
+    ) -> tuple[list[list[int]], list[set[Action]]]:
         """
         This method produces two outputs:
-            1. A list of lists of object names, where each inner list corresponds
+            1. A list of lists of object ids, where each inner list corresponds
                 to the objects used as parameters for the action.
-            2. A dictionary mapping each object name to the set of actions that
-                include the previous equivalent object as a parameter.
+            2. A list, indexed by object id, of the set of actions that include
+                the previous equivalent object as a parameter (empty set if the
+                object has no such constraint).
 
         Returns:
-            Tuple[List[List[str]], Dict[str, Set[Action]]]:
-                - List of object lists for each action.
-                - Mapping from object names to the set of actions.
+            Tuple[List[List[int]], List[Set[Action]]]:
+                - List of object id lists for each action.
+                - List, indexed by object id, of the set of actions.
         """
 
         equivalent_objects = self._compute_equivalent_objects()
@@ -304,23 +305,27 @@ class Encoder:
                 prev_equivalent_object[obj] = None if i == 0 else group[i - 1]
 
         obj_to_actions_map: dict[Object, set[Action]] = {}
-        action_objects: list[list[str]] = [[]] * len(self.actions)
+        action_objects: list[list[int]] = [[] for _ in range(len(self.actions))]
         for action in self._problem.actions:
             ai = self._map_back_action_instance(action())
             assert ai is not None
             objects = [p.object() for p in ai.actual_parameters if p.is_object_exp()]
             action_objects[self.action_by_name[action.name].idx] = [
-                obj.name for obj in objects
+                self._object_ids[obj.name] for obj in objects
             ]
             for obj in objects:
                 if obj not in obj_to_actions_map:
                     obj_to_actions_map[obj] = set()
                 obj_to_actions_map[obj].add(self._action_by_name[action.name])
 
-        obj_to_prev_actions_map = {}
+        obj_to_prev_actions_map: list[set[Action]] = [
+            set() for _ in range(len(self._object_names))
+        ]
         for obj, prev_obj in prev_equivalent_object.items():
             if prev_obj is not None and prev_obj in obj_to_actions_map:
-                obj_to_prev_actions_map[obj.name] = obj_to_actions_map[prev_obj]
+                obj_to_prev_actions_map[self._object_ids[obj.name]] = (
+                    obj_to_actions_map[prev_obj]
+                )
 
         return action_objects, obj_to_prev_actions_map
 

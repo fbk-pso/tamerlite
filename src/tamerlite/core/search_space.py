@@ -511,8 +511,8 @@ class SearchSpace(SearchSpaceABC):
         events: dict[Action, list[tuple[Timing, Event]]],
         actions: list[Action],
         compression_safe_actions: list[bool] | None,
-        action_objects: list[list[str]] | None,
-        obj_to_prev_actions_map: dict[str, set[Action]] | None,
+        action_objects: list[list[int]] | None,
+        obj_to_prev_actions_map: list[set[Action]] | None,
         initial_state: list[bool | int | Fraction | ObjectNode] | None = None,
         goal: Expression | None = None,
         relevant_actions: list[Action] | None = None,
@@ -733,8 +733,8 @@ class SearchSpace(SearchSpaceABC):
             and self._obj_to_prev_actions_map is not None
         ):
             for obj in self._action_objects[action.idx]:
-                prev_actions = self._obj_to_prev_actions_map.get(obj, None)
-                if prev_actions is None or action in prev_actions:
+                prev_actions = self._obj_to_prev_actions_map[obj]
+                if not prev_actions or action in prev_actions:
                     continue
 
                 if not any(a in prev_actions for a, _, _ in state.path):
