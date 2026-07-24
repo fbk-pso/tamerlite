@@ -39,7 +39,8 @@ class ObjectNode:
     object: int
 
 
-ExpressionNode = OperatorNode | FluentNode | ObjectNode | bool | int | Fraction
+ConstantNode = bool | int | Fraction | ObjectNode
+ExpressionNode = OperatorNode | FluentNode | ConstantNode
 Expression = tuple[ExpressionNode, ...]
 
 
@@ -172,7 +173,7 @@ class MultiSet:
 
 @dataclass
 class State:
-    assignments: list[bool | int | Fraction | ObjectNode]
+    assignments: list[ConstantNode]
     temporal_network: DeltaSimpleTemporalNetwork | None
     todo: dict[Action, tuple[int, int]]
     active_conditions: MultiSet
@@ -189,7 +190,7 @@ class State:
         else:
             return False
 
-    def get_value(self, fluent: int) -> bool | int | Fraction | ObjectNode:
+    def get_value(self, fluent: int) -> ConstantNode:
         return self.assignments[fluent]
 
     def clone(self):
@@ -253,11 +254,11 @@ class PrecedenceChecker:
         return res
 
 
-def get_fluent_value(fluent: int, state: State) -> bool | int | Fraction | ObjectNode:
+def get_fluent_value(fluent: int, state: State) -> ConstantNode:
     return state.get_value(fluent)
 
 
-def evaluate(exp: Expression, state: State) -> bool | int | Fraction | ObjectNode:
+def evaluate(exp: Expression, state: State) -> ConstantNode:
     res: list[ExpressionNode] = []
     for e in exp:
         if isinstance(e, (bool, int, Fraction)):
@@ -308,9 +309,7 @@ def evaluate(exp: Expression, state: State) -> bool | int | Fraction | ObjectNod
     return res[-1]
 
 
-def simplify(
-    exp: Expression, assignments: dict[int, bool | int | Fraction | ObjectNode]
-) -> Expression:
+def simplify(exp: Expression, assignments: dict[int, ConstantNode]) -> Expression:
     """This function simplifies the given expression using the given assignments"""
 
     # We iterate over the expression elements and we store the simplified value
@@ -475,7 +474,7 @@ class SearchSpaceABC(ABC):
     @abstractmethod
     def initial_state(
         self,
-        initial_state: list[bool | int | Fraction | ObjectNode] | None = None,
+        initial_state: list[ConstantNode] | None = None,
     ) -> State:
         pass
 
@@ -513,7 +512,7 @@ class SearchSpace(SearchSpaceABC):
         compression_safe_actions: list[bool] | None,
         action_objects: list[list[int]] | None,
         obj_to_prev_actions_map: list[set[Action]] | None,
-        initial_state: list[bool | int | Fraction | ObjectNode] | None = None,
+        initial_state: list[ConstantNode] | None = None,
         goal: Expression | None = None,
         relevant_actions: list[Action] | None = None,
         deadline: Fraction | None = None,
@@ -568,7 +567,7 @@ class SearchSpace(SearchSpaceABC):
 
     def initial_state(
         self,
-        initial_state: list[bool | int | Fraction | ObjectNode] | None = None,
+        initial_state: list[ConstantNode] | None = None,
     ) -> State:
         if self._is_temporal:
             tn = DeltaSimpleTemporalNetwork()
@@ -751,12 +750,14 @@ class SearchSpace(SearchSpaceABC):
             if duration is None:
                 lower, upper = 0, 0
             else:
-                lower = evaluate(duration[0], state)  # type: ignore[assignment]
-                assert isinstance(lower, (int, Fraction))
+                evaluated_lower = evaluate(duration[0], state)
+                assert isinstance(evaluated_lower, (int, Fraction))
+                lower = evaluated_lower
                 if duration[2]:
                     lower += self._epsilon
-                upper = evaluate(duration[1], state)  # type: ignore[assignment]
-                assert isinstance(upper, (int, Fraction))
+                evaluated_upper = evaluate(duration[1], state)
+                assert isinstance(evaluated_upper, (int, Fraction))
+                upper = evaluated_upper
                 if duration[3]:
                     upper -= self._epsilon
             new_state.temporal_network.insert_interval(

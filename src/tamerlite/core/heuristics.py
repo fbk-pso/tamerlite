@@ -26,6 +26,7 @@ from fractions import Fraction
 
 from tamerlite.core.search_space import (
     Action,
+    ConstantNode,
     Effect,
     Event,
     Expression,
@@ -77,7 +78,7 @@ class Operator:
 class OperatorHmax:
     action: Action
     conditions: tuple[Expression, ...]
-    effects: tuple[tuple[int, Expression | bool | int | Fraction | ObjectNode], ...]
+    effects: tuple[tuple[int, Expression | ConstantNode], ...]
     cost: float
 
 
@@ -282,8 +283,7 @@ class DeleteRelaxationHeuristic(Heuristic):
             weights[-1] += epsilon
 
         self._internal_caching: (
-            dict[tuple[bool | int | Fraction | ObjectNode | None, ...], float | None]
-            | None
+            dict[tuple[ConstantNode | None, ...], float | None] | None
         ) = {} if internal_caching else None
 
     @property
@@ -410,8 +410,12 @@ class DeleteRelaxationHeuristic(Heuristic):
 
         if nodes is not None:
             # Check whether the leaf node represents a simple numeric expression
-            exp = nodes[0].expression  # type: ignore[union-attr]
-            polynomial_exp = (*exp[:-1], Op("-", exp[-1].operands))  # type: ignore
+            first_node = nodes[0]
+            assert isinstance(first_node, LeafNode)
+            exp = first_node.expression
+            last = exp[-1]
+            assert isinstance(last, Op)
+            polynomial_exp = (*exp[:-1], Op("-", last.operands))
             try:
                 self._to_linear_polynomial(polynomial_exp)
             except ValueError:
@@ -559,8 +563,10 @@ class DeleteRelaxationHeuristic(Heuristic):
 
         # find the start index of the sub-expression
         i = idx
-        while isinstance(exp[i], Op):
-            i = exp[i].operands[0]  # type: ignore[union-attr]
+        node = exp[i]
+        while isinstance(node, Op):
+            i = node.operands[0]
+            node = exp[i]
 
         return shift_expression(exp[i : idx + 1], -i)
 
@@ -625,8 +631,8 @@ class DeleteRelaxationHeuristic(Heuristic):
             if exp[-1].kind == "not":
                 i = exp[-1].operands[0]
 
-            if isinstance(exp[i], Op):
-                exp_node: Op = exp[i]  # type: ignore[assignment]
+            exp_node = exp[i]
+            if isinstance(exp_node, Op):
                 if exp_node.kind != "==":
                     return True
 
@@ -702,7 +708,7 @@ class DeleteRelaxationHeuristic(Heuristic):
             return None
 
         k = float(polynomial.pop(None, 0))
-        fluents: list[int] = list(polynomial.keys())  # type: ignore[arg-type]
+        fluents: list[int] = [f for f in polynomial if f is not None]
         weights: list[float] = [float(polynomial[f]) for f in fluents] + [k]
         return fluents, weights, exp[-1].kind == "<"
 
@@ -1139,6 +1145,7 @@ class DeleteRelaxationHeuristic(Heuristic):
             elif isinstance(node, AndNode):
                 v = 0.0
                 leaves = []
+                all_defined = True
                 operands_values = [res.pop() for i in range(node.num_operands)]
                 for ov, ol in operands_values:
                     if ov is not None:
@@ -1148,10 +1155,10 @@ class DeleteRelaxationHeuristic(Heuristic):
                             v += ov
                             leaves.extend(ol)
                     else:
-                        v = None  # type: ignore[assignment]
+                        all_defined = False
                         leaves = []
                         break
-                res.append((v, leaves))
+                res.append((v if all_defined else None, leaves))
             elif isinstance(node, OrNode):
                 operands_values = [res.pop() for _ in range(node.num_operands)]
                 operands_values = [
@@ -1272,9 +1279,7 @@ class HMaxExplicit(Heuristic):
             f_cond = self._num_fluents + len(le) - 1
             cond = (FluentNode(f_cond),)
             for _, e in le:
-                effects: list[
-                    tuple[int, Expression | bool | int | Fraction | ObjectNode]
-                ] = []
+                effects: list[tuple[int, Expression | ConstantNode]] = []
                 f = self._num_fluents
                 self._num_fluents += 1
                 self._extra_fluents[a].append(f)
@@ -1338,8 +1343,7 @@ class HMaxExplicit(Heuristic):
                     )
 
         self._internal_caching: (
-            dict[tuple[bool | int | Fraction | ObjectNode | None, ...], float | None]
-            | None
+            dict[tuple[ConstantNode | None, ...], float | None] | None
         ) = {} if internal_caching else None
 
     @property
@@ -1361,18 +1365,16 @@ class HMaxExplicit(Heuristic):
 
     def _possible_values(
         self,
-        exp: Expression | bool | int | Fraction | ObjectNode,
-        assignments: list[set[bool | int | Fraction | ObjectNode]],
+        exp: Expression | ConstantNode,
+        assignments: list[set[ConstantNode]],
         cache_extract_fluents: dict[int, set[int]],
         exp_fluents: set[int] | None = None,
-    ) -> Iterator[bool | int | Fraction | ObjectNode]:
+    ) -> Iterator[ConstantNode]:
         if isinstance(exp, tuple):
             if exp_fluents is None:
                 exp_fluents = self._extract_fluents(exp, cache_extract_fluents)
             values = (assignments[f] for f in exp_fluents)
-            state_assignments: list[bool | int | Fraction | ObjectNode | None] = [
-                None
-            ] * len(assignments)
+            state_assignments: list[ConstantNode | None] = [None] * len(assignments)
             for assignments_values in itertools.product(*values):
                 for f, v in zip(exp_fluents, assignments_values, strict=True):
                     state_assignments[f] = v
@@ -1384,7 +1386,7 @@ class HMaxExplicit(Heuristic):
     def _exp_can_be_true(
         self,
         exp: Expression,
-        assignments: list[set[bool | int | Fraction | ObjectNode]],
+        assignments: list[set[ConstantNode]],
         assignments_changes: set[int],
         cache_can_be_true: dict[int, bool],
         cache_extract_fluents: dict[int, set[int]],
@@ -1413,7 +1415,7 @@ class HMaxExplicit(Heuristic):
     def _can_be_true(
         self,
         expressions: tuple[Expression, ...],
-        assignments: list[set[bool | int | Fraction | ObjectNode]],
+        assignments: list[set[ConstantNode]],
         assignments_changes: set[int],
         cache_can_be_true: dict[int, bool],
         cache_extract_fluents: dict[int, set[int]],
@@ -1445,9 +1447,9 @@ class HMaxExplicit(Heuristic):
         return res
 
     def _eval_core(self, state: State) -> float | None:
-        assignments: list[set[bool | int | Fraction | ObjectNode]] = [
-            {v} for v in state.assignments
-        ] + [set() for _ in range(self._num_fluents - len(state.assignments))]
+        assignments: list[set[ConstantNode]] = [{v} for v in state.assignments] + [
+            set() for _ in range(self._num_fluents - len(state.assignments))
+        ]
 
         # add extra fluents to assignments
         for action in self._events:
@@ -1474,9 +1476,7 @@ class HMaxExplicit(Heuristic):
                 # goal satisfied
                 return float(depth)
 
-            new_assignments: dict[int, set[bool | int | Fraction | ObjectNode]] = (
-                defaultdict(set)
-            )
+            new_assignments: dict[int, set[ConstantNode]] = defaultdict(set)
             for i, operator in enumerate(self._operators):
                 if applied_operators[i]:
                     # operator already applied

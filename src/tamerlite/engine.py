@@ -22,7 +22,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import partial
-from typing import IO, cast
+from typing import IO, Protocol, cast
 
 import unified_planning as up
 import unified_planning.engines
@@ -40,6 +40,7 @@ from unified_planning.plans import ActionInstance, PlanKind
 
 from tamerlite.core import (
     HFF,
+    Action,
     CustomHeuristic,
     HAdd,
     HMax,
@@ -58,7 +59,7 @@ from tamerlite.core import (
     wastar_search_memory_bounded,
 )
 from tamerlite.core.heuristics import Heuristic
-from tamerlite.encoder import Encoder, PlanType
+from tamerlite.encoder import Encoder
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +122,7 @@ class HeuristicParams:
 
 @dataclass(frozen=True)
 class SearchParams(HeuristicParams):
-    search: str | None = None
+    search: str = "wastar"
     internal_heuristic_cache: bool = True
     inadmissible_numeric_heuristic_variant: bool = False
     early_termination: bool = False
@@ -142,6 +143,40 @@ class MultiqueueParams:
     symmetry_breaking: bool = True
     compression_safe_actions: bool = True
     relevance_analysis: bool = True
+
+
+class _SearchCallable(Protocol):
+    """Call signature shared by the search functions bound (via `partial`) in
+    `TamerLite._get_search`; a plain `Callable[[...], ...]` can't express the
+    keyword-only `weak_equality` param, which `dfs`/`bfs` don't accept."""
+
+    def __call__(
+        self,
+        ss: search_space.SearchSpaceABC,
+        timeout: float | None = ...,
+        early_termination: bool = ...,
+        weak_equality: bool = ...,
+    ) -> tuple[list[Action] | None, dict[str, str]]: ...
+
+
+class _HeuristicCallable(Protocol):
+    """Call signature shared by the heuristic constructors in `hh_map`
+    (`_get_heuristic`): a mix of plain functions, a class, and `partial`-bound
+    variants, which a plain `Callable[[...], ...]` can't unify (their join
+    widens to `object`, which isn't callable)."""
+
+    def __call__(
+        self,
+        actions: list[Action],
+        fluent_types: list[str],
+        objects: dict[str, list[int]],
+        events: dict[Action, list[tuple[search_space.Timing, search_space.Event]]],
+        goals: search_space.Expression,
+        *,
+        internal_caching: bool,
+        cache_value_in_state: bool,
+        inadmissible_numeric_heuristic_variant: bool,
+    ) -> Heuristic: ...
 
 
 class TamerLite(
@@ -243,7 +278,7 @@ class TamerLite(
 
         if h_name == "custom":
             assert heuristic is not None
-            h = CustomHeuristic(
+            h: Heuristic = CustomHeuristic(
                 StateWrapper.wrap_heuristic(encoder, heuristic),
                 cache_heuristic_in_state,
             )
@@ -254,7 +289,7 @@ class TamerLite(
             w = 0.0
 
         else:
-            hh_map = {
+            hh_map: dict[str, _HeuristicCallable] = {
                 "hff": HFF,
                 "hadd": HAdd,
                 "hmax": HMax,
@@ -274,7 +309,7 @@ class TamerLite(
                 for a, e in encoder.events.items()
                 if a in encoder.applicable_actions
             }
-            h = hh_map[h_name](  # type: ignore
+            h = hh_map[h_name](
                 encoder.actions,
                 encoder.fluent_types,
                 encoder.objects,
@@ -290,21 +325,15 @@ class TamerLite(
 
     def _get_search(
         self,
-        search_name: str | None,
+        search_name: str,
         heuristic: Heuristic,
         weight: float,
         incomplete_memory_bounded_search: bool,
         weak_equality: bool,
         is_temporal: bool,
-    ) -> tuple[
-        str,
-        Callable[
-            [search_space.SearchSpaceABC, float | None, bool],
-            tuple[PlanType | None, dict[str, str]],
-        ],
-    ]:
+    ) -> tuple[str, _SearchCallable]:
         if (
-            (search_name is None or search_name in {"wastar", "astar", "gbfs"})
+            search_name in {"wastar", "astar", "gbfs"}
             and incomplete_memory_bounded_search
             and is_temporal
             and weak_equality
@@ -314,7 +343,7 @@ class TamerLite(
                 stacklevel=2,
             )
 
-        if search_name is None or search_name == "wastar":
+        if search_name == "wastar":
             if incomplete_memory_bounded_search:
                 search = partial(
                     wastar_search_memory_bounded, heuristic=heuristic, weight=weight
@@ -343,7 +372,7 @@ class TamerLite(
                 "Supported values are: wastar, astar, gbfs, dfs, bfs, ehc."
             )
 
-        return search_name, search  # type: ignore[return-value]
+        return search_name, search
 
     def _compile_problem(
         self, problem: "up.model.Problem"
@@ -755,7 +784,7 @@ class TamerLite(
 
                 if self._params.weak_equality and search_name not in ("dfs", "bfs"):
                     start = time.monotonic()
-                    path, metrics = search(  # type: ignore
+                    path, metrics = search(
                         encoder.search_space,
                         timeout=timeout,
                         early_termination=self._params.early_termination,
@@ -768,14 +797,14 @@ class TamerLite(
                             "with weak_equality=False and timeout=%s",
                             updated_timeout,
                         )
-                        path, metrics = search(  # type: ignore
+                        path, metrics = search(
                             encoder.search_space,
                             timeout=updated_timeout,
                             early_termination=self._params.early_termination,
                             weak_equality=False,
                         )
                 else:
-                    path, metrics = search(  # type: ignore
+                    path, metrics = search(
                         encoder.search_space,
                         timeout=timeout,
                         early_termination=self._params.early_termination,

@@ -21,7 +21,7 @@ import sys
 import warnings
 from typing import TYPE_CHECKING
 
-from tamerlite.core.search_space import ObjectNode
+from tamerlite.core.search_space import ConstantNode, ObjectNode
 
 if TYPE_CHECKING:
     # `Expression`/`State` are bound at runtime below to whichever backend is
@@ -166,7 +166,7 @@ else:
         rustamer_lib.Heuristic.custom,
     )
 
-    def _unwrap_value(v) -> bool | int | Fraction | ObjectNode:
+    def _unwrap_value(v) -> ConstantNode:
         if v.bool_constant is not None:
             return v.bool_constant
         elif v.object is not None:
@@ -178,12 +178,8 @@ else:
         else:
             raise NotImplementedError("Unreachable code")
 
-    def get_fluent_value(
-        fluent: int, state: "_StateT"
-    ) -> bool | int | Fraction | ObjectNode:
+    def get_fluent_value(fluent: int, state: "_StateT") -> ConstantNode:
         return _unwrap_value(state.get_value(fluent))
 
-    def evaluate(
-        exp: "_ExpressionT", state: "_StateT"
-    ) -> bool | int | Fraction | ObjectNode:
+    def evaluate(exp: "_ExpressionT", state: "_StateT") -> ConstantNode:
         return _unwrap_value(rustamer_lib.evaluate(exp, state))
