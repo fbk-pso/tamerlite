@@ -263,7 +263,7 @@ def evaluate(exp: Expression, state: State) -> bool | int | Fraction | ObjectNod
         if isinstance(e, (bool, int, Fraction)):
             res.append(e)
         elif isinstance(e, FluentNode):
-            res.append(state.assignments[e.fluent])
+            res.append(get_fluent_value(e.fluent, state))
         elif isinstance(e, ObjectNode):
             res.append(e)
         else:

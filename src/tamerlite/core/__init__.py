@@ -21,6 +21,8 @@ import sys
 import warnings
 from typing import TYPE_CHECKING
 
+from tamerlite.core.search_space import ObjectNode
+
 if TYPE_CHECKING:
     # `Expression`/`State` are bound at runtime below to whichever backend is
     # active (pure-Python or the dynamically-imported `rustamer` extension),
@@ -54,7 +56,6 @@ if not use_rustamer:
         "For better performance, ensure rustamer is installed and not disabled.",
         stacklevel=2,
     )
-    from fractions import Fraction
 
     from tamerlite.core.heuristics import (
         HFF,
@@ -80,10 +81,11 @@ if not use_rustamer:
         Effect,
         Event,
         Expression,
-        ObjectNode,
         SearchSpace,
         State,
         Timing,
+        evaluate,
+        get_fluent_value,
         get_fluents,
         make_bool_constant_node,
         make_fluent_node,
@@ -94,16 +96,6 @@ if not use_rustamer:
         shift_expression,
         simplify,
     )
-    from tamerlite.core.search_space import evaluate as _evaluate
-    from tamerlite.core.search_space import get_fluent_value as _get_fluent_value
-
-    def get_fluent_value(fluent: int, state: "_StateT") -> bool | int | Fraction:
-        r = _get_fluent_value(fluent, state)
-        return r.object if isinstance(r, ObjectNode) else r
-
-    def evaluate(exp: "_ExpressionT", state: "_StateT") -> bool | int | Fraction:
-        r = _evaluate(exp, state)
-        return r.object if isinstance(r, ObjectNode) else r
 else:
     from fractions import Fraction
 
@@ -174,28 +166,24 @@ else:
         rustamer_lib.Heuristic.custom,
     )
 
-    def get_fluent_value(fluent: int, state: "_StateT") -> bool | int | Fraction:
-        exp = state.get_value(fluent)
-        if exp.bool_constant is not None:
-            return exp.bool_constant
-        elif exp.object is not None:
-            return exp.object
-        elif exp.int_constant is not None:
-            return exp.int_constant
-        elif exp.real_constant is not None:
-            return exp.real_constant
+    def _unwrap_value(v) -> bool | int | Fraction | ObjectNode:
+        if v.bool_constant is not None:
+            return v.bool_constant
+        elif v.object is not None:
+            return ObjectNode(v.object)
+        elif v.int_constant is not None:
+            return v.int_constant
+        elif v.real_constant is not None:
+            return v.real_constant
         else:
             raise NotImplementedError("Unreachable code")
 
-    def evaluate(exp: "_ExpressionT", state: "_StateT") -> bool | int | Fraction:
-        r = rustamer_lib.evaluate(exp, state)
-        if r.bool_constant is not None:
-            return r.bool_constant
-        elif r.object is not None:
-            return r.object
-        elif r.int_constant is not None:
-            return r.int_constant
-        elif r.real_constant is not None:
-            return r.real_constant
-        else:
-            raise NotImplementedError("Unreachable code")
+    def get_fluent_value(
+        fluent: int, state: "_StateT"
+    ) -> bool | int | Fraction | ObjectNode:
+        return _unwrap_value(state.get_value(fluent))
+
+    def evaluate(
+        exp: "_ExpressionT", state: "_StateT"
+    ) -> bool | int | Fraction | ObjectNode:
+        return _unwrap_value(rustamer_lib.evaluate(exp, state))
