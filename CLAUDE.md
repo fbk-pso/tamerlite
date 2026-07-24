@@ -44,6 +44,15 @@ uv run pre-commit install  # one-time
 
 `uv` is required. `just` is the task runner — install via `uv tool install rust-just` or your package manager.
 
+### Known gotcha: `uv`'s own cache can serve a stale `rustamer` wheel
+
+`rustamer` is a `uv` workspace member with `source = { editable = ... }` in `uv.lock`. Plain `uv run`/`uv sync` (no `--no-sync`) silently re-syncs the environment first and, when it decides the editable `rustamer` package needs rebuilding, builds it through **its own** PEP 517 path — not `maturin develop`. That path has been observed to serve a wheel from `uv`'s persistent build cache (`~/.cache/uv/archive-v0/...`) that predates the current Rust source, instead of rebuilding fresh. The symptom is a confusing runtime `TypeError`/`AttributeError` from a `rustamer`-exported function that looks like a genuine Rust bug but disappears on a from-scratch build — e.g. a PyO3 argument-extraction error mentioning an old parameter name/type that no longer exists in the current source (concretely hit after the `10ce304` refactor: `make_object_node(oid: usize)` calls raised `TypeError: 'int' object is not an instance of 'str', while processing 'name'`, because the cached wheel still had the pre-refactor `make_object_node(name: String)`).
+
+**Before concluding there's a Rust logic bug**, rule this out:
+1. Rebuild explicitly with `just build-rust` (`maturin develop --release`) and retest — this bypasses `uv`'s own build path entirely.
+2. If the bug persists after that but reappears whenever a bare `uv run`/`uv sync` executes, purge the cache: `uv cache clean rustamer` (or `uv cache clean` for everything) and rebuild.
+3. Prefer `uv run --no-sync ...` for ad hoc commands during Rust dev iteration, right after `just build-rust`, to avoid uv silently reinstalling over your local build.
+
 ## Common tasks (all via `just`)
 
 | Recipe | What it does |
