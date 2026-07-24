@@ -31,7 +31,7 @@ use super::tn_interpreter::TNInterpreter;
 use super::utils::*;
 
 type ScheduledAction = (Option<BigRational>, Action, Option<BigRational>);
-type PyScheduledAction = (Option<String>, Action, Option<String>);
+type PyScheduledAction<'py> = (Option<Bound<'py, PyAny>>, Action, Option<Bound<'py, PyAny>>);
 type MutexCache = Mutex<FxHashMap<((Action, usize), (Action, usize)), bool>>;
 type PrecedenceCache = Mutex<FxHashMap<((Action, usize), (Action, usize)), bool>>;
 type EventFluents = Vec<
@@ -331,19 +331,23 @@ impl SearchSpace {
     }
 
     #[pyo3(name = "build_plan", signature = (path))]
-    fn py_build_plan(&self, path: Vec<Action>) -> PyResult<Option<Vec<PyScheduledAction>>> {
+    fn py_build_plan<'py>(
+        &self,
+        py: Python<'py>,
+        path: Vec<Action>,
+    ) -> PyResult<Option<Vec<PyScheduledAction<'py>>>> {
         let plan = self.build_plan(&path)?;
         let mut res = Vec::with_capacity(plan.len());
-        for (s, a, d) in plan.into_iter() {
-            let mut ss = None;
-            let mut ds = None;
-            if let Some(start) = s {
-                ss = Some(format!("{}/{}", start.numer(), start.denom()));
-            }
-            if let Some(duration) = d {
-                ds = Some(format!("{}/{}", duration.numer(), duration.denom()));
-            }
-            res.push((ss, a, ds));
+        for (start, action, duration) in plan.into_iter() {
+            let start = match start {
+                Some(start) => Some(big_rational_to_py_fraction(&start, py)?),
+                None => None,
+            };
+            let duration = match duration {
+                Some(duration) => Some(big_rational_to_py_fraction(&duration, py)?),
+                None => None,
+            };
+            res.push((start, action, duration));
         }
         Ok(Some(res))
     }
