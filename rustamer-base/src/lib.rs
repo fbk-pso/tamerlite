@@ -31,7 +31,7 @@ pub use search::{
     wastar_search,
     wastar_search_memory_bounded,
     Plan,
-    WastarSearchResult,
+    AnytimeSearchResult,
     ehc_search,
     bfs_search,
     dfs_search,

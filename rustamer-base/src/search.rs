@@ -37,7 +37,7 @@ use super::utils::PersistentList;
 
 pub type Plan = Vec<(Option<String>, Action, Option<String>)>;
 
-pub struct WastarSearchResult {
+pub struct AnytimeSearchResult {
     pub plan: Option<Plan>,
     pub metrics: FxHashMap<String, String>,
     pub plans: Option<Vec<Vec<Action>>>,
@@ -145,7 +145,7 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     early_termination: bool,
     weak_equality: bool,
     max_len: Option<f64>,
-) -> PyResult<WastarSearchResult> {
+) -> PyResult<AnytimeSearchResult> {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
     let start = SystemTime::now();
     let init = Rc::new(ss.initial_state(None)?);
@@ -153,7 +153,7 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     if early_termination && ss.goal_reached(&init, None)? {
         metrics.insert("expanded_states".to_string(), expanded_states.to_string());
         metrics.insert("goal_depth".to_string(), init.g.to_string());
-        return build_plan(ss, &init).map(|plan| WastarSearchResult {
+        return build_plan(ss, &init).map(|plan| AnytimeSearchResult {
             plan,
             metrics,
             plans: None,
@@ -175,7 +175,7 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         Some(v) => v,
         None => {
             metrics.insert("expanded_states".to_string(), 0.to_string());
-            return Ok(WastarSearchResult {
+            return Ok(AnytimeSearchResult {
                 plan: None,
                 metrics,
                 plans: max_len.map(|_| Vec::new()),
@@ -195,7 +195,7 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
             if start.elapsed().unwrap().as_secs_f32() > t {
                 if max_len.is_some() {
                     metrics.insert("expanded_states".to_string(), expanded_states.to_string());
-                    return Ok(WastarSearchResult {
+                    return Ok(AnytimeSearchResult {
                         plan: None,
                         metrics,
                         plans: Some(plans),
@@ -220,7 +220,7 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
             } else {
                 metrics.insert("expanded_states".to_string(), expanded_states.to_string());
                 metrics.insert("goal_depth".to_string(), state.g.to_string());
-                return build_plan(ss, &state).map(|plan| WastarSearchResult {
+                return build_plan(ss, &state).map(|plan| AnytimeSearchResult {
                     plan,
                     metrics,
                     plans: None,
@@ -255,7 +255,7 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
                 if early_termination && ss.goal_reached(&s, None)? {
                     metrics.insert("expanded_states".to_string(), expanded_states.to_string());
                     metrics.insert("goal_depth".to_string(), s.g.to_string());
-                    return build_plan(ss, &s).map(|plan| WastarSearchResult {
+                    return build_plan(ss, &s).map(|plan| AnytimeSearchResult {
                         plan,
                         metrics,
                         plans: None,
@@ -276,7 +276,7 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         }
     }
     metrics.insert("expanded_states".to_string(), expanded_states.to_string());
-    Ok(WastarSearchResult {
+    Ok(AnytimeSearchResult {
         plan: None,
         metrics,
         plans: max_len.map(|_| plans),
@@ -398,7 +398,7 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
     early_termination: bool,
     weak_equality: bool,
     max_len: Option<f64>,
-) -> PyResult<WastarSearchResult> {
+) -> PyResult<AnytimeSearchResult> {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
     let start = SystemTime::now();
     let init = ss.initial_state(None)?;
@@ -408,7 +408,7 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
     if early_termination && ss.goal_reached(&init, None)? {
         metrics.insert("expanded_states".to_string(), expanded_states.to_string());
         metrics.insert("goal_depth".to_string(), init.g.to_string());
-        return build_plan(ss, &init).map(|plan| WastarSearchResult {
+        return build_plan(ss, &init).map(|plan| AnytimeSearchResult {
             plan,
             metrics,
             plans: None,
@@ -431,7 +431,7 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
         Some(v) => v,
         None => {
             metrics.insert("expanded_states".to_string(), 0.to_string());
-            return Ok(WastarSearchResult {
+            return Ok(AnytimeSearchResult {
                 plan: None,
                 metrics,
                 plans: max_len.map(|_| Vec::new()),
@@ -454,7 +454,7 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
             if start.elapsed().unwrap().as_secs_f32() > t {
                 if max_len.is_some() {
                     metrics.insert("expanded_states".to_string(), expanded_states.to_string());
-                    return Ok(WastarSearchResult {
+                    return Ok(AnytimeSearchResult {
                         plan: None,
                         metrics,
                         plans: Some(plans),
@@ -479,7 +479,7 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
             } else {
                 metrics.insert("expanded_states".to_string(), expanded_states.to_string());
                 metrics.insert("goal_depth".to_string(), state.g.to_string());
-                return build_plan(ss, &state).map(|plan| WastarSearchResult {
+                return build_plan(ss, &state).map(|plan| AnytimeSearchResult {
                     plan,
                     metrics,
                     plans: None,
@@ -508,7 +508,7 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
             if early_termination && ss.goal_reached(&s, None)? {
                 metrics.insert("expanded_states".to_string(), expanded_states.to_string());
                 metrics.insert("goal_depth".to_string(), s.g.to_string());
-                return build_plan(ss, &s).map(|plan| WastarSearchResult {
+                return build_plan(ss, &s).map(|plan| AnytimeSearchResult {
                     plan,
                     metrics,
                     plans: None,
@@ -527,7 +527,7 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
         }
     }
     metrics.insert("expanded_states".to_string(), expanded_states.to_string());
-    Ok(WastarSearchResult {
+    Ok(AnytimeSearchResult {
         plan: None,
         metrics,
         plans: max_len.map(|_| plans),
@@ -613,16 +613,42 @@ fn basic_search<S: SearchSpaceTrait>(
     Ok((None, metrics))
 }
 
+/// Checks whether `state` is a goal state and, if so and it is within
+/// `current_max_len`, records its path in `plans` (tightening the bound to
+/// the plan's length if it started out infinite). Used by [`ehc_search`]'s
+/// anytime mode to check every generated state for goal_reached exactly
+/// once, right when it is created — EHC restarts by wiping its open/closed
+/// sets whenever a strictly better successor is found, so a goal state that
+/// is only checked when popped could be discarded by such a restart before
+/// ever being tested.
+fn log_if_goal<S: SearchSpaceTrait>(
+    ss: &S,
+    state: &State,
+    current_max_len: &mut Option<f64>,
+    plans: &mut Vec<Vec<Action>>,
+) -> PyResult<()> {
+    if ss.goal_reached(state, None)? {
+        if let Some(bound) = *current_max_len {
+            let path = PersistentList::to_vec_copy(&state.path);
+            if (path.len() as f64) <= bound {
+                plans.push(path.into_iter().map(|(action, _, _)| action).collect());
+                if bound.is_infinite() {
+                    *current_max_len = Some(plans.last().unwrap().len() as f64);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     ss: &S,
     heuristic: &H,
     timeout: Option<f32>,
     early_termination: bool,
     weak_equality: bool,
-) -> PyResult<(
-    Option<Vec<(Option<String>, Action, Option<String>)>>,
-    FxHashMap<String, String>,
-)> {
+    max_len: Option<f64>,
+) -> PyResult<AnytimeSearchResult> {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
     let start = SystemTime::now();
     let init = Rc::new(ss.initial_state(None)?);
@@ -631,16 +657,44 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     if early_termination && ss.goal_reached(&init, None)? {
         metrics.insert("expanded_states".to_string(), expanded_states.to_string());
         metrics.insert("goal_depth".to_string(), init.g.to_string());
-        return build_plan(ss, &init).map(|plan| (plan, metrics));
+        return build_plan(ss, &init).map(|plan| AnytimeSearchResult {
+            plan,
+            metrics,
+            plans: None,
+            timed_out: false,
+        });
     }
 
     let mut best_h = match heuristic.eval(&init, ss)? {
         Some(v) => v,
         None => {
             metrics.insert("expanded_states".to_string(), 0.to_string());
-            return Ok((None, metrics));
+            return Ok(AnytimeSearchResult {
+                plan: None,
+                metrics,
+                plans: max_len.map(|_| Vec::new()),
+                timed_out: false,
+            });
         }
     };
+
+    let mut plans = Vec::new();
+    let mut current_max_len = max_len;
+    if max_len.is_some() {
+        if let Some(t) = timeout {
+            if start.elapsed().unwrap().as_secs_f32() > t {
+                metrics.insert("expanded_states".to_string(), expanded_states.to_string());
+                return Ok(AnytimeSearchResult {
+                    plan: None,
+                    metrics,
+                    plans: Some(plans),
+                    timed_out: true,
+                });
+            }
+        }
+        log_if_goal(ss, &init, &mut current_max_len, &mut plans)?;
+    }
+
     let mut open = VecDeque::new();
     open.push_back(init);
     let mut closed = FxHashSet::with_hasher(FxBuildHasher::default());
@@ -648,15 +702,29 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     while let Some(state) = open.pop_front() {
         if let Some(t) = timeout {
             if start.elapsed().unwrap().as_secs_f32() > t {
+                if max_len.is_some() {
+                    metrics.insert("expanded_states".to_string(), expanded_states.to_string());
+                    return Ok(AnytimeSearchResult {
+                        plan: None,
+                        metrics,
+                        plans: Some(plans),
+                        timed_out: true,
+                    });
+                }
                 return Err(PyTimeoutError::new_err("Timeout"));
             }
         }
 
         expanded_states += 1;
-        if !early_termination && ss.goal_reached(&state, None)? {
+        if max_len.is_none() && !early_termination && ss.goal_reached(&state, None)? {
             metrics.insert("expanded_states".to_string(), expanded_states.to_string());
             metrics.insert("goal_depth".to_string(), state.g.to_string());
-            return build_plan(ss, &state).map(|plan| (plan, metrics));
+            return build_plan(ss, &state).map(|plan| AnytimeSearchResult {
+                plan,
+                metrics,
+                plans: None,
+                timed_out: false,
+            });
         } else {
             if !ss.is_temporal() {
                 closed.insert(Rc::clone(&state));
@@ -690,7 +758,15 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
                 if early_termination && ss.goal_reached(&s, None)? {
                     metrics.insert("expanded_states".to_string(), expanded_states.to_string());
                     metrics.insert("goal_depth".to_string(), s.g.to_string());
-                    return build_plan(ss, &s).map(|plan| (plan, metrics));
+                    return build_plan(ss, &s).map(|plan| AnytimeSearchResult {
+                        plan,
+                        metrics,
+                        plans: None,
+                        timed_out: false,
+                    });
+                }
+                if max_len.is_some() {
+                    log_if_goal(ss, &s, &mut current_max_len, &mut plans)?;
                 }
                 match h {
                     Some(v) => {
@@ -714,5 +790,10 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         }
     }
     metrics.insert("expanded_states".to_string(), expanded_states.to_string());
-    Ok((None, metrics))
+    Ok(AnytimeSearchResult {
+        plan: None,
+        metrics,
+        plans: max_len.map(|_| plans),
+        timed_out: false,
+    })
 }

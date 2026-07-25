@@ -259,6 +259,7 @@ class TamerLite(
             search = partial(bfs_search)
         elif s == "ehs":
             search = partial(ehc_search, heuristic=heuristic)
+            supports_max_len = True
 
         return s, search, supports_max_len  # type: ignore[return-value]
 

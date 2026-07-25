@@ -50,18 +50,48 @@ pub fn dfs_search(
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, heuristic, timeout=None, early_termination=false, weak_equality=false))]
+#[pyo3(signature = (ss, heuristic, timeout=None, early_termination=false, weak_equality=false, max_len=None))]
 pub fn ehc_search(
+    py: Python<'_>,
     ss: &rustamer_base::SearchSpace,
     heuristic: &Heuristic,
     timeout: Option<f32>,
     early_termination: bool,
     weak_equality: bool,
-) -> PyResult<(
-    Option<Vec<(Option<String>, Action, Option<String>)>>,
-    FxHashMap<String, String>,
-)> {
-    rustamer_base::ehc_search(ss, heuristic, timeout, early_termination, weak_equality)
+    max_len: Option<f64>,
+) -> PyResult<(Option<rustamer_base::Plan>, Py<PyDict>)> {
+    if max_len.is_some() && timeout.is_none() {
+        return Err(PyValueError::new_err(
+            "timeout must be provided when max_len is set",
+        ));
+    }
+    if max_len.is_some() && early_termination {
+        return Err(PyValueError::new_err(
+            "early_termination must be false when max_len is set",
+        ));
+    }
+
+    let result = rustamer_base::ehc_search(
+        ss,
+        heuristic,
+        timeout,
+        early_termination,
+        weak_equality,
+        max_len,
+    )?;
+    let metrics = PyDict::new(py);
+    for (key, value) in result.metrics {
+        metrics.set_item(key, value)?;
+    }
+    if let Some(plans) = result.plans {
+        metrics.set_item("plans", plans)?;
+    }
+    let metrics = metrics.unbind();
+    if result.timed_out {
+        Err(PyTimeoutError::new_err(metrics))
+    } else {
+        Ok((result.plan, metrics))
+    }
 }
 
 #[pyfunction]

@@ -243,6 +243,7 @@ def ehc_search(
     timeout: Optional[float] = None,
     early_termination: bool = False,
     weak_equality: bool = False,
+    max_len: Optional[float] = None,
 ) -> Tuple[
         Optional[List[Tuple[Optional[Fraction], Action, Optional[Fraction]]]],
         Dict[str, str],
@@ -263,7 +264,31 @@ def ehc_search(
         return None, {"expanded_states": str(0)}
 
     closed = set()
+    plans: List[List[Action]] = []
+    if max_len is not None:
+        assert timeout is not None
+
+        # EHC restarts by wiping `open`/`closed` whenever a strictly better
+        # successor is found, so a goal state sitting in `open` can be
+        # discarded before it is ever popped. To not lose it, every state is
+        # checked for goal_reached exactly once, right when it's generated
+        # (here, and for each successor below), instead of only at pop time.
+        def log_if_goal(candidate: State) -> None:
+            nonlocal max_len
+            if ss.goal_reached(candidate):
+                path = [a for a, _, _ in candidate.path]
+                if len(path) <= max_len:
+                    plans.append(path)
+                    if max_len == float("inf"):
+                        max_len = len(path)
+
+        if time.time() - st > timeout:
+            raise TimeoutError({"expanded_states": str(expanded_states), "plans": plans})
+        log_if_goal(init)
+
     while len(open) > 0:
+        if max_len is not None and time.time() - st > timeout:
+            raise TimeoutError({"expanded_states": str(expanded_states), "plans": plans})
         if timeout is not None and time.time() - st > timeout:
             raise TimeoutError({"expanded_states": str(expanded_states)})
         state = open.popleft()
@@ -271,7 +296,7 @@ def ehc_search(
         if not ss.is_temporal or weak_equality:
             closed.add(state_representation(state, weak_equality))
 
-        if not early_termination and ss.goal_reached(state):
+        if max_len is None and not early_termination and ss.goal_reached(state):
             return ss.build_plan(state), {
                 "expanded_states": str(expanded_states),
                 "goal_depth": str(state.g),
@@ -285,12 +310,17 @@ def ehc_search(
                     "goal_depth": str(succ_state.g),
                 }
 
+            if max_len is not None:
+                log_if_goal(succ_state)
+
             if not ss.is_temporal or weak_equality:
                 state_repr = state_representation(succ_state, weak_equality)
                 if state_repr not in closed:
-                    candidate_states.append(succ_state)
+                    if max_len is None or succ_state.g <= max_len:
+                        candidate_states.append(succ_state)
             else:
-                candidate_states.append(succ_state)
+                if max_len is None or succ_state.g <= max_len:
+                    candidate_states.append(succ_state)
 
         for succ_state, h in heuristic.eval_gen(candidate_states, ss):
             if h is not None:
@@ -302,4 +332,9 @@ def ehc_search(
                     break
                 else:
                     open.append(succ_state)
-    return None, {"expanded_states": str(expanded_states)}
+    res = (
+        {"expanded_states": str(expanded_states)}
+        if max_len is None
+        else {"expanded_states": str(expanded_states), "plans": plans}
+    )
+    return None, res
