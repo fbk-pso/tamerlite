@@ -10,29 +10,29 @@ import sys
 from aalpy.automata.Dfa import Dfa
 from aalpy.utils import load_automaton_from_file
 
-# try:
-#     from trace_conversion_utils import (
-#         _is_numeric_parameter_type,
-#         canonical_parameter_type,
-#         canonicalize_identifier,
-#         split_ground_action,
-#     )
-#     from goal_trace_utils import add_state_trace_markers, goal_tokens_for_profile, init_tokens_for_profile
-# except ModuleNotFoundError:
-#     REPO_ROOT = Path(__file__).resolve().parents[2]
-#     for candidate in (
-#         REPO_ROOT / "src",
-#         REPO_ROOT / "src" / "trace_preprocessing",
-#     ):
-#         if str(candidate) not in sys.path:
-#             sys.path.insert(0, str(candidate))
-#     from trace_conversion_utils import (
-#         _is_numeric_parameter_type,
-#         canonical_parameter_type,
-#         canonicalize_identifier,
-#         split_ground_action,
-#     )
-#     from goal_trace_utils import add_state_trace_markers, goal_tokens_for_profile, init_tokens_for_profile
+try:
+    from trace_conversion_utils import (
+        _is_numeric_parameter_type,
+        canonical_parameter_type,
+        canonicalize_identifier,
+        split_ground_action,
+    )
+    from goal_trace_utils import add_state_trace_markers, goal_tokens_for_profile, init_tokens_for_profile
+except ModuleNotFoundError:
+    REPO_ROOT = Path(__file__).resolve().parents[2]
+    for candidate in (
+        REPO_ROOT / "src",
+        REPO_ROOT / "src" / "trace_preprocessing",
+    ):
+        if str(candidate) not in sys.path:
+            sys.path.insert(0, str(candidate))
+    from trace_conversion_utils import (
+        _is_numeric_parameter_type,
+        canonical_parameter_type,
+        canonicalize_identifier,
+        split_ground_action,
+    )
+    from goal_trace_utils import add_state_trace_markers, goal_tokens_for_profile, init_tokens_for_profile
 
 
 @dataclass(frozen=True)
