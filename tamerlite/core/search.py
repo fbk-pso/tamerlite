@@ -286,6 +286,7 @@ def ehc_search(
             if ss.goal_reached(candidate):
                 path = [a for a, _, _ in candidate.path]
                 if len(path) <= max_len:
+                    print(f"{len(plans)}) Found plan of length {len(path)}")
                     plans.append(path)
                     if max_len == float("inf"):
                         max_len = len(path)

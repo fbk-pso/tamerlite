@@ -631,6 +631,7 @@ fn log_if_goal<S: SearchSpaceTrait>(
         if let Some(bound) = *current_max_len {
             let path = PersistentList::to_vec_copy(&state.path);
             if (path.len() as f64) <= bound {
+                println!("{}) Found plan of length {}", plans.len(), path.len());
                 plans.push(path.into_iter().map(|(action, _, _)| action).collect());
                 if bound.is_infinite() {
                     *current_max_len = Some(plans.last().unwrap().len() as f64);
