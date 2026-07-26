@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Mapping, Sequence
@@ -110,7 +111,13 @@ def _normalize_transition_token(token: object) -> str:
     token_str = str(token)
     if len(token_str) >= 2 and token_str[0] == token_str[-1] and token_str[0] in {"'", '"'}:
         token_str = token_str[1:-1]
-    return canonicalize_identifier(token_str)
+    normalized = canonicalize_identifier(token_str)
+    # Planning-safe Childsnack ANML renames identifiers whose `not` prefix is
+    # parsed as an ANML operator. Monitors are learned from the original names.
+    normalized = normalized.replace("unused_sandwich(", "notexist(")
+    normalized = normalized.replace("does_not_exist(", "notexist(")
+    normalized = normalized.replace("non_allergic_gluten(", "not_allergic_gluten(")
+    return normalized
 
 
 class DfaPruningModel:
@@ -505,10 +512,14 @@ class MultiAutomatonPruningModel:
         goals: Sequence[object] | None = None,
     ) -> None:
         self._action_by_name = dict(action_by_name)
-        self._objects_by_type = {
-            str(object_type).lower(): tuple(sorted(object_names))
+        objects_by_type_normalized = {
+            canonical_parameter_type(str(object_type)): tuple(sorted(object_names))
             for object_type, object_names in objects_by_type.items()
         }
+        self._objects_by_type = dict(objects_by_type_normalized)
+        for object_type, object_names in objects_by_type_normalized.items():
+            self._objects_by_type.setdefault(object_type.replace("_", "-"), object_names)
+            self._objects_by_type.setdefault(object_type.replace("-", "_"), object_names)
         self._object_type_by_name = {
             object_name: object_type
             for object_type, object_names in self._objects_by_type.items()
@@ -787,6 +798,14 @@ class MultiAutomatonPruningModel:
                 if legacy_token is not None:
                     next_state = current_state.transitions.get(legacy_token)
             if next_state is None:
+                if os.environ.get("TAMERLITE_DEBUG_MONITOR_PREFIX", "") == "1":
+                    print(
+                        "MONITOR_PREFIX_MISSING",
+                        focus_label,
+                        focus_tuple,
+                        current_state.state_id,
+                        normalized_token,
+                    )
                 self._prefixed_initial_states[entry_key] = None
                 return None
             current_state = next_state

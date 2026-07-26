@@ -536,6 +536,10 @@ class SearchSpace(SearchSpaceABC):
         self._pruned_subtrees_by_label: Dict[str, int] = {}
         self._debug_prunes_limit = max(0, int(os.environ.get("TAMERLITE_DEBUG_PRUNES", "0") or "0"))
         self._pruned_debug_records: List[Dict[str, object]] = []
+        self._trace_search = os.environ.get("TAMERLITE_TRACE_SEARCH", "") == "1"
+        self._search_trace_records: List[Dict[str, object]] = []
+        self._search_trace_next_id = 0
+        self._trace_heuristic = None
 
         event_fluents: List[List[Tuple[Set[int], Set[int], Set[int], Set[int],
                                        Set[int]]]] = [[] for _ in actions]
@@ -563,6 +567,55 @@ class SearchSpace(SearchSpaceABC):
             return self._action_names[action.idx]
         return str(action.idx)
 
+    def trace_state(
+        self,
+        state: State,
+        *,
+        parent: Optional[State] = None,
+        action: Optional[Action] = None,
+        status: Optional[str] = None,
+        **updates: object,
+    ) -> Optional[Dict[str, object]]:
+        if not self._trace_search:
+            return None
+        record_id = getattr(state, "_search_trace_id", None)
+        if record_id is None:
+            record_id = self._search_trace_next_id
+            self._search_trace_next_id += 1
+            setattr(state, "_search_trace_id", record_id)
+            progress = state.pruning_state
+            monitor_states = (
+                [list(entry) for entry in getattr(progress, "object_states", ())]
+                if progress is not None
+                else []
+            )
+            record = {
+                "state_id": record_id,
+                "parent_state_id": None if parent is None else getattr(parent, "_search_trace_id", None),
+                "action": None if action is None else self._action_name(action),
+                "depth": state.g,
+                "assignments": [
+                    str(value) if isinstance(value, Fraction) else value
+                    for value in state.assignments
+                ],
+                "generated_order": None,
+                "added_order": None,
+                "expanded_order": None,
+                "heuristic": None,
+                "heuristic_is_dead_end": False,
+                "f_value": None,
+                "status": status or "generated",
+                "pruning_labels": [],
+                "monitor_states": monitor_states,
+            }
+            self._search_trace_records.append(record)
+        else:
+            record = self._search_trace_records[record_id]
+        if status is not None:
+            record["status"] = status
+        record.update(updates)
+        return record
+
     def _record_pruned_transition(self, state: State, action: Action, labels: Tuple[str, ...], progress: object) -> None:
         if self._debug_prunes_limit <= 0 or len(self._pruned_debug_records) >= self._debug_prunes_limit:
             return
@@ -586,7 +639,7 @@ class SearchSpace(SearchSpaceABC):
         if self._dfa is not None:
             dfa_init = self._dfa.initial_state
         if initial_state is not None:
-            return State(
+            state = State(
                 initial_state,
                 tn,
                 {},
@@ -598,7 +651,7 @@ class SearchSpace(SearchSpaceABC):
         else:
             # `initial_state` can be None if the initial state was already provided when instantiating the class
             assert self._initial_state is not None
-            return State(
+            state = State(
                 self._initial_state,
                 tn,
                 {},
@@ -607,6 +660,9 @@ class SearchSpace(SearchSpaceABC):
                 [],
                 dfa_init,
             )
+        if not self._search_trace_records:
+            self.trace_state(state, status="initial")
+        return state
 
     def get_successor_state(self, state: State, action: Action) -> Optional[State]:
         events = self._events[action]
@@ -635,6 +691,7 @@ class SearchSpace(SearchSpaceABC):
                 continue
 
             if new_state.pruning_state is None and self._dfa is not None:
+                self.trace_state(new_state, parent=state, action=action, status="monitor_rejected")
                 continue
 
             if self._dfa is not None and self._dfa.is_prunable(new_state.pruning_state):
@@ -646,8 +703,19 @@ class SearchSpace(SearchSpaceABC):
                     for label in labels:
                         self._pruned_subtrees_by_label[label] = self._pruned_subtrees_by_label.get(label, 0) + 1
                 self._record_pruned_transition(state, action, labels, new_state.pruning_state)
+                h = self._trace_heuristic.eval(new_state, self) if self._trace_heuristic is not None else None
+                self.trace_state(
+                    new_state,
+                    parent=state,
+                    action=action,
+                    status="pruned",
+                    heuristic=h,
+                    heuristic_is_dead_end=h is None,
+                    pruning_labels=list(labels),
+                )
                 continue
 
+            self.trace_state(new_state, parent=state, action=action)
             yield new_state
 
     def goal_reached(self, state: State, goal: Optional[Expression] = None) -> bool:

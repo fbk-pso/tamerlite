@@ -348,6 +348,11 @@ class TamerLite(
                     traces.append(p)
                 metrics["plans"] = traces
             metrics["heuristic"] = self._params.heuristic
+            if getattr(encoder.search_space, "_search_trace_records", None):
+                metrics["search_trace"] = json.dumps(
+                    encoder.search_space._search_trace_records,
+                    sort_keys=True,
+                )
             if self._params.dfa is not None:
                 metrics["pruned_states"] = encoder.search_space._pruned_subtrees
                 if getattr(encoder.search_space, "_pruned_subtrees_by_label", None):
@@ -371,6 +376,11 @@ class TamerLite(
             status = up.engines.PlanGenerationResultStatus.TIMEOUT
             metrics = e.args[0] if e.args and isinstance(e.args[0], dict) else {}
             metrics["heuristic"] = self._params.heuristic
+            if getattr(encoder.search_space, "_search_trace_records", None):
+                metrics["search_trace"] = json.dumps(
+                    encoder.search_space._search_trace_records,
+                    sort_keys=True,
+                )
             if self._params.dfa is not None:
                 metrics["pruned_states"] = encoder.search_space._pruned_subtrees
                 if getattr(encoder.search_space, "_pruned_subtrees_by_label", None):

@@ -169,6 +169,8 @@ def wastar_search(
     st = time.time()
     open: List[PrioritizedItem] = []
     init = ss.initial_state()
+    if getattr(ss, "_trace_search", False):
+        ss._trace_heuristic = heuristic
     if not ss.is_temporal or weak_equality:
         visited_states = {state_representation(init, weak_equality)}
     expanded_states = 0
@@ -184,6 +186,17 @@ def wastar_search(
     if init_h is None:
         return None, {"expanded_states": str(0)}
     heapq.heappush(open, PrioritizedItem(init_h, init, 0))
+    added_states = 2
+    trace_state = getattr(ss, "trace_state", None)
+    if callable(trace_state):
+        trace_state(
+            init,
+            status="open",
+            generated_order=0,
+            added_order=1,
+            heuristic=init_h,
+            f_value=init_h,
+        )
     plans = []
     if max_len is not None:            
         assert timeout is not None
@@ -195,7 +208,11 @@ def wastar_search(
         item = heapq.heappop(open)
         state = item.state
         expanded_states += 1
+        if callable(trace_state):
+            trace_state(state, status="expanded", expanded_order=expanded_states)
         if not early_termination and ss.goal_reached(state):
+            if callable(trace_state):
+                trace_state(state, status="goal", expanded_order=expanded_states)
             path = [a for a, _, _ in state.path]
             if max_len is not None: 
                 if len(path) <= max_len:
@@ -228,6 +245,8 @@ def wastar_search(
                         candidate_indices[id(succ_state)] = generated_states
                         generated_states += 1
                         candidate_states.append(succ_state)
+                elif callable(trace_state):
+                    trace_state(succ_state, status="duplicate")
             else:
                 if max_len is None or succ_state.g <= max_len:
                     candidate_indices[id(succ_state)] = generated_states
@@ -235,8 +254,23 @@ def wastar_search(
                     candidate_states.append(succ_state)
 
         for succ_state, h in heuristic.eval_gen(candidate_states, ss):
+            if callable(trace_state):
+                trace_state(
+                    succ_state,
+                    status="dead_end" if h is None else "open",
+                    generated_order=candidate_indices[id(succ_state)],
+                    heuristic=h,
+                    heuristic_is_dead_end=h is None,
+                )
             if h is not None:
                 f = (1 - weight) * succ_state.g + weight * h
+                if callable(trace_state):
+                    trace_state(
+                        succ_state,
+                        added_order=added_states,
+                        f_value=f,
+                    )
+                added_states += 1
                 heapq.heappush(
                     open,
                     PrioritizedItem(f, succ_state, candidate_indices[id(succ_state)]),
