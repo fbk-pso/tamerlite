@@ -24,6 +24,7 @@ from tamerlite.core import (
     make_bool_constant_node,
     make_fluent_node,
     make_int_constant_node,
+    make_interpreted_function_node,
     make_object_node,
     make_operator_node,
     make_rational_constant_node,
@@ -196,6 +197,55 @@ class Converter(DagWalker):
     ) -> Expression:
         assert len(args) == 0
         return (make_int_constant_node(expression.int_constant_value()),)
+
+    def walk_interpreted_function_exp(
+        self, expression: FNode, args: list[Expression]
+    ) -> Expression:
+        # `Converter` only sees interpreted-function calls with at least one
+        # non-constant argument: UP's `Grounder` already
+        # folds any call whose arguments are all constant -- including
+        # static fluents, resolved to their initial value -- by calling the
+        # real Python function during grounding. What remains here
+        # must be re-evaluated at search time.
+        interpreted_function = expression.interpreted_function()
+        for parameter in interpreted_function.signature:
+            if parameter.type.is_user_type():
+                raise NotImplementedError(
+                    "Interpreted functions with object-typed parameters are "
+                    "not yet supported."
+                )
+        return_type = interpreted_function.return_type
+        if return_type.is_bool_type():
+            return_type_str = "bool"
+        elif return_type.is_int_type():
+            return_type_str = "int"
+        elif return_type.is_real_type():
+            return_type_str = "real"
+        else:
+            raise NotImplementedError(
+                "Interpreted functions with object-typed return values are "
+                "not yet supported."
+            )
+
+        if len(args) == 0:
+            return (
+                make_interpreted_function_node(
+                    interpreted_function.function, return_type_str, ()
+                ),
+            )
+        res = args[0]
+        offset = len(res) - 1
+        operands = [offset]
+        for i in range(1, len(args)):
+            res += tuple(shift_expression(args[i], offset + 1))
+            offset += len(args[i])
+            operands.append(offset)
+        res += (
+            make_interpreted_function_node(
+                interpreted_function.function, return_type_str, tuple(operands)
+            ),
+        )
+        return res
 
     def walk_implies(self, expression: FNode, args: list[Expression]) -> Expression:
         raise NotImplementedError

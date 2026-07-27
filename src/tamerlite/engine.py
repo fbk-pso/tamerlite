@@ -33,7 +33,7 @@ from unified_planning.engines.plan_validator import (
     SequentialPlanValidator,
     TimeTriggeredPlanValidator,
 )
-from unified_planning.exceptions import UPStateMissingFluentError
+from unified_planning.exceptions import UPStateMissingFluentError, UPUsageError
 from unified_planning.model import FNode, ProblemKind, StartTiming
 from unified_planning.model.state import State
 from unified_planning.plans import ActionInstance, PlanKind
@@ -55,6 +55,7 @@ from tamerlite.core import (
     get_fluent_value,
     multiqueue_search,
     search_space,
+    use_rustamer,
     wastar_search,
     wastar_search_memory_bounded,
 )
@@ -234,6 +235,18 @@ class TamerLite(
         supported_kind.set_conditions_kind("EQUALITIES")
         supported_kind.set_conditions_kind("EXISTENTIAL_CONDITIONS")
         supported_kind.set_conditions_kind("UNIVERSAL_CONDITIONS")
+        if not use_rustamer:
+            # Interpreted functions are only evaluated by the pure-Python
+            # search space (see `search_space.evaluate` /
+            # `InterpretedFunctionNode`); the Rust backend has no equivalent
+            # yet, so problems using them must not be routed there.
+            supported_kind.set_conditions_kind("INTERPRETED_FUNCTIONS_IN_CONDITIONS")
+            supported_kind.set_effects_kind(
+                "INTERPRETED_FUNCTIONS_IN_BOOLEAN_ASSIGNMENTS"
+            )
+            supported_kind.set_effects_kind(
+                "INTERPRETED_FUNCTIONS_IN_NUMERIC_ASSIGNMENTS"
+            )
         supported_kind.set_fluents_type("NUMERIC_FLUENTS")
         supported_kind.set_fluents_type("OBJECT_FLUENTS")
         supported_kind.set_fluents_type("INT_FLUENTS")
@@ -275,6 +288,21 @@ class TamerLite(
             h_name = "custom" if heuristic is not None else "hff"
         else:
             h_name = params.heuristic
+
+        if h_name not in ("custom", "blind") and (
+            encoder.problem.kind.has_interpreted_functions_in_conditions()
+            or encoder.problem.kind.has_interpreted_functions_in_boolean_assignments()
+            or encoder.problem.kind.has_interpreted_functions_in_numeric_assignments()
+        ):
+            # HFF/HAdd/HMax/HMaxExplicit reason about conditions/effects
+            # structurally (e.g. to build the delete relaxation) and don't
+            # know how to handle an interpreted-function node -- only
+            # "blind" and "custom" evaluate a plain search `State` and are
+            # therefore interpreted-function-safe.
+            raise UPUsageError(
+                f"Heuristic '{h_name}' does not support interpreted functions. "
+                "Use the 'blind' or 'custom' heuristic for problems that use them."
+            )
 
         if h_name == "custom":
             assert heuristic is not None
@@ -381,15 +409,42 @@ class TamerLite(
         "up.model.Problem",
         Callable[[ActionInstance], ActionInstance | None],
     ]:
-        with problem.environment.factory.Compiler(
-            compilation_kind="UNDEFINED_INITIAL_NUMERIC_REMOVING",
-            problem_kind=problem.kind,
-        ) as compiler:
-            compilation_res = compiler.compile(problem)
-            undefined_map_back_action_instance = (
-                compilation_res.map_back_action_instance
+        kind = problem.kind
+        if kind.has_undefined_initial_numeric() and (
+            kind.has_interpreted_functions_in_conditions()
+            or kind.has_interpreted_functions_in_boolean_assignments()
+            or kind.has_interpreted_functions_in_numeric_assignments()
+        ):
+            # UP's `UndefinedInitialNumericRemover` doesn't declare support
+            # for `INTERPRETED_FUNCTIONS_IN_*` (upstream gap, not ours to
+            # fix), so the Factory can't select it for this combination --
+            # raise a clear error instead of an opaque
+            # `UPNoSuitableEngineAvailableException` from the Factory.
+            raise UPUsageError(
+                "TamerLite does not support problems that combine undefined "
+                "initial numeric fluents with interpreted functions."
             )
-            problem = cast("up.model.Problem", compilation_res.problem)
+
+        if kind.has_undefined_initial_numeric():
+            # Problems with only interpreted functions skip this branch
+            # entirely: `UndefinedInitialNumericRemover._compile` is a no-op
+            # passthrough when nothing is undefined, so there is nothing to
+            # gain from routing them through the Factory here.
+            with problem.environment.factory.Compiler(
+                compilation_kind="UNDEFINED_INITIAL_NUMERIC_REMOVING",
+                problem_kind=problem.kind,
+            ) as compiler:
+                compilation_res = compiler.compile(problem)
+                undefined_map_back_action_instance = (
+                    compilation_res.map_back_action_instance
+                )
+                problem = cast("up.model.Problem", compilation_res.problem)
+        else:
+
+            def undefined_map_back_action_instance(
+                ai: ActionInstance,
+            ) -> ActionInstance | None:
+                return ai
 
         with problem.environment.factory.Compiler(
             compilation_kind="GROUNDING", problem_kind=problem.kind
@@ -681,13 +736,42 @@ class TamerLite(
         is_intermediate_solution: bool = False,
     ) -> tuple["up.engines.results.PlanGenerationResult", bool, bool]:
         try:
+            # Symmetry breaking, compression-safe-action detection, and
+            # relevance analysis (which runs HMax reachability) all inspect
+            # or evaluate expressions structurally without accounting for
+            # interpreted functions -- disable them for problems that use
+            # one, rather than risk a silently wrong optimization. This also
+            # means `are_all_actions_compression_safe()` below is always
+            # False for these problems, so the TimedToSequential recompile
+            # branch is naturally skipped too.
+            ground_kind = ground_problem.kind
+            has_interpreted_functions = (
+                ground_kind.has_interpreted_functions_in_conditions()
+                or ground_kind.has_interpreted_functions_in_boolean_assignments()
+                or ground_kind.has_interpreted_functions_in_numeric_assignments()
+            )
+            if has_interpreted_functions:
+                for flag_name, flag_value in (
+                    ("symmetry_breaking", self._params.symmetry_breaking),
+                    (
+                        "compression_safe_actions",
+                        self._params.compression_safe_actions,
+                    ),
+                    ("relevance_analysis", self._params.relevance_analysis),
+                ):
+                    if flag_value:
+                        warnings.warn(
+                            f"Disabling '{flag_name}': it is not supported for "
+                            "problems that use interpreted functions.",
+                            stacklevel=2,
+                        )
             encoder = Encoder(
                 ground_problem,
                 problem,
                 map_back_action_instance,
-                self._params.symmetry_breaking,
-                self._params.compression_safe_actions,
-                self._params.relevance_analysis,
+                self._params.symmetry_breaking and not has_interpreted_functions,
+                self._params.compression_safe_actions and not has_interpreted_functions,
+                self._params.relevance_analysis and not has_interpreted_functions,
                 deadline=deadline,
             )
 

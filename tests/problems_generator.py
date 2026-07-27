@@ -16,7 +16,9 @@
 #
 
 import pathlib
+from collections import OrderedDict
 
+import unified_planning.test.examples
 from unified_planning.io import PDDLReader
 from unified_planning.shortcuts import *
 
@@ -709,4 +711,134 @@ def get_problem_anytime_symmetric_delivery() -> Problem:
     problem.add_goal(delivered(p1))
     problem.add_goal(delivered(p2))
     problem.add_goal(delivered(p3))
+    return problem
+
+
+# Interpreted-function problems below use plain `IntType()` rather than a
+# bounded range: TamerLite's `supported_kind` doesn't declare `BOUNDED_TYPES`
+# at all (a pre-existing gap unrelated to interpreted functions), so a
+# bounded IntType would make `TamerLite.supports()` reject the problem
+# regardless of interpreted-function support.
+
+
+def get_problem_if_bool_condition() -> Problem:
+    """A boolean interpreted function gating a precondition, adapted from
+    `unified_planning.test.examples.interpreted_functions_examples
+    .IF_in_conditions_complex_1` (dropping the bounded int types)."""
+
+    def integers_to_bool(ina, inb):
+        return (ina * inb) == 60
+
+    def int_to_int(inc):
+        return inc - 2
+
+    IF_integers_to_bool = InterpretedFunction(
+        "integers_to_bool",
+        BoolType(),
+        OrderedDict(ina=IntType(), inb=IntType()),
+        integers_to_bool,
+    )
+    IF_int_to_int = InterpretedFunction(
+        "simple_int_to_int", IntType(), OrderedDict(inc=IntType()), int_to_int
+    )
+
+    g = Fluent("g", IntType())
+    ione = Fluent("ione", IntType())
+    itwo = Fluent("itwo", IntType())
+    ithree = Fluent("ithree", IntType())
+
+    a = InstantaneousAction("a")
+    a.add_precondition(And(IF_integers_to_bool(ione, itwo), LT(ione, 15)))
+    a.add_precondition(LT(g, 10))
+    a.add_effect(g, Plus(g, 3))
+    c = InstantaneousAction("c")
+    c.add_effect(ione, Plus(ione, 1))
+    d = InstantaneousAction("d")
+    d.add_effect(ione, Minus(ione, 1))
+    f = InstantaneousAction("f")
+    f.add_precondition(GT(ione, IF_int_to_int(ithree)))
+    f.add_effect(itwo, 5)
+
+    problem = Problem("if_bool_condition")
+    problem.add_fluent(g)
+    problem.add_fluent(ione)
+    problem.add_fluent(itwo)
+    problem.add_fluent(ithree)
+    problem.add_action(a)
+    problem.add_action(c)
+    problem.add_action(d)
+    problem.add_action(f)
+    problem.set_initial_value(g, 1)
+    problem.set_initial_value(ione, 11)
+    problem.set_initial_value(itwo, 1)
+    problem.set_initial_value(ithree, 15)
+    problem.add_goal(GE(g, 5))
+    return problem
+
+
+def get_problem_if_numeric_effect() -> Problem:
+    """A numeric interpreted function used as an effect assignment value."""
+
+    def double_it(x):
+        return x * 2
+
+    IF_double = InterpretedFunction(
+        "double_it", IntType(), OrderedDict(x=IntType()), double_it
+    )
+
+    counter = Fluent("counter", IntType())
+    result = Fluent("result", IntType())
+    act = InstantaneousAction("act")
+    act.add_precondition(LT(counter, 5))
+    act.add_effect(counter, Plus(counter, 1))
+    act.add_effect(result, IF_double(counter))
+
+    problem = Problem("if_numeric_effect")
+    problem.add_fluent(counter)
+    problem.add_fluent(result)
+    problem.add_action(act)
+    problem.set_initial_value(counter, 0)
+    problem.set_initial_value(result, 0)
+    problem.add_goal(Equals(result, 8))
+    return problem
+
+
+def get_problem_if_minimal_chain() -> Problem:
+    """Reuses UP's own bundled example -- the only one of its IF examples
+    that doesn't also require `BOUNDED_TYPES`."""
+    problem = unified_planning.test.examples.get_example_problems()[
+        "interpreted_functions_minimal_chain_of_assignments"
+    ].problem
+    assert isinstance(problem, Problem)
+    return problem
+
+
+def get_problem_if_object_argument() -> Problem:
+    """A boolean interpreted function taking an object-typed argument --
+    object-typed interpreted-function parameters aren't supported yet (see
+    `Converter.walk_interpreted_function_exp`), so this problem is used to
+    check that a clear `NotImplementedError` is raised rather than silently
+    doing the wrong thing."""
+    Loc = UserType("Loc")
+    l1 = Object("l1", Loc)
+    l2 = Object("l2", Loc)
+
+    def loc_check(loc):
+        return True
+
+    IF_obj = InterpretedFunction(
+        "loc_check", BoolType(), OrderedDict(loc=Loc), loc_check
+    )
+    at = Fluent("at", Loc)
+    act = InstantaneousAction("act")
+    act.add_precondition(IF_obj(at))
+    act.add_effect(at, l2)
+
+    problem = Problem("if_object_argument")
+    problem.add_fluent(at)
+    problem.add_object(l1)
+    problem.add_object(l2)
+    problem.add_action(act)
+    problem.set_initial_value(at, l1)
+    problem.add_goal(Equals(at, l2))
     return problem
