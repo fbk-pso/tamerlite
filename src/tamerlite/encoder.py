@@ -824,13 +824,7 @@ class Encoder:
             actions = []
             for s, a, d in plan:
                 assert s is not None
-                actions.append(
-                    (
-                        Fraction(s),
-                        self._problem.action(self.get_action_name(a))(),
-                        Fraction(d) if d is not None else None,
-                    )
-                )
+                actions.append((s, self._problem.action(self.get_action_name(a))(), d))
             return TimeTriggeredPlan(actions)
         else:
             return SequentialPlan(
