@@ -33,6 +33,7 @@ from unified_planning.engines.plan_validator import (
     SequentialPlanValidator,
     TimeTriggeredPlanValidator,
 )
+from unified_planning.exceptions import UPStateMissingFluentError
 from unified_planning.model import FNode, ProblemKind, StartTiming
 from unified_planning.model.state import State
 from unified_planning.plans import ActionInstance, PlanKind
@@ -48,10 +49,9 @@ from tamerlite.core import (
     bfs_search,
     dfs_search,
     ehc_search,
-    evaluate,
     gbfs_search,
     gbfs_search_memory_bounded,
-    make_fluent_node,
+    get_fluent_value,
     multiqueue_search,
     search_space,
     wastar_search,
@@ -75,25 +75,42 @@ credits = up.engines.Credits(
 
 
 class StateWrapper(State):
-    def __init__(self, encoder: Encoder, search_state: search_space.State):
+    def __init__(self, encoder: Encoder, state: search_space.State):
         self.encoder = encoder
-        self.search_state = search_state
+        self.state = state
         self.problem = encoder.problem
         self.em = self.problem.environment.expression_manager
 
-    def get_value(self, x: FNode) -> FNode:
-        key = (make_fluent_node(self.encoder.fluent_ids[str(x)]),)
-        v = evaluate(key, self.search_state)
-        if x.type.is_bool_type():
+    def get_value(self, fluent: FNode) -> FNode:
+        try:
+            fluent_id = self.encoder.fluent_ids[str(fluent)]
+        except KeyError:
+            raise UPStateMissingFluentError(
+                f"The state {self.state} does not have a value for the fluent {fluent}"
+            ) from None
+        v = get_fluent_value(fluent_id, self.state)
+        if fluent.type.is_bool_type():
             return self.em.Bool(cast(bool, v))
-        elif x.type.is_int_type():
+        elif fluent.type.is_int_type():
             return self.em.Int(cast(int, v))
-        elif x.type.is_real_type():
+        elif fluent.type.is_real_type():
             return self.em.Real(cast(Fraction, v))
-        elif x.type.is_user_type():
-            return self.em.ObjectExp(self.problem.object(cast(str, v)))
+        elif fluent.type.is_user_type():
+            oid = cast(search_space.ObjectNode, v).object
+            return self.em.ObjectExp(
+                self.problem.object(self.encoder.object_names[oid])
+            )
         else:
-            raise NotImplementedError(f"Unknown value type for expression {x}")
+            raise NotImplementedError(f"Unknown value type for expression {fluent}")
+
+    @classmethod
+    def wrap_heuristic(
+        cls,
+        encoder: Encoder,
+        heuristic: Callable[[State], float | None],
+    ) -> Callable[[search_space.State], float | None]:
+        """Wrap heuristic so it receives a StateWrapper instead of a State."""
+        return lambda state: heuristic(cls(encoder, state))
 
 
 @dataclass(frozen=True)
@@ -225,11 +242,11 @@ class TamerLite(
             h_name = params.heuristic
 
         if h_name == "custom":
-
-            def rewrite_h(search_state: search_space.State):
-                return heuristic(StateWrapper(encoder, search_state))  # type: ignore[misc]
-
-            h = CustomHeuristic(rewrite_h, cache_heuristic_in_state)
+            assert heuristic is not None
+            h = CustomHeuristic(
+                StateWrapper.wrap_heuristic(encoder, heuristic),
+                cache_heuristic_in_state,
+            )
             w = 1.0 if params.weight is None else params.weight
 
         elif h_name == "blind":

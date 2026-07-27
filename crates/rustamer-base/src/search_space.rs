@@ -169,8 +169,8 @@ pub struct SearchSpace {
     event_fluents: EventFluents,
     mutex: MutexChecker,
     precedence: PrecedenceChecker,
-    action_objects: Option<Vec<Vec<String>>>,
-    obj_to_prev_actions_map: Option<FxHashMap<String, FxHashSet<Action>>>,
+    action_objects: Option<Vec<Vec<usize>>>,
+    obj_to_prev_actions_map: Option<Vec<FxHashSet<Action>>>,
     initial_state: Option<Vec<ExpressionNode>>,
     goal: Option<Vec<ExpressionNode>>,
     tn_interpreter: TNInterpreter,
@@ -191,8 +191,8 @@ impl SearchSpace {
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         actions: Vec<Action>,
         compression_safe_actions: Option<Vec<bool>>,
-        action_objects: Option<Vec<Vec<String>>>,
-        obj_to_prev_actions_map: Option<FxHashMap<String, FxHashSet<Action>>>,
+        action_objects: Option<Vec<Vec<usize>>>,
+        obj_to_prev_actions_map: Option<Vec<FxHashSet<Action>>>,
         initial_state: Option<Vec<PyExpressionNode>>,
         goal: Option<Vec<PyExpressionNode>>,
         relevant_actions: Option<Vec<Action>>,
@@ -527,12 +527,9 @@ impl SearchSpace {
             (&self.action_objects, &self.obj_to_prev_actions_map)
         {
             for obj in &action_objects[action.idx] {
-                let prev_actions = match obj_to_prev_actions_map.get(obj) {
-                    Some(actions) => actions,
-                    None => continue,
-                };
+                let prev_actions = &obj_to_prev_actions_map[*obj];
 
-                if prev_actions.contains(&action) {
+                if prev_actions.is_empty() || prev_actions.contains(&action) {
                     continue;
                 }
 

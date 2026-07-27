@@ -28,7 +28,7 @@ pub enum ExpressionNode {
     Int(Box<BigInt>),
     Rational(Box<BigRational>),
     Fluent(usize),
-    Object(String),
+    Object(usize),
     And(Vec<usize>),
     Or(Vec<usize>),
     Not(usize),
@@ -106,17 +106,17 @@ pub struct PyExpressionNode {
 impl PyExpressionNode {
     #[getter]
     fn fluent(&self) -> Option<usize> {
-        if let ExpressionNode::Fluent(v) = &self.v {
-            Some(*v)
+        if let ExpressionNode::Fluent(v) = self.v {
+            Some(v)
         } else {
             None
         }
     }
 
     #[getter]
-    fn object(&self) -> Option<String> {
-        if let ExpressionNode::Object(v) = &self.v {
-            Some(v.to_string())
+    fn object(&self) -> Option<usize> {
+        if let ExpressionNode::Object(v) = self.v {
+            Some(v)
         } else {
             None
         }
@@ -124,8 +124,8 @@ impl PyExpressionNode {
 
     #[getter]
     fn bool_constant(&self) -> Option<bool> {
-        if let ExpressionNode::Bool(v) = &self.v {
-            Some(*v)
+        if let ExpressionNode::Bool(v) = self.v {
+            Some(v)
         } else {
             None
         }
@@ -201,9 +201,9 @@ pub fn make_rational_constant_node(numerator: i32, denominator: i32) -> PyExpres
 }
 
 #[pyfunction]
-pub fn make_object_node(name: String) -> PyExpressionNode {
+pub fn make_object_node(oid: usize) -> PyExpressionNode {
     PyExpressionNode {
-        v: ExpressionNode::Object(name),
+        v: ExpressionNode::Object(oid),
     }
 }
 

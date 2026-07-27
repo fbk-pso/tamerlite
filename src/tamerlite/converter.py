@@ -32,9 +32,12 @@ from tamerlite.core import (
 
 
 class Converter(DagWalker):
-    def __init__(self, problem: Problem, fluent_ids: dict[str, int]):
+    def __init__(
+        self, problem: Problem, fluent_ids: dict[str, int], object_ids: dict[str, int]
+    ):
         DagWalker.__init__(self)
         self._fluent_ids = fluent_ids
+        self._object_ids = object_ids
         self.static_fluents = problem.get_static_fluents()
 
     def convert(self, expression: FNode) -> Expression:
@@ -173,7 +176,7 @@ class Converter(DagWalker):
 
     def walk_object_exp(self, expression: FNode, args: list[Expression]) -> Expression:
         assert len(args) == 0
-        return (make_object_node(str(expression)),)
+        return (make_object_node(self._object_ids[expression.object().name]),)
 
     def walk_bool_constant(
         self, expression: FNode, args: list[Expression]

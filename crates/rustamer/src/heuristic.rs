@@ -51,7 +51,7 @@ impl Heuristic {
     pub fn hff(
         actions: Vec<Action>,
         fluent_types: Vec<String>,
-        objects: FxHashMap<String, Vec<String>>,
+        objects: FxHashMap<String, Vec<usize>>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
@@ -83,7 +83,7 @@ impl Heuristic {
     pub fn hadd(
         actions: Vec<Action>,
         fluent_types: Vec<String>,
-        objects: FxHashMap<String, Vec<String>>,
+        objects: FxHashMap<String, Vec<usize>>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
@@ -115,7 +115,7 @@ impl Heuristic {
     pub fn hmax(
         actions: Vec<Action>,
         fluent_types: Vec<String>,
-        objects: FxHashMap<String, Vec<String>>,
+        objects: FxHashMap<String, Vec<usize>>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
@@ -146,7 +146,7 @@ impl Heuristic {
     pub fn hmax_explicit(
         actions: Vec<Action>,
         fluent_types: Vec<String>,
-        objects: FxHashMap<String, Vec<String>>,
+        objects: FxHashMap<String, Vec<usize>>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
