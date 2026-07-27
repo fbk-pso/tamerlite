@@ -16,7 +16,7 @@
 #
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from fractions import Fraction
 
@@ -39,13 +39,45 @@ class ObjectNode:
     object: int
 
 
+@dataclass(eq=True, frozen=True)
+class InterpretedFunctionNode:
+    """An interpreted function call, evaluated by invoking a real Python
+    callable at search time (see `evaluate`). `operands` are indices of the
+    (inlined) argument sub-expression roots, exactly like `OperatorNode`."""
+
+    function: Callable
+    return_type: str  # "bool" | "int" | "real"
+    operands: tuple[int, ...]
+
+    def call(self, *arg_values: "ConstantNode") -> "ConstantNode":
+        """Calls the underlying Python callable and coerces its result to
+        the declared `return_type` -- the raw callable is free to return
+        any Python-native type (e.g. a plain `float` for a "real" function),
+        so this normalizes it to the exact type the rest of the search space
+        expects (mirroring `Simplifier.walk_interpreted_function_exp`, which
+        does the analogous normalization on UP's side)."""
+        r = self.function(*arg_values)
+        if self.return_type == "bool":
+            return bool(r)
+        elif self.return_type == "int":
+            return int(r)
+        else:
+            return Fraction(r)
+
+
 ConstantNode = bool | int | Fraction | ObjectNode
-ExpressionNode = OperatorNode | FluentNode | ConstantNode
+ExpressionNode = OperatorNode | FluentNode | InterpretedFunctionNode | ConstantNode
 Expression = tuple[ExpressionNode, ...]
 
 
 def make_operator_node(kind: str, operands: tuple[int, ...]) -> ExpressionNode:
     return OperatorNode(kind, operands)
+
+
+def make_interpreted_function_node(
+    function: Callable, return_type: str, operands: tuple[int, ...]
+) -> ExpressionNode:
+    return InterpretedFunctionNode(function, return_type, operands)
 
 
 def make_bool_constant_node(v: bool) -> ExpressionNode:
@@ -73,6 +105,14 @@ def shift_expression(exp: Expression, offset: int) -> Expression:
     for e in exp:
         if isinstance(e, OperatorNode):
             res.append(OperatorNode(e.kind, tuple([o + offset for o in e.operands])))
+        elif isinstance(e, InterpretedFunctionNode):
+            res.append(
+                InterpretedFunctionNode(
+                    e.function,
+                    e.return_type,
+                    tuple([o + offset for o in e.operands]),
+                )
+            )
         else:
             res.append(e)
     return tuple(res)
@@ -272,6 +312,9 @@ def evaluate(exp: Expression, state: State) -> ConstantNode:
             res.append(get_fluent_value(e.fluent, state))
         elif isinstance(e, ObjectNode):
             res.append(e)
+        elif isinstance(e, InterpretedFunctionNode):
+            arg_values = [res[i] for i in e.operands]
+            res.append(e.call(*arg_values))  # type: ignore[arg-type]
         else:
             assert isinstance(e, OperatorNode)
             if e.kind == "and":
@@ -314,8 +357,17 @@ def evaluate(exp: Expression, state: State) -> ConstantNode:
     return res[-1]
 
 
-def simplify(exp: Expression, assignments: dict[int, ConstantNode]) -> Expression:
-    """This function simplifies the given expression using the given assignments"""
+def simplify(
+    exp: Expression,
+    assignments: dict[int, ConstantNode],
+    evaluate_interpreted_functions: bool = False,
+) -> Expression:
+    """This function simplifies the given expression using the given assignments.
+
+    If `evaluate_interpreted_functions` is True, an interpreted function whose
+    operands have all been folded to constants is actually called and
+    replaced by its result; otherwise (the default) it is always re-emitted
+    unchanged."""
 
     # We iterate over the expression elements and we store the simplified value
     # in the res vector
@@ -336,6 +388,16 @@ def simplify(exp: Expression, assignments: dict[int, ConstantNode]) -> Expressio
                 res.append(v)
         elif isinstance(e, ObjectNode):
             res.append(e)
+        elif isinstance(e, InterpretedFunctionNode):
+            operand_values = [res[i] for i in e.operands]
+            if evaluate_interpreted_functions and all(
+                isinstance(v, (bool, int, Fraction, ObjectNode)) for v in operand_values
+            ):
+                res.append(e.call(*operand_values))  # type: ignore[arg-type]
+            else:
+                # Either not all operands have been folded to constants yet,
+                # or the caller opted out (the default): re-emit the node unchanged.
+                res.append(e)
         else:
             assert isinstance(e, OperatorNode)
             if e.kind == "and":
@@ -454,11 +516,19 @@ def simplify(exp: Expression, assignments: dict[int, ConstantNode]) -> Expressio
             operands_stack.append(len(final_res))
             final_res.append(e)
         else:
+            assert isinstance(e, (OperatorNode, InterpretedFunctionNode))
             if processed:
                 operands = [operands_stack.pop() for _ in e.operands]
                 operands.reverse()
                 operands_stack.append(len(final_res))
-                final_res.append(OperatorNode(e.kind, tuple(operands)))
+                if isinstance(e, InterpretedFunctionNode):
+                    final_res.append(
+                        InterpretedFunctionNode(
+                            e.function, e.return_type, tuple(operands)
+                        )
+                    )
+                else:
+                    final_res.append(OperatorNode(e.kind, tuple(operands)))
             else:
                 stack.append((idx, True))
                 stack.extend((i, False) for i in e.operands[::-1])

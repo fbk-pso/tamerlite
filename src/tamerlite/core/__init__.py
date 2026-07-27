@@ -21,7 +21,18 @@ import sys
 import warnings
 from typing import TYPE_CHECKING
 
-from tamerlite.core.search_space import ConstantNode, ObjectNode
+from tamerlite.core.search_space import (
+    ConstantNode,
+    ObjectNode,
+    make_interpreted_function_node,
+)
+
+# `make_interpreted_function_node` is imported unconditionally (like
+# `ConstantNode`/`ObjectNode` above) rather than per-branch below: interpreted
+# functions are supported only by the pure-Python backend (see
+# `TamerLite.supported_kind` gating on `use_rustamer`), but `converter.py`
+# imports this factory unconditionally, so it must resolve regardless of
+# which backend is active.
 
 if TYPE_CHECKING:
     # `Expression`/`State` are bound at runtime below to whichever backend is

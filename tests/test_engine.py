@@ -29,6 +29,7 @@ import unified_planning.test.examples
 import up_test_cases.builtin
 from unified_planning.engines import PlanGenerationResult, ValidationResult
 from unified_planning.engines import PlanGenerationResultStatus as ResultStatus
+from unified_planning.exceptions import UPUsageError
 from unified_planning.plans import TimeTriggeredPlan
 from unified_planning.shortcuts import *
 
@@ -1367,3 +1368,103 @@ def test_symmetry_breaking_goal_taint_is_per_object():
     assert len(observed_groups) >= 2
     for pkg_groups in observed_groups[:2]:
         assert {"p1", "p2", "p3"} in pkg_groups
+
+
+# --- Interpreted-function tests --------------------------------------------
+#
+# Interpreted functions are only evaluated by the pure-Python backend (see
+# `InterpretedFunctionNode` / `evaluate` in `tamerlite.core.search_space`), so
+# every test below forces the Python backend via `reload_tamerlite(True)`.
+# They are never routed to the Rust backend: `TamerLite.supported_kind()`
+# only advertises `INTERPRETED_FUNCTIONS_IN_*` when it is active.
+
+IF_PROBLEMS = [
+    problems_generator.get_problem_if_bool_condition(),
+    problems_generator.get_problem_if_numeric_effect(),
+    problems_generator.get_problem_if_minimal_chain(),
+]
+
+# Delete-relaxation heuristics reason about conditions/effects structurally
+# and don't know how to handle an interpreted-function node; only "blind"
+# and "custom" evaluate a plain search `State` and are IF-safe.
+IF_DISALLOWED_HEURISTICS = [
+    "hff",
+    "hadd",
+    "hmax",
+    "hmax_explicit",
+    "hff_no_numbers",
+    "hadd_no_numbers",
+    "hmax_no_numbers",
+]
+
+
+@pytest.mark.parametrize("problem", IF_PROBLEMS, ids=[p.name for p in IF_PROBLEMS])
+def test_interpreted_functions_supports(problem):
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        assert tamerlite.engine.TamerLite.supports(problem.kind) == disable_rustamer
+
+
+@pytest.mark.parametrize("problem", IF_PROBLEMS, ids=[p.name for p in IF_PROBLEMS])
+@pytest.mark.parametrize("search_kind", ["gbfs", "wastar", "bfs"])
+def test_interpreted_functions_solve_with_blind_heuristic(problem, search_kind):
+    results = []
+    for disable_rustamer in [True]:
+        reload_tamerlite(disable_rustamer)
+        search = tamerlite.SearchParams(search=search_kind, heuristic="blind")
+        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+            planner: tamerlite.engine.TamerLite
+            res: PlanGenerationResult = planner.solve(problem, timeout=None)
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+            results.append(res)
+            with PlanValidator(problem_kind=problem.kind) as v:
+                assert v.validate(problem, res.plan)
+
+    check_metrics_equality(results)
+
+
+@pytest.mark.parametrize("problem", IF_PROBLEMS, ids=[p.name for p in IF_PROBLEMS])
+def test_interpreted_functions_solve_with_custom_heuristic(problem):
+    def custom_heuristic(state: State):
+        return 0.0
+
+    results = []
+    for disable_rustamer in [True]:
+        reload_tamerlite(disable_rustamer)
+        search = tamerlite.SearchParams(search="gbfs", heuristic="custom")
+        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+            planner: tamerlite.engine.TamerLite
+            res: PlanGenerationResult = planner.solve(
+                problem, heuristic=custom_heuristic, timeout=None
+            )
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+            results.append(res)
+            with PlanValidator(problem_kind=problem.kind) as v:
+                assert v.validate(problem, res.plan)
+
+    check_metrics_equality(results)
+
+
+@pytest.mark.parametrize("problem", IF_PROBLEMS, ids=[p.name for p in IF_PROBLEMS])
+@pytest.mark.parametrize("heuristic", IF_DISALLOWED_HEURISTICS)
+def test_interpreted_functions_delete_relaxation_heuristics_raise(problem, heuristic):
+    for disable_rustamer in [True]:
+        reload_tamerlite(disable_rustamer)
+        search = tamerlite.SearchParams(search="gbfs", heuristic=heuristic)
+        with (
+            OneshotPlanner(name="tamerlite", params={"search": search}) as planner,
+            pytest.raises(UPUsageError),
+        ):
+            planner.solve(problem, timeout=None)
+
+
+def test_interpreted_functions_object_typed_argument_not_supported():
+    problem = problems_generator.get_problem_if_object_argument()
+    for disable_rustamer in [True]:
+        reload_tamerlite(disable_rustamer)
+        search = tamerlite.SearchParams(search="gbfs", heuristic="blind")
+        with (
+            OneshotPlanner(name="tamerlite", params={"search": search}) as planner,
+            pytest.raises(NotImplementedError),
+        ):
+            planner.solve(problem, timeout=None)
