@@ -41,7 +41,7 @@ from tamerlite.core import (
     Timing,
     get_fluents,
 )
-from tamerlite.core.search_space import SearchSpaceABC
+from tamerlite.core.search_space import ConstantNode, SearchSpaceABC
 
 
 def extract_objects(exp: FNode) -> Iterable[Object]:
@@ -73,8 +73,6 @@ def extract_and_arguments(expressions: list[FNode]) -> Iterable[FNode]:
         else:
             yield exp
 
-
-PlanType = list[tuple[Fraction | str | None, Action, Fraction | str | None]]
 
 # Value recorded for a fluent appearing in a goal conjunct: the raw constant
 # (bool/int/Fraction/Object), or a `(value, False)` pair marking a negated
@@ -196,7 +194,7 @@ class Encoder:
             self._compression_safe_actions,
             action_objects,
             obj_to_prev_actions_map,
-            initial_state,  # type: ignore[arg-type]
+            initial_state,
             self._goal,
             self._applicable_actions,
             deadline,
@@ -218,7 +216,7 @@ class Encoder:
     def problem(self) -> Problem:
         return self._problem
 
-    def initial_state(self, initial_values: dict[FNode, FNode]) -> Expression:
+    def initial_state(self, initial_values: dict[FNode, FNode]) -> list[ConstantNode]:
         initial_state_values = {}
         for f, v in initial_values.items():
             initial_state_values[self._convert_fluent(f)] = self._convert_expression(v)[
@@ -226,16 +224,19 @@ class Encoder:
             ]
 
         initial_state = [initial_state_values[f] for f in self._fluents]
-        return initial_state  # type: ignore[return-value]
+        # Initial values are always constants (no OperatorNode/FluentNode), so
+        # narrowing the wider ExpressionNode element type to ConstantNode is safe.
+        return cast(list[ConstantNode], initial_state)
 
     def _compute_relevant_actions(self) -> list[Action]:
+        assert self.goal is not None
         events = {a: e for a, e in self.events.items() if a in self.applicable_actions}
         heuristic = HMax(
             self.actions,
             self.fluent_types,
             self.objects,
             events,
-            self.goal,  # type: ignore[arg-type]
+            self.goal,
             internal_caching=False,
             cache_value_in_state=False,
             inadmissible_numeric_heuristic_variant=False,
@@ -263,7 +264,7 @@ class Encoder:
                     action_to_condition_fluents[a.idx].update(get_fluents(cond))
 
         checked_fluents = [False] * len(self._fluents)
-        stack = list(get_fluents(self.goal))  # type: ignore[arg-type]
+        stack = list(get_fluents(self.goal))
         for f in stack:
             checked_fluents[f] = True
 
@@ -820,17 +821,17 @@ class Encoder:
     def build_plan(self, path: list[Action]) -> Plan:
         plan = self.search_space.build_plan(path)
         if self._is_temporal:
-            assert all(e[0] is not None for e in plan)
-            return TimeTriggeredPlan(
-                [
+            actions = []
+            for s, a, d in plan:
+                assert s is not None
+                actions.append(
                     (
-                        Fraction(s),  # type: ignore[arg-type]
+                        Fraction(s),
                         self._problem.action(self.get_action_name(a))(),
                         Fraction(d) if d is not None else None,
                     )
-                    for s, a, d in plan
-                ]
-            )
+                )
+            return TimeTriggeredPlan(actions)
         else:
             return SequentialPlan(
                 [self._problem.action(self.get_action_name(a))() for _, a, _ in plan]
