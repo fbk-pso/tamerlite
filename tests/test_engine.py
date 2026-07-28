@@ -1382,6 +1382,8 @@ IF_PROBLEMS = [
     problems_generator.get_problem_if_bool_condition(),
     problems_generator.get_problem_if_numeric_effect(),
     problems_generator.get_problem_if_minimal_chain(),
+    problems_generator.get_problem_if_undefined_initial_numeric(),
+    problems_generator.get_problem_if_temporal_compression_safe(),
 ]
 
 # Delete-relaxation heuristics reason about conditions/effects structurally

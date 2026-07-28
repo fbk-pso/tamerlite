@@ -410,26 +410,7 @@ class TamerLite(
         Callable[[ActionInstance], ActionInstance | None],
     ]:
         kind = problem.kind
-        if kind.has_undefined_initial_numeric() and (
-            kind.has_interpreted_functions_in_conditions()
-            or kind.has_interpreted_functions_in_boolean_assignments()
-            or kind.has_interpreted_functions_in_numeric_assignments()
-        ):
-            # UP's `UndefinedInitialNumericRemover` doesn't declare support
-            # for `INTERPRETED_FUNCTIONS_IN_*` (upstream gap, not ours to
-            # fix), so the Factory can't select it for this combination --
-            # raise a clear error instead of an opaque
-            # `UPNoSuitableEngineAvailableException` from the Factory.
-            raise UPUsageError(
-                "TamerLite does not support problems that combine undefined "
-                "initial numeric fluents with interpreted functions."
-            )
-
         if kind.has_undefined_initial_numeric():
-            # Problems with only interpreted functions skip this branch
-            # entirely: `UndefinedInitialNumericRemover._compile` is a no-op
-            # passthrough when nothing is undefined, so there is nothing to
-            # gain from routing them through the Factory here.
             with problem.environment.factory.Compiler(
                 compilation_kind="UNDEFINED_INITIAL_NUMERIC_REMOVING",
                 problem_kind=problem.kind,
@@ -736,27 +717,32 @@ class TamerLite(
         is_intermediate_solution: bool = False,
     ) -> tuple["up.engines.results.PlanGenerationResult", bool, bool]:
         try:
-            # Symmetry breaking, compression-safe-action detection, and
-            # relevance analysis (which runs HMax reachability) all inspect
-            # or evaluate expressions structurally without accounting for
-            # interpreted functions -- disable them for problems that use
-            # one, rather than risk a silently wrong optimization. This also
-            # means `are_all_actions_compression_safe()` below is always
-            # False for these problems, so the TimedToSequential recompile
-            # branch is naturally skipped too.
+            # Symmetry breaking and relevance analysis (which runs HMax
+            # reachability) both inspect or evaluate expressions
+            # structurally without accounting for interpreted functions --
+            # disable them for problems that use one, rather than risk a
+            # silently wrong optimization. Compression-safe-action detection
+            # and the TimedToSequential recompile below are unaffected:
+            # interpreted functions are carried through both as opaque
+            # sub-expressions (see UP's TimedToSequential docstring) and
+            # TamerLite's own `_compute_compression_safe_actions` only
+            # inspects fluents/objects via generic expression-argument
+            # traversal.
             ground_kind = ground_problem.kind
             has_interpreted_functions = (
                 ground_kind.has_interpreted_functions_in_conditions()
                 or ground_kind.has_interpreted_functions_in_boolean_assignments()
                 or ground_kind.has_interpreted_functions_in_numeric_assignments()
             )
+            symmetry_breaking = (
+                self._params.symmetry_breaking and not has_interpreted_functions
+            )
+            relevance_analysis = (
+                self._params.relevance_analysis and not has_interpreted_functions
+            )
             if has_interpreted_functions:
                 for flag_name, flag_value in (
                     ("symmetry_breaking", self._params.symmetry_breaking),
-                    (
-                        "compression_safe_actions",
-                        self._params.compression_safe_actions,
-                    ),
                     ("relevance_analysis", self._params.relevance_analysis),
                 ):
                     if flag_value:
@@ -769,9 +755,9 @@ class TamerLite(
                 ground_problem,
                 problem,
                 map_back_action_instance,
-                self._params.symmetry_breaking and not has_interpreted_functions,
-                self._params.compression_safe_actions and not has_interpreted_functions,
-                self._params.relevance_analysis and not has_interpreted_functions,
+                symmetry_breaking,
+                self._params.compression_safe_actions,
+                relevance_analysis,
                 deadline=deadline,
             )
 
@@ -804,9 +790,9 @@ class TamerLite(
                     cast("up.model.Problem", compilation_res.problem),
                     problem,
                     new_map_back_action_instance,
-                    self._params.symmetry_breaking,
+                    symmetry_breaking,
                     self._params.compression_safe_actions,
-                    self._params.relevance_analysis,
+                    relevance_analysis,
                     deadline=deadline,
                 )
 
