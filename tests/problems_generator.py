@@ -842,3 +842,97 @@ def get_problem_if_object_argument() -> Problem:
     problem.set_initial_value(at, l1)
     problem.add_goal(Equals(at, l2))
     return problem
+
+
+def get_problem_if_undefined_initial_numeric() -> Problem:
+    """A fluent left undefined for one object, read both inside an
+    interpreted-function precondition and an interpreted-function effect
+    value -- adapted from UP's `interpreted_functions_undef_numeric` example
+    (dropping the object-typed `choose`/`use_chosen` action, since
+    object-typed interpreted-function arguments aren't supported yet). The
+    `set_value` action (writing `value`, mirroring the UP original) is kept:
+    without it `value` would be a static (never-written) fluent and UP's
+    Grounder would constant-fold every interpreted-function call away,
+    leaving nothing interpreted-function-related in the ground problem this
+    combination is meant to exercise."""
+    Obj = UserType("Obj")
+    o1 = Object("o1", Obj)
+    o2 = Object("o2", Obj)
+
+    def is_big(x):
+        return x >= 3
+
+    IF_is_big = InterpretedFunction(
+        "is_big", BoolType(), OrderedDict(x=IntType()), is_big
+    )
+
+    def double_it(x):
+        return 2 * x
+
+    IF_double = InterpretedFunction(
+        "double", IntType(), OrderedDict(x=IntType()), double_it
+    )
+
+    value = Fluent("value", IntType(), o=Obj)
+    total = Fluent("total", IntType())
+
+    use_value = InstantaneousAction("use_value", o=Obj)
+    use_value.add_precondition(IF_is_big(value(use_value.o)))
+    use_value.add_effect(total, IF_double(value(use_value.o)))
+
+    set_value = InstantaneousAction("set_value", o=Obj)
+    set_value.add_effect(value(set_value.o), IF_double(value(o1)))
+
+    problem = Problem("if_undefined_initial_numeric")
+    problem.add_fluent(value)
+    problem.add_fluent(total, default_initial_value=0)
+    problem.add_object(o1)
+    problem.add_object(o2)
+    problem.add_action(use_value)
+    problem.add_action(set_value)
+    problem.set_initial_value(value(o1), 4)  # value(o2) is left undefined
+    problem.add_goal(GE(total, 1))
+    return problem
+
+
+def get_problem_if_temporal_compression_safe() -> Problem:
+    """A durative action whose start condition and start effect both use an
+    interpreted function. Compression-safe per TamerLite's own
+    `Encoder._compute_compression_safe_actions`: its only condition is at
+    start, and its only non-start effect assigns a bool constant -- so
+    solving it exercises TamerLite's compression-safe-action detection and
+    the TimedToSequential recompile, not just the general IF machinery.
+    Interpreted functions in a duration remain unsupported (the Grounder
+    doesn't declare `INTERPRETED_FUNCTIONS_IN_DURATIONS`), so the duration
+    here is a plain constant."""
+
+    def is_low(level):
+        return level < 10
+
+    IF_is_low = InterpretedFunction(
+        "is_low", BoolType(), OrderedDict(level=IntType()), is_low
+    )
+
+    def boost(level):
+        return min(level + 3, 10)
+
+    IF_boost = InterpretedFunction(
+        "boost", IntType(), OrderedDict(level=IntType()), boost
+    )
+
+    battery = Fluent("battery", IntType())
+    charged = Fluent("charged")
+
+    charge = DurativeAction("charge")
+    charge.set_fixed_duration(1)
+    charge.add_condition(StartTiming(), IF_is_low(battery))
+    charge.add_effect(StartTiming(), battery, IF_boost(battery))
+    charge.add_effect(EndTiming(), charged, True)
+
+    problem = Problem("if_temporal_compression_safe")
+    problem.add_fluent(battery)
+    problem.add_fluent(charged, default_initial_value=False)
+    problem.add_action(charge)
+    problem.set_initial_value(battery, 2)
+    problem.add_goal(charged)
+    return problem

@@ -1094,7 +1094,7 @@ dev = [
     { name = "pytest-xdist", specifier = "==3.8.0" },
     { name = "ruff", specifier = "==0.16.0" },
     { name = "rustamer", editable = "crates/rustamer" },
-    { name = "unified-planning", git = "https://github.com/aiplan4eu/unified-planning.git" },
+    { name = "unified-planning", git = "https://github.com/aiplan4eu/unified-planning.git?rev=fix%2Ft2s-factory-registration" },
 ]
 
 [[package]]
