@@ -265,6 +265,17 @@ def skip(
             and (search == "astar" or (heuristic == "hmax" and not weak_equality))
         )
         or (problem.name == "rovers_pfile2" and heuristic == "custom")
+        or (
+            problem.name == "logistic"
+            and not weak_equality
+            and (
+                search in ["gbfs", "dfs", "bfs"]
+                or (
+                    search == "wastar"
+                    and heuristic in ["hff", "hff_no_numbers", "custom"]
+                )
+            )
+        )
     )
 
 
