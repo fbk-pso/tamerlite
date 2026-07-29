@@ -38,10 +38,7 @@ dev = [
     "pre-commit==4.6.1",
     "maturin>=1.14.1,<2.0",
     "rustamer",
-    # TODO: temporary pin to a branch with interpreted-function support in
-    # UndefinedInitialNumericRemover/TimedToSequential; revert to master once
-    # https://github.com/aiplan4eu/unified-planning merges it.
-    "unified-planning @ git+https://github.com/aiplan4eu/unified-planning.git@fix/t2s-factory-registration",
+    "unified-planning @ git+https://github.com/aiplan4eu/unified-planning.git",
 ]
 
 [build-system]
