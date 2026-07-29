@@ -1384,6 +1384,7 @@ IF_PROBLEMS = [
     problems_generator.get_problem_if_minimal_chain(),
     problems_generator.get_problem_if_undefined_initial_numeric(),
     problems_generator.get_problem_if_temporal_compression_safe(),
+    problems_generator.get_problem_if_duration(),
 ]
 
 # Delete-relaxation heuristics reason about conditions/effects structurally
@@ -1470,3 +1471,33 @@ def test_interpreted_functions_object_typed_argument_not_supported():
             pytest.raises(NotImplementedError),
         ):
             planner.solve(problem, timeout=None)
+
+
+def test_interpreted_functions_duration():
+    problem = problems_generator.get_problem_if_duration()
+    assert problem.kind.has_interpreted_functions_in_durations()
+
+    for disable_rustamer in [True]:
+        reload_tamerlite(disable_rustamer)
+
+        search = tamerlite.SearchParams(
+            search="wastar",
+            heuristic="blind",
+            weight=0.8,
+            compression_safe_actions=False,
+        )
+
+        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+            planner: tamerlite.engine.TamerLite
+            res: PlanGenerationResult = planner.solve(problem, timeout=None)
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+
+            with PlanValidator(problem_kind=problem.kind) as v:
+                assert v.validate(problem, res.plan)
+
+            assert isinstance(res.plan, TimeTriggeredPlan)
+            timed_actions = res.plan.timed_actions
+            assert len(timed_actions) == 1
+            _, _, duration = timed_actions[0]
+            # charge_time(battery=4) == 10 - 4 == 6
+            assert duration == Fraction(6)

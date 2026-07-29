@@ -1014,9 +1014,8 @@ def get_problem_if_temporal_compression_safe() -> Problem:
     start, and its only non-start effect assigns a bool constant -- so
     solving it exercises TamerLite's compression-safe-action detection and
     the TimedToSequential recompile, not just the general IF machinery.
-    Interpreted functions in a duration remain unsupported (the Grounder
-    doesn't declare `INTERPRETED_FUNCTIONS_IN_DURATIONS`), so the duration
-    here is a plain constant."""
+    The duration here is a plain constant; see `get_problem_if_duration` for
+    interpreted functions used inside a duration itself."""
 
     def is_low(level):
         return level < 10
@@ -1046,5 +1045,48 @@ def get_problem_if_temporal_compression_safe() -> Problem:
     problem.add_fluent(charged, default_initial_value=False)
     problem.add_action(charge)
     problem.set_initial_value(battery, 2)
+    problem.add_goal(charged)
+    return problem
+
+
+def get_problem_if_duration() -> Problem:
+    """A durative action whose *duration* is an interpreted function --
+    modelled on UP's `interpreted_functions_in_durative_start_effects`
+    example, now that UP's Grounder correctly substitutes into (without
+    folding) an interpreted function used in a duration bound.
+
+    `battery` is written by `charge`'s own start effect, so it isn't a
+    static fluent -- the encoder's `Simplifier` would otherwise constant-fold
+    `charge_time_if(battery)` away during grounding, and the duration would
+    reach the search space as a plain literal, silently defeating the point
+    of this test.
+
+    The end-only condition (with no matching overall condition) makes
+    `charge` fail `Encoder._compute_compression_safe_actions`, so solving
+    this exercises the real temporal search path (`_open_action`'s duration
+    evaluation), not the `TimedToSequential` recompile, which would discard
+    the duration and re-derive it in `build_plan` instead."""
+
+    def charge_time(level):
+        return 10 - level
+
+    IF_charge_time = InterpretedFunction(
+        "charge_time", IntType(), OrderedDict(level=IntType()), charge_time
+    )
+
+    battery = Fluent("battery", IntType())
+    charged = Fluent("charged")
+
+    charge = DurativeAction("charge")
+    charge.set_fixed_duration(IF_charge_time(battery))
+    charge.add_effect(StartTiming(), battery, battery - 2)
+    charge.add_condition(EndTiming(), GE(battery, 0))
+    charge.add_effect(EndTiming(), charged, True)
+
+    problem = Problem("if_duration")
+    problem.add_fluent(battery)
+    problem.add_fluent(charged, default_initial_value=False)
+    problem.add_action(charge)
+    problem.set_initial_value(battery, 4)
     problem.add_goal(charged)
     return problem
