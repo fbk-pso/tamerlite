@@ -27,7 +27,11 @@ from typing import IO, Protocol, cast
 import unified_planning as up
 import unified_planning.engines
 import unified_planning.engines.mixins
+from unified_planning.engines.compilers.grounder import Grounder
 from unified_planning.engines.compilers.timed_to_sequential import TimedToSequential
+from unified_planning.engines.compilers.undefined_initial_numeric_remover import (
+    UndefinedInitialNumericRemover,
+)
 from unified_planning.engines.compilers.utils import get_fresh_name
 from unified_planning.engines.plan_validator import (
     SequentialPlanValidator,
@@ -247,6 +251,7 @@ class TamerLite(
             supported_kind.set_effects_kind(
                 "INTERPRETED_FUNCTIONS_IN_NUMERIC_ASSIGNMENTS"
             )
+            supported_kind.set_expression_duration("INTERPRETED_FUNCTIONS_IN_DURATIONS")
         supported_kind.set_fluents_type("NUMERIC_FLUENTS")
         supported_kind.set_fluents_type("OBJECT_FLUENTS")
         supported_kind.set_fluents_type("INT_FLUENTS")
@@ -293,6 +298,7 @@ class TamerLite(
             encoder.problem.kind.has_interpreted_functions_in_conditions()
             or encoder.problem.kind.has_interpreted_functions_in_boolean_assignments()
             or encoder.problem.kind.has_interpreted_functions_in_numeric_assignments()
+            or encoder.problem.kind.has_interpreted_functions_in_durations()
         ):
             # HFF/HAdd/HMax/HMaxExplicit reason about conditions/effects
             # structurally (e.g. to build the delete relaxation) and don't
@@ -410,16 +416,17 @@ class TamerLite(
         Callable[[ActionInstance], ActionInstance | None],
     ]:
         kind = problem.kind
+        undefined_map_back_action_instance: Callable[
+            [ActionInstance], ActionInstance | None
+        ]
         if kind.has_undefined_initial_numeric():
-            with problem.environment.factory.Compiler(
-                compilation_kind="UNDEFINED_INITIAL_NUMERIC_REMOVING",
-                problem_kind=problem.kind,
-            ) as compiler:
-                compilation_res = compiler.compile(problem)
-                undefined_map_back_action_instance = (
-                    compilation_res.map_back_action_instance
-                )
-                problem = cast("up.model.Problem", compilation_res.problem)
+            undefined_initial_numeric_remover = UndefinedInitialNumericRemover()
+            compilation_res = undefined_initial_numeric_remover.compile(problem)
+            assert compilation_res.map_back_action_instance is not None
+            undefined_map_back_action_instance = (
+                compilation_res.map_back_action_instance
+            )
+            problem = cast("up.model.Problem", compilation_res.problem)
         else:
 
             def undefined_map_back_action_instance(
@@ -427,18 +434,28 @@ class TamerLite(
             ) -> ActionInstance | None:
                 return ai
 
-        with problem.environment.factory.Compiler(
-            compilation_kind="GROUNDING", problem_kind=problem.kind
-        ) as compiler:
-            compilation_res = compiler.compile(problem)
-            ground_map_back_action_instance = compilation_res.map_back_action_instance
-            ground_problem = cast("up.model.Problem", compilation_res.problem)
-            lifted_problem = problem
+        # UP's Grounder handles interpreted functions in durations
+        # correctly -- `create_action_with_given_subs` substitutes into
+        # the duration bounds without simplifying them -- but its
+        # `supported_kind()` doesn't declare
+        # INTERPRETED_FUNCTIONS_IN_DURATIONS, so the factory would refuse
+        # the problem. Skip the check rather than the compilation.
+        # TODO: drop this once UP's Grounder declares the feature.
+        grounder = Grounder()
+        grounder.skip_checks = True
+        compilation_res = grounder.compile(problem)
+        assert compilation_res.map_back_action_instance is not None
+        ground_map_back_action_instance = compilation_res.map_back_action_instance
+        ground_problem = cast("up.model.Problem", compilation_res.problem)
+        lifted_problem = problem
 
-        def map_back_action_instance(ai):
-            return undefined_map_back_action_instance(
-                ground_map_back_action_instance(ai)
-            )
+        def map_back_action_instance(
+            ai: ActionInstance,
+        ) -> ActionInstance | None:
+            lifted_ai = ground_map_back_action_instance(ai)
+            if lifted_ai is None:
+                return None
+            return undefined_map_back_action_instance(lifted_ai)
 
         return lifted_problem, ground_problem, map_back_action_instance
 
@@ -733,6 +750,7 @@ class TamerLite(
                 ground_kind.has_interpreted_functions_in_conditions()
                 or ground_kind.has_interpreted_functions_in_boolean_assignments()
                 or ground_kind.has_interpreted_functions_in_numeric_assignments()
+                or ground_kind.has_interpreted_functions_in_durations()
             )
             symmetry_breaking = (
                 self._params.symmetry_breaking and not has_interpreted_functions
