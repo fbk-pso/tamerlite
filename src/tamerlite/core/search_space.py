@@ -795,10 +795,6 @@ class SearchSpace(SearchSpaceABC):
         counter = 0
         state = self.initial_state()
         for action in path:
-            succ_state = self.get_successor_state_with_compression(state, action, False)
-            assert succ_state is not None
-            state = succ_state
-
             action_events = self._events[action]
             if action in todo:
                 index, id = todo[action]
@@ -888,6 +884,12 @@ class SearchSpace(SearchSpaceABC):
                 event_path.append((e, id))
                 if len(action_events) > 1:
                     todo[action] = (1, id + 1)
+
+            # Advance to the successor state only after evaluating the action's
+            # duration bounds above, so they are evaluated against the pre-action state
+            succ_state = self.get_successor_state_with_compression(state, action, False)
+            assert succ_state is not None
+            state = succ_state
 
         res: list[tuple[Fraction | None, Action, Fraction | None]] = []
         start_time: dict[tuple[Action, int], Fraction] = {}
