@@ -46,7 +46,7 @@ class InterpretedFunctionNode:
     (inlined) argument sub-expression roots, exactly like `OperatorNode`."""
 
     function: Callable
-    return_type: str  # "bool" | "int" | "real"
+    return_type: str  # "bool" | "int" | "real" | "object"
     operands: tuple[int, ...]
 
     def call(self, *arg_values: "ConstantNode") -> "ConstantNode":
@@ -55,12 +55,17 @@ class InterpretedFunctionNode:
         any Python-native type (e.g. a plain `float` for a "real" function),
         so this normalizes it to the exact type the rest of the search space
         expects (mirroring `Simplifier.walk_interpreted_function_exp`, which
-        does the analogous normalization on UP's side)."""
+        does the analogous normalization on UP's side). For "object", the
+        `Converter` already wraps the raw callable to return an `ObjectNode`
+        directly, so no further coercion is needed here."""
         r = self.function(*arg_values)
         if self.return_type == "bool":
             return bool(r)
         elif self.return_type == "int":
             return int(r)
+        elif self.return_type == "object":
+            assert isinstance(r, ObjectNode)
+            return r
         else:
             return Fraction(r)
 

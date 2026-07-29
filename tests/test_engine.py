@@ -1381,6 +1381,7 @@ def test_symmetry_breaking_goal_taint_is_per_object():
 IF_PROBLEMS = [
     problems_generator.get_problem_if_bool_condition(),
     problems_generator.get_problem_if_numeric_effect(),
+    problems_generator.get_problem_if_object_effect(),
     problems_generator.get_problem_if_minimal_chain(),
     problems_generator.get_problem_if_undefined_initial_numeric(),
     problems_generator.get_problem_if_temporal_compression_safe(),
@@ -1501,3 +1502,20 @@ def test_interpreted_functions_duration():
             _, _, duration = timed_actions[0]
             # charge_time(battery=4) == 10 - 4 == 6
             assert duration == Fraction(6)
+
+
+def test_interpreted_functions_object_effect():
+    problem = problems_generator.get_problem_if_object_effect()
+    assert problem.kind.has_interpreted_functions_in_object_assignments()
+
+    for disable_rustamer in [True]:
+        reload_tamerlite(disable_rustamer)
+
+        search = tamerlite.SearchParams(search="gbfs", heuristic="blind")
+        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+            planner: tamerlite.engine.TamerLite
+            res: PlanGenerationResult = planner.solve(problem, timeout=None)
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+
+            with PlanValidator(problem_kind=problem.kind) as v:
+                assert v.validate(problem, res.plan)

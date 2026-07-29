@@ -251,6 +251,9 @@ class TamerLite(
             supported_kind.set_effects_kind(
                 "INTERPRETED_FUNCTIONS_IN_NUMERIC_ASSIGNMENTS"
             )
+            supported_kind.set_effects_kind(
+                "INTERPRETED_FUNCTIONS_IN_OBJECT_ASSIGNMENTS"
+            )
             supported_kind.set_expression_duration("INTERPRETED_FUNCTIONS_IN_DURATIONS")
         supported_kind.set_fluents_type("NUMERIC_FLUENTS")
         supported_kind.set_fluents_type("OBJECT_FLUENTS")
@@ -298,6 +301,7 @@ class TamerLite(
             encoder.problem.kind.has_interpreted_functions_in_conditions()
             or encoder.problem.kind.has_interpreted_functions_in_boolean_assignments()
             or encoder.problem.kind.has_interpreted_functions_in_numeric_assignments()
+            or encoder.problem.kind.has_interpreted_functions_in_object_assignments()
             or encoder.problem.kind.has_interpreted_functions_in_durations()
         ):
             # HFF/HAdd/HMax/HMaxExplicit reason about conditions/effects
@@ -750,6 +754,7 @@ class TamerLite(
                 ground_kind.has_interpreted_functions_in_conditions()
                 or ground_kind.has_interpreted_functions_in_boolean_assignments()
                 or ground_kind.has_interpreted_functions_in_numeric_assignments()
+                or ground_kind.has_interpreted_functions_in_object_assignments()
                 or ground_kind.has_interpreted_functions_in_durations()
             )
             symmetry_breaking = (
