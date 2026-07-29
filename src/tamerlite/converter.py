@@ -215,24 +215,30 @@ class Converter(DagWalker):
                     "not yet supported."
                 )
         return_type = interpreted_function.return_type
+        function = interpreted_function.function
         if return_type.is_bool_type():
             return_type_str = "bool"
         elif return_type.is_int_type():
             return_type_str = "int"
         elif return_type.is_real_type():
             return_type_str = "real"
-        else:
-            raise NotImplementedError(
-                "Interpreted functions with object-typed return values are "
-                "not yet supported."
-            )
+        elif return_type.is_user_type():
+            return_type_str = "object"
+            # The real callable returns an actual UP `Object` -- wrap it so
+            # the `InterpretedFunctionNode` sees the same internal
+            # object-id representation as any other object-valued
+            # expression (mirroring `walk_object_exp` above). Closure over
+            # `object_ids`/`raw_function` rather than default args, so
+            # `*call_args` stays unambiguous.
+            object_ids = self._object_ids
+
+            def function(*call_args):
+                return make_object_node(
+                    object_ids[interpreted_function.function(*call_args).name]
+                )
 
         if len(args) == 0:
-            return (
-                make_interpreted_function_node(
-                    interpreted_function.function, return_type_str, ()
-                ),
-            )
+            return (make_interpreted_function_node(function, return_type_str, ()),)
         res = args[0]
         offset = len(res) - 1
         operands = [offset]
@@ -241,9 +247,7 @@ class Converter(DagWalker):
             offset += len(args[i])
             operands.append(offset)
         res += (
-            make_interpreted_function_node(
-                interpreted_function.function, return_type_str, tuple(operands)
-            ),
+            make_interpreted_function_node(function, return_type_str, tuple(operands)),
         )
         return res
 

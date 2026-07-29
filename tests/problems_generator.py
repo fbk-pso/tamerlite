@@ -803,6 +803,41 @@ def get_problem_if_numeric_effect() -> Problem:
     return problem
 
 
+def get_problem_if_object_effect() -> Problem:
+    """An interpreted function returning an object, used as an effect
+    assignment value."""
+
+    Loc = UserType("Loc")
+    l1 = Object("l1", Loc)
+    l2 = Object("l2", Loc)
+
+    def choose_location(c):
+        return l2 if c >= 1 else l1
+
+    IF_choose = InterpretedFunction(
+        "choose_location", Loc, OrderedDict(c=IntType()), choose_location
+    )
+
+    counter = Fluent("counter", IntType())
+    at = Fluent("at", Loc)
+
+    act = InstantaneousAction("act")
+    act.add_precondition(LT(counter, 5))
+    act.add_effect(counter, Plus(counter, 1))
+    act.add_effect(at, IF_choose(counter))
+
+    problem = Problem("if_object_effect")
+    problem.add_fluent(counter)
+    problem.add_fluent(at)
+    problem.add_object(l1)
+    problem.add_object(l2)
+    problem.add_action(act)
+    problem.set_initial_value(counter, 0)
+    problem.set_initial_value(at, l1)
+    problem.add_goal(Equals(at, l2))
+    return problem
+
+
 def get_problem_if_minimal_chain() -> Problem:
     """Reuses UP's own bundled example -- the only one of its IF examples
     that doesn't also require `BOUNDED_TYPES`."""
@@ -848,8 +883,12 @@ def get_problem_if_undefined_initial_numeric() -> Problem:
     """A fluent left undefined for one object, read both inside an
     interpreted-function precondition and an interpreted-function effect
     value -- adapted from UP's `interpreted_functions_undef_numeric` example
-    (dropping the object-typed `choose`/`use_chosen` action, since
-    object-typed interpreted-function arguments aren't supported yet). The
+    (dropping the `choose`/`use_chosen` action: `choose_if()` returns an
+    object, and `use_chosen` feeds that object into `undef_value(...)` to
+    pick *which fluent instance to read* -- a further capability, dynamic
+    fluent-parameter resolution from a runtime-computed object, that's
+    separate from and harder than a plain object-valued effect (see
+    `get_problem_if_object_effect`) and still out of scope). The
     `set_value` action (writing `value`, mirroring the UP original) is kept:
     without it `value` would be a static (never-written) fluent and UP's
     Grounder would constant-fold every interpreted-function call away,
