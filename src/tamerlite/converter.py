@@ -16,7 +16,7 @@
 #
 
 
-from unified_planning.model import FNode, Problem
+from unified_planning.model import FNode, Object, Problem
 from unified_planning.model.walkers import DagWalker
 
 from tamerlite.core import (
@@ -34,11 +34,16 @@ from tamerlite.core import (
 
 class Converter(DagWalker):
     def __init__(
-        self, problem: Problem, fluent_ids: dict[str, int], object_ids: dict[str, int]
+        self,
+        problem: Problem,
+        fluent_ids: dict[str, int],
+        object_ids: dict[str, int],
+        objects_by_id: list[Object],
     ):
         DagWalker.__init__(self)
         self._fluent_ids = fluent_ids
         self._object_ids = object_ids
+        self._objects_by_id = objects_by_id
         self.static_fluents = problem.get_static_fluents()
 
     def convert(self, expression: FNode) -> Expression:
@@ -208,12 +213,6 @@ class Converter(DagWalker):
         # real Python function during grounding. What remains here
         # must be re-evaluated at search time.
         interpreted_function = expression.interpreted_function()
-        for parameter in interpreted_function.signature:
-            if parameter.type.is_user_type():
-                raise NotImplementedError(
-                    "Interpreted functions with object-typed parameters are "
-                    "not yet supported."
-                )
         return_type = interpreted_function.return_type
         function = interpreted_function.function
         if return_type.is_bool_type():
@@ -224,18 +223,29 @@ class Converter(DagWalker):
             return_type_str = "real"
         elif return_type.is_user_type():
             return_type_str = "object"
-            # The real callable returns an actual UP `Object` -- wrap it so
-            # the `InterpretedFunctionNode` sees the same internal
-            # object-id representation as any other object-valued
-            # expression (mirroring `walk_object_exp` above). Closure over
-            # `object_ids`/`raw_function` rather than default args, so
-            # `*call_args` stays unambiguous.
-            object_ids = self._object_ids
+
+        # Object-typed parameters/return values are exposed to `evaluate` as
+        # internal `ObjectNode`s (see `search_space.evaluate`), but the real
+        # callable expects/returns actual UP `Object`s -- wrap it to translate
+        # both directions, mirroring `walk_object_exp`'s name <-> id lookup.
+        # Only installed when actually needed, so plain bool/int/real IFs
+        # keep storing `interpreted_function.function` verbatim.
+        object_params = tuple(
+            p.type.is_user_type() for p in interpreted_function.signature
+        )
+        wraps_result = return_type.is_user_type()
+        if any(object_params) or wraps_result:
 
             def function(*call_args):
-                return make_object_node(
-                    object_ids[interpreted_function.function(*call_args).name]
-                )
+                if any(object_params):
+                    call_args = tuple(
+                        self._objects_by_id[a.object] if is_obj else a
+                        for a, is_obj in zip(call_args, object_params, strict=True)
+                    )
+                r = interpreted_function.function(*call_args)
+                if wraps_result:
+                    return make_object_node(self._object_ids[r.name])
+                return r
 
         if len(args) == 0:
             return (make_interpreted_function_node(function, return_type_str, ()),)
