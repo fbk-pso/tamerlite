@@ -849,17 +849,19 @@ def get_problem_if_minimal_chain() -> Problem:
 
 
 def get_problem_if_object_argument() -> Problem:
-    """A boolean interpreted function taking an object-typed argument --
-    object-typed interpreted-function parameters aren't supported yet (see
-    `Converter.walk_interpreted_function_exp`), so this problem is used to
-    check that a clear `NotImplementedError` is raised rather than silently
-    doing the wrong thing."""
+    """A boolean interpreted function taking an object-typed argument, read
+    directly off an object-typed fluent. The callable's result depends on
+    the argument's identity (not a constant `True`), so this fails loudly
+    if the argument is ever passed through unresolved (e.g. a raw internal
+    `ObjectNode`) instead of the real `up.model.Object` -- `at` is written
+    by this action's own effect, so it isn't a static fluent and the call
+    survives grounding."""
     Loc = UserType("Loc")
     l1 = Object("l1", Loc)
     l2 = Object("l2", Loc)
 
     def loc_check(loc):
-        return True
+        return loc == l1
 
     IF_obj = InterpretedFunction(
         "loc_check", BoolType(), OrderedDict(loc=Loc), loc_check
@@ -876,6 +878,45 @@ def get_problem_if_object_argument() -> Problem:
     problem.add_action(act)
     problem.set_initial_value(at, l1)
     problem.add_goal(Equals(at, l2))
+    return problem
+
+
+def get_problem_if_object_argument_and_return() -> Problem:
+    """An interpreted function returning an object (`next_loc`) and one
+    taking an object-typed argument (`is_final`), chained through the same
+    object-typed fluent -- exercises both directions of the argument/
+    return-unwrapping wrapper in `Converter.walk_interpreted_function_exp`
+    together. Three objects so reaching the goal takes two real state
+    transitions, not one degenerate step."""
+    Loc = UserType("Loc")
+    l1 = Object("l1", Loc)
+    l2 = Object("l2", Loc)
+    l3 = Object("l3", Loc)
+
+    def next_loc(loc):
+        return {l1: l2, l2: l3, l3: l3}[loc]
+
+    def is_final(loc):
+        return loc == l3
+
+    IF_next = InterpretedFunction("next_loc", Loc, OrderedDict(loc=Loc), next_loc)
+    IF_final = InterpretedFunction(
+        "is_final", BoolType(), OrderedDict(loc=Loc), is_final
+    )
+
+    at = Fluent("at", Loc)
+    act = InstantaneousAction("act")
+    act.add_precondition(Not(IF_final(at)))
+    act.add_effect(at, IF_next(at))
+
+    problem = Problem("if_object_argument_and_return")
+    problem.add_fluent(at)
+    problem.add_object(l1)
+    problem.add_object(l2)
+    problem.add_object(l3)
+    problem.add_action(act)
+    problem.set_initial_value(at, l1)
+    problem.add_goal(Equals(at, l3))
     return problem
 
 

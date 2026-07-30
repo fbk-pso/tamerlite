@@ -1217,6 +1217,8 @@ IF_PROBLEMS = [
     problems_generator.get_problem_if_bool_condition(),
     problems_generator.get_problem_if_numeric_effect(),
     problems_generator.get_problem_if_object_effect(),
+    problems_generator.get_problem_if_object_argument(),
+    problems_generator.get_problem_if_object_argument_and_return(),
     problems_generator.get_problem_if_minimal_chain(),
     problems_generator.get_problem_if_undefined_initial_numeric(),
     problems_generator.get_problem_if_temporal_compression_safe(),
@@ -1293,18 +1295,6 @@ def test_interpreted_functions_delete_relaxation_heuristics_raise(problem, heuri
         with (
             OneshotPlanner(name="tamerlite", params={"search": search}) as planner,
             pytest.raises(UPUsageError),
-        ):
-            planner.solve(problem, timeout=None)
-
-
-def test_interpreted_functions_object_typed_argument_not_supported():
-    problem = problems_generator.get_problem_if_object_argument()
-    for disable_rustamer in [True]:
-        reload_tamerlite(disable_rustamer)
-        search = tamerlite.SearchParams(search="gbfs", heuristic="blind")
-        with (
-            OneshotPlanner(name="tamerlite", params={"search": search}) as planner,
-            pytest.raises(NotImplementedError),
         ):
             planner.solve(problem, timeout=None)
 

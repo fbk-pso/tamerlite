@@ -127,10 +127,13 @@ class Encoder:
         self._fluent_ids = {f: i for i, f in enumerate(self._fluents)}
         self._fluent_types = [fluent_types[f] for f in self._fluents]
 
-        self._object_names: list[str] = sorted(o.name for o in problem.all_objects)
+        self._objects_by_id = sorted(problem.all_objects, key=lambda o: o.name)
+        self._object_names: list[str] = [o.name for o in self._objects_by_id]
         self._object_ids = {name: i for i, name in enumerate(self._object_names)}
 
-        self._converter = Converter(problem, self._fluent_ids, self._object_ids)
+        self._converter = Converter(
+            problem, self._fluent_ids, self._object_ids, self._objects_by_id
+        )
         self._action_names: list[str] = sorted(
             action.name for action in problem.actions
         )
