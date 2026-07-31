@@ -542,6 +542,36 @@ def get_problem_temporal_flight_maximize_fuel() -> Problem:
     return problem
 
 
+def get_problem_temporal_fluent_duration() -> Problem:
+    """A single-action temporal problem whose duration is a fluent that the
+    action's own start effect overwrites.
+    """
+    problem = Problem("temporal_fluent_duration")
+
+    charge = Fluent("charge", RealType(0, 100))
+    ready = Fluent("ready")
+    done = Fluent("done")
+
+    run = DurativeAction("run")
+    run.set_fixed_duration(charge())
+    run.add_condition(StartTiming(), ready)
+    run.add_effect(StartTiming(), ready, False)
+    run.add_effect(StartTiming(), charge, 10)
+    run.add_effect(EndTiming(), done, True)
+
+    problem.add_fluent(charge, default_initial_value=0)
+    problem.add_fluent(ready, default_initial_value=False)
+    problem.add_fluent(done, default_initial_value=False)
+    problem.add_action(run)
+
+    problem.set_initial_value(charge, 5)
+    problem.set_initial_value(ready, True)
+
+    problem.add_goal(done)
+
+    return problem
+
+
 def get_problem_object_value_symmetry_initial() -> Problem:
     Token = UserType("Token")
     Slot = UserType("Slot")
