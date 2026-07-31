@@ -719,9 +719,6 @@ impl SearchSpaceTrait for SearchSpace {
         let mut counter = 0;
         let mut state = self.initial_state(None)?;
         for action in path {
-            state = self
-                .get_successor_state_with_compression(&state, *action, false)?
-                .unwrap();
             if let Some(events) = self.events.get(action).cloned() {
                 if let Some((index, id)) = todo.get(action).cloned() {
                     if let Some((_, e)) = events.get(index) {
@@ -836,6 +833,11 @@ impl SearchSpaceTrait for SearchSpace {
                     }
                 }
             }
+            // Advance to the successor state only after evaluating the action's
+            // duration bounds above, so they are evaluated against the pre-action state
+            state = self
+                .get_successor_state_with_compression(&state, *action, false)?
+                .unwrap();
         }
 
         let mut res = Vec::new();

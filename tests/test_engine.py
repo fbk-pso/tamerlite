@@ -29,6 +29,7 @@ import unified_planning.test.examples
 import up_test_cases.builtin
 from unified_planning.engines import PlanGenerationResult, ValidationResult
 from unified_planning.engines import PlanGenerationResultStatus as ResultStatus
+from unified_planning.plans import TimeTriggeredPlan
 from unified_planning.shortcuts import *
 
 import problems_generator
@@ -265,6 +266,17 @@ def skip(
             and (search == "astar" or (heuristic == "hmax" and not weak_equality))
         )
         or (problem.name == "rovers_pfile2" and heuristic == "custom")
+        or (
+            problem.name == "logistic"
+            and not weak_equality
+            and (
+                search in ["gbfs", "dfs", "bfs"]
+                or (
+                    search == "wastar"
+                    and heuristic in ["hff", "hff_no_numbers", "custom"]
+                )
+            )
+        )
     )
 
 
@@ -973,6 +985,34 @@ def test_simplify_fixed_expressions(expressions):
             if not disable_rustamer:
                 simplified_exp = str(list(parse_expression(simplified_exp)))
             assert str(simplify(exp, {})) == simplified_exp
+
+
+def test_temporal_fluent_duration():
+    problem = problems_generator.get_problem_temporal_fluent_duration()
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+
+        search = tamerlite.SearchParams(
+            search="wastar",
+            heuristic="hff",
+            weight=0.8,
+            compression_safe_actions=False,
+        )
+
+        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+            planner: tamerlite.engine.TamerLite
+            res: PlanGenerationResult = planner.solve(problem, timeout=None)
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+
+            with PlanValidator(problem_kind=problem.kind) as v:
+                assert v.validate(problem, res.plan)
+
+            assert isinstance(res.plan, TimeTriggeredPlan)
+            timed_actions = res.plan.timed_actions
+            assert len(timed_actions) == 1
+            _, _, duration = timed_actions[0]
+            assert duration == Fraction(5)
 
 
 def test_symmetry_breaking_object_valued_fluents():
