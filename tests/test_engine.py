@@ -19,6 +19,7 @@ import contextlib
 import importlib
 import os
 import types
+import warnings
 from collections import OrderedDict
 from collections.abc import Callable
 from functools import partial
@@ -1249,11 +1250,16 @@ def test_interpreted_functions_supports(problem):
 
 @pytest.mark.parametrize("problem", IF_PROBLEMS, ids=[p.name for p in IF_PROBLEMS])
 @pytest.mark.parametrize("search_kind", ["gbfs", "wastar", "bfs"])
-def test_interpreted_functions_solve_with_blind_heuristic(problem, search_kind):
+@pytest.mark.parametrize("symmetry_breaking", [True, False])
+def test_interpreted_functions_solve_with_blind_heuristic(
+    problem, search_kind, symmetry_breaking
+):
     results = []
     for disable_rustamer in [True]:
         reload_tamerlite(disable_rustamer)
-        search = tamerlite.SearchParams(search=search_kind, heuristic="blind")
+        search = tamerlite.SearchParams(
+            search=search_kind, heuristic="blind", symmetry_breaking=symmetry_breaking
+        )
         with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
             planner: tamerlite.engine.TamerLite
             res: PlanGenerationResult = planner.solve(problem, timeout=None)
@@ -1266,14 +1272,17 @@ def test_interpreted_functions_solve_with_blind_heuristic(problem, search_kind):
 
 
 @pytest.mark.parametrize("problem", IF_PROBLEMS, ids=[p.name for p in IF_PROBLEMS])
-def test_interpreted_functions_solve_with_custom_heuristic(problem):
+@pytest.mark.parametrize("symmetry_breaking", [True, False])
+def test_interpreted_functions_solve_with_custom_heuristic(problem, symmetry_breaking):
     def custom_heuristic(state: State):
         return 0.0
 
     results = []
     for disable_rustamer in [True]:
         reload_tamerlite(disable_rustamer)
-        search = tamerlite.SearchParams(search="gbfs", heuristic="custom")
+        search = tamerlite.SearchParams(
+            search="gbfs", heuristic="custom", symmetry_breaking=symmetry_breaking
+        )
         with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
             planner: tamerlite.engine.TamerLite
             res: PlanGenerationResult = planner.solve(
@@ -1436,3 +1445,121 @@ def test_nested_fluent_in_fluent_argument_raises():
             pytest.raises(NotImplementedError, match="other fluents in its arguments"),
         ):
             planner.solve(problem, timeout=None)
+
+
+def test_symmetry_breaking_interpreted_function_numeric_is_retained():
+    """A numeric-only interpreted function (signature and return type both
+    plain numbers) must not defeat symmetry breaking: `{s1, s2}` stays a
+    legitimate equivalence class."""
+
+    problem = problems_generator.get_problem_if_numeric_symmetry_retained()
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    encoder = Encoder(
+        ground_problem,
+        lifted_problem,
+        map_back_action_instance,
+        symmetry_breaking=False,
+        compression_safe_actions=False,
+        relevance_analysis=False,
+    )
+    groups = encoder._compute_equivalent_objects()
+    assert {"s1", "s2"} in [{obj.name for obj in group} for group in groups]
+
+
+def test_symmetry_breaking_interpreted_function_object_argument_taint():
+    """An interpreted function taking an object-typed argument must taint
+    every object of that type: `l1`/`l2` must come back as singletons, not
+    grouped together.
+
+    This is also the soundness regression: before
+    `Encoder._extract_interpreted_function_tainted_objects`, `{l1, l2}` were
+    wrongly grouped (their initial state and goal are symmetric; the IF's
+    distinguishing logic lives entirely in a Python closure invisible to
+    `_extract_domain_objects`), which made `enter(l2)`/`finish(l2)` require
+    an `l1`-using action already on the plan prefix -- but `enter(l1)` can
+    never fire, so the goal became unreachable even though
+    `enter(l2); finish(l2)` is a trivial valid plan. Solving with
+    `symmetry_breaking=True` must still find and validate that plan.
+    """
+
+    problem = problems_generator.get_problem_if_object_argument_symmetry_unsound()
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    encoder = Encoder(
+        ground_problem,
+        lifted_problem,
+        map_back_action_instance,
+        symmetry_breaking=False,
+        compression_safe_actions=False,
+        relevance_analysis=False,
+    )
+    groups = encoder._compute_equivalent_objects()
+    group_sets = [{obj.name for obj in group} for group in groups]
+    assert {"l1"} in group_sets
+    assert {"l2"} in group_sets
+    assert {"l1", "l2"} not in group_sets
+
+    reload_tamerlite(True)
+    search = tamerlite.SearchParams(
+        search="wastar", heuristic="blind", symmetry_breaking=True
+    )
+    with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+        planner: tamerlite.engine.TamerLite
+        res: PlanGenerationResult = planner.solve(problem, timeout=None)
+        assert res.status == ResultStatus.SOLVED_SATISFICING
+        with PlanValidator(problem_kind=problem.kind) as v:
+            assert v.validate(problem, res.plan)
+
+
+def test_symmetry_breaking_interpreted_function_object_return_taint():
+    """An object-returning interpreted function must taint every object of
+    its return type (`{l1, l2}` become singletons), while leaving a second,
+    unrelated type's genuine symmetry untouched (`{i1, i2}` stays grouped) --
+    the taint must be scoped to the types an IF can actually observe or
+    produce, not a blanket effect on the whole problem."""
+
+    problem = problems_generator.get_problem_if_object_return_symmetry()
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    encoder = Encoder(
+        ground_problem,
+        lifted_problem,
+        map_back_action_instance,
+        symmetry_breaking=False,
+        compression_safe_actions=False,
+        relevance_analysis=False,
+    )
+    groups = encoder._compute_equivalent_objects()
+    group_sets = [{obj.name for obj in group} for group in groups]
+    assert {"l1"} in group_sets
+    assert {"l2"} in group_sets
+    assert {"i1", "i2"} in group_sets
+
+
+def test_interpreted_functions_symmetry_breaking_not_disabled():
+    """Solving a problem with interpreted functions must no longer disable
+    symmetry breaking (it's now IF-aware inside the `Encoder`), but must
+    still disable -- and warn about -- relevance analysis, which isn't."""
+
+    problem = problems_generator.get_problem_if_bool_condition()
+    reload_tamerlite(True)
+    search = tamerlite.SearchParams(
+        search="gbfs",
+        heuristic="blind",
+        symmetry_breaking=True,
+        relevance_analysis=True,
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+            planner: tamerlite.engine.TamerLite
+            res: PlanGenerationResult = planner.solve(problem, timeout=None)
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+
+    messages = [str(w.message) for w in caught]
+    assert any("relevance_analysis" in m for m in messages)
+    assert not any("symmetry_breaking" in m for m in messages)

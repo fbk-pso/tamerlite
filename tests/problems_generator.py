@@ -1058,3 +1058,131 @@ def get_problem_if_duration() -> Problem:
     problem.set_initial_value(battery, 4)
     problem.add_goal(charged)
     return problem
+
+
+def get_problem_if_numeric_symmetry_retained() -> Problem:
+    """A numeric-only interpreted function (its signature and return type
+    are both `IntType()`) applied to symmetric objects. An IF that only
+    ever sees numeric/boolean argument values returns the same result on
+    both sides of a genuine object swap -- a real automorphism preserves
+    fluent values, and numbers aren't permuted by the swap -- so this
+    pattern must not taint the objects it's applied to: `{s1, s2}` stays a
+    legitimate equivalence class."""
+    Slot = UserType("Slot")
+    s1 = Object("s1", Slot)
+    s2 = Object("s2", Slot)
+
+    def boost(n):
+        return n + 1
+
+    IF_boost = InterpretedFunction("boost", IntType(), OrderedDict(n=IntType()), boost)
+
+    level = Fluent("level", IntType(), s=Slot)
+    bump = InstantaneousAction("bump", s=Slot)
+    s = bump.parameter("s")
+    bump.add_precondition(LT(level(s), 3))
+    bump.add_effect(level(s), IF_boost(level(s)))
+
+    problem = Problem("if_numeric_symmetry_retained")
+    problem.add_fluent(level)
+    problem.add_objects([s1, s2])
+    problem.add_action(bump)
+    problem.set_initial_value(level(s1), 0)
+    problem.set_initial_value(level(s2), 0)
+    problem.add_goal(Equals(level(s1), 1))
+    problem.add_goal(Equals(level(s2), 1))
+    return problem
+
+
+def get_problem_if_object_argument_symmetry_unsound() -> Problem:
+    """Soundness regression: an interpreted function taking an object-typed
+    argument distinguishes `l1`/`l2` in a way the initial state and goal
+    alone cannot see -- the distinguishing logic lives entirely inside the
+    IF's Python closure, so neither `l1` nor `l2` appears as a literal
+    `Object` constant anywhere in the lifted action schema, and a symmetry
+    breaker that only looks at `_extract_domain_objects`, the goal and the
+    initial state wrongly groups `{l1, l2}`.
+
+    That wrong grouping makes any `l2`-using action require some
+    `l1`-using action to already be on the plan prefix. But `enter(l1)` can
+    never fire (`is_open(l1)` is always `False`), so nothing that uses `l1`
+    is ever applicable, and the goal becomes unreachable even though
+    `enter(l2); finish(l2)` is a trivial valid plan. A sound symmetry
+    breaker must recognise that `is_open`'s object-typed argument means
+    `l1`/`l2` cannot be treated as equivalent."""
+    Loc = UserType("Loc")
+    l1 = Object("l1", Loc)
+    l2 = Object("l2", Loc)
+
+    def is_open(loc):
+        return loc == l2
+
+    IF_is_open = InterpretedFunction(
+        "is_open", BoolType(), OrderedDict(loc=Loc), is_open
+    )
+
+    visited = Fluent("visited", BoolType(), x=Loc)
+    done = Fluent("done", BoolType())
+
+    enter = InstantaneousAction("enter", x=Loc)
+    x = enter.parameter("x")
+    enter.add_precondition(And(IF_is_open(x), Not(visited(x))))
+    enter.add_effect(visited(x), True)
+
+    finish = InstantaneousAction("finish", x=Loc)
+    y = finish.parameter("x")
+    finish.add_precondition(visited(y))
+    finish.add_effect(done, True)
+
+    problem = Problem("if_object_argument_symmetry_unsound")
+    problem.add_fluent(visited, default_initial_value=False)
+    problem.add_fluent(done, default_initial_value=False)
+    problem.add_objects([l1, l2])
+    problem.add_action(enter)
+    problem.add_action(finish)
+    problem.add_goal(done)
+    return problem
+
+
+def get_problem_if_object_return_symmetry() -> Problem:
+    """An object-returning interpreted function must taint every object of
+    its return type -- the value it can produce is a dynamically-computed
+    domain constant invisible to `_extract_domain_objects` -- while leaving
+    a second, unrelated type's genuine symmetry untouched: `{l1, l2}` must
+    become singletons, but `{i1, i2}` (never seen by any IF) must stay
+    grouped, proving the taint is scoped to the IF's actual types rather
+    than a blanket effect on the whole problem."""
+    Loc = UserType("Loc")
+    l1 = Object("l1", Loc)
+    l2 = Object("l2", Loc)
+    Item = UserType("Item")
+    i1 = Object("i1", Item)
+    i2 = Object("i2", Item)
+
+    def pick(n):
+        return l2 if n >= 1 else l1
+
+    IF_pick = InterpretedFunction("pick", Loc, OrderedDict(n=IntType()), pick)
+
+    counter = Fluent("counter", IntType())
+    at = Fluent("at", Loc)
+    held = Fluent("held", BoolType(), item=Item)
+
+    move = InstantaneousAction("move")
+    move.add_precondition(LT(counter, 5))
+    move.add_effect(counter, Plus(counter, 1))
+    move.add_effect(at, IF_pick(counter))
+
+    grab = InstantaneousAction("grab", item=Item)
+    grab.add_effect(held(grab.parameter("item")), True)
+
+    problem = Problem("if_object_return_symmetry")
+    problem.add_fluent(counter)
+    problem.add_fluent(at)
+    problem.add_fluent(held, default_initial_value=False)
+    problem.add_objects([l1, l2, i1, i2])
+    problem.add_action(move)
+    problem.add_action(grab)
+    problem.set_initial_value(counter, 0)
+    problem.set_initial_value(at, l1)
+    return problem
