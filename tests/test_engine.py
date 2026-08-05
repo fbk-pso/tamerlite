@@ -19,6 +19,7 @@ import contextlib
 import importlib
 import os
 import types
+from collections import OrderedDict
 from collections.abc import Callable
 from functools import partial
 
@@ -1344,3 +1345,94 @@ def test_interpreted_functions_object_effect():
 
             with PlanValidator(problem_kind=problem.kind) as v:
                 assert v.validate(problem, res.plan)
+
+
+def test_interpreted_function_in_fluent_argument_raises():
+    """`value(choose(sel))` addresses `value` through an interpreted-function
+    call rather than a plain object -- no such grounded fluent exists in
+    `problem.initial_values` (only `value(l1)`/`value(l2)` do), so encoding
+    must fail loudly instead of crashing with a bare `KeyError`. `sel` is
+    written by `pick`'s effect, so it stays non-static and `choose(sel)`
+    survives grounding instead of being constant-folded away."""
+    Loc = UserType("Loc")
+    l1 = Object("l1", Loc)
+    l2 = Object("l2", Loc)
+
+    def choose(loc):
+        return l2 if loc == l1 else l1
+
+    IF_choose = InterpretedFunction("choose", Loc, OrderedDict(loc=Loc), choose)
+
+    value = Fluent("value", IntType(), loc=Loc)
+    sel = Fluent("sel", Loc)
+
+    check = InstantaneousAction("check")
+    check.add_precondition(GE(value(IF_choose(sel)), 2))
+    pick = InstantaneousAction("pick")
+    pick.add_effect(sel, l2)
+
+    problem = Problem("if_in_fluent_argument")
+    problem.add_fluent(value)
+    problem.add_fluent(sel)
+    problem.add_object(l1)
+    problem.add_object(l2)
+    problem.add_action(check)
+    problem.add_action(pick)
+    problem.set_initial_value(value(l1), 1)
+    problem.set_initial_value(value(l2), 5)
+    problem.set_initial_value(sel, l1)
+    problem.add_goal(GE(value(l2), 2))
+
+    for disable_rustamer in [True]:
+        reload_tamerlite(disable_rustamer)
+        search = tamerlite.SearchParams(search="gbfs", heuristic="blind")
+        with (
+            OneshotPlanner(name="tamerlite", params={"search": search}) as planner,
+            pytest.raises(
+                NotImplementedError, match="interpreted functions in its arguments"
+            ),
+        ):
+            planner.solve(problem, timeout=None)
+
+
+def test_nested_fluent_in_fluent_argument_raises():
+    """`value(sel)` addresses `value` through another fluent rather than a
+    plain object -- nothing in UP forbids this on the read side (only
+    `Effect.__init__` rejects it, and only for effect *targets*), so it
+    reaches TamerLite's encoder unchecked. No grounded `value(sel)` instance
+    exists in `problem.initial_values` (only `value(l1)`/`value(l2)` do), so
+    this must fail loudly rather than crash with a bare `KeyError`. `sel` is
+    written by `pick`'s effect, so it stays non-static and survives
+    grounding instead of being constant-folded away."""
+    Loc = UserType("Loc")
+    l1 = Object("l1", Loc)
+    l2 = Object("l2", Loc)
+
+    value = Fluent("value", IntType(), loc=Loc)
+    sel = Fluent("sel", Loc)
+
+    check = InstantaneousAction("check")
+    check.add_precondition(GE(value(sel), 2))
+    pick = InstantaneousAction("pick")
+    pick.add_effect(sel, l2)
+
+    problem = Problem("nested_fluent_in_fluent_argument")
+    problem.add_fluent(value)
+    problem.add_fluent(sel)
+    problem.add_object(l1)
+    problem.add_object(l2)
+    problem.add_action(check)
+    problem.add_action(pick)
+    problem.set_initial_value(value(l1), 1)
+    problem.set_initial_value(value(l2), 5)
+    problem.set_initial_value(sel, l1)
+    problem.add_goal(GE(value(l2), 2))
+
+    for disable_rustamer in [True]:
+        reload_tamerlite(disable_rustamer)
+        search = tamerlite.SearchParams(search="gbfs", heuristic="blind")
+        with (
+            OneshotPlanner(name="tamerlite", params={"search": search}) as planner,
+            pytest.raises(NotImplementedError, match="other fluents in its arguments"),
+        ):
+            planner.solve(problem, timeout=None)

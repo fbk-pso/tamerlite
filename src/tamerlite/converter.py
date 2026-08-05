@@ -32,6 +32,25 @@ from tamerlite.core import (
 )
 
 
+def _unresolvable_fluent_message(expression: FNode) -> str:
+    """Explain why `expression` names no grounded fluent of the problem."""
+    env = expression.environment
+    ifuns = set(env.interpreted_functions_extractor.get(expression))
+    nested_fluents = set(env.free_vars_extractor.get(expression))
+    nested_fluents.discard(expression)
+    if ifuns:
+        cause = f"contains interpreted functions in its arguments: {ifuns}"
+    elif nested_fluents:
+        cause = f"contains other fluents in its arguments: {nested_fluents}"
+    else:
+        cause = "does not name a grounded fluent of the problem"
+    return (
+        f"TamerLite does not support the fluent expression `{expression}`: it "
+        f"{cause}, so it cannot be resolved to a single grounded fluent at "
+        "encoding time."
+    )
+
+
 class Converter(DagWalker):
     def __init__(
         self,
@@ -178,7 +197,12 @@ class Converter(DagWalker):
 
     def walk_fluent_exp(self, expression: FNode, args: list[Expression]) -> Expression:
         fluent = str(expression)
-        return (make_fluent_node(self._fluent_ids[fluent]),)
+        try:
+            return (make_fluent_node(self._fluent_ids[fluent]),)
+        except KeyError:
+            raise NotImplementedError(
+                _unresolvable_fluent_message(expression)
+            ) from None
 
     def walk_object_exp(self, expression: FNode, args: list[Expression]) -> Expression:
         assert len(args) == 0
