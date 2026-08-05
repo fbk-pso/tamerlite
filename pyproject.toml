@@ -38,7 +38,7 @@ dev = [
     "pre-commit==4.6.1",
     "maturin>=1.14.1,<2.0",
     "rustamer",
-    "unified-planning @ git+https://github.com/aiplan4eu/unified-planning.git",
+    "unified-planning @ git+https://github.com/aiplan4eu/unified-planning.git@fix/kind-blind-spots-773",
 ]
 
 [build-system]
