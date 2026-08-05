@@ -44,6 +44,16 @@ from tamerlite.core import (
 from tamerlite.core.search_space import ConstantNode, SearchSpaceABC
 
 
+def has_interpreted_functions(kind: up.model.ProblemKind) -> bool:
+    return bool(
+        kind.has_interpreted_functions_in_conditions()
+        or kind.has_interpreted_functions_in_boolean_assignments()
+        or kind.has_interpreted_functions_in_numeric_assignments()
+        or kind.has_interpreted_functions_in_object_assignments()
+        or kind.has_interpreted_functions_in_durations()
+    )
+
+
 def extract_objects(exp: FNode) -> Iterable[Object]:
     stack: list[FNode] = [exp]
     while len(stack) > 0:
@@ -356,7 +366,11 @@ class Encoder:
         goal_obj_to_fluent_map, goal_tainted_objects = (
             self._extract_goal_obj_to_fluent_map()
         )
-        non_equivalent_objects = self._extract_domain_objects() | goal_tainted_objects
+        non_equivalent_objects = (
+            self._extract_domain_objects()
+            | goal_tainted_objects
+            | self._extract_interpreted_function_tainted_objects()
+        )
         obj_to_init_assignments = self._compute_obj_to_init_assignments_map()
 
         objects: dict[Type, list[Object]] = {}
@@ -400,6 +414,32 @@ class Encoder:
 
         return groups
 
+    def _iter_lifted_action_expressions(self) -> Iterable[FNode]:
+        """
+        Yield every expression appearing in a lifted action's preconditions,
+        conditions, effect conditions/fluents/values, or duration bounds.
+        """
+
+        for a in self._lifted_problem.actions:
+            if isinstance(a, up.model.InstantaneousAction):
+                yield from a.preconditions
+                for e in a.effects:
+                    if e.is_conditional():
+                        yield e.condition
+                    yield e.fluent
+                    yield e.value
+            elif isinstance(a, up.model.DurativeAction):
+                yield a.duration.lower
+                yield a.duration.upper
+                for cl in a.conditions.values():
+                    yield from cl
+                for el in a.effects.values():
+                    for e in el:
+                        if e.is_conditional():
+                            yield e.condition
+                        yield e.fluent
+                        yield e.value
+
     def _extract_domain_objects(self) -> set[Object]:
         """
         Extract all objects that appear in the problem's domain.
@@ -409,28 +449,62 @@ class Encoder:
         """
 
         domain_objects: set[Object] = set()
-        for a in self._lifted_problem.actions:
-            if isinstance(a, up.model.InstantaneousAction):
-                for p in a.preconditions:
-                    domain_objects.update(extract_objects(p))
-                for e in a.effects:
-                    if e.is_conditional():
-                        domain_objects.update(extract_objects(e.condition))
-                    domain_objects.update(extract_objects(e.fluent))
-                    domain_objects.update(extract_objects(e.value))
-            elif isinstance(a, up.model.DurativeAction):
-                domain_objects.update(extract_objects(a.duration.lower))
-                domain_objects.update(extract_objects(a.duration.upper))
-                for cl in a.conditions.values():
-                    for c in cl:
-                        domain_objects.update(extract_objects(c))
-                for el in a.effects.values():
-                    for e in el:
-                        if e.is_conditional():
-                            domain_objects.update(extract_objects(e.condition))
-                        domain_objects.update(extract_objects(e.fluent))
-                        domain_objects.update(extract_objects(e.value))
+        for exp in self._iter_lifted_action_expressions():
+            domain_objects.update(extract_objects(exp))
         return domain_objects
+
+    def _extract_interpreted_function_tainted_objects(self) -> set[Object]:
+        """
+        Extract objects that an interpreted function (IF) call could observe
+        or produce, and which must therefore be excluded from equivalence.
+
+        An IF is opaque: we can't reason about its behavior, only require its
+        inputs be swap-invariant. Numeric/boolean values are swap-invariant by
+        construction. Object-typed arguments or return values are not and they
+        can change under the swap, and the IF is free to react to that
+        difference however it wants. So for every IF call reachable from the
+        lifted problem, every object compatible with an object-typed parameter
+        or the return type (i.e. that type and its subtypes, matching how objects
+        could actually be substituted in) is tainted.
+
+        Returns:
+            Set[Object]: A set of objects that must be treated as
+            non-equivalent because of an interpreted function.
+        """
+
+        if not has_interpreted_functions(self._lifted_problem.kind):
+            return set()
+
+        ifun_calls: set[FNode] = set()
+        extractor = self._lifted_problem.environment.interpreted_functions_extractor
+        expressions: list[FNode] = list(self._iter_lifted_action_expressions())
+        expressions.extend(self._lifted_problem.goals)
+        for goals in self._lifted_problem.timed_goals.values():
+            expressions.extend(goals)
+        for effects in self._lifted_problem.timed_effects.values():
+            for e in effects:
+                if e.is_conditional():
+                    expressions.append(e.condition)
+                expressions.append(e.fluent)
+                expressions.append(e.value)
+        for (
+            fluent_exp,
+            value_exp,
+        ) in self._lifted_problem.explicit_initial_values.items():
+            expressions.append(fluent_exp)
+            expressions.append(value_exp)
+        for exp in expressions:
+            ifun_calls.update(extractor.get(exp))
+
+        tainted_objects: set[Object] = set()
+        for call in ifun_calls:
+            ifun = call.interpreted_function()
+            for param in ifun.signature:
+                if param.type.is_user_type():
+                    tainted_objects.update(self._problem.objects(param.type))
+            if ifun.return_type.is_user_type():
+                tainted_objects.update(self._problem.objects(ifun.return_type))
+        return tainted_objects
 
     def _compute_obj_to_init_assignments_map(
         self,

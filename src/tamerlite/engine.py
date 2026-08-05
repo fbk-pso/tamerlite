@@ -64,7 +64,7 @@ from tamerlite.core import (
     wastar_search_memory_bounded,
 )
 from tamerlite.core.heuristics import Heuristic
-from tamerlite.encoder import Encoder
+from tamerlite.encoder import Encoder, has_interpreted_functions
 
 logger = logging.getLogger(__name__)
 
@@ -738,47 +738,32 @@ class TamerLite(
         is_intermediate_solution: bool = False,
     ) -> tuple["up.engines.results.PlanGenerationResult", bool, bool]:
         try:
-            # Symmetry breaking and relevance analysis (which runs HMax
-            # reachability) both inspect or evaluate expressions
-            # structurally without accounting for interpreted functions --
-            # disable them for problems that use one, rather than risk a
-            # silently wrong optimization. Compression-safe-action detection
-            # and the TimedToSequential recompile below are unaffected:
-            # interpreted functions are carried through both as opaque
-            # sub-expressions (see UP's TimedToSequential docstring) and
-            # TamerLite's own `_compute_compression_safe_actions` only
-            # inspects fluents/objects via generic expression-argument
-            # traversal.
+            # Relevance analysis (which runs HMax reachability) inspects
+            # expressions structurally and doesn't account for interpreted
+            # functions at all -- disable it for problems that use one,
+            # rather than risk a silently wrong optimization.
+            # Compression-safe-action detection and the TimedToSequential
+            # recompile below are unaffected: interpreted functions are
+            # carried through both as opaque sub-expressions (see UP's
+            # TimedToSequential docstring) and TamerLite's own
+            # `_compute_compression_safe_actions` only inspects
+            # fluents/objects via generic expression-argument traversal.
             ground_kind = ground_problem.kind
-            has_interpreted_functions = (
-                ground_kind.has_interpreted_functions_in_conditions()
-                or ground_kind.has_interpreted_functions_in_boolean_assignments()
-                or ground_kind.has_interpreted_functions_in_numeric_assignments()
-                or ground_kind.has_interpreted_functions_in_object_assignments()
-                or ground_kind.has_interpreted_functions_in_durations()
-            )
-            symmetry_breaking = (
-                self._params.symmetry_breaking and not has_interpreted_functions
-            )
+            ground_has_interpreted_functions = has_interpreted_functions(ground_kind)
             relevance_analysis = (
-                self._params.relevance_analysis and not has_interpreted_functions
+                self._params.relevance_analysis and not ground_has_interpreted_functions
             )
-            if has_interpreted_functions:
-                for flag_name, flag_value in (
-                    ("symmetry_breaking", self._params.symmetry_breaking),
-                    ("relevance_analysis", self._params.relevance_analysis),
-                ):
-                    if flag_value:
-                        warnings.warn(
-                            f"Disabling '{flag_name}': it is not supported for "
-                            "problems that use interpreted functions.",
-                            stacklevel=2,
-                        )
+            if ground_has_interpreted_functions and self._params.relevance_analysis:
+                warnings.warn(
+                    "Disabling 'relevance_analysis': it is not supported for "
+                    "problems that use interpreted functions.",
+                    stacklevel=2,
+                )
             encoder = Encoder(
                 ground_problem,
                 problem,
                 map_back_action_instance,
-                symmetry_breaking,
+                self._params.symmetry_breaking,
                 self._params.compression_safe_actions,
                 relevance_analysis,
                 deadline=deadline,
@@ -813,7 +798,7 @@ class TamerLite(
                     cast("up.model.Problem", compilation_res.problem),
                     problem,
                     new_map_back_action_instance,
-                    symmetry_breaking,
+                    self._params.symmetry_breaking,
                     self._params.compression_safe_actions,
                     relevance_analysis,
                     deadline=deadline,
