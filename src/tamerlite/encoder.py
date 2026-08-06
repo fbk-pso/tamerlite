@@ -242,6 +242,32 @@ class Encoder:
         return cast(list[ConstantNode], initial_state)
 
     def _compute_relevant_actions(self) -> list[Action]:
+        """Computes the actions that are relevant for reaching the goal.
+
+        This is a two-pass over-approximation, used to prune the search space
+        to actions that could actually matter:
+
+        1. **Forward reachability.** Builds an `HMax` heuristic over the
+        applicable actions and runs its relaxed reachability analysis from
+        the initial state. An action is *reachable* only if all of its
+        events got a finite cost during the fixpoint (see
+        `DeleteRelaxationHeuristic.reachable_actions`) -- i.e. it could ever
+        be applied, start to finish, in the delete relaxation.
+        2. **Backward goal-dependency walk.** Starting from the fluents in
+        the goal, an action is *relevant* if it writes (via an effect) a
+        fluent already known to be relevant. Once an action is marked
+        relevant, the fluents it *depends on* -- those in its own
+        conditions, plus those read by its own effect value expressions --
+        are added to the goal-dependency set and the walk continues from there.
+
+        Both passes only ever narrow the search space (an action never
+        pruned this way stays available), so this cannot make a solvable
+        problem appear unsolvable through under-approximation.
+
+        Returns:
+            The subset of `self._actions` that are reachable and relevant;
+            actions outside this set can never contribute to a plan.
+        """
         assert self.goal is not None
         events = {a: e for a, e in self.events.items() if a in self.applicable_actions}
         heuristic = HMax(
@@ -260,12 +286,12 @@ class Encoder:
         }
 
         actions_affecting_fluent: dict[int, set[int]] = {}
-        action_to_condition_fluents: dict[int, set[int]] = {}
+        action_to_dependency_fluents: dict[int, set[int]] = {}
         for a, le in events.items():
             if a.idx not in reachable_actions:
                 continue
 
-            action_to_condition_fluents[a.idx] = set()
+            action_to_dependency_fluents[a.idx] = set()
 
             # An action's duration bounds are arbitrary expressions evaluated
             # against the pre-action state (see `SearchSpace._open_action`), so
@@ -274,8 +300,8 @@ class Encoder:
             # marked relevant and gets pruned away.
             duration = self._actions_duration[a.idx]
             if duration is not None:
-                action_to_condition_fluents[a.idx].update(get_fluents(duration[0]))
-                action_to_condition_fluents[a.idx].update(get_fluents(duration[1]))
+                action_to_dependency_fluents[a.idx].update(get_fluents(duration[0]))
+                action_to_dependency_fluents[a.idx].update(get_fluents(duration[1]))
 
             for _, e in le:
                 for eff in e.effects:
@@ -284,8 +310,15 @@ class Encoder:
                     else:
                         actions_affecting_fluent[eff.fluent].add(a.idx)
 
+                    # An effect's value expression can read other fluents
+                    # (e.g. `g := mid_value`) with no corresponding
+                    # precondition tying the two together -- those fluents
+                    # must count as a dependency too, or the action that
+                    # writes them is never pulled in as relevant.
+                    action_to_dependency_fluents[a.idx].update(get_fluents(eff.value))
+
                 for cond in [*list(e.end_conditions), e.conditions]:
-                    action_to_condition_fluents[a.idx].update(get_fluents(cond))
+                    action_to_dependency_fluents[a.idx].update(get_fluents(cond))
 
         checked_fluents = [False] * len(self._fluents)
         stack = list(get_fluents(self.goal))
@@ -294,12 +327,12 @@ class Encoder:
 
         relevant_actions: set[int] = set()
         while len(stack) > 0 and len(relevant_actions) < len(
-            action_to_condition_fluents
+            action_to_dependency_fluents
         ):
             f = stack.pop()
             relevant_actions.update(actions_affecting_fluent.get(f, set()))
             for action_idx in actions_affecting_fluent.get(f, set()):
-                for f in action_to_condition_fluents[action_idx]:
+                for f in action_to_dependency_fluents[action_idx]:
                     if not checked_fluents[f]:
                         checked_fluents[f] = True
                         stack.append(f)
