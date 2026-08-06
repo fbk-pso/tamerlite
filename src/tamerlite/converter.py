@@ -16,7 +16,10 @@
 #
 
 
-from unified_planning.model import FNode, Object, Problem
+from collections.abc import Callable
+from typing import Any
+
+from unified_planning.model import FNode, InterpretedFunction, Object, Problem
 from unified_planning.model.walkers import DagWalker
 
 from tamerlite.core import (
@@ -58,12 +61,17 @@ class Converter(DagWalker):
         fluent_ids: dict[str, int],
         object_ids: dict[str, int],
         objects_by_id: list[Object],
+        if_cache: dict[InterpretedFunction, dict[tuple, Any]] | None = None,
     ):
         DagWalker.__init__(self)
         self._fluent_ids = fluent_ids
         self._object_ids = object_ids
         self._objects_by_id = objects_by_id
         self.static_fluents = problem.get_static_fluents()
+        self._if_wrappers: dict[InterpretedFunction, Callable] = {}
+        self._if_cache: dict[InterpretedFunction, dict[tuple, Any]] = (
+            if_cache if if_cache is not None else {}
+        )
 
     def convert(self, expression: FNode) -> Expression:
         """Converts the given expression."""
@@ -227,6 +235,62 @@ class Converter(DagWalker):
         assert len(args) == 0
         return (make_int_constant_node(expression.int_constant_value()),)
 
+    def _get_interpreted_function_wrapper(
+        self, interpreted_function: InterpretedFunction
+    ) -> Callable:
+        """Returns the single, memoizing wrapper callable for
+        `interpreted_function`, shared by every occurrence of the same
+        interpreted function across the whole problem.
+
+        Sharing the wrapper keeps `InterpretedFunctionNode` equality/hashing
+        meaningful within one encoding. The wrapper's *result* cache
+        (`self._if_cache`) is a separate concern and may be shared across
+        several Converters re-encoding the same problem (see
+        `TamerLite._get_solutions_with_params`, which re-encodes on every
+        anytime iteration): it's keyed by the already-unwrapped,
+        table-agnostic argument values (real `Object`s, not this Converter's
+        internal ids), so a shared cache stays correct even if two Converters
+        happen to number their objects differently. Only the id<->`Object`
+        translation actually depends on that numbering, so it always runs
+        fresh against *this* Converter's own `_objects_by_id`/`_object_ids`,
+        on every call, cache hit or not -- never against whichever Converter
+        first populated a shared cache. This assumes interpreted functions
+        are deterministic and side-effect-free.
+        """
+        cached = self._if_wrappers.get(interpreted_function)
+        if cached is not None:
+            return cached
+
+        return_type = interpreted_function.return_type
+        # Object-typed parameters/return values are exposed to `evaluate` as
+        # internal `ObjectNode`s, but the real callable expects/returns actual
+        # UP `Object`s -- translate both directions.
+        object_params = tuple(
+            p.type.is_user_type() for p in interpreted_function.signature
+        )
+        wraps_result = return_type.is_user_type()
+        result_cache = self._if_cache.setdefault(interpreted_function, {})
+
+        def wrapper(*call_args):
+            if any(object_params):
+                real_args = tuple(
+                    self._objects_by_id[a.object] if is_obj else a
+                    for a, is_obj in zip(call_args, object_params, strict=True)
+                )
+            else:
+                real_args = call_args
+            if real_args in result_cache:
+                raw_result = result_cache[real_args]
+            else:
+                raw_result = interpreted_function.function(*real_args)
+                result_cache[real_args] = raw_result
+            if wraps_result:
+                return make_object_node(self._object_ids[raw_result.name])
+            return raw_result
+
+        self._if_wrappers[interpreted_function] = wrapper
+        return wrapper
+
     def walk_interpreted_function_exp(
         self, expression: FNode, args: list[Expression]
     ) -> Expression:
@@ -238,7 +302,6 @@ class Converter(DagWalker):
         # must be re-evaluated at search time.
         interpreted_function = expression.interpreted_function()
         return_type = interpreted_function.return_type
-        function = interpreted_function.function
         if return_type.is_bool_type():
             return_type_str = "bool"
         elif return_type.is_int_type():
@@ -248,28 +311,7 @@ class Converter(DagWalker):
         elif return_type.is_user_type():
             return_type_str = "object"
 
-        # Object-typed parameters/return values are exposed to `evaluate` as
-        # internal `ObjectNode`s (see `search_space.evaluate`), but the real
-        # callable expects/returns actual UP `Object`s -- wrap it to translate
-        # both directions, mirroring `walk_object_exp`'s name <-> id lookup.
-        # Only installed when actually needed, so plain bool/int/real IFs
-        # keep storing `interpreted_function.function` verbatim.
-        object_params = tuple(
-            p.type.is_user_type() for p in interpreted_function.signature
-        )
-        wraps_result = return_type.is_user_type()
-        if any(object_params) or wraps_result:
-
-            def function(*call_args):
-                if any(object_params):
-                    call_args = tuple(
-                        self._objects_by_id[a.object] if is_obj else a
-                        for a, is_obj in zip(call_args, object_params, strict=True)
-                    )
-                r = interpreted_function.function(*call_args)
-                if wraps_result:
-                    return make_object_node(self._object_ids[r.name])
-                return r
+        function = self._get_interpreted_function_wrapper(interpreted_function)
 
         if len(args) == 0:
             return (make_interpreted_function_node(function, return_type_str, ()),)

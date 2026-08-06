@@ -129,14 +129,7 @@ def split_expression(exp: Expression) -> tuple[Expression, ...]:
     res = []
     last = 0
     for i in exp[-1].operands:
-        new_exp: list[ExpressionNode] = []
-        for e in exp[last : i + 1]:
-            if isinstance(e, OperatorNode):
-                new_operands = tuple([j - last for j in e.operands])
-                new_exp.append(OperatorNode(e.kind, new_operands))
-            else:
-                new_exp.append(e)
-        res.append(tuple(new_exp))
+        res.append(shift_expression(exp[last : i + 1], -last))
         last = i + 1
     return tuple(res)
 
@@ -145,6 +138,11 @@ def get_fluents(exp: Expression) -> Iterator[int]:
     for e in exp:
         if isinstance(e, FluentNode):
             yield e.fluent
+
+
+def has_interpreted_function(exp: Expression) -> bool:
+    """True if `exp` contains an interpreted-function call"""
+    return any(isinstance(e, InterpretedFunctionNode) for e in exp)
 
 
 @dataclass(eq=True, frozen=True)

@@ -22,7 +22,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import partial
-from typing import IO, Protocol, cast
+from typing import IO, Any, Protocol, cast
 
 import unified_planning as up
 import unified_planning.engines
@@ -38,7 +38,7 @@ from unified_planning.engines.plan_validator import (
     TimeTriggeredPlanValidator,
 )
 from unified_planning.exceptions import UPStateMissingFluentError, UPUsageError
-from unified_planning.model import FNode, ProblemKind, StartTiming
+from unified_planning.model import FNode, InterpretedFunction, ProblemKind, StartTiming
 from unified_planning.model.state import State
 from unified_planning.plans import ActionInstance, PlanKind
 
@@ -297,21 +297,18 @@ class TamerLite(
         else:
             h_name = params.heuristic
 
-        if h_name not in ("custom", "blind") and (
-            encoder.problem.kind.has_interpreted_functions_in_conditions()
-            or encoder.problem.kind.has_interpreted_functions_in_boolean_assignments()
-            or encoder.problem.kind.has_interpreted_functions_in_numeric_assignments()
-            or encoder.problem.kind.has_interpreted_functions_in_object_assignments()
-            or encoder.problem.kind.has_interpreted_functions_in_durations()
+        if h_name == "hmax_explicit" and has_interpreted_functions(
+            encoder.problem.kind
         ):
-            # HFF/HAdd/HMax/HMaxExplicit reason about conditions/effects
-            # structurally (e.g. to build the delete relaxation) and don't
-            # know how to handle an interpreted-function node -- only
-            # "blind" and "custom" evaluate a plain search `State` and are
-            # therefore interpreted-function-safe.
+            # HMaxExplicit tracks, per fluent, the set of values reachable so
+            # far and would need to invoke an interpreted function over the
+            # cross-product of its arguments' reachable values. Out of
+            # scope for now.
             raise UPUsageError(
-                f"Heuristic '{h_name}' does not support interpreted functions. "
-                "Use the 'blind' or 'custom' heuristic for problems that use them."
+                "Heuristic 'hmax_explicit' does not support interpreted "
+                "functions. Use 'hff', 'hadd', 'hmax' (optionally with "
+                "'_no_numbers'), 'blind' or 'custom' for problems that use "
+                "them."
             )
 
         if h_name == "custom":
@@ -484,6 +481,11 @@ class TamerLite(
         )
         original_problem = problem
 
+        # Share one interpreted functions cache across every `_solve_ground_problem`
+        # call in this anytime run (see `Converter._if_cache`) instead of recomputing
+        # from scratch each time.
+        if_cache: dict[InterpretedFunction, dict[tuple, Any]] = {}
+
         logger.info(
             "Solving '%s' (anytime): actions=%d fluents=%d",
             ground_problem.name,
@@ -498,6 +500,7 @@ class TamerLite(
             timeout=timeout - elapsed_time if timeout is not None else None,
             output_stream=output_stream,
             is_intermediate_solution=True,
+            if_cache=if_cache,
         )
         if res.plan is not None:
             logger.info(
@@ -640,6 +643,7 @@ class TamerLite(
                     output_stream=output_stream,
                     deadline=deadline,
                     is_intermediate_solution=True,
+                    if_cache=if_cache,
                 )
             )
             if (
@@ -736,37 +740,29 @@ class TamerLite(
         output_stream: IO[str] | None = None,
         deadline: Fraction | None = None,
         is_intermediate_solution: bool = False,
+        if_cache: dict[InterpretedFunction, dict[tuple, Any]] | None = None,
     ) -> tuple["up.engines.results.PlanGenerationResult", bool, bool]:
+        # Default to one fresh dict shared by both `Encoder(...)` sites below
+        if if_cache is None:
+            if_cache = {}
         try:
-            # Relevance analysis (which runs HMax reachability) inspects
-            # expressions structurally and doesn't account for interpreted
-            # functions at all -- disable it for problems that use one,
-            # rather than risk a silently wrong optimization.
             # Compression-safe-action detection and the TimedToSequential
-            # recompile below are unaffected: interpreted functions are
-            # carried through both as opaque sub-expressions (see UP's
+            # recompile below are unaffected by interpreted functions: they
+            # are carried through both as opaque sub-expressions (see UP's
             # TimedToSequential docstring) and TamerLite's own
             # `_compute_compression_safe_actions` only inspects
             # fluents/objects via generic expression-argument traversal.
-            ground_kind = ground_problem.kind
-            ground_has_interpreted_functions = has_interpreted_functions(ground_kind)
-            relevance_analysis = (
-                self._params.relevance_analysis and not ground_has_interpreted_functions
-            )
-            if ground_has_interpreted_functions and self._params.relevance_analysis:
-                warnings.warn(
-                    "Disabling 'relevance_analysis': it is not supported for "
-                    "problems that use interpreted functions.",
-                    stacklevel=2,
-                )
+            # Relevance analysis (`Encoder._compute_relevant_actions`, which
+            # runs `HMax` reachability) is interpreted-function-safe too.
             encoder = Encoder(
                 ground_problem,
                 problem,
                 map_back_action_instance,
                 self._params.symmetry_breaking,
                 self._params.compression_safe_actions,
-                relevance_analysis,
+                self._params.relevance_analysis,
                 deadline=deadline,
+                if_cache=if_cache,
             )
 
             original_encoder = encoder
@@ -800,8 +796,9 @@ class TamerLite(
                     new_map_back_action_instance,
                     self._params.symmetry_breaking,
                     self._params.compression_safe_actions,
-                    relevance_analysis,
+                    self._params.relevance_analysis,
                     deadline=deadline,
+                    if_cache=if_cache,
                 )
 
             if isinstance(self._params, MultiqueueParams):

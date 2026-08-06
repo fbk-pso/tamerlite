@@ -1227,17 +1227,17 @@ IF_PROBLEMS = [
     problems_generator.get_problem_if_duration(),
 ]
 
-# Delete-relaxation heuristics reason about conditions/effects structurally
-# and don't know how to handle an interpreted-function node; only "blind"
-# and "custom" evaluate a plain search `State` and are IF-safe.
-IF_DISALLOWED_HEURISTICS = [
+IF_SUPPORTED_HEURISTICS = [
     "hff",
     "hadd",
     "hmax",
-    "hmax_explicit",
     "hff_no_numbers",
     "hadd_no_numbers",
     "hmax_no_numbers",
+]
+
+IF_UNSUPPORTED_HEURISTICS = [
+    "hmax_explicit",
 ]
 
 
@@ -1297,8 +1297,33 @@ def test_interpreted_functions_solve_with_custom_heuristic(problem, symmetry_bre
 
 
 @pytest.mark.parametrize("problem", IF_PROBLEMS, ids=[p.name for p in IF_PROBLEMS])
-@pytest.mark.parametrize("heuristic", IF_DISALLOWED_HEURISTICS)
-def test_interpreted_functions_delete_relaxation_heuristics_raise(problem, heuristic):
+@pytest.mark.parametrize("heuristic", IF_SUPPORTED_HEURISTICS)
+@pytest.mark.parametrize("symmetry_breaking", [True, False])
+@pytest.mark.parametrize("relevance_analysis", [True, False])
+def test_interpreted_functions_solve_with_delete_relaxation_heuristic(
+    problem, heuristic, symmetry_breaking, relevance_analysis
+):
+    for disable_rustamer in [True]:
+        reload_tamerlite(disable_rustamer)
+        search = tamerlite.SearchParams(
+            search="gbfs",
+            heuristic=heuristic,
+            symmetry_breaking=symmetry_breaking,
+            relevance_analysis=relevance_analysis,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+                planner: tamerlite.engine.TamerLite
+                res: PlanGenerationResult = planner.solve(problem, timeout=None)
+                assert res.status == ResultStatus.SOLVED_SATISFICING
+                with PlanValidator(problem_kind=problem.kind) as v:
+                    assert v.validate(problem, res.plan)
+
+
+@pytest.mark.parametrize("problem", IF_PROBLEMS, ids=[p.name for p in IF_PROBLEMS])
+@pytest.mark.parametrize("heuristic", IF_UNSUPPORTED_HEURISTICS)
+def test_interpreted_functions_unsupported_heuristics_raise(problem, heuristic):
     for disable_rustamer in [True]:
         reload_tamerlite(disable_rustamer)
         search = tamerlite.SearchParams(search="gbfs", heuristic=heuristic)
@@ -1307,6 +1332,197 @@ def test_interpreted_functions_delete_relaxation_heuristics_raise(problem, heuri
             pytest.raises(UPUsageError),
         ):
             planner.solve(problem, timeout=None)
+
+
+@pytest.mark.parametrize("problem", IF_PROBLEMS, ids=[p.name for p in IF_PROBLEMS])
+def test_interpreted_functions_heuristic_values(problem, data_regression):
+    """Regression-pins the heuristic values `hff`/`hadd`/`hmax` (and their
+    `_no_numbers` variants) compute on interpreted-function problems. Unlike
+    `test_heuristic_values`, this only ever runs on the Python backend --
+    interpreted functions don't exist on the Rust one -- and it excludes
+    `HMaxExplicit`, which stays unsupported for them (see
+    `IF_UNSUPPORTED_HEURISTICS`)."""
+
+    reload_tamerlite(True)
+    from tamerlite.core import HFF, HAdd, HMax
+
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    encoder = Encoder(
+        ground_problem,
+        lifted_problem,
+        map_back_action_instance,
+        symmetry_breaking=False,
+        compression_safe_actions=False,
+        relevance_analysis=False,
+    )
+    ss: SearchSpaceABC = encoder.search_space
+    init_state = ss.initial_state()
+    states = generate_states(ss, init_state, num_states=max_generated_states(problem))
+
+    heuristic_classes: list[tuple[Callable[..., Heuristic], str]] = [
+        (HFF, "hff"),
+        (HAdd, "hadd"),
+        (HMax, "hmax"),
+        (partial(HFF, disable_numeric_reasoning=True), "hff_no_numbers"),
+        (partial(HAdd, disable_numeric_reasoning=True), "hadd_no_numbers"),
+        (partial(HMax, disable_numeric_reasoning=True), "hmax_no_numbers"),
+    ]
+    values: dict[str, list[int | None]] = {}
+    for heuristic_class, heuristic_name in heuristic_classes:
+        for internal_caching in [True, False]:
+            heuristic: Heuristic = heuristic_class(
+                encoder.actions,
+                encoder.fluent_types,
+                encoder.objects,
+                encoder.events,
+                encoder.goal,
+                internal_caching=internal_caching,
+                cache_value_in_state=False,
+                inadmissible_numeric_heuristic_variant=False,
+            )
+
+            computed = []
+            for state in states:
+                h_val = heuristic.eval(state, ss)
+                if h_val is not None:
+                    h_val = int(h_val)
+                computed.append(h_val)
+
+            if heuristic_name not in values:
+                values[heuristic_name] = computed
+            else:
+                assert computed == values[heuristic_name]
+
+    data_regression.check(values)
+
+
+def test_converter_shares_interpreted_function_wrapper():
+    """Two calls to the *same* interpreted function -- even with different
+    argument expressions -- must share one wrapper callable, built once by
+    `Converter._get_interpreted_function_wrapper` and reused for every
+    occurrence."""
+
+    reload_tamerlite(True)
+    from tamerlite.converter import Converter
+    from tamerlite.core.search_space import (
+        InterpretedFunctionNode,
+        MultiSet,
+        ObjectNode,
+        State,
+        evaluate,
+    )
+
+    Loc = UserType("Loc")
+    l1 = Object("l1", Loc)
+    l2 = Object("l2", Loc)
+
+    def is_l1(loc):
+        return loc == l1
+
+    IF_is_l1 = InterpretedFunction("is_l1", BoolType(), OrderedDict(loc=Loc), is_l1)
+
+    at1 = Fluent("at1", Loc)
+    at2 = Fluent("at2", Loc)
+    problem = Problem("shared_if")
+    problem.add_fluent(at1)
+    problem.add_fluent(at2)
+    problem.add_object(l1)
+    problem.add_object(l2)
+
+    exp1 = IF_is_l1(at1())
+    exp2 = IF_is_l1(at2())
+    assert exp1 is not exp2
+
+    converter = Converter(
+        problem,
+        fluent_ids={"at1": 0, "at2": 1},
+        object_ids={"l1": 0, "l2": 1},
+        objects_by_id=[l1, l2],
+    )
+    converted1 = converter.convert(exp1)
+    converted2 = converter.convert(exp2)
+
+    node1 = converted1[-1]
+    node2 = converted2[-1]
+    assert isinstance(node1, InterpretedFunctionNode)
+    assert isinstance(node2, InterpretedFunctionNode)
+    assert node1.function is node2.function
+
+    state = State([ObjectNode(0), ObjectNode(1)], None, {}, MultiSet(), 0, [])
+    assert evaluate(converted1, state) is True
+    assert evaluate(converted2, state) is False
+
+
+def test_converter_shares_if_cache_across_converters_with_different_object_tables():
+    """`Converter._if_cache` -- unlike `_if_wrappers`, see
+    `Converter._get_interpreted_function_wrapper`'s docstring -- is safe to
+    share across Converters even when their object numbering differs: it's
+    keyed by the already-unwrapped, table-agnostic real argument (an
+    `Object`, never an internal id), and the id<->`Object` translation always
+    runs against the *calling* Converter's own tables, never a stale one
+    baked into a shared closure. The two Converters below deliberately
+    number `l1`/`l2` oppositely to exercise exactly that."""
+
+    reload_tamerlite(True)
+    from tamerlite.converter import Converter
+    from tamerlite.core.search_space import MultiSet, ObjectNode, State, evaluate
+
+    Loc = UserType("Loc")
+    l1 = Object("l1", Loc)
+    l2 = Object("l2", Loc)
+
+    calls = []
+
+    def is_l1(loc):
+        calls.append(loc)
+        return loc == l1
+
+    IF_is_l1 = InterpretedFunction("is_l1", BoolType(), OrderedDict(loc=Loc), is_l1)
+
+    at = Fluent("at", Loc)
+    problem = Problem("shared_if_cache")
+    problem.add_fluent(at)
+    problem.add_object(l1)
+    problem.add_object(l2)
+
+    exp = IF_is_l1(at())
+
+    if_cache: dict = {}
+    converter_a = Converter(
+        problem,
+        fluent_ids={"at": 0},
+        object_ids={"l1": 0, "l2": 1},
+        objects_by_id=[l1, l2],
+        if_cache=if_cache,
+    )
+    converter_b = Converter(
+        problem,
+        fluent_ids={"at": 0},
+        object_ids={"l1": 1, "l2": 0},
+        objects_by_id=[l2, l1],
+        if_cache=if_cache,
+    )
+
+    converted_a = converter_a.convert(exp)
+    converted_b = converter_b.convert(exp)
+
+    # Same real object (l1), opposite internal ids under each converter.
+    state_a_l1 = State([ObjectNode(0)], None, {}, MultiSet(), 0, [])  # a: 0 -> l1
+    state_b_l1 = State([ObjectNode(1)], None, {}, MultiSet(), 0, [])  # b: 1 -> l1
+
+    assert evaluate(converted_a, state_a_l1) is True
+    assert evaluate(converted_b, state_b_l1) is True
+    # The second call hit the cache populated by the first -- the real
+    # callable ran exactly once, despite the two converters' opposite
+    # numbering.
+    assert calls == [l1]
+
+    # A different real object (l2) must not collide with l1's cache entry.
+    state_a_l2 = State([ObjectNode(1)], None, {}, MultiSet(), 0, [])  # a: 1 -> l2
+    assert evaluate(converted_a, state_a_l2) is False
+    assert calls == [l1, l2]
 
 
 def test_interpreted_functions_duration():
@@ -1540,11 +1756,7 @@ def test_symmetry_breaking_interpreted_function_object_return_taint():
     assert {"i1", "i2"} in group_sets
 
 
-def test_interpreted_functions_symmetry_breaking_not_disabled():
-    """Solving a problem with interpreted functions must no longer disable
-    symmetry breaking (it's now IF-aware inside the `Encoder`), but must
-    still disable -- and warn about -- relevance analysis, which isn't."""
-
+def test_interpreted_functions_symmetry_breaking_and_relevance_analysis_not_disabled():
     problem = problems_generator.get_problem_if_bool_condition()
     reload_tamerlite(True)
     search = tamerlite.SearchParams(
@@ -1561,5 +1773,5 @@ def test_interpreted_functions_symmetry_breaking_not_disabled():
             assert res.status == ResultStatus.SOLVED_SATISFICING
 
     messages = [str(w.message) for w in caught]
-    assert any("relevance_analysis" in m for m in messages)
+    assert not any("relevance_analysis" in m for m in messages)
     assert not any("symmetry_breaking" in m for m in messages)

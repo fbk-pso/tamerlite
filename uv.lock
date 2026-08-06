@@ -1094,7 +1094,7 @@ dev = [
     { name = "pytest-xdist", specifier = "==3.8.0" },
     { name = "ruff", specifier = "==0.16.0" },
     { name = "rustamer", editable = "crates/rustamer" },
-    { name = "unified-planning", git = "https://github.com/aiplan4eu/unified-planning.git?rev=fix%2Fkind-blind-spots-773" },
+    { name = "unified-planning", git = "https://github.com/aiplan4eu/unified-planning.git" },
 ]
 
 [[package]]
@@ -1162,8 +1162,8 @@ wheels = [
 
 [[package]]
 name = "unified-planning"
-version = "1.3.0.548.dev1"
-source = { git = "https://github.com/aiplan4eu/unified-planning.git?rev=fix%2Fkind-blind-spots-773#36addf46b8efe2b14a260235543305cdd6465a8b" }
+version = "1.3.0.558.dev1"
+source = { git = "https://github.com/aiplan4eu/unified-planning.git#b560bfe1aa4060076b42045a02d5c1183b9ece34" }
 dependencies = [
     { name = "configspace" },
     { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
