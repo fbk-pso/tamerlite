@@ -421,15 +421,7 @@ class TamerLite(
             ) -> ActionInstance | None:
                 return ai
 
-        # UP's Grounder handles interpreted functions in durations
-        # correctly -- `create_action_with_given_subs` substitutes into
-        # the duration bounds without simplifying them -- but its
-        # `supported_kind()` doesn't declare
-        # INTERPRETED_FUNCTIONS_IN_DURATIONS, so the factory would refuse
-        # the problem. Skip the check rather than the compilation.
-        # TODO: drop this once UP's Grounder declares the feature.
         grounder = Grounder()
-        grounder.skip_checks = True
         compilation_res = grounder.compile(problem)
         assert compilation_res.map_back_action_instance is not None
         ground_map_back_action_instance = compilation_res.map_back_action_instance
@@ -762,7 +754,11 @@ class TamerLite(
             )
             if are_all_actions_compression_safe:
                 # Compile a temporal planning problem, where all actions are
-                # safe to compress, into an equivalent classical planning problem
+                # safe to compress, into an equivalent classical planning problem.
+                # `TimedToSequential.supported_kind()` doesn't declare
+                # MAKESPAN, but a fully compression-safe problem can still
+                # carry a minimize-makespan metric, which would make
+                # the kind check reject it.
                 t2s_compiler = TimedToSequential()
                 t2s_compiler.skip_checks = True
                 compilation_res = t2s_compiler.compile(ground_problem)
