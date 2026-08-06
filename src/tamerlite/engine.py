@@ -37,7 +37,7 @@ from unified_planning.engines.plan_validator import (
     SequentialPlanValidator,
     TimeTriggeredPlanValidator,
 )
-from unified_planning.exceptions import UPStateMissingFluentError, UPUsageError
+from unified_planning.exceptions import UPStateMissingFluentError
 from unified_planning.model import FNode, InterpretedFunction, ProblemKind, StartTiming
 from unified_planning.model.state import State
 from unified_planning.plans import ActionInstance, PlanKind
@@ -64,7 +64,7 @@ from tamerlite.core import (
     wastar_search_memory_bounded,
 )
 from tamerlite.core.heuristics import Heuristic
-from tamerlite.encoder import Encoder, has_interpreted_functions
+from tamerlite.encoder import Encoder
 
 logger = logging.getLogger(__name__)
 
@@ -296,20 +296,6 @@ class TamerLite(
             h_name = "custom" if heuristic is not None else "hff"
         else:
             h_name = params.heuristic
-
-        if h_name == "hmax_explicit" and has_interpreted_functions(
-            encoder.problem.kind
-        ):
-            # HMaxExplicit tracks, per fluent, the set of values reachable so
-            # far and would need to invoke an interpreted function over the
-            # cross-product of its arguments' reachable values. Out of
-            # scope for now.
-            raise UPUsageError(
-                "Heuristic 'hmax_explicit' does not support interpreted "
-                "functions. Use 'hff', 'hadd', 'hmax' (optionally with "
-                "'_no_numbers'), 'blind' or 'custom' for problems that use "
-                "them."
-            )
 
         if h_name == "custom":
             assert heuristic is not None

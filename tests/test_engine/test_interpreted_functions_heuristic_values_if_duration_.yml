@@ -33,6 +33,13 @@ hmax:
 - 1
 - 0
 - null
+hmax_explicit:
+- 2
+- 1
+- 0
+- 1
+- 0
+- null
 hmax_no_numbers:
 - 2
 - 1

@@ -18,6 +18,10 @@ hmax:
 - 1
 - 1
 - 0
+hmax_explicit:
+- 1
+- 1
+- 0
 hmax_no_numbers:
 - 1
 - 1

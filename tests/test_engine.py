@@ -31,7 +31,6 @@ import unified_planning.test.examples
 import up_test_cases.builtin
 from unified_planning.engines import PlanGenerationResult, ValidationResult
 from unified_planning.engines import PlanGenerationResultStatus as ResultStatus
-from unified_planning.exceptions import UPUsageError
 from unified_planning.plans import TimeTriggeredPlan
 from unified_planning.shortcuts import *
 
@@ -1234,9 +1233,6 @@ IF_SUPPORTED_HEURISTICS = [
     "hff_no_numbers",
     "hadd_no_numbers",
     "hmax_no_numbers",
-]
-
-IF_UNSUPPORTED_HEURISTICS = [
     "hmax_explicit",
 ]
 
@@ -1322,29 +1318,15 @@ def test_interpreted_functions_solve_with_delete_relaxation_heuristic(
 
 
 @pytest.mark.parametrize("problem", IF_PROBLEMS, ids=[p.name for p in IF_PROBLEMS])
-@pytest.mark.parametrize("heuristic", IF_UNSUPPORTED_HEURISTICS)
-def test_interpreted_functions_unsupported_heuristics_raise(problem, heuristic):
-    for disable_rustamer in [True]:
-        reload_tamerlite(disable_rustamer)
-        search = tamerlite.SearchParams(search="gbfs", heuristic=heuristic)
-        with (
-            OneshotPlanner(name="tamerlite", params={"search": search}) as planner,
-            pytest.raises(UPUsageError),
-        ):
-            planner.solve(problem, timeout=None)
-
-
-@pytest.mark.parametrize("problem", IF_PROBLEMS, ids=[p.name for p in IF_PROBLEMS])
 def test_interpreted_functions_heuristic_values(problem, data_regression):
     """Regression-pins the heuristic values `hff`/`hadd`/`hmax` (and their
-    `_no_numbers` variants) compute on interpreted-function problems. Unlike
-    `test_heuristic_values`, this only ever runs on the Python backend --
-    interpreted functions don't exist on the Rust one -- and it excludes
-    `HMaxExplicit`, which stays unsupported for them (see
-    `IF_UNSUPPORTED_HEURISTICS`)."""
+    `_no_numbers` variants) and `hmax_explicit` compute on interpreted-
+    function problems. Unlike `test_heuristic_values`, this only ever runs on
+    the Python backend -- interpreted functions don't exist on the Rust
+    one."""
 
     reload_tamerlite(True)
-    from tamerlite.core import HFF, HAdd, HMax
+    from tamerlite.core import HFF, HAdd, HMax, HMaxExplicit
 
     lifted_problem, ground_problem, map_back_action_instance = (
         testing_utils.compile_problem(problem)
@@ -1368,6 +1350,7 @@ def test_interpreted_functions_heuristic_values(problem, data_regression):
         (partial(HFF, disable_numeric_reasoning=True), "hff_no_numbers"),
         (partial(HAdd, disable_numeric_reasoning=True), "hadd_no_numbers"),
         (partial(HMax, disable_numeric_reasoning=True), "hmax_no_numbers"),
+        (HMaxExplicit, "hmax_explicit"),
     ]
     values: dict[str, list[int | None]] = {}
     for heuristic_class, heuristic_name in heuristic_classes:
