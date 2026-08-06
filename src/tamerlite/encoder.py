@@ -20,7 +20,15 @@ from fractions import Fraction
 from typing import Any, cast
 
 import unified_planning as up
-from unified_planning.model import Fluent, FNode, Object, Problem, TimepointKind, Type
+from unified_planning.model import (
+    Fluent,
+    FNode,
+    InterpretedFunction,
+    Object,
+    Problem,
+    TimepointKind,
+    Type,
+)
 from unified_planning.model.types import _UserType
 from unified_planning.model.walkers import ExpressionQuantifiersRemover, Nnf
 from unified_planning.plans import (
@@ -108,6 +116,7 @@ class Encoder:
         relevance_analysis: bool,
         full: bool = True,
         deadline: Fraction | None = None,
+        if_cache: dict[InterpretedFunction, dict[tuple, Any]] | None = None,
     ):
         self._problem = problem
         self._lifted_problem = lifted_problem
@@ -142,7 +151,11 @@ class Encoder:
         self._object_ids = {name: i for i, name in enumerate(self._object_names)}
 
         self._converter = Converter(
-            problem, self._fluent_ids, self._object_ids, self._objects_by_id
+            problem,
+            self._fluent_ids,
+            self._object_ids,
+            self._objects_by_id,
+            if_cache,
         )
         self._action_names: list[str] = sorted(
             action.name for action in problem.actions
