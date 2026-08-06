@@ -310,6 +310,10 @@ class Converter(DagWalker):
             return_type_str = "real"
         elif return_type.is_user_type():
             return_type_str = "object"
+        else:
+            raise NotImplementedError(
+                f"Unsupported interpreted function return type: {return_type}"
+            )
 
         function = self._get_interpreted_function_wrapper(interpreted_function)
 
