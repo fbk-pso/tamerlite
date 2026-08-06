@@ -1276,6 +1276,26 @@ def HMax(
 
 
 class HMaxExplicit(Heuristic):
+    """An explicit-value-set variant of HMax: it tracks, per fluent, the growing
+    set of values reachable so far, and re-evaluates conditions/effects against
+    the cross-product of those sets on every fixpoint round.
+
+    This makes it interpreted-function-safe for free: an interpreted-function
+    call is just another node `evaluate()` knows how to invoke, and the
+    generic fluent-collecting scans (`_extract_fluents`,
+    `_operator_conditions_fluents`/`_operator_effects_fluents`) already find
+    an interpreted function's argument fluents.
+
+    One real caveat: unlike `DeleteRelaxationHeuristic`, which only ever
+    evaluates an interpreted-function condition against the real, concrete
+    search state, this class's cross-product can hand a callable an argument
+    combination that never jointly occurs in any reachable state. A partial
+    callable (e.g. a lookup table missing a key) can therefore raise here in
+    a way it wouldn't under hff/hadd/hmax -- the same class of hazard as
+    `evaluate`'s own `/` raising `ZeroDivisionError` on relaxed values, just
+    with arbitrary user code instead of a builtin operator.
+    """
+
     def __init__(
         self,
         actions: list[Action],
