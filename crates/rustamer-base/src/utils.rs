@@ -44,6 +44,26 @@ pub fn get_big_rational(obj: &pyo3::Bound<'_, PyAny>) -> PyResult<BigRational> {
     Err(PyValueError::new_err("Unable to parse Rational number"))
 }
 
+/// Same as `get_big_rational`, but via arbitrary-precision `BigInt`
+/// numerator/denominator instead of `i32`.
+pub fn get_big_rational_bigint(obj: &pyo3::Bound<'_, PyAny>) -> PyResult<BigRational> {
+    if let Ok(v) = obj.extract::<BigInt>() {
+        return Ok(BigRational::from_integer(v));
+    }
+
+    if is_fraction(obj).unwrap_or(false) {
+        if let (Ok(numerator), Ok(denominator)) = (
+            obj.getattr("numerator").and_then(|n| n.extract::<BigInt>()),
+            obj.getattr("denominator")
+                .and_then(|d| d.extract::<BigInt>()),
+        ) {
+            return Ok(BigRational::new(numerator, denominator));
+        }
+    }
+
+    Err(PyValueError::new_err("Unable to parse Rational number"))
+}
+
 pub fn get_option_big_rational(obj: &pyo3::Bound<'_, PyAny>) -> PyResult<Option<BigRational>> {
     if obj.is_none() {
         Ok(None)

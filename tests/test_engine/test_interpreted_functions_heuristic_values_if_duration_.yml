@@ -1,0 +1,56 @@
+hadd:
+- 2
+- 2
+- 0
+- 1
+- 0
+- null
+hadd_no_numbers:
+- 2
+- 2
+- 0
+- 1
+- 0
+- 2
+hff:
+- 2
+- 1
+- 0
+- 1
+- 0
+- 1
+hff_no_numbers:
+- 2
+- 1
+- 0
+- 1
+- 0
+- 1
+hmax:
+- 2
+- 1
+- 0
+- 1
+- 0
+- null
+hmax_explicit_python:
+- 2
+- 1
+- 0
+- 1
+- 0
+- null
+hmax_explicit_rust:
+- 2
+- 1
+- 0
+- 1
+- 0
+- null
+hmax_no_numbers:
+- 2
+- 1
+- 0
+- 1
+- 0
+- 2

@@ -15,12 +15,18 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 
+use std::cell::RefCell;
+
 use num::BigInt;
 use num_rational::BigRational;
-use pyo3::{exceptions::PyValueError, prelude::*};
+use pyo3::{
+    exceptions::PyValueError,
+    prelude::*,
+    types::{PyBool, PyInt, PyTuple},
+};
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
-use crate::utils::{big_rational_to_py_fraction, integer_to_i32};
+use crate::utils::{big_rational_to_py_fraction, get_big_rational_bigint, integer_to_i32};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ExpressionNode {
@@ -39,6 +45,167 @@ pub enum ExpressionNode {
     Minus(usize, usize),
     Times(Vec<usize>),
     Div(usize, usize),
+    /// An interpreted-function call. `func_id` indexes `INTERPRETED_FUNCTIONS` rather
+    /// than embedding the callable inline: `ExpressionNode` must stay
+    /// `Clone + PartialEq + Eq + Hash`, which a raw `Py<PyAny>` cannot
+    /// support without a GIL acquisition on every clone.
+    InterpretedFunction {
+        func_id: usize,
+        return_type: IfReturnType,
+        operands: Vec<usize>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum IfReturnType {
+    Bool,
+    Int,
+    Real,
+    Object,
+}
+
+impl IfReturnType {
+    fn parse(s: &str) -> PyResult<IfReturnType> {
+        match s {
+            "bool" => Ok(IfReturnType::Bool),
+            "int" => Ok(IfReturnType::Int),
+            "real" => Ok(IfReturnType::Real),
+            "object" => Ok(IfReturnType::Object),
+            &_ => Err(PyValueError::new_err(
+                "Unknown interpreted function return type: ".to_owned() + s,
+            )),
+        }
+    }
+}
+
+// Process-global registry mapping a `func_id` to the Python callable it was
+// built from. Populated by `make_interpreted_function_node` (called from
+// `Converter.walk_interpreted_function_exp`) and read by
+// `call_interpreted_function`. `IF_IDS_BY_PTR` dedups registrations by pointer
+// identity so the single, memoizing wrapper callable
+// `Converter._get_interpreted_function_wrapper` builds per
+// `InterpretedFunction` always maps back to the same `func_id`.
+//
+// Entries are never removed. Growth is bounded by the number of distinct
+// interpreted-function wrapper callables built across the process's
+// lifetime -- a handful per problem, and `Encoder`/`Converter` rebuild
+// fresh wrappers on every anytime re-encode -- so this is not unbounded in
+// practice, but it is a deliberate, permanent leak rather than a scoped
+// resource.
+//
+// `thread_local!` + `RefCell`: TamerLite's Rust search is single-threaded,
+// so there is no concurrent access to guard against. `thread_local!` is what
+// makes that legal: a plain `static` requires its type to be `Sync`, which
+// `RefCell` deliberately isn't, so this would need `unsafe` (`static mut`
+// or a raw `UnsafeCell`) without it.
+thread_local! {
+    static INTERPRETED_FUNCTIONS: RefCell<Vec<Py<PyAny>>> = const { RefCell::new(Vec::new()) };
+    static IF_IDS_BY_PTR: RefCell<FxHashMap<usize, usize>> =
+        const { RefCell::new(FxHashMap::with_hasher(FxBuildHasher)) };
+}
+
+fn register_interpreted_function(function: Py<PyAny>) -> usize {
+    let ptr = function.as_ptr() as usize;
+    if let Some(id) = IF_IDS_BY_PTR.with_borrow(|by_ptr| by_ptr.get(&ptr).copied()) {
+        return id;
+    }
+
+    let id = INTERPRETED_FUNCTIONS.with_borrow_mut(|registry| {
+        registry.push(function);
+        registry.len() - 1
+    });
+    IF_IDS_BY_PTR.with_borrow_mut(|by_ptr| by_ptr.insert(ptr, id));
+    id
+}
+
+fn get_interpreted_function(py: Python<'_>, func_id: usize) -> Py<PyAny> {
+    INTERPRETED_FUNCTIONS.with_borrow(|registry| registry[func_id].clone_ref(py))
+}
+
+/// Converts an evaluated `ExpressionNode` argument into the Python value an
+/// interpreted function's real callable expects.
+fn interpreted_function_arg<'py>(
+    node: &ExpressionNode,
+    py: Python<'py>,
+) -> PyResult<Bound<'py, PyAny>> {
+    match node {
+        ExpressionNode::Bool(v) => Ok(v.into_pyobject(py)?.to_owned().into_any()),
+        ExpressionNode::Int(v) => Ok(v.as_ref().into_pyobject(py)?.into_any()),
+        ExpressionNode::Rational(v) => big_rational_to_py_fraction(v, py),
+        ExpressionNode::Object(oid) => Ok(Bound::new(
+            py,
+            PyExpressionNode {
+                v: ExpressionNode::Object(*oid),
+            },
+        )?
+        .into_any()),
+        other => Err(PyValueError::new_err(format!(
+            "Cannot pass {:?} as an interpreted-function argument",
+            other
+        ))),
+    }
+}
+
+/// Converts an interpreted function's raw Python return value into an
+/// `ExpressionNode`, coercing it to the declared `return_type` -- the raw
+/// callable is free to return any Python-native type (e.g. a plain `float`
+/// for a "real" function), so this normalizes it to the exact type the rest
+/// of the search space expects.
+fn interpreted_function_result(
+    result: &Bound<'_, PyAny>,
+    return_type: IfReturnType,
+) -> PyResult<ExpressionNode> {
+    let py = result.py();
+    match return_type {
+        IfReturnType::Bool => {
+            let b: bool = py.get_type::<PyBool>().call1((result,))?.extract()?;
+            Ok(ExpressionNode::Bool(b))
+        }
+        IfReturnType::Int => {
+            let v: BigInt = py.get_type::<PyInt>().call1((result,))?.extract()?;
+            Ok(ExpressionNode::Int(Box::new(v)))
+        }
+        IfReturnType::Real => {
+            let fractions = PyModule::import(py, "fractions")?;
+            let fraction = fractions.getattr("Fraction")?.call1((result,))?;
+            let v = get_big_rational_bigint(&fraction)?;
+            Ok(if v.is_integer() {
+                ExpressionNode::Int(Box::new(v.to_integer()))
+            } else {
+                ExpressionNode::Rational(Box::new(v))
+            })
+        }
+        IfReturnType::Object => {
+            let node: PyExpressionNode = result.extract()?;
+            match node.v {
+                ExpressionNode::Object(oid) => Ok(ExpressionNode::Object(oid)),
+                other => Err(PyValueError::new_err(format!(
+                    "An interpreted function with an object return type must \
+                     return an ObjectNode, got {:?}",
+                    other
+                ))),
+            }
+        }
+    }
+}
+
+/// Calls the interpreted function registered under `func_id` with the given
+/// already-evaluated argument nodes, returning its result coerced to
+/// `return_type`.
+pub fn call_interpreted_function(
+    func_id: usize,
+    return_type: IfReturnType,
+    args: &[&ExpressionNode],
+) -> PyResult<ExpressionNode> {
+    Python::attach(|py| {
+        let callable = get_interpreted_function(py, func_id);
+        let mut py_args = Vec::with_capacity(args.len());
+        for &a in args {
+            py_args.push(interpreted_function_arg(a, py)?);
+        }
+        let result = callable.call1(py, PyTuple::new(py, py_args)?)?;
+        interpreted_function_result(result.bind(py), return_type)
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -212,4 +379,21 @@ pub fn make_fluent_node(fluent: usize) -> PyExpressionNode {
     PyExpressionNode {
         v: ExpressionNode::Fluent(fluent),
     }
+}
+
+#[pyfunction]
+pub fn make_interpreted_function_node(
+    function: Py<PyAny>,
+    return_type: String,
+    operands: Vec<usize>,
+) -> PyResult<PyExpressionNode> {
+    let return_type = IfReturnType::parse(&return_type)?;
+    let func_id = register_interpreted_function(function);
+    Ok(PyExpressionNode {
+        v: ExpressionNode::InterpretedFunction {
+            func_id,
+            return_type,
+            operands,
+        },
+    })
 }

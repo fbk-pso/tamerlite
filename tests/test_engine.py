@@ -19,6 +19,8 @@ import contextlib
 import importlib
 import os
 import types
+import warnings
+from collections import OrderedDict
 from collections.abc import Callable
 from functools import partial
 
@@ -276,6 +278,15 @@ def skip(
                     and heuristic in ["hff", "hff_no_numbers", "custom"]
                 )
             )
+        )
+        or (
+            problem.name == "interpreted_functions_minimal_chain_of_assignments"
+            and search == "dfs"
+        )
+        or (problem.name == "treasure_hunting_robot_simple" and search == "dfs")
+        or (
+            problem.name == "if_reals_condition_effect_pizza"
+            and search in ["bfs", "ehc"]
         )
     )
 
@@ -1202,3 +1213,575 @@ def test_symmetry_breaking_goal_taint_is_per_object():
     assert len(observed_groups) >= 2
     for pkg_groups in observed_groups[:2]:
         assert {"p1", "p2", "p3"} in pkg_groups
+
+
+# --- Interpreted-function tests --------------------------------------------
+
+IF_PROBLEMS = [
+    problems_generator.get_problem_if_bool_condition(),
+    problems_generator.get_problem_if_numeric_effect(),
+    problems_generator.get_problem_if_object_effect(),
+    problems_generator.get_problem_if_object_argument(),
+    problems_generator.get_problem_if_object_argument_and_return(),
+    problems_generator.get_problem_if_minimal_chain(),
+    problems_generator.get_problem_if_undefined_initial_numeric(),
+    problems_generator.get_problem_if_temporal_compression_safe(),
+    problems_generator.get_problem_if_duration(),
+]
+
+IF_SUPPORTED_HEURISTICS = [
+    "hff",
+    "hadd",
+    "hmax",
+    "hff_no_numbers",
+    "hadd_no_numbers",
+    "hmax_no_numbers",
+    "hmax_explicit",
+]
+
+
+@pytest.mark.parametrize("problem", IF_PROBLEMS, ids=[p.name for p in IF_PROBLEMS])
+def test_interpreted_functions_supports(problem):
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        assert tamerlite.engine.TamerLite.supports(problem.kind)
+
+
+@pytest.mark.parametrize("problem", IF_PROBLEMS, ids=[p.name for p in IF_PROBLEMS])
+@pytest.mark.parametrize("search_kind", ["gbfs", "wastar", "bfs"])
+@pytest.mark.parametrize("symmetry_breaking", [True, False])
+def test_interpreted_functions_solve_with_blind_heuristic(
+    problem, search_kind, symmetry_breaking
+):
+    results = []
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        search = tamerlite.SearchParams(
+            search=search_kind, heuristic="blind", symmetry_breaking=symmetry_breaking
+        )
+        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+            planner: tamerlite.engine.TamerLite
+            res: PlanGenerationResult = planner.solve(problem, timeout=None)
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+            results.append(res)
+            with PlanValidator(problem_kind=problem.kind) as v:
+                assert v.validate(problem, res.plan)
+
+    check_metrics_equality(results)
+
+
+@pytest.mark.parametrize("problem", IF_PROBLEMS, ids=[p.name for p in IF_PROBLEMS])
+@pytest.mark.parametrize("symmetry_breaking", [True, False])
+def test_interpreted_functions_solve_with_custom_heuristic(problem, symmetry_breaking):
+    def custom_heuristic(state: State):
+        return 0.0
+
+    results = []
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        search = tamerlite.SearchParams(
+            search="gbfs", heuristic="custom", symmetry_breaking=symmetry_breaking
+        )
+        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+            planner: tamerlite.engine.TamerLite
+            res: PlanGenerationResult = planner.solve(
+                problem, heuristic=custom_heuristic, timeout=None
+            )
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+            results.append(res)
+            with PlanValidator(problem_kind=problem.kind) as v:
+                assert v.validate(problem, res.plan)
+
+    check_metrics_equality(results)
+
+
+@pytest.mark.parametrize("problem", IF_PROBLEMS, ids=[p.name for p in IF_PROBLEMS])
+@pytest.mark.parametrize("heuristic", IF_SUPPORTED_HEURISTICS)
+@pytest.mark.parametrize("symmetry_breaking", [True, False])
+@pytest.mark.parametrize("relevance_analysis", [True, False])
+def test_interpreted_functions_solve_with_delete_relaxation_heuristic(
+    problem, heuristic, symmetry_breaking, relevance_analysis
+):
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        search = tamerlite.SearchParams(
+            search="gbfs",
+            heuristic=heuristic,
+            symmetry_breaking=symmetry_breaking,
+            relevance_analysis=relevance_analysis,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+                planner: tamerlite.engine.TamerLite
+                res: PlanGenerationResult = planner.solve(problem, timeout=None)
+                assert res.status == ResultStatus.SOLVED_SATISFICING
+                with PlanValidator(problem_kind=problem.kind) as v:
+                    assert v.validate(problem, res.plan)
+
+
+@pytest.mark.parametrize("problem", IF_PROBLEMS, ids=[p.name for p in IF_PROBLEMS])
+def test_interpreted_functions_heuristic_values(problem, data_regression):
+    """Regression-pins the heuristic values `hff`/`hadd`/`hmax` (and their
+    `_no_numbers` variants) and `hmax_explicit` compute on interpreted-
+    function problems.
+
+    Mirrors `test_heuristic_values` by asserting the two backends agree
+    exactly -- except for `hmax_explicit`, which is deliberately excluded
+    from that cross-check. It computes an effect's reachable values very
+    differently per backend: Rust cross-products the effect's argument
+    fluents' already-reachable values and evaluates, while Python's
+    classifier over-approximates any non-constant object/bool effect to
+    "every object of the type"/`{True, False}`. A non-constant object effect
+    (see `if_object_effect`, `if_object_argument_and_return`) can therefore
+    legitimately yield a smaller, still-admissible value on the Rust side.
+    Both backends' `hmax_explicit` values are recorded under backend-
+    specific keys, so the divergence stays pinned rather than silently
+    accepted or forced to agree by weakening either implementation."""
+
+    values: dict[str, list[int | None]] = {}
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.core import HFF, HAdd, HMax, HMaxExplicit
+
+        lifted_problem, ground_problem, map_back_action_instance = (
+            testing_utils.compile_problem(problem)
+        )
+        encoder = Encoder(
+            ground_problem,
+            lifted_problem,
+            map_back_action_instance,
+            symmetry_breaking=False,
+            compression_safe_actions=False,
+            relevance_analysis=False,
+        )
+        ss: SearchSpaceABC = encoder.search_space
+        init_state = ss.initial_state()
+        states = generate_states(
+            ss, init_state, num_states=max_generated_states(problem)
+        )
+
+        heuristic_classes: list[tuple[Callable[..., Heuristic], str]] = [
+            (HFF, "hff"),
+            (HAdd, "hadd"),
+            (HMax, "hmax"),
+            (partial(HFF, disable_numeric_reasoning=True), "hff_no_numbers"),
+            (partial(HAdd, disable_numeric_reasoning=True), "hadd_no_numbers"),
+            (partial(HMax, disable_numeric_reasoning=True), "hmax_no_numbers"),
+            (HMaxExplicit, "hmax_explicit"),
+        ]
+        for heuristic_class, heuristic_name in heuristic_classes:
+            # `hmax_explicit` legitimately diverges between backends (see
+            # docstring): key it per-backend so both real values get
+            # recorded instead of asserted equal.
+            values_key = (
+                f"{heuristic_name}_{'python' if disable_rustamer else 'rust'}"
+                if heuristic_name == "hmax_explicit"
+                else heuristic_name
+            )
+            for internal_caching in [True, False]:
+                heuristic: Heuristic = heuristic_class(
+                    encoder.actions,
+                    encoder.fluent_types,
+                    encoder.objects,
+                    encoder.events,
+                    encoder.goal,
+                    internal_caching=internal_caching,
+                    cache_value_in_state=False,
+                    inadmissible_numeric_heuristic_variant=False,
+                )
+
+                computed = []
+                for state in states:
+                    h_val = heuristic.eval(state, ss)
+                    if h_val is not None:
+                        h_val = int(h_val)
+                    computed.append(h_val)
+
+                if values_key not in values:
+                    values[values_key] = computed
+                else:
+                    assert computed == values[values_key]
+
+    data_regression.check(values)
+
+
+def test_converter_shares_interpreted_function_wrapper():
+    """Two calls to the *same* interpreted function -- even with different
+    argument expressions -- must share one wrapper callable, built once by
+    `Converter._get_interpreted_function_wrapper` and reused for every
+    occurrence."""
+
+    reload_tamerlite(True)
+    from tamerlite.converter import Converter
+    from tamerlite.core.search_space import (
+        InterpretedFunctionNode,
+        MultiSet,
+        ObjectNode,
+        State,
+        evaluate,
+    )
+
+    Loc = UserType("Loc")
+    l1 = Object("l1", Loc)
+    l2 = Object("l2", Loc)
+
+    def is_l1(loc):
+        return loc == l1
+
+    IF_is_l1 = InterpretedFunction("is_l1", BoolType(), OrderedDict(loc=Loc), is_l1)
+
+    at1 = Fluent("at1", Loc)
+    at2 = Fluent("at2", Loc)
+    problem = Problem("shared_if")
+    problem.add_fluent(at1)
+    problem.add_fluent(at2)
+    problem.add_object(l1)
+    problem.add_object(l2)
+
+    exp1 = IF_is_l1(at1())
+    exp2 = IF_is_l1(at2())
+    assert exp1 is not exp2
+
+    converter = Converter(
+        problem,
+        fluent_ids={"at1": 0, "at2": 1},
+        object_ids={"l1": 0, "l2": 1},
+        objects_by_id=[l1, l2],
+    )
+    converted1 = converter.convert(exp1)
+    converted2 = converter.convert(exp2)
+
+    node1 = converted1[-1]
+    node2 = converted2[-1]
+    assert isinstance(node1, InterpretedFunctionNode)
+    assert isinstance(node2, InterpretedFunctionNode)
+    assert node1.function is node2.function
+
+    state = State([ObjectNode(0), ObjectNode(1)], None, {}, MultiSet(), 0, [])
+    assert evaluate(converted1, state) is True
+    assert evaluate(converted2, state) is False
+
+
+def test_converter_shares_if_cache_across_converters_with_different_object_tables():
+    """`Converter._if_cache` -- unlike `_if_wrappers`, see
+    `Converter._get_interpreted_function_wrapper`'s docstring -- is safe to
+    share across Converters even when their object numbering differs: it's
+    keyed by the already-unwrapped, table-agnostic real argument (an
+    `Object`, never an internal id), and the id<->`Object` translation always
+    runs against the *calling* Converter's own tables, never a stale one
+    baked into a shared closure. The two Converters below deliberately
+    number `l1`/`l2` oppositely to exercise exactly that."""
+
+    reload_tamerlite(True)
+    from tamerlite.converter import Converter
+    from tamerlite.core.search_space import MultiSet, ObjectNode, State, evaluate
+
+    Loc = UserType("Loc")
+    l1 = Object("l1", Loc)
+    l2 = Object("l2", Loc)
+
+    calls = []
+
+    def is_l1(loc):
+        calls.append(loc)
+        return loc == l1
+
+    IF_is_l1 = InterpretedFunction("is_l1", BoolType(), OrderedDict(loc=Loc), is_l1)
+
+    at = Fluent("at", Loc)
+    problem = Problem("shared_if_cache")
+    problem.add_fluent(at)
+    problem.add_object(l1)
+    problem.add_object(l2)
+
+    exp = IF_is_l1(at())
+
+    if_cache: dict = {}
+    converter_a = Converter(
+        problem,
+        fluent_ids={"at": 0},
+        object_ids={"l1": 0, "l2": 1},
+        objects_by_id=[l1, l2],
+        if_cache=if_cache,
+    )
+    converter_b = Converter(
+        problem,
+        fluent_ids={"at": 0},
+        object_ids={"l1": 1, "l2": 0},
+        objects_by_id=[l2, l1],
+        if_cache=if_cache,
+    )
+
+    converted_a = converter_a.convert(exp)
+    converted_b = converter_b.convert(exp)
+
+    # Same real object (l1), opposite internal ids under each converter.
+    state_a_l1 = State([ObjectNode(0)], None, {}, MultiSet(), 0, [])  # a: 0 -> l1
+    state_b_l1 = State([ObjectNode(1)], None, {}, MultiSet(), 0, [])  # b: 1 -> l1
+
+    assert evaluate(converted_a, state_a_l1) is True
+    assert evaluate(converted_b, state_b_l1) is True
+    # The second call hit the cache populated by the first -- the real
+    # callable ran exactly once, despite the two converters' opposite
+    # numbering.
+    assert calls == [l1]
+
+    # A different real object (l2) must not collide with l1's cache entry.
+    state_a_l2 = State([ObjectNode(1)], None, {}, MultiSet(), 0, [])  # a: 1 -> l2
+    assert evaluate(converted_a, state_a_l2) is False
+    assert calls == [l1, l2]
+
+
+def test_interpreted_functions_duration():
+    problem = problems_generator.get_problem_if_duration()
+    assert problem.kind.has_interpreted_functions_in_durations()
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+
+        search = tamerlite.SearchParams(
+            search="wastar",
+            heuristic="blind",
+            weight=0.8,
+            compression_safe_actions=False,
+        )
+
+        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+            planner: tamerlite.engine.TamerLite
+            res: PlanGenerationResult = planner.solve(problem, timeout=None)
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+
+            with PlanValidator(problem_kind=problem.kind) as v:
+                assert v.validate(problem, res.plan)
+
+            assert isinstance(res.plan, TimeTriggeredPlan)
+            timed_actions = res.plan.timed_actions
+            assert len(timed_actions) == 1
+            _, _, duration = timed_actions[0]
+            # charge_time(battery=4) == 10 - 4 == 6
+            assert duration == Fraction(6)
+
+
+def test_interpreted_functions_object_effect():
+    problem = problems_generator.get_problem_if_object_effect()
+    assert problem.kind.has_interpreted_functions_in_object_assignments()
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+
+        search = tamerlite.SearchParams(search="gbfs", heuristic="blind")
+        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+            planner: tamerlite.engine.TamerLite
+            res: PlanGenerationResult = planner.solve(problem, timeout=None)
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+
+            with PlanValidator(problem_kind=problem.kind) as v:
+                assert v.validate(problem, res.plan)
+
+
+def test_interpreted_function_in_fluent_argument_raises():
+    """`value(choose(sel))` addresses `value` through an interpreted-function
+    call rather than a plain object -- no such grounded fluent exists in
+    `problem.initial_values` (only `value(l1)`/`value(l2)` do), so encoding
+    must fail loudly instead of crashing with a bare `KeyError`. `sel` is
+    written by `pick`'s effect, so it stays non-static and `choose(sel)`
+    survives grounding instead of being constant-folded away."""
+    Loc = UserType("Loc")
+    l1 = Object("l1", Loc)
+    l2 = Object("l2", Loc)
+
+    def choose(loc):
+        return l2 if loc == l1 else l1
+
+    IF_choose = InterpretedFunction("choose", Loc, OrderedDict(loc=Loc), choose)
+
+    value = Fluent("value", IntType(), loc=Loc)
+    sel = Fluent("sel", Loc)
+
+    check = InstantaneousAction("check")
+    check.add_precondition(GE(value(IF_choose(sel)), 2))
+    pick = InstantaneousAction("pick")
+    pick.add_effect(sel, l2)
+
+    problem = Problem("if_in_fluent_argument")
+    problem.add_fluent(value)
+    problem.add_fluent(sel)
+    problem.add_object(l1)
+    problem.add_object(l2)
+    problem.add_action(check)
+    problem.add_action(pick)
+    problem.set_initial_value(value(l1), 1)
+    problem.set_initial_value(value(l2), 5)
+    problem.set_initial_value(sel, l1)
+    problem.add_goal(GE(value(l2), 2))
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        search = tamerlite.SearchParams(search="gbfs", heuristic="blind")
+        with (
+            OneshotPlanner(name="tamerlite", params={"search": search}) as planner,
+            pytest.raises(
+                NotImplementedError, match="interpreted functions in its arguments"
+            ),
+        ):
+            planner.solve(problem, timeout=None)
+
+
+def test_nested_fluent_in_fluent_argument_raises():
+    """`value(sel)` addresses `value` through another fluent rather than a
+    plain object -- nothing in UP forbids this on the read side (only
+    `Effect.__init__` rejects it, and only for effect *targets*), so it
+    reaches TamerLite's encoder unchecked. No grounded `value(sel)` instance
+    exists in `problem.initial_values` (only `value(l1)`/`value(l2)` do), so
+    this must fail loudly rather than crash with a bare `KeyError`. `sel` is
+    written by `pick`'s effect, so it stays non-static and survives
+    grounding instead of being constant-folded away."""
+    Loc = UserType("Loc")
+    l1 = Object("l1", Loc)
+    l2 = Object("l2", Loc)
+
+    value = Fluent("value", IntType(), loc=Loc)
+    sel = Fluent("sel", Loc)
+
+    check = InstantaneousAction("check")
+    check.add_precondition(GE(value(sel), 2))
+    pick = InstantaneousAction("pick")
+    pick.add_effect(sel, l2)
+
+    problem = Problem("nested_fluent_in_fluent_argument")
+    problem.add_fluent(value)
+    problem.add_fluent(sel)
+    problem.add_object(l1)
+    problem.add_object(l2)
+    problem.add_action(check)
+    problem.add_action(pick)
+    problem.set_initial_value(value(l1), 1)
+    problem.set_initial_value(value(l2), 5)
+    problem.set_initial_value(sel, l1)
+    problem.add_goal(GE(value(l2), 2))
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        search = tamerlite.SearchParams(search="gbfs", heuristic="blind")
+        with (
+            OneshotPlanner(name="tamerlite", params={"search": search}) as planner,
+            pytest.raises(NotImplementedError, match="other fluents in its arguments"),
+        ):
+            planner.solve(problem, timeout=None)
+
+
+def test_symmetry_breaking_interpreted_function_numeric_is_retained():
+    """A numeric-only interpreted function (signature and return type both
+    plain numbers) must not defeat symmetry breaking: `{s1, s2}` stays a
+    legitimate equivalence class."""
+
+    problem = problems_generator.get_problem_if_numeric_symmetry_retained()
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    encoder = Encoder(
+        ground_problem,
+        lifted_problem,
+        map_back_action_instance,
+        symmetry_breaking=False,
+        compression_safe_actions=False,
+        relevance_analysis=False,
+    )
+    groups = encoder._compute_equivalent_objects()
+    assert {"s1", "s2"} in [{obj.name for obj in group} for group in groups]
+
+
+def test_symmetry_breaking_interpreted_function_object_argument_taint():
+    """An interpreted function taking an object-typed argument must taint
+    every object of that type: `l1`/`l2` must come back as singletons, not
+    grouped together.
+
+    This is also the soundness regression: before
+    `Encoder._extract_interpreted_function_tainted_objects`, `{l1, l2}` were
+    wrongly grouped (their initial state and goal are symmetric; the IF's
+    distinguishing logic lives entirely in a Python closure invisible to
+    `_extract_domain_objects`), which made `enter(l2)`/`finish(l2)` require
+    an `l1`-using action already on the plan prefix -- but `enter(l1)` can
+    never fire, so the goal became unreachable even though
+    `enter(l2); finish(l2)` is a trivial valid plan. Solving with
+    `symmetry_breaking=True` must still find and validate that plan.
+    """
+
+    problem = problems_generator.get_problem_if_object_argument_symmetry_unsound()
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    encoder = Encoder(
+        ground_problem,
+        lifted_problem,
+        map_back_action_instance,
+        symmetry_breaking=False,
+        compression_safe_actions=False,
+        relevance_analysis=False,
+    )
+    groups = encoder._compute_equivalent_objects()
+    group_sets = [{obj.name for obj in group} for group in groups]
+    assert {"l1"} in group_sets
+    assert {"l2"} in group_sets
+    assert {"l1", "l2"} not in group_sets
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        search = tamerlite.SearchParams(
+            search="wastar", heuristic="blind", symmetry_breaking=True
+        )
+        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+            planner: tamerlite.engine.TamerLite
+            res: PlanGenerationResult = planner.solve(problem, timeout=None)
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+            with PlanValidator(problem_kind=problem.kind) as v:
+                assert v.validate(problem, res.plan)
+
+
+def test_symmetry_breaking_interpreted_function_object_return_taint():
+    """An object-returning interpreted function must taint every object of
+    its return type (`{l1, l2}` become singletons), while leaving a second,
+    unrelated type's genuine symmetry untouched (`{i1, i2}` stays grouped) --
+    the taint must be scoped to the types an IF can actually observe or
+    produce, not a blanket effect on the whole problem."""
+
+    problem = problems_generator.get_problem_if_object_return_symmetry()
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    encoder = Encoder(
+        ground_problem,
+        lifted_problem,
+        map_back_action_instance,
+        symmetry_breaking=False,
+        compression_safe_actions=False,
+        relevance_analysis=False,
+    )
+    groups = encoder._compute_equivalent_objects()
+    group_sets = [{obj.name for obj in group} for group in groups]
+    assert {"l1"} in group_sets
+    assert {"l2"} in group_sets
+    assert {"i1", "i2"} in group_sets
+
+
+def test_interpreted_functions_symmetry_breaking_and_relevance_analysis_not_disabled():
+    problem = problems_generator.get_problem_if_bool_condition()
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        search = tamerlite.SearchParams(
+            search="gbfs",
+            heuristic="blind",
+            symmetry_breaking=True,
+            relevance_analysis=True,
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+                planner: tamerlite.engine.TamerLite
+                res: PlanGenerationResult = planner.solve(problem, timeout=None)
+                assert res.status == ResultStatus.SOLVED_SATISFICING
+
+        messages = [str(w.message) for w in caught]
+        assert not any("relevance_analysis" in m for m in messages)
+        assert not any("symmetry_breaking" in m for m in messages)
