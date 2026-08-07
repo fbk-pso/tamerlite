@@ -572,6 +572,44 @@ def get_problem_temporal_fluent_duration() -> Problem:
     return problem
 
 
+def get_problem_duration_fluent_relevance() -> Problem:
+    """A two-action temporal problem where `tune`'s sole role is to set
+    `charge`, a fluent read *only* by `run`'s duration bound -- no condition,
+    effect value, or goal anywhere else mentions `charge`. `tune` is only
+    reachable as relevant via the goal (`done`) -> `run` (writes `done`) ->
+    `run`'s duration bound -> `charge` -> `tune` (writes `charge`) chain, so
+    it isolates whether relevance analysis's backward walk follows duration
+    dependencies.
+
+    `run`'s duration is constrained to `[10, charge]`: at the initial
+    `charge == 0` this is an empty (lower > upper) interval, so the temporal
+    network is inconsistent and `run` can never open -- the goal is only
+    reachable by running `tune` first to raise `charge` to `10`. If `tune` is
+    wrongly pruned as irrelevant, the problem becomes genuinely unsolvable
+    rather than merely producing a worse plan.
+    """
+    problem = Problem("duration_fluent_relevance")
+
+    charge = Fluent("charge", RealType(0, 100))
+    done = Fluent("done")
+
+    tune = InstantaneousAction("tune")
+    tune.add_effect(charge, 10)
+
+    run = DurativeAction("run")
+    run.set_duration_constraint(DurationInterval(Int(10), charge()))
+    run.add_effect(EndTiming(), done, True)
+
+    problem.add_fluent(charge, default_initial_value=0)
+    problem.add_fluent(done, default_initial_value=False)
+    problem.add_action(tune)
+    problem.add_action(run)
+
+    problem.add_goal(done)
+
+    return problem
+
+
 def get_problem_object_value_symmetry_initial() -> Problem:
     Token = UserType("Token")
     Slot = UserType("Slot")
