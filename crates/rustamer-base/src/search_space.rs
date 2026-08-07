@@ -99,9 +99,9 @@ impl MutexChecker {
             return *are_mutex;
         }
 
-        let (_, a_e, a_pe, _, _) = &event_fluents[a1.idx][*i1];
-        let (b_p, b_e, _, _, _) = &event_fluents[a2.idx][*i2];
-        let are_mutex = !(b_p.is_disjoint(a_e) && a_pe.is_disjoint(b_e));
+        let (_, a_writes, a_read_writes, _, _) = &event_fluents[a1.idx][*i1];
+        let (b_reads, b_writes, _, _, _) = &event_fluents[a2.idx][*i2];
+        let are_mutex = !(b_reads.is_disjoint(a_writes) && a_read_writes.is_disjoint(b_writes));
         cache.insert(*events_pair, are_mutex);
         are_mutex
     }
@@ -134,9 +134,10 @@ impl PrecedenceChecker {
             return *res;
         }
 
-        let (_, a_e, _, _, a_ec) = &event_fluents[a1.idx][*i1];
-        let (_, b_e, _, b_sc, _) = &event_fluents[a2.idx][*i2];
-        let res = !(a_e.is_disjoint(b_sc) && b_e.is_disjoint(a_ec));
+        let (_, a_writes, _, _, a_end_cond_reads) = &event_fluents[a1.idx][*i1];
+        let (_, b_writes, _, b_start_cond_reads, _) = &event_fluents[a2.idx][*i2];
+        let res =
+            !(a_writes.is_disjoint(b_start_cond_reads) && b_writes.is_disjoint(a_end_cond_reads));
         cache.insert(*events_pair, res);
         res
     }
@@ -167,6 +168,7 @@ pub struct SearchSpace {
     relevant_actions: Vec<Action>,
     compression_safe_actions: Option<Vec<bool>>,
     event_fluents: EventFluents,
+    duration_fluents: Vec<FxHashSet<usize>>,
     mutex: MutexChecker,
     precedence: PrecedenceChecker,
     action_objects: Option<Vec<Vec<usize>>>,
@@ -222,23 +224,37 @@ impl SearchSpace {
         let mut event_fluents = vec![Vec::new(); actions.len()];
         for (a, le) in &events {
             for (_, e) in le {
-                let mut a_p: FxHashSet<usize> = get_fluents(&e.conditions).collect();
-                a_p.extend(e.effects.iter().flat_map(|eff| get_fluents(&eff.value)));
-                let a_e: FxHashSet<usize> = e.effects.iter().map(|eff| eff.fluent).collect();
-                let a_pe: FxHashSet<usize> = a_p.union(&a_e).copied().collect();
-                let a_sc: FxHashSet<usize> = e
+                let mut reads: FxHashSet<usize> = get_fluents(&e.conditions).collect();
+                reads.extend(e.effects.iter().flat_map(|eff| get_fluents(&eff.value)));
+                let writes: FxHashSet<usize> = e.effects.iter().map(|eff| eff.fluent).collect();
+                let read_writes: FxHashSet<usize> = reads.union(&writes).copied().collect();
+                let start_cond_reads: FxHashSet<usize> = e
                     .start_conditions
                     .iter()
                     .flat_map(|c| get_fluents(c))
                     .collect();
-                let a_ec: FxHashSet<usize> = e
+                let end_cond_reads: FxHashSet<usize> = e
                     .end_conditions
                     .iter()
                     .flat_map(|c| get_fluents(c))
                     .collect();
-                event_fluents[a.idx].push((a_p, a_e, a_pe, a_sc, a_ec));
+                event_fluents[a.idx].push((
+                    reads,
+                    writes,
+                    read_writes,
+                    start_cond_reads,
+                    end_cond_reads,
+                ));
             }
         }
+
+        let duration_fluents: Vec<FxHashSet<usize>> = converted_actions_duration
+            .iter()
+            .map(|d| match d {
+                Some(d) => get_fluents(&d.0).chain(get_fluents(&d.1)).collect(),
+                None => FxHashSet::default(),
+            })
+            .collect();
 
         let tn_interpreter = TNInterpreter::new(&actions, &events);
 
@@ -248,6 +264,7 @@ impl SearchSpace {
             relevant_actions,
             compression_safe_actions,
             event_fluents,
+            duration_fluents,
             mutex: MutexChecker::new(),
             precedence: PrecedenceChecker::new(),
             action_objects,
@@ -574,6 +591,38 @@ impl SearchSpace {
             tn.add(&end, &start, &ub);
             tn.add(&self.tn_interpreter.start_plan_id, &start, &0.0);
             tn.add(&end, &self.tn_interpreter.end_plan_id, &-self.epsilon);
+            // `duration` was evaluated above against `state`, i.e. as of
+            // `start`. A past event that writes one of its fluents must be
+            // epsilon-separated from `start` and forced to occur strictly
+            // before it, or the evaluated duration and the plan's actual
+            // timing could disagree. Symmetrically, a still-open (`todo`)
+            // action's future write must land after `start`, since it
+            // wasn't visible to that evaluation. `MutexChecker` can't cover
+            // this: an action with no from-start conditions/effects has no
+            // event coincident with `start`.
+            let duration_fluents = &self.duration_fluents[action.idx];
+            if !duration_fluents.is_empty() {
+                for (e2_action, e2_pos, id2) in PersistentList::iter_rev(&state.path) {
+                    if !self.event_fluents[e2_action.idx][*e2_pos]
+                        .1
+                        .is_disjoint(duration_fluents)
+                    {
+                        let e2_id = self.tn_interpreter.get_event_id(*e2_action, *e2_pos, *id2);
+                        tn.add(&e2_id, &start, &-self.epsilon);
+                    }
+                }
+                for (a2, (pos2, id2)) in new_state.todo.iter() {
+                    for (id2, j) in (*id2..).zip(*pos2..self.events[a2].len()) {
+                        if !self.event_fluents[a2.idx][j]
+                            .1
+                            .is_disjoint(duration_fluents)
+                        {
+                            let ev2 = self.tn_interpreter.get_event_id(*a2, j, id2);
+                            tn.add(&start, &ev2, &-self.epsilon);
+                        }
+                    }
+                }
+            }
             id = *counter;
             for (t, e) in events.iter() {
                 let ev = self.tn_interpreter.get_event_id(e.action, e.pos, *counter);
@@ -783,6 +832,35 @@ impl SearchSpaceTrait for SearchSpace {
                     };
                     tn.add(&start, &end, &lb);
                     tn.add(&end, &start, &ub);
+                    // See the matching comment in `open_action`: a fluent
+                    // read only by this action's duration must still
+                    // epsilon-separate `start` from whichever past/future
+                    // event writes it.
+                    let duration_fluents = &self.duration_fluents[action.idx];
+                    if !duration_fluents.is_empty() {
+                        for (e2, id2) in event_path.iter() {
+                            if !self.event_fluents[e2.action.idx][e2.pos]
+                                .1
+                                .is_disjoint(duration_fluents)
+                            {
+                                let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, *id2);
+                                let b = -self.epsilon_rational.clone();
+                                tn.add(&ev2, &start, &b);
+                            }
+                        }
+                        for (a2, i2) in todo.iter() {
+                            for (id2, j) in (i2.1..).zip(i2.0..self.events[a2].len()) {
+                                if !self.event_fluents[a2.idx][j]
+                                    .1
+                                    .is_disjoint(duration_fluents)
+                                {
+                                    let ev2 = self.tn_interpreter.get_event_id(*a2, j, id2);
+                                    let b = -self.epsilon_rational.clone();
+                                    tn.add(&start, &ev2, &b);
+                                }
+                            }
+                        }
+                    }
                     let id = counter;
                     for (t, e) in events.iter() {
                         let ev = self.tn_interpreter.get_event_id(e.action, e.pos, counter);

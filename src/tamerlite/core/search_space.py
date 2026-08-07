@@ -221,9 +221,11 @@ class MutexChecker:
 
         are_mutex = self._cache.get(events_pair, None)
         if are_mutex is None:
-            (_, a_e, a_pe, _, _) = self._event_fluents[a1.idx][i1]
-            (b_p, b_e, _, _, _) = self._event_fluents[a2.idx][i2]
-            are_mutex = not (b_p.isdisjoint(a_e) and a_pe.isdisjoint(b_e))
+            (_, a_writes, a_read_writes, _, _) = self._event_fluents[a1.idx][i1]
+            (b_reads, b_writes, _, _, _) = self._event_fluents[a2.idx][i2]
+            are_mutex = not (
+                b_reads.isdisjoint(a_writes) and a_read_writes.isdisjoint(b_writes)
+            )
             self._cache[events_pair] = are_mutex
         return are_mutex
 
@@ -247,9 +249,12 @@ class PrecedenceChecker:
 
         res = self._cache.get(events_pair, None)
         if res is None:
-            (_, a_e, _, _, a_ec) = self._event_fluents[a1.idx][i1]
-            (_, b_e, _, b_sc, _) = self._event_fluents[a2.idx][i2]
-            res = not (a_e.isdisjoint(b_sc) and b_e.isdisjoint(a_ec))
+            (_, a_writes, _, _, a_end_cond_reads) = self._event_fluents[a1.idx][i1]
+            (_, b_writes, _, b_start_cond_reads, _) = self._event_fluents[a2.idx][i2]
+            res = not (
+                a_writes.isdisjoint(b_start_cond_reads)
+                and b_writes.isdisjoint(a_end_cond_reads)
+            )
             self._cache[events_pair] = res
         return res
 
@@ -540,15 +545,25 @@ class SearchSpace(SearchSpaceABC):
         ] = [[] for _ in actions]
         for a, le in self._events.items():
             for _, e in le:
-                a_p = set(get_fluents(e.conditions))
-                a_p.update(x for eff in e.effects for x in get_fluents(eff.value))
-                a_e = {eff.fluent for eff in e.effects}
-                a_pe = a_p.union(a_e)
-                a_sc = {f for c in e.start_conditions for f in get_fluents(c)}
-                a_ec = {f for c in e.end_conditions for f in get_fluents(c)}
-                event_fluents[a.idx].append((a_p, a_e, a_pe, a_sc, a_ec))
+                reads = set(get_fluents(e.conditions))
+                reads.update(x for eff in e.effects for x in get_fluents(eff.value))
+                writes = {eff.fluent for eff in e.effects}
+                read_writes = reads.union(writes)
+                start_cond_reads = {
+                    f for c in e.start_conditions for f in get_fluents(c)
+                }
+                end_cond_reads = {f for c in e.end_conditions for f in get_fluents(c)}
+                event_fluents[a.idx].append(
+                    (reads, writes, read_writes, start_cond_reads, end_cond_reads)
+                )
+        self._event_fluents = event_fluents
         self._mutex = MutexChecker(event_fluents)
         self._precedence = PrecedenceChecker(event_fluents)
+
+        self._duration_fluents: list[set[int]] = [
+            set(get_fluents(d[0])) | set(get_fluents(d[1])) if d is not None else set()
+            for d in actions_duration
+        ]
 
     @property
     def is_temporal(self) -> bool:
@@ -765,6 +780,34 @@ class SearchSpace(SearchSpaceABC):
             )
             new_state.temporal_network.add(self._start_plan, start, 0)
             new_state.temporal_network.add(end, self._end_plan, -self._epsilon)
+            # `duration` was evaluated above against `state`, i.e. as of
+            # `start`. A past event that writes one of its fluents must be
+            # epsilon-separated from `start` and forced to occur strictly
+            # before it, or the evaluated duration and the plan's actual
+            # timing could disagree. Symmetrically, a still-open (`todo`)
+            # action's future write must land after `start`, since it
+            # wasn't visible to that evaluation. `MutexChecker` can't cover
+            # this: an action with no from-start conditions/effects has no
+            # event coincident with `start`.
+            duration_fluents = self._duration_fluents[action.idx]
+            if duration_fluents:
+                for e2_action, e2_pos, id2 in state.path:
+                    if not self._event_fluents[e2_action.idx][e2_pos][1].isdisjoint(
+                        duration_fluents
+                    ):
+                        new_state.temporal_network.add(
+                            (e2_action, e2_pos, id2), start, -self._epsilon
+                        )
+                for a2, i2 in new_state.todo.items():
+                    id2 = i2[1]
+                    for j in range(i2[0], len(self._events[a2])):
+                        if not self._event_fluents[a2.idx][j][1].isdisjoint(
+                            duration_fluents
+                        ):
+                            new_state.temporal_network.add(
+                                start, (a2, j, id2), -self._epsilon
+                            )
+                        id2 += 1
             id = self._counter
             for t, e in events:
                 ev = (e.action, e.pos, self._counter)
@@ -848,6 +891,24 @@ class SearchSpace(SearchSpaceABC):
 
                 tn.add(start, end, lb)
                 tn.add(end, start, ub)
+                # See the matching comment in `_open_action`: a fluent read
+                # only by this action's duration must still epsilon-separate
+                # `start` from whichever past/future event writes it.
+                duration_fluents = self._duration_fluents[action.idx]
+                if duration_fluents:
+                    for e2, id2 in event_path:
+                        if not self._event_fluents[e2.action.idx][e2.pos][1].isdisjoint(
+                            duration_fluents
+                        ):
+                            tn.add((e2.action, e2.pos, id2), start, -self._epsilon)
+                    for a2, i2 in todo.items():
+                        id2 = i2[1]
+                        for j in range(i2[0], len(self._events[a2])):
+                            if not self._event_fluents[a2.idx][j][1].isdisjoint(
+                                duration_fluents
+                            ):
+                                tn.add(start, (a2, j, id2), -self._epsilon)
+                            id2 += 1
                 id = counter
                 for t, e in action_events:
                     ev = (e.action, e.pos, counter)
