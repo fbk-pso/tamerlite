@@ -33,7 +33,14 @@ hmax:
 - 1
 - 0
 - null
-hmax_explicit:
+hmax_explicit_python:
+- 2
+- 1
+- 0
+- 1
+- 0
+- null
+hmax_explicit_rust:
 - 2
 - 1
 - 0
