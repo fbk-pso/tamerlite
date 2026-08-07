@@ -1015,6 +1015,63 @@ def test_temporal_fluent_duration():
             assert duration == Fraction(5)
 
 
+def test_relevance_analysis_keeps_duration_only_writer():
+    """
+    `_compute_relevant_actions`'s backward goal-dependency walk must count
+    fluents read by an action's duration bounds as dependencies too, not just
+    fluents read by its conditions/effect values -- otherwise an action whose
+    sole role is to write a fluent read only by another action's duration
+    (`tune` writing `charge`, which only `run`'s duration reads) is wrongly
+    pruned as irrelevant. `get_problem_duration_fluent_relevance` makes this
+    an actual solvability difference (not just a suboptimal plan): without
+    `tune`, `run`'s duration bound is never satisfiable, so pruning `tune`
+    makes the problem UNSOLVABLE.
+
+    No `PlanValidator` round-trip here: `tune` and `run` share no fluent
+    that `MutexChecker`/`PrecedenceChecker` track (those also ignore duration
+    fluents -- a separate, pre-existing gap), so the reconstructed plan places
+    them at the same timestamp and an external validator sees `run` as
+    inapplicable even though the search's own state sequence runs `tune`
+    first. `res.status` alone already isolates the fix under test.
+    """
+    problem = problems_generator.get_problem_duration_fluent_relevance()
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+
+        encoder = Encoder(
+            ground_problem,
+            lifted_problem,
+            map_back_action_instance,
+            symmetry_breaking=False,
+            compression_safe_actions=False,
+            relevance_analysis=True,
+        )
+        assert encoder.relevant_actions is not None
+        relevant_actions = {
+            name
+            for name, action in encoder.action_by_name.items()
+            if action in encoder.relevant_actions
+        }
+        assert "tune" in relevant_actions
+        assert "run" in relevant_actions
+
+        search = tamerlite.SearchParams(
+            search="wastar",
+            heuristic="hff",
+            weight=0.8,
+            compression_safe_actions=False,
+            relevance_analysis=True,
+        )
+        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+            planner: tamerlite.engine.TamerLite
+            res: PlanGenerationResult = planner.solve(problem, timeout=None)
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+
+
 def test_symmetry_breaking_object_valued_fluents():
     """
     Symmetry breaking must not conflate two objects that are only distinguished by
