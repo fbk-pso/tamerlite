@@ -52,9 +52,7 @@ from tamerlite.core.search_space import (
 )
 
 # Whether the Rust `rustamer` extension is the active backend (`False` means
-# the pure-Python core in this package is in use). Interpreted functions are
-# only evaluated by the Python core -- see `TamerLite.supported_kind`, which
-# gates `INTERPRETED_FUNCTIONS_IN_*` on this flag.
+# the pure-Python core in this package is in use).
 use_rustamer: bool
 
 __all__ = [

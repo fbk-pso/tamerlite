@@ -29,8 +29,9 @@ mod tn_interpreter;
 mod utils;
 
 pub use expressions::{
-    make_bool_constant_node, make_fluent_node, make_int_constant_node, make_object_node,
-    make_operator_node, make_rational_constant_node, ExpressionNode, PyExpressionNode,
+    make_bool_constant_node, make_fluent_node, make_int_constant_node,
+    make_interpreted_function_node, make_object_node, make_operator_node,
+    make_rational_constant_node, ExpressionNode, PyExpressionNode,
 };
 pub use expressions_utils::{evaluate, py_shift_expression, simplify, FluentValueTrait};
 pub use heuristics::{

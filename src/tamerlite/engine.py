@@ -59,7 +59,6 @@ from tamerlite.core import (
     get_fluent_value,
     multiqueue_search,
     search_space,
-    use_rustamer,
     wastar_search,
     wastar_search_memory_bounded,
 )
@@ -239,22 +238,11 @@ class TamerLite(
         supported_kind.set_conditions_kind("EQUALITIES")
         supported_kind.set_conditions_kind("EXISTENTIAL_CONDITIONS")
         supported_kind.set_conditions_kind("UNIVERSAL_CONDITIONS")
-        if not use_rustamer:
-            # Interpreted functions are only evaluated by the pure-Python
-            # search space (see `search_space.evaluate` /
-            # `InterpretedFunctionNode`); the Rust backend has no equivalent
-            # yet, so problems using them must not be routed there.
-            supported_kind.set_conditions_kind("INTERPRETED_FUNCTIONS_IN_CONDITIONS")
-            supported_kind.set_effects_kind(
-                "INTERPRETED_FUNCTIONS_IN_BOOLEAN_ASSIGNMENTS"
-            )
-            supported_kind.set_effects_kind(
-                "INTERPRETED_FUNCTIONS_IN_NUMERIC_ASSIGNMENTS"
-            )
-            supported_kind.set_effects_kind(
-                "INTERPRETED_FUNCTIONS_IN_OBJECT_ASSIGNMENTS"
-            )
-            supported_kind.set_expression_duration("INTERPRETED_FUNCTIONS_IN_DURATIONS")
+        supported_kind.set_conditions_kind("INTERPRETED_FUNCTIONS_IN_CONDITIONS")
+        supported_kind.set_effects_kind("INTERPRETED_FUNCTIONS_IN_BOOLEAN_ASSIGNMENTS")
+        supported_kind.set_effects_kind("INTERPRETED_FUNCTIONS_IN_NUMERIC_ASSIGNMENTS")
+        supported_kind.set_effects_kind("INTERPRETED_FUNCTIONS_IN_OBJECT_ASSIGNMENTS")
+        supported_kind.set_expression_duration("INTERPRETED_FUNCTIONS_IN_DURATIONS")
         supported_kind.set_fluents_type("NUMERIC_FLUENTS")
         supported_kind.set_fluents_type("OBJECT_FLUENTS")
         supported_kind.set_fluents_type("INT_FLUENTS")

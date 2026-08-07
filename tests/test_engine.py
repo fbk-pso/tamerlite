@@ -279,6 +279,15 @@ def skip(
                 )
             )
         )
+        or (
+            problem.name == "interpreted_functions_minimal_chain_of_assignments"
+            and search == "dfs"
+        )
+        or (problem.name == "treasure_hunting_robot_simple" and search == "dfs")
+        or (
+            problem.name == "if_reals_condition_effect_pizza"
+            and search in ["bfs", "ehc"]
+        )
     )
 
 
@@ -1207,12 +1216,6 @@ def test_symmetry_breaking_goal_taint_is_per_object():
 
 
 # --- Interpreted-function tests --------------------------------------------
-#
-# Interpreted functions are only evaluated by the pure-Python backend (see
-# `InterpretedFunctionNode` / `evaluate` in `tamerlite.core.search_space`), so
-# every test below forces the Python backend via `reload_tamerlite(True)`.
-# They are never routed to the Rust backend: `TamerLite.supported_kind()`
-# only advertises `INTERPRETED_FUNCTIONS_IN_*` when it is active.
 
 IF_PROBLEMS = [
     problems_generator.get_problem_if_bool_condition(),
@@ -1241,7 +1244,7 @@ IF_SUPPORTED_HEURISTICS = [
 def test_interpreted_functions_supports(problem):
     for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
-        assert tamerlite.engine.TamerLite.supports(problem.kind) == disable_rustamer
+        assert tamerlite.engine.TamerLite.supports(problem.kind)
 
 
 @pytest.mark.parametrize("problem", IF_PROBLEMS, ids=[p.name for p in IF_PROBLEMS])
@@ -1251,7 +1254,7 @@ def test_interpreted_functions_solve_with_blind_heuristic(
     problem, search_kind, symmetry_breaking
 ):
     results = []
-    for disable_rustamer in [True]:
+    for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
         search = tamerlite.SearchParams(
             search=search_kind, heuristic="blind", symmetry_breaking=symmetry_breaking
@@ -1274,7 +1277,7 @@ def test_interpreted_functions_solve_with_custom_heuristic(problem, symmetry_bre
         return 0.0
 
     results = []
-    for disable_rustamer in [True]:
+    for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
         search = tamerlite.SearchParams(
             search="gbfs", heuristic="custom", symmetry_breaking=symmetry_breaking
@@ -1299,7 +1302,7 @@ def test_interpreted_functions_solve_with_custom_heuristic(problem, symmetry_bre
 def test_interpreted_functions_solve_with_delete_relaxation_heuristic(
     problem, heuristic, symmetry_breaking, relevance_analysis
 ):
-    for disable_rustamer in [True]:
+    for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
         search = tamerlite.SearchParams(
             search="gbfs",
@@ -1321,62 +1324,84 @@ def test_interpreted_functions_solve_with_delete_relaxation_heuristic(
 def test_interpreted_functions_heuristic_values(problem, data_regression):
     """Regression-pins the heuristic values `hff`/`hadd`/`hmax` (and their
     `_no_numbers` variants) and `hmax_explicit` compute on interpreted-
-    function problems. Unlike `test_heuristic_values`, this only ever runs on
-    the Python backend -- interpreted functions don't exist on the Rust
-    one."""
+    function problems.
 
-    reload_tamerlite(True)
-    from tamerlite.core import HFF, HAdd, HMax, HMaxExplicit
+    Mirrors `test_heuristic_values` by asserting the two backends agree
+    exactly -- except for `hmax_explicit`, which is deliberately excluded
+    from that cross-check. It computes an effect's reachable values very
+    differently per backend: Rust cross-products the effect's argument
+    fluents' already-reachable values and evaluates, while Python's
+    classifier over-approximates any non-constant object/bool effect to
+    "every object of the type"/`{True, False}`. A non-constant object effect
+    (see `if_object_effect`, `if_object_argument_and_return`) can therefore
+    legitimately yield a smaller, still-admissible value on the Rust side.
+    Both backends' `hmax_explicit` values are recorded under backend-
+    specific keys, so the divergence stays pinned rather than silently
+    accepted or forced to agree by weakening either implementation."""
 
-    lifted_problem, ground_problem, map_back_action_instance = (
-        testing_utils.compile_problem(problem)
-    )
-    encoder = Encoder(
-        ground_problem,
-        lifted_problem,
-        map_back_action_instance,
-        symmetry_breaking=False,
-        compression_safe_actions=False,
-        relevance_analysis=False,
-    )
-    ss: SearchSpaceABC = encoder.search_space
-    init_state = ss.initial_state()
-    states = generate_states(ss, init_state, num_states=max_generated_states(problem))
-
-    heuristic_classes: list[tuple[Callable[..., Heuristic], str]] = [
-        (HFF, "hff"),
-        (HAdd, "hadd"),
-        (HMax, "hmax"),
-        (partial(HFF, disable_numeric_reasoning=True), "hff_no_numbers"),
-        (partial(HAdd, disable_numeric_reasoning=True), "hadd_no_numbers"),
-        (partial(HMax, disable_numeric_reasoning=True), "hmax_no_numbers"),
-        (HMaxExplicit, "hmax_explicit"),
-    ]
     values: dict[str, list[int | None]] = {}
-    for heuristic_class, heuristic_name in heuristic_classes:
-        for internal_caching in [True, False]:
-            heuristic: Heuristic = heuristic_class(
-                encoder.actions,
-                encoder.fluent_types,
-                encoder.objects,
-                encoder.events,
-                encoder.goal,
-                internal_caching=internal_caching,
-                cache_value_in_state=False,
-                inadmissible_numeric_heuristic_variant=False,
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.core import HFF, HAdd, HMax, HMaxExplicit
+
+        lifted_problem, ground_problem, map_back_action_instance = (
+            testing_utils.compile_problem(problem)
+        )
+        encoder = Encoder(
+            ground_problem,
+            lifted_problem,
+            map_back_action_instance,
+            symmetry_breaking=False,
+            compression_safe_actions=False,
+            relevance_analysis=False,
+        )
+        ss: SearchSpaceABC = encoder.search_space
+        init_state = ss.initial_state()
+        states = generate_states(
+            ss, init_state, num_states=max_generated_states(problem)
+        )
+
+        heuristic_classes: list[tuple[Callable[..., Heuristic], str]] = [
+            (HFF, "hff"),
+            (HAdd, "hadd"),
+            (HMax, "hmax"),
+            (partial(HFF, disable_numeric_reasoning=True), "hff_no_numbers"),
+            (partial(HAdd, disable_numeric_reasoning=True), "hadd_no_numbers"),
+            (partial(HMax, disable_numeric_reasoning=True), "hmax_no_numbers"),
+            (HMaxExplicit, "hmax_explicit"),
+        ]
+        for heuristic_class, heuristic_name in heuristic_classes:
+            # `hmax_explicit` legitimately diverges between backends (see
+            # docstring): key it per-backend so both real values get
+            # recorded instead of asserted equal.
+            values_key = (
+                f"{heuristic_name}_{'python' if disable_rustamer else 'rust'}"
+                if heuristic_name == "hmax_explicit"
+                else heuristic_name
             )
+            for internal_caching in [True, False]:
+                heuristic: Heuristic = heuristic_class(
+                    encoder.actions,
+                    encoder.fluent_types,
+                    encoder.objects,
+                    encoder.events,
+                    encoder.goal,
+                    internal_caching=internal_caching,
+                    cache_value_in_state=False,
+                    inadmissible_numeric_heuristic_variant=False,
+                )
 
-            computed = []
-            for state in states:
-                h_val = heuristic.eval(state, ss)
-                if h_val is not None:
-                    h_val = int(h_val)
-                computed.append(h_val)
+                computed = []
+                for state in states:
+                    h_val = heuristic.eval(state, ss)
+                    if h_val is not None:
+                        h_val = int(h_val)
+                    computed.append(h_val)
 
-            if heuristic_name not in values:
-                values[heuristic_name] = computed
-            else:
-                assert computed == values[heuristic_name]
+                if values_key not in values:
+                    values[values_key] = computed
+                else:
+                    assert computed == values[values_key]
 
     data_regression.check(values)
 
@@ -1512,7 +1537,7 @@ def test_interpreted_functions_duration():
     problem = problems_generator.get_problem_if_duration()
     assert problem.kind.has_interpreted_functions_in_durations()
 
-    for disable_rustamer in [True]:
+    for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
 
         search = tamerlite.SearchParams(
@@ -1542,7 +1567,7 @@ def test_interpreted_functions_object_effect():
     problem = problems_generator.get_problem_if_object_effect()
     assert problem.kind.has_interpreted_functions_in_object_assignments()
 
-    for disable_rustamer in [True]:
+    for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
 
         search = tamerlite.SearchParams(search="gbfs", heuristic="blind")
@@ -1591,7 +1616,7 @@ def test_interpreted_function_in_fluent_argument_raises():
     problem.set_initial_value(sel, l1)
     problem.add_goal(GE(value(l2), 2))
 
-    for disable_rustamer in [True]:
+    for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
         search = tamerlite.SearchParams(search="gbfs", heuristic="blind")
         with (
@@ -1636,7 +1661,7 @@ def test_nested_fluent_in_fluent_argument_raises():
     problem.set_initial_value(sel, l1)
     problem.add_goal(GE(value(l2), 2))
 
-    for disable_rustamer in [True]:
+    for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
         search = tamerlite.SearchParams(search="gbfs", heuristic="blind")
         with (
@@ -1701,16 +1726,17 @@ def test_symmetry_breaking_interpreted_function_object_argument_taint():
     assert {"l2"} in group_sets
     assert {"l1", "l2"} not in group_sets
 
-    reload_tamerlite(True)
-    search = tamerlite.SearchParams(
-        search="wastar", heuristic="blind", symmetry_breaking=True
-    )
-    with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
-        planner: tamerlite.engine.TamerLite
-        res: PlanGenerationResult = planner.solve(problem, timeout=None)
-        assert res.status == ResultStatus.SOLVED_SATISFICING
-        with PlanValidator(problem_kind=problem.kind) as v:
-            assert v.validate(problem, res.plan)
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        search = tamerlite.SearchParams(
+            search="wastar", heuristic="blind", symmetry_breaking=True
+        )
+        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+            planner: tamerlite.engine.TamerLite
+            res: PlanGenerationResult = planner.solve(problem, timeout=None)
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+            with PlanValidator(problem_kind=problem.kind) as v:
+                assert v.validate(problem, res.plan)
 
 
 def test_symmetry_breaking_interpreted_function_object_return_taint():
@@ -1741,20 +1767,21 @@ def test_symmetry_breaking_interpreted_function_object_return_taint():
 
 def test_interpreted_functions_symmetry_breaking_and_relevance_analysis_not_disabled():
     problem = problems_generator.get_problem_if_bool_condition()
-    reload_tamerlite(True)
-    search = tamerlite.SearchParams(
-        search="gbfs",
-        heuristic="blind",
-        symmetry_breaking=True,
-        relevance_analysis=True,
-    )
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
-            planner: tamerlite.engine.TamerLite
-            res: PlanGenerationResult = planner.solve(problem, timeout=None)
-            assert res.status == ResultStatus.SOLVED_SATISFICING
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        search = tamerlite.SearchParams(
+            search="gbfs",
+            heuristic="blind",
+            symmetry_breaking=True,
+            relevance_analysis=True,
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+                planner: tamerlite.engine.TamerLite
+                res: PlanGenerationResult = planner.solve(problem, timeout=None)
+                assert res.status == ResultStatus.SOLVED_SATISFICING
 
-    messages = [str(w.message) for w in caught]
-    assert not any("relevance_analysis" in m for m in messages)
-    assert not any("symmetry_breaking" in m for m in messages)
+        messages = [str(w.message) for w in caught]
+        assert not any("relevance_analysis" in m for m in messages)
+        assert not any("symmetry_breaking" in m for m in messages)

@@ -71,6 +71,18 @@ pub fn do_shift(
             checked_add_sub(*o1, offset, is_negative)?,
             checked_add_sub(*o2, offset, is_negative)?,
         ),
+        ExpressionNode::InterpretedFunction {
+            func_id,
+            return_type,
+            operands,
+        } => ExpressionNode::InterpretedFunction {
+            func_id: *func_id,
+            return_type: *return_type,
+            operands: operands
+                .iter()
+                .map(|&o| checked_add_sub(o, offset, is_negative))
+                .collect::<Result<_, _>>()?,
+        },
         other => other.clone(),
     })
 }
@@ -141,6 +153,17 @@ pub fn split_expression(exp: &[ExpressionNode]) -> PyResult<Vec<Vec<ExpressionNo
                     ExpressionNode::Not(i) => {
                         new_exp.push(make_operator("not".to_string(), vec![i - last])?);
                     }
+                    ExpressionNode::InterpretedFunction {
+                        func_id,
+                        return_type,
+                        operands,
+                    } => {
+                        new_exp.push(ExpressionNode::InterpretedFunction {
+                            func_id: *func_id,
+                            return_type: *return_type,
+                            operands: operands.iter().map(|&j| j - last).collect(),
+                        });
+                    }
                     ExpressionNode::Bool(_)
                     | ExpressionNode::Int(_)
                     | ExpressionNode::Rational(_)
@@ -160,11 +183,18 @@ pub fn split_expression(exp: &[ExpressionNode]) -> PyResult<Vec<Vec<ExpressionNo
 }
 
 #[pyfunction]
+#[pyo3(signature = (exp, assignments, evaluate_interpreted_functions=false))]
 pub fn simplify(
     exp: Vec<PyExpressionNode>,
     assignments: FxHashMap<usize, PyExpressionNode>,
+    evaluate_interpreted_functions: bool,
 ) -> PyResult<Vec<PyExpressionNode>> {
-    // This function simplifies the given expression using the given assignments
+    // This function simplifies the given expression using the given assignments.
+    //
+    // If `evaluate_interpreted_functions` is true, an interpreted function
+    // whose operands have all been folded to constants is actually called
+    // and replaced by its result; otherwise (the default) it is always
+    // re-emitted unchanged.
 
     // We iterate over the expression elements and we store the simplified value in the res vector
     let mut res: Vec<ExpressionNode> = Vec::with_capacity(exp.len());
@@ -366,6 +396,30 @@ pub fn simplify(
                     e.v
                 }
             }
+            ExpressionNode::InterpretedFunction {
+                func_id,
+                return_type,
+                ref operands,
+            } => {
+                if evaluate_interpreted_functions
+                    && operands.iter().all(|&p| {
+                        matches!(
+                            &res[p],
+                            ExpressionNode::Bool(_)
+                                | ExpressionNode::Int(_)
+                                | ExpressionNode::Rational(_)
+                                | ExpressionNode::Object(_)
+                        )
+                    })
+                {
+                    // all operands are constants
+                    let operand_values: Vec<&ExpressionNode> =
+                        operands.iter().map(|&p| &res[p]).collect();
+                    call_interpreted_function(func_id, return_type, &operand_values)?
+                } else {
+                    e.v
+                }
+            }
             ExpressionNode::Rational(v) => {
                 if v.is_integer() {
                     ExpressionNode::Int(Box::new(v.to_integer()))
@@ -397,7 +451,8 @@ pub fn simplify(
             ExpressionNode::And(operands)
             | ExpressionNode::Or(operands)
             | ExpressionNode::Plus(operands)
-            | ExpressionNode::Times(operands) => {
+            | ExpressionNode::Times(operands)
+            | ExpressionNode::InterpretedFunction { operands, .. } => {
                 if processed {
                     let new_operands = operands_stack
                         .drain((operands_stack.len() - operands.len())..)
@@ -408,6 +463,15 @@ pub fn simplify(
                         ExpressionNode::Or(_) => ExpressionNode::Or(new_operands),
                         ExpressionNode::Plus(_) => ExpressionNode::Plus(new_operands),
                         ExpressionNode::Times(_) => ExpressionNode::Times(new_operands),
+                        ExpressionNode::InterpretedFunction {
+                            func_id,
+                            return_type,
+                            ..
+                        } => ExpressionNode::InterpretedFunction {
+                            func_id: *func_id,
+                            return_type: *return_type,
+                            operands: new_operands,
+                        },
                         _ => unreachable!(),
                     };
                     final_res.push(PyExpressionNode { v: exp_node });
@@ -544,6 +608,14 @@ pub fn internal_evaluate(
                 }
             }
             ExpressionNode::Fluent(s) => fluent_values.get_value(*s).clone(),
+            ExpressionNode::InterpretedFunction {
+                func_id,
+                return_type,
+                operands,
+            } => {
+                let args: Vec<&ExpressionNode> = operands.iter().map(|&p| &res[p]).collect();
+                call_interpreted_function(*func_id, *return_type, &args)?
+            }
             other => (*other).clone(),
         };
         if res.len() == exp.len() - 1 {
