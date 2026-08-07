@@ -11,6 +11,23 @@ TamerLite is a heuristic search-based temporal planner ([README.md](README.md)).
 
 At runtime [src/tamerlite/core/__init__.py](src/tamerlite/core/__init__.py) tries `import rustamer`; on `ImportError` or if `DISABLE_RUSTAMER=true` it falls back to the pure-Python implementations in `src/tamerlite/core/`. **The fallback is load-bearing and tested**: parametrized tests in [tests/test_engine.py](tests/test_engine.py) exercise both code paths.
 
+## Implementation guidance
+
+- Favor efficient implementations: prefer precomputed lookups/O(1) structures over per-call
+  scans on hot paths (e.g. state expansion, expression evaluation). Concrete precedent:
+  `Converter`'s `int -> up.model.Object` reverse list, built once in `Encoder`, instead of
+  `Problem.object(name)`'s linear scan per call.
+- The Rust core (`crates/rustamer-base`) can safely assume it runs single-core,
+  single-thread: search never spawns threads or releases the GIL (no
+  `Python::detach`/`allow_threads` anywhere in the crate). Prefer `RefCell` +
+  `thread_local!` over `Mutex`/`RwLock` for module-level mutable state -- a plain
+  `static` requires its type to be `Sync`, which `RefCell` isn't, so `thread_local!`
+  is what makes that legal without `unsafe`. Concrete precedent: `expressions.rs`'s
+  `INTERPRETED_FUNCTIONS`/`IF_IDS_BY_PTR` interpreted-function callable registry. If this
+  assumption ever changes (e.g. parallel search), anything built on `thread_local!`
+  would need revisiting -- it fails silently (each thread gets its own empty state)
+  rather than refusing to compile.
+
 ## Repository layout
 
 ```
@@ -69,7 +86,7 @@ Every dev-loop recipe (`test`, `lint`, `format`, `typecheck`, `precommit`, `chec
 | `just test` | `uv run --no-sync pytest tests/ -n auto` — runs in parallel via pytest-xdist; set `PYTHONPATH=up-checkout/up_test_cases` if you need the UP fixtures |
 | `just lint` | Ruff (check + format --check) + cargo fmt --check + cargo clippy (informational, -W warnings) |
 | `just format` | Ruff format + ruff --fix + cargo fmt --all |
-| `just typecheck` | `uv run mypy` (config in `pyproject.toml`, scope `src/tamerlite`) |
+| `just typecheck` | `uv run mypy` (config in `pyproject.toml`, scope `src/tamerlite` + `tests`) |
 | `just precommit` | `pre-commit run --all-files --show-diff-on-failure` — same as CI's `lint` job |
 | `just check-versions` | Verify pyproject + Cargo agree on base `X.Y.Z` |
 | `just bump VERSION` | Update version in pyproject + Cargo + rustamer pin; refresh `uv.lock` |
@@ -85,6 +102,20 @@ PYTHONPATH=up-checkout/up_test_cases just test
 ```
 
 Re-run `just up-checkout` whenever `uv.lock` changes — an existing checkout does **not** move on its own. Mismatched commits cause `NameError` collection failures from newer TAMP fixtures referencing symbols absent in the installed UP version, and can also make otherwise-healthy regression tests (e.g. `test_heuristic_values`) fail with diffs that have nothing to do with your change.
+
+### Cap memory when running tests
+
+The full suite (and some individual heavy cases -- unbounded `timeout=None` searches, `-n auto` parallelism multiplying peak RSS across workers) can exhaust host RAM and take down the whole environment. Always run pytest under `runlim` with a memory cap, e.g.:
+
+```bash
+runlim --space-limit=4096 uv run --no-sync pytest tests/ -n auto
+```
+
+`runlim` does **not** accept a `--` separator before the wrapped command (`runlim: invalid option '--'`) -- pass the command directly after the options.
+
+Adjust `--space-limit` (MB) down for a single test file/case, and prefer targeting specific tests (`-k`) over the full suite when iterating. `runlim` also accepts `--time-limit=<seconds>` (`-t`) if a run risks hanging instead of just ballooning memory.
+
+**Known flakiness**: in some sandboxed dev-container setups, `runlim`'s own `execvp` of `uv` intermittently fails (`[runlim] status: execvp failed`, exits immediately with no child spawned) for no apparent reason tied to the command's arguments -- the identical invocation can fail several times in a row and then succeed. This is unrelated to the wrapped command itself (a bare, unwrapped run of the same command is reliable). If you hit this, retry the same `runlim` invocation a few times (a short sleep between attempts helps) rather than assuming the test setup is broken.
 
 ## Architecture
 
@@ -178,4 +209,4 @@ Both `github-release` and `dev-release` jobs authenticate with an **installation
 - `Cargo.lock` is **committed** — uncommon for libraries but right for a workspace shipping a cdylib wheel.
 - The justfile's `check-versions` recipe calls `python3` directly (not `uv run`) so it doesn't trigger a uv resolve mid-bump.
 - Ruff is scoped to `src tests ci crates`.
-- `clippy` is informational (`-W warnings`) until the ~27-warning backlog on `rustamer-base` is cleaned up; switch to `-D warnings` in [justfile](justfile) + [.pre-commit-config.yaml](.pre-commit-config.yaml) when ready.
+- `clippy` runs with `-D warnings` in [justfile](justfile) (enforced via `.pre-commit-config.yaml`'s `just lint` hook) — the backlog that once kept it informational-only has been cleared.
