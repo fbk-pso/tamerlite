@@ -1027,12 +1027,15 @@ def test_relevance_analysis_keeps_duration_only_writer():
     `tune`, `run`'s duration bound is never satisfiable, so pruning `tune`
     makes the problem UNSOLVABLE.
 
-    No `PlanValidator` round-trip here: `tune` and `run` share no fluent
-    that `MutexChecker`/`PrecedenceChecker` track (those also ignore duration
-    fluents -- a separate, pre-existing gap), so the reconstructed plan places
-    them at the same timestamp and an external validator sees `run` as
-    inapplicable even though the search's own state sequence runs `tune`
-    first. `res.status` alone already isolates the fix under test.
+    The `PlanValidator` round-trip additionally exercises a second, related
+    fix: `tune` and `run` share no explicit condition, only the
+    duration-read/effect-write relationship on `charge`, so `run`'s `start`
+    timepoint must be epsilon-separated from `tune`'s write via a dedicated
+    duration-fluents check in `SearchSpace._open_action`/`build_plan` (not
+    `MutexChecker`, which never covers `start` for an action with no
+    from-start conditions/effects) -- or the reconstructed plan places them
+    at the same timestamp, which an external validator rejects (`run`'s
+    duration would be evaluated before `tune`'s effect applies).
     """
     problem = problems_generator.get_problem_duration_fluent_relevance()
     lifted_problem, ground_problem, map_back_action_instance = (
@@ -1070,6 +1073,8 @@ def test_relevance_analysis_keeps_duration_only_writer():
             planner: tamerlite.engine.TamerLite
             res: PlanGenerationResult = planner.solve(problem, timeout=None)
             assert res.status == ResultStatus.SOLVED_SATISFICING
+            with PlanValidator(problem_kind=problem.kind) as v:
+                assert v.validate(problem, res.plan)
 
 
 def test_symmetry_breaking_object_valued_fluents():
