@@ -157,7 +157,7 @@ class Encoder:
                 )
             else:
                 actions_duration_map[a.name] = None
-        actions_duration = [actions_duration_map[a] for a in self._action_names]
+        self._actions_duration = [actions_duration_map[a] for a in self._action_names]
         self._build_events()
 
         initial_state = None
@@ -188,7 +188,7 @@ class Encoder:
                     self._compression_safe_actions = None
 
         self._search_space = SearchSpace(
-            actions_duration,
+            self._actions_duration,
             self._events,
             self._actions,
             self._compression_safe_actions,
@@ -253,6 +253,17 @@ class Encoder:
                 continue
 
             action_to_condition_fluents[a.idx] = set()
+
+            # An action's duration bounds are arbitrary expressions evaluated
+            # against the pre-action state (see `SearchSpace._open_action`), so
+            # a fluent read only there is still a genuine dependency: without
+            # this, the action whose sole role is to write that fluent is never
+            # marked relevant and gets pruned away.
+            duration = self._actions_duration[a.idx]
+            if duration is not None:
+                action_to_condition_fluents[a.idx].update(get_fluents(duration[0]))
+                action_to_condition_fluents[a.idx].update(get_fluents(duration[1]))
+
             for _, e in le:
                 for eff in e.effects:
                     if eff.fluent not in actions_affecting_fluent:
