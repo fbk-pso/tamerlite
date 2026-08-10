@@ -24,6 +24,7 @@ from unified_planning.model.walkers import DagWalker
 
 from tamerlite.core import (
     Expression,
+    IfReturnType,
     make_bool_constant_node,
     make_fluent_node,
     make_int_constant_node,
@@ -303,13 +304,13 @@ class Converter(DagWalker):
         interpreted_function = expression.interpreted_function()
         return_type = interpreted_function.return_type
         if return_type.is_bool_type():
-            return_type_str = "bool"
+            return_type_tag = IfReturnType.BOOL
         elif return_type.is_int_type():
-            return_type_str = "int"
+            return_type_tag = IfReturnType.INT
         elif return_type.is_real_type():
-            return_type_str = "real"
+            return_type_tag = IfReturnType.REAL
         elif return_type.is_user_type():
-            return_type_str = "object"
+            return_type_tag = IfReturnType.OBJECT
         else:
             raise NotImplementedError(
                 f"Unsupported interpreted function return type: {return_type}"
@@ -318,7 +319,7 @@ class Converter(DagWalker):
         function = self._get_interpreted_function_wrapper(interpreted_function)
 
         if len(args) == 0:
-            return (make_interpreted_function_node(function, return_type_str, ()),)
+            return (make_interpreted_function_node(function, return_type_tag, ()),)
         res = args[0]
         offset = len(res) - 1
         operands = [offset]
@@ -327,7 +328,7 @@ class Converter(DagWalker):
             offset += len(args[i])
             operands.append(offset)
         res += (
-            make_interpreted_function_node(function, return_type_str, tuple(operands)),
+            make_interpreted_function_node(function, return_type_tag, tuple(operands)),
         )
         return res
 

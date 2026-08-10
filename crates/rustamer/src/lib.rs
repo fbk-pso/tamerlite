@@ -30,6 +30,7 @@ fn rustamer(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     pyo3_log::init();
 
     m.add_class::<rustamer_base::PyExpressionNode>()?;
+    m.add_class::<rustamer_base::IfReturnType>()?;
     m.add_class::<rustamer_base::Effect>()?;
     m.add_class::<rustamer_base::Timing>()?;
     m.add_class::<rustamer_base::Event>()?;

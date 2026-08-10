@@ -18,9 +18,23 @@
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+from enum import Enum
 from fractions import Fraction
 
 from unified_planning.model import DeltaSimpleTemporalNetwork
+
+
+class IfReturnType(Enum):
+    """The declared return type of an interpreted function, as tagged by
+    `Converter.walk_interpreted_function_exp`. Mirrors the `#[pyclass] enum
+    IfReturnType` in `crates/rustamer-base/src/expressions.rs` -- member
+    names must match exactly, member values need not (nothing compares
+    across backends; only one backend is ever live)."""
+
+    BOOL = 1
+    INT = 2
+    REAL = 3
+    OBJECT = 4
 
 
 @dataclass(eq=True, frozen=True)
@@ -46,7 +60,7 @@ class InterpretedFunctionNode:
     (inlined) argument sub-expression roots, exactly like `OperatorNode`."""
 
     function: Callable
-    return_type: str  # "bool" | "int" | "real" | "object"
+    return_type: IfReturnType
     operands: tuple[int, ...]
 
     def call(self, *arg_values: "ConstantNode") -> "ConstantNode":
@@ -55,19 +69,19 @@ class InterpretedFunctionNode:
         any Python-native type (e.g. a plain `float` for a "real" function),
         so this normalizes it to the exact type the rest of the search space
         expects (mirroring `Simplifier.walk_interpreted_function_exp`, which
-        does the analogous normalization on UP's side). For "object", the
+        does the analogous normalization on UP's side). For `OBJECT`, the
         `Converter` already wraps the raw callable to return an `ObjectNode`
         directly, so no further coercion is needed here."""
         r = self.function(*arg_values)
-        if self.return_type == "bool":
+        if self.return_type == IfReturnType.BOOL:
             return bool(r)
-        elif self.return_type == "int":
+        elif self.return_type == IfReturnType.INT:
             return int(r)
-        elif self.return_type == "object":
+        elif self.return_type == IfReturnType.REAL:
+            return Fraction(r)
+        elif self.return_type == IfReturnType.OBJECT:
             assert isinstance(r, ObjectNode)
             return r
-        else:
-            return Fraction(r)
 
 
 ConstantNode = bool | int | Fraction | ObjectNode
@@ -80,7 +94,7 @@ def make_operator_node(kind: str, operands: tuple[int, ...]) -> ExpressionNode:
 
 
 def make_interpreted_function_node(
-    function: Callable, return_type: str, operands: tuple[int, ...]
+    function: Callable, return_type: IfReturnType, operands: tuple[int, ...]
 ) -> ExpressionNode:
     return InterpretedFunctionNode(function, return_type, operands)
 

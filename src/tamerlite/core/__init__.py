@@ -81,6 +81,7 @@ if not use_rustamer:
         Effect,
         Event,
         Expression,
+        IfReturnType,
         SearchSpace,
         State,
         Timing,
@@ -130,6 +131,7 @@ else:
     )
     Expression = list[rustamer_lib.ExpressionNode]
     State = rustamer_lib.State
+    IfReturnType = rustamer_lib.IfReturnType
 
     (
         make_bool_constant_node,

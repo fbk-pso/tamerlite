@@ -153,8 +153,14 @@ def reload_package(package):
     del fn
 
     def reload_recursive_ex(module):
-        importlib.reload(module)
-
+        # Children must be reloaded *before* `module` itself: `module`'s own
+        # top-level code re-runs `from child import name` statements, and
+        # those need `child` already holding its freshest definitions --
+        # otherwise `name` rebinds to whatever `child` had before this reload
+        # pass touched it, leaving two live, non-identical objects (e.g. two
+        # `Enum` classes) that compare unequal despite being "the same" type
+        # conceptually.
+        children = []
         for module_child in vars(module).values():
             if isinstance(module_child, types.ModuleType):
                 fn_child = getattr(module_child, "__file__", None)
@@ -164,7 +170,12 @@ def reload_package(package):
                     and fn_child not in module_visit
                 ):
                     module_visit.add(fn_child)
-                    reload_recursive_ex(module_child)
+                    children.append(module_child)
+
+        for module_child in children:
+            reload_recursive_ex(module_child)
+
+        importlib.reload(module)
 
     return reload_recursive_ex(package)
 

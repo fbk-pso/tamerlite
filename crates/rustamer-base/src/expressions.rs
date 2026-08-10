@@ -56,26 +56,17 @@ pub enum ExpressionNode {
     },
 }
 
+#[pyclass(eq, eq_int, frozen, hash, from_py_object)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum IfReturnType {
+    #[pyo3(name = "BOOL")]
     Bool,
+    #[pyo3(name = "INT")]
     Int,
+    #[pyo3(name = "REAL")]
     Real,
+    #[pyo3(name = "OBJECT")]
     Object,
-}
-
-impl IfReturnType {
-    fn parse(s: &str) -> PyResult<IfReturnType> {
-        match s {
-            "bool" => Ok(IfReturnType::Bool),
-            "int" => Ok(IfReturnType::Int),
-            "real" => Ok(IfReturnType::Real),
-            "object" => Ok(IfReturnType::Object),
-            &_ => Err(PyValueError::new_err(
-                "Unknown interpreted function return type: ".to_owned() + s,
-            )),
-        }
-    }
 }
 
 // Process-global registry mapping a `func_id` to the Python callable it was
@@ -384,16 +375,15 @@ pub fn make_fluent_node(fluent: usize) -> PyExpressionNode {
 #[pyfunction]
 pub fn make_interpreted_function_node(
     function: Py<PyAny>,
-    return_type: String,
+    return_type: IfReturnType,
     operands: Vec<usize>,
-) -> PyResult<PyExpressionNode> {
-    let return_type = IfReturnType::parse(&return_type)?;
+) -> PyExpressionNode {
     let func_id = register_interpreted_function(function);
-    Ok(PyExpressionNode {
+    PyExpressionNode {
         v: ExpressionNode::InterpretedFunction {
             func_id,
             return_type,
             operands,
         },
-    })
+    }
 }
