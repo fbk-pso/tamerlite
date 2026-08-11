@@ -932,6 +932,7 @@ class Encoder:
         self._events: dict[Action, list[tuple[Timing, Event]]] = {}
         applicable_actions = set()
         for a in self._problem.actions:
+            action = self.get_action(a.name)
             if isinstance(a, up.model.DurativeAction):
                 from_start: dict[Any, Any] = {}
                 from_end: dict[Any, Any] = {}
@@ -1000,7 +1001,31 @@ class Encoder:
                             "end inside the same action!"
                         )
 
-                self._events[self.get_action(a.name)] = []
+                if from_start and min(from_start) < 0:
+                    # Either a directly authored negative `StartTiming`, or an
+                    # end-relative timing that the fold above mapped before the
+                    # action's own start. Such an event would sort ahead of the
+                    # start event below and break the invariant it establishes.
+                    raise Exception(
+                        "TamerLite does not support conditions or effects placed "
+                        f"before the start of a durative action (action `{a.name}`)!"
+                    )
+
+                if 0 not in from_start:
+                    # Every durative action must own an event at its start
+                    # timepoint. The search opens an action when its *first*
+                    # event fires and reads the duration bounds from that
+                    # state (`SearchSpace._open_action`), so an action whose
+                    # first event sits at the end -- or at an intermediate
+                    # `start + delay` -- would be sized from the wrong state.
+                    # A trivially-true, effect-less event restores the
+                    # invariant without changing the action's semantics; it
+                    # also covers the degenerate action with no conditions
+                    # and no effects at all, which would otherwise end up
+                    # with an empty event list.
+                    from_start[0] = (up.model.StartTiming(), [], [], [], [])
+
+                events: list[tuple[Timing, Event]] = []
                 pos = 0
                 for d in sorted(from_start):
                     t, lc, lsc, lec, le = from_start[d]
@@ -1009,9 +1034,7 @@ class Encoder:
                     tsc = tuple([self._convert_expression(sc) for sc in lsc])
                     tec = tuple([self._convert_expression(ec) for ec in lec])
                     te = tuple(self._convert_effects(le))
-                    self._events[self.get_action(a.name)].append(
-                        (conv_t, Event(self.get_action(a.name), pos, c, tsc, tec, te))
-                    )
+                    events.append((conv_t, Event(action, pos, c, tsc, tec, te)))
                     pos += 1
                 for d in sorted(from_end):
                     t, lc, lsc, lec, le = from_end[d]
@@ -1020,19 +1043,18 @@ class Encoder:
                     tsc = tuple([self._convert_expression(sc) for sc in lsc])
                     tec = tuple([self._convert_expression(ec) for ec in lec])
                     te = tuple(self._convert_effects(le))
-                    self._events[self.get_action(a.name)].append(
-                        (conv_t, Event(self.get_action(a.name), pos, c, tsc, tec, te))
-                    )
+                    events.append((conv_t, Event(action, pos, c, tsc, tec, te)))
                     pos += 1
+                self._events[action] = events
             else:
                 assert isinstance(a, up.model.InstantaneousAction)
                 conv_t = Timing(True, Fraction(0))
                 te = tuple(self._convert_effects(a.effects))
-                self._events[self.get_action(a.name)] = [
+                self._events[action] = [
                     (
                         conv_t,
                         Event(
-                            self.get_action(a.name),
+                            action,
                             0,
                             self._convert_expression(em.And(a.preconditions)),
                             (),
@@ -1042,6 +1064,6 @@ class Encoder:
                     )
                 ]
                 if not self._simplifier.simplify(em.And(a.preconditions)).is_false():
-                    applicable_actions.add(self.get_action(a.name))
+                    applicable_actions.add(action)
 
         self._applicable_actions = [a for a in self._actions if a in applicable_actions]

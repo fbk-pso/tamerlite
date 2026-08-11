@@ -221,9 +221,11 @@ class MutexChecker:
 
         are_mutex = self._cache.get(events_pair, None)
         if are_mutex is None:
-            (_, a_e, a_pe, _, _) = self._event_fluents[a1.idx][i1]
-            (b_p, b_e, _, _, _) = self._event_fluents[a2.idx][i2]
-            are_mutex = not (b_p.isdisjoint(a_e) and a_pe.isdisjoint(b_e))
+            (_, a_writes, a_read_writes, _, _) = self._event_fluents[a1.idx][i1]
+            (b_reads, b_writes, _, _, _) = self._event_fluents[a2.idx][i2]
+            are_mutex = not (
+                b_reads.isdisjoint(a_writes) and a_read_writes.isdisjoint(b_writes)
+            )
             self._cache[events_pair] = are_mutex
         return are_mutex
 
@@ -247,9 +249,12 @@ class PrecedenceChecker:
 
         res = self._cache.get(events_pair, None)
         if res is None:
-            (_, a_e, _, _, a_ec) = self._event_fluents[a1.idx][i1]
-            (_, b_e, _, b_sc, _) = self._event_fluents[a2.idx][i2]
-            res = not (a_e.isdisjoint(b_sc) and b_e.isdisjoint(a_ec))
+            (_, a_writes, _, _, a_end_cond_reads) = self._event_fluents[a1.idx][i1]
+            (_, b_writes, _, b_start_cond_reads, _) = self._event_fluents[a2.idx][i2]
+            res = not (
+                a_writes.isdisjoint(b_start_cond_reads)
+                and b_writes.isdisjoint(a_end_cond_reads)
+            )
             self._cache[events_pair] = res
         return res
 
@@ -539,14 +544,28 @@ class SearchSpace(SearchSpaceABC):
             list[tuple[set[int], set[int], set[int], set[int], set[int]]]
         ] = [[] for _ in actions]
         for a, le in self._events.items():
-            for _, e in le:
-                a_p = set(get_fluents(e.conditions))
-                a_p.update(x for eff in e.effects for x in get_fluents(eff.value))
-                a_e = {eff.fluent for eff in e.effects}
-                a_pe = a_p.union(a_e)
-                a_sc = {f for c in e.start_conditions for f in get_fluents(c)}
-                a_ec = {f for c in e.end_conditions for f in get_fluents(c)}
-                event_fluents[a.idx].append((a_p, a_e, a_pe, a_sc, a_ec))
+            duration = self._actions_duration[a.idx]
+            for i, (_, e) in enumerate(le):
+                reads = set(get_fluents(e.conditions))
+                reads.update(x for eff in e.effects for x in get_fluents(eff.value))
+                if i == 0 and duration is not None:
+                    # The duration bounds are read when the action is opened,
+                    # i.e. at its first (start) event, so that event reads the
+                    # fluents they mention just like a condition would. Without
+                    # this, nothing orders the start against the events writing
+                    # those fluents and `build_plan` is free to schedule the
+                    # action where its duration does not hold.
+                    reads.update(get_fluents(duration[0]))
+                    reads.update(get_fluents(duration[1]))
+                writes = {eff.fluent for eff in e.effects}
+                read_writes = reads.union(writes)
+                start_cond_reads = {
+                    f for c in e.start_conditions for f in get_fluents(c)
+                }
+                end_cond_reads = {f for c in e.end_conditions for f in get_fluents(c)}
+                event_fluents[a.idx].append(
+                    (reads, writes, read_writes, start_cond_reads, end_cond_reads)
+                )
         self._mutex = MutexChecker(event_fluents)
         self._precedence = PrecedenceChecker(event_fluents)
 

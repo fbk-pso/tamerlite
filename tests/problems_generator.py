@@ -610,6 +610,80 @@ def get_problem_duration_fluent_relevance() -> Problem:
     return problem
 
 
+def get_problem_temporal_no_start_event() -> Problem:
+    """A temporal problem with:
+    - `noop`, a durative action with no conditions and no effects at all, so
+      it has no events of its own (an edge case for the encoder's event list,
+      which must never index into it as if it were non-empty).
+    - `finish`, a durative action whose only condition/effect is `at end`, so
+      it has no event of its own at the start timepoint.
+
+    `finish` reads `d` in its duration, and `setup` -- the only way to make
+    `finish`'s end condition `ready` true -- writes `d` at its end. So the
+    length of `finish` is decided by whether it starts before or after
+    `setup` ends, and any encoding that does not tie `finish`'s start to the
+    state its duration was read from produces an invalid plan.
+    """
+    problem = Problem("temporal_no_start_event")
+
+    d = Fluent("d", IntType())
+    ready = Fluent("ready")
+    done = Fluent("done")
+
+    noop = DurativeAction("noop")
+    noop.set_fixed_duration(2)
+
+    setup = DurativeAction("setup")
+    setup.set_fixed_duration(20)
+    setup.add_effect(EndTiming(), d, 10)
+    setup.add_effect(EndTiming(), ready, True)
+
+    finish = DurativeAction("finish")
+    finish.set_fixed_duration(d())
+    finish.add_condition(EndTiming(), ready)
+    finish.add_effect(EndTiming(), done, True)
+
+    problem.add_fluent(d, default_initial_value=1)
+    problem.add_fluent(ready, default_initial_value=False)
+    problem.add_fluent(done, default_initial_value=False)
+    problem.add_action(noop)
+    problem.add_action(setup)
+    problem.add_action(finish)
+
+    problem.add_goal(done)
+
+    return problem
+
+
+def get_problem_temporal_condition_before_start() -> Problem:
+    """A malformed temporal problem the encoder must reject.
+
+    `a` mixes an intermediate condition from start with one from end, so the
+    encoder folds the end-relative timings onto the start. With a duration of
+    2, `end - 5` folds to `start - 3`: a condition required before the action
+    begins. Left alone it would sort ahead of `a`'s start event and quietly
+    break the invariant that the first event is the action's start.
+    """
+    problem = Problem("temporal_condition_before_start")
+
+    ok = Fluent("ok")
+    done = Fluent("done")
+
+    a = DurativeAction("a")
+    a.set_fixed_duration(2)
+    a.add_condition(StartTiming() + 1, ok)
+    a.add_condition(EndTiming() - 5, ok)
+    a.add_effect(EndTiming(), done, True)
+
+    problem.add_fluent(ok, default_initial_value=True)
+    problem.add_fluent(done, default_initial_value=False)
+    problem.add_action(a)
+
+    problem.add_goal(done)
+
+    return problem
+
+
 def get_problem_object_value_symmetry_initial() -> Problem:
     Token = UserType("Token")
     Slot = UserType("Slot")
