@@ -99,9 +99,9 @@ impl MutexChecker {
             return *are_mutex;
         }
 
-        let (_, a_e, a_pe, _, _) = &event_fluents[a1.idx][*i1];
-        let (b_p, b_e, _, _, _) = &event_fluents[a2.idx][*i2];
-        let are_mutex = !(b_p.is_disjoint(a_e) && a_pe.is_disjoint(b_e));
+        let (_, a_writes, a_read_writes, _, _) = &event_fluents[a1.idx][*i1];
+        let (b_reads, b_writes, _, _, _) = &event_fluents[a2.idx][*i2];
+        let are_mutex = !(b_reads.is_disjoint(a_writes) && a_read_writes.is_disjoint(b_writes));
         cache.insert(*events_pair, are_mutex);
         are_mutex
     }
@@ -134,9 +134,10 @@ impl PrecedenceChecker {
             return *res;
         }
 
-        let (_, a_e, _, _, a_ec) = &event_fluents[a1.idx][*i1];
-        let (_, b_e, _, b_sc, _) = &event_fluents[a2.idx][*i2];
-        let res = !(a_e.is_disjoint(b_sc) && b_e.is_disjoint(a_ec));
+        let (_, a_writes, _, _, a_end_cond_reads) = &event_fluents[a1.idx][*i1];
+        let (_, b_writes, _, b_start_cond_reads, _) = &event_fluents[a2.idx][*i2];
+        let res =
+            !(a_writes.is_disjoint(b_start_cond_reads) && b_writes.is_disjoint(a_end_cond_reads));
         cache.insert(*events_pair, res);
         res
     }
@@ -221,22 +222,41 @@ impl SearchSpace {
 
         let mut event_fluents = vec![Vec::new(); actions.len()];
         for (a, le) in &events {
-            for (_, e) in le {
-                let mut a_p: FxHashSet<usize> = get_fluents(&e.conditions).collect();
-                a_p.extend(e.effects.iter().flat_map(|eff| get_fluents(&eff.value)));
-                let a_e: FxHashSet<usize> = e.effects.iter().map(|eff| eff.fluent).collect();
-                let a_pe: FxHashSet<usize> = a_p.union(&a_e).copied().collect();
-                let a_sc: FxHashSet<usize> = e
+            let duration = &converted_actions_duration[a.idx];
+            for (i, (_, e)) in le.iter().enumerate() {
+                let mut reads: FxHashSet<usize> = get_fluents(&e.conditions).collect();
+                reads.extend(e.effects.iter().flat_map(|eff| get_fluents(&eff.value)));
+                if i == 0 {
+                    // The duration bounds are read when the action is opened,
+                    // i.e. at its first (start) event, so that event reads the
+                    // fluents they mention just like a condition would. Without
+                    // this, nothing orders the start against the events writing
+                    // those fluents and `build_plan` is free to schedule the
+                    // action where its duration does not hold.
+                    if let Some((lower, upper, _, _)) = duration {
+                        reads.extend(get_fluents(lower));
+                        reads.extend(get_fluents(upper));
+                    }
+                }
+                let writes: FxHashSet<usize> = e.effects.iter().map(|eff| eff.fluent).collect();
+                let read_writes: FxHashSet<usize> = reads.union(&writes).copied().collect();
+                let start_cond_reads: FxHashSet<usize> = e
                     .start_conditions
                     .iter()
                     .flat_map(|c| get_fluents(c))
                     .collect();
-                let a_ec: FxHashSet<usize> = e
+                let end_cond_reads: FxHashSet<usize> = e
                     .end_conditions
                     .iter()
                     .flat_map(|c| get_fluents(c))
                     .collect();
-                event_fluents[a.idx].push((a_p, a_e, a_pe, a_sc, a_ec));
+                event_fluents[a.idx].push((
+                    reads,
+                    writes,
+                    read_writes,
+                    start_cond_reads,
+                    end_cond_reads,
+                ));
             }
         }
 

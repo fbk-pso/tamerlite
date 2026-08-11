@@ -1027,12 +1027,14 @@ def test_relevance_analysis_keeps_duration_only_writer():
     `tune`, `run`'s duration bound is never satisfiable, so pruning `tune`
     makes the problem UNSOLVABLE.
 
-    No `PlanValidator` round-trip here: `tune` and `run` share no fluent
-    that `MutexChecker`/`PrecedenceChecker` track (those also ignore duration
-    fluents -- a separate, pre-existing gap), so the reconstructed plan places
+    The `PlanValidator` round-trip additionally covers the ordering side of
+    the same relationship: `tune` and `run` share no condition, only a
+    duration-read against an effect-write on `charge`. `run`'s start event
+    carries its duration bounds' fluents in its read set, which makes it
+    mutex with `tune`'s write; without that the reconstructed plan places
     them at the same timestamp and an external validator sees `run` as
     inapplicable even though the search's own state sequence runs `tune`
-    first. `res.status` alone already isolates the fix under test.
+    first.
     """
     problem = problems_generator.get_problem_duration_fluent_relevance()
     lifted_problem, ground_problem, map_back_action_instance = (
@@ -1070,6 +1072,112 @@ def test_relevance_analysis_keeps_duration_only_writer():
             planner: tamerlite.engine.TamerLite
             res: PlanGenerationResult = planner.solve(problem, timeout=None)
             assert res.status == ResultStatus.SOLVED_SATISFICING
+
+            with PlanValidator(problem_kind=problem.kind) as v:
+                assert v.validate(problem, res.plan)
+
+
+def test_temporal_no_start_event():
+    """Every durative action must own an event at its start timepoint.
+
+    The search opens an action when its first event fires and reads the
+    duration bounds from that state, so an action whose first event sits
+    elsewhere -- `finish`, which only has an `at end` condition/effect, or
+    the degenerate `noop`, which has no conditions and no effects at all --
+    would be sized from the wrong state. `finish`'s duration reads a fluent
+    that `setup` overwrites at its end, so an encoding that loses the start
+    event emits a 10-long `finish` that the validator rejects.
+    """
+    problem = problems_generator.get_problem_temporal_no_start_event()
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        reload_package(tamerlite.encoder)
+        from tamerlite.encoder import Encoder
+
+        lifted_problem, ground_problem, map_back_action_instance = (
+            testing_utils.compile_problem(problem)
+        )
+        encoder = Encoder(
+            ground_problem,
+            lifted_problem,
+            map_back_action_instance,
+            symmetry_breaking=False,
+            compression_safe_actions=False,
+            relevance_analysis=False,
+        )
+        for name in ["noop", "setup", "finish"]:
+            events = encoder.events[encoder.action_by_name[name]]
+            assert events, f"{name} has no events"
+            timing, _ = events[0]
+            assert timing.is_from_start() and timing.delay == 0, (
+                f"{name}'s first event is not at the start timepoint"
+            )
+
+        noop = encoder.action_by_name["noop"]
+        assert noop in encoder.applicable_actions
+
+        ss: SearchSpaceABC = encoder.search_space
+        succ_state = ss.get_successor_state(ss.initial_state(), noop)
+        assert succ_state is not None
+
+        scheduled = ss.build_plan([noop])
+        assert len(scheduled) == 1
+        start, scheduled_action, duration = scheduled[0]
+        # `scheduled_action` is reconstructed by `build_plan`, so it may not
+        # be `noop` itself (the Rust backend's pyo3 `Action` doesn't wire up
+        # value equality); compare by `idx` instead.
+        assert scheduled_action.idx == noop.idx
+        assert start == 0
+        assert duration == Fraction(2)
+
+        # Opening `finish` after `setup`'s end event reads `d == 10`, so the
+        # scheduler must keep it there: the duration fluents are read at the
+        # start event, which makes it mutex with the event writing them.
+        setup = encoder.action_by_name["setup"]
+        finish = encoder.action_by_name["finish"]
+        scheduled = ss.build_plan([setup, setup, finish, finish])
+        by_idx = {a.idx: (start, duration) for start, a, duration in scheduled}
+        assert by_idx[setup.idx] == (Fraction(0), Fraction(20))
+        finish_start, finish_duration = by_idx[finish.idx]
+        assert finish_duration == Fraction(10)
+        assert finish_start is not None and finish_start > Fraction(20)
+
+        with OneshotPlanner(name="tamerlite") as planner:
+            planner: tamerlite.engine.TamerLite
+            res: PlanGenerationResult = planner.solve(problem, timeout=None)
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+
+            with PlanValidator(problem_kind=problem.kind) as v:
+                assert v.validate(problem, res.plan)
+
+            assert isinstance(res.plan, TimeTriggeredPlan)
+
+
+def test_temporal_condition_before_start_is_rejected():
+    """An event the ICE fold maps before the action's own start would sort
+    ahead of the start event and defeat the invariant that event 0 is the
+    start, so the encoder must reject the action instead of encoding it.
+    """
+    problem = problems_generator.get_problem_temporal_condition_before_start()
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        reload_package(tamerlite.encoder)
+        from tamerlite.encoder import Encoder
+
+        with pytest.raises(Exception, match="before the start of a durative action"):
+            Encoder(
+                ground_problem,
+                lifted_problem,
+                map_back_action_instance,
+                symmetry_breaking=False,
+                compression_safe_actions=False,
+                relevance_analysis=False,
+            )
 
 
 def test_symmetry_breaking_object_valued_fluents():

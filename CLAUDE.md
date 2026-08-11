@@ -105,6 +105,11 @@ Rust implementation lives in [crates/rustamer-base/src/](crates/rustamer-base/sr
 3. Builds the internal `SearchSpace`.
 4. Optional preprocessing: symmetry breaking, compression-safe action identification, relevance analysis via HMax reachability.
 
+**Load-bearing invariant: every durative action owns an event at delay 0 from start.**
+`SearchSpace._open_action` opens an action when its *first* event fires and evaluates the duration bounds against that state, so `events[0]` must sit exactly at the action's start. UP problems don't guarantee this — an action may only have `at end` conditions/effects, may start with an intermediate `start + delay` event, or (degenerately) may have no conditions and no effects at all and therefore no events. `Encoder._build_events` synthesizes a trivially-true, effect-less event at delay 0 whenever the action doesn't provide one; an action whose timings resolve *before* its own start is rejected outright.
+
+Relatedly, `SearchSpace.__init__` records the duration expression's fluents in the **start event's read set**, so `MutexChecker` orders that event against whatever writes them. Without it, `build_plan` — which, unlike `_expand_event`, only adds ordering edges for mutex/precedence pairs — is free to reschedule the action away from the state its duration was read from, producing plans that UP's own `PlanValidator` rejects. Both halves are needed: the invariant alone gives the ordering nothing to attach to.
+
 ### Engine ([src/tamerlite/engine.py](src/tamerlite/engine.py))
 
 `TamerLite` implements both `OneshotPlannerMixin` and `AnytimePlannerMixin`.
