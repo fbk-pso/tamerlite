@@ -12,31 +12,56 @@ install:
 build-rust:
     uv run --no-sync maturin develop --release --manifest-path crates/rustamer/Cargo.toml
 
-# Run pytest in parallel (pytest-xdist). Set PYTHONPATH externally for extra fixtures (e.g. up_test_cases).
+# NOTE: every recipe below uses `uv run --no-sync`. A bare `uv run` re-syncs the
+# environment first and, when it decides the editable `rustamer` member needs
+# rebuilding, reinstalls it through uv's own PEP 517 path -- silently replacing
+# the wheel `just build-rust` put there, sometimes with a stale cached one. Use
+# `just install` as the single syncing entry point.
+
+# Run pytest in parallel (pytest-xdist). Set PYTHONPATH externally for extra fixtures (e.g. up_test_cases; see `just up-checkout`).
 test:
-    uv run pytest tests/ -n auto
+    uv run --no-sync pytest tests/ -n auto
 
 # Run all lint and formatting checks (Python + Rust). Fails if any issues are found.
 lint:
-    uv run ruff check src tests ci crates
-    uv run ruff format --check src tests ci crates
+    uv run --no-sync ruff check src tests ci crates
+    uv run --no-sync ruff format --check src tests ci crates
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets -- -D warnings
 
 # Apply Python and Rust formatters and auto-fix lint issues where possible
 format:
-    uv run ruff format src tests ci crates
-    uv run ruff check --fix src tests ci crates
+    uv run --no-sync ruff format src tests ci crates
+    uv run --no-sync ruff check --fix src tests ci crates
     cargo fmt --all
     cargo clippy --workspace --all-targets --fix --allow-dirty --allow-staged
 
 # Static type checking
 typecheck:
-    uv run mypy
+    uv run --no-sync mypy
 
 # Run all pre-commit hooks against the whole repo
 precommit:
-    uv run pre-commit run --all-files --show-diff-on-failure
+    uv run --no-sync pre-commit run --all-files --show-diff-on-failure
+
+# up_test_cases fixtures live in ./up-checkout; a mismatch against the installed
+# unified-planning shows up as NameError collection failures or spurious
+# regression diffs. Uses system python3 (stdlib tomllib) so it works on
+# interpreters older than the one uv installed, matching the CI step in
+# .github/workflows/test.yml.
+# Clone or re-pin ./up-checkout to the unified-planning commit uv.lock resolves
+up-checkout:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    sha=$(python3 -c "import tomllib; d = tomllib.load(open('uv.lock', 'rb')); print(next(p['source']['git'].rsplit('#', 1)[1] for p in d['package'] if p['name'] == 'unified-planning'))")
+    if [ -d up-checkout ]; then
+        git -C up-checkout fetch --filter=blob:none origin
+    else
+        git clone --filter=blob:none https://github.com/aiplan4eu/unified-planning.git up-checkout
+    fi
+    git -C up-checkout checkout --detach --quiet "$sha"
+    echo "up-checkout pinned to $sha"
+    echo "run the suite with: PYTHONPATH=up-checkout/up_test_cases just test"
 
 # Build sdist + wheel for the tamerlite Python package (hatchling).
 # Used by the CI tamerlite job; locally callable on its own.
@@ -67,7 +92,7 @@ check-versions:
 
 # Print rustamer and tamerlite versions and verify they match
 check-installed-versions:
-    @uv run python -c 'from importlib.metadata import version;\
+    @uv run --no-sync python -c 'from importlib.metadata import version;\
     r=version("rustamer"); t=version("tamerlite"); print(f"rustamer:  {r}"); print(f"tamerlite: {t}");\
     assert r == t, f"Version mismatch: rustamer={r}, tamerlite={t}"; print("✓ Versions match")'
 

@@ -48,21 +48,25 @@ uv run pre-commit install  # one-time
 
 `rustamer` is a `uv` workspace member with `source = { editable = ... }` in `uv.lock`. Plain `uv run`/`uv sync` (no `--no-sync`) silently re-syncs the environment first and, when it decides the editable `rustamer` package needs rebuilding, builds it through **its own** PEP 517 path — not `maturin develop`. That path has been observed to serve a wheel from `uv`'s persistent build cache (`~/.cache/uv/archive-v0/...`) that predates the current Rust source, instead of rebuilding fresh. The symptom is a confusing runtime `TypeError`/`AttributeError` from a `rustamer`-exported function that looks like a genuine Rust bug but disappears on a from-scratch build — e.g. a PyO3 argument-extraction error mentioning an old parameter name/type that no longer exists in the current source (concretely hit after the `10ce304` refactor: `make_object_node(oid: usize)` calls raised `TypeError: 'int' object is not an instance of 'str', while processing 'name'`, because the cached wheel still had the pre-refactor `make_object_node(name: String)`).
 
+Every dev-loop recipe (`test`, `lint`, `format`, `typecheck`, `precommit`, `check-installed-versions`) therefore passes `--no-sync`, so anything invoked through `just` leaves a `just build-rust` build alone. **`just install` is the single syncing entry point** — run it after changing dependencies, then `just build-rust`. The trap is still live for bare `uv run ...` typed by hand.
+
 **Before concluding there's a Rust logic bug**, rule this out:
 1. Rebuild explicitly with `just build-rust` (`maturin develop --release`) and retest — this bypasses `uv`'s own build path entirely.
 2. If the bug persists after that but reappears whenever a bare `uv run`/`uv sync` executes, purge the cache: `uv cache clean rustamer` (or `uv cache clean` for everything) and rebuild.
 3. Prefer `uv run --no-sync ...` for ad hoc commands during Rust dev iteration, right after `just build-rust`, to avoid uv silently reinstalling over your local build.
+4. Symptoms are not limited to import/signature errors: a stale wheel can also produce *plausible but wrong results* on only one backend. A test that passes under `DISABLE_RUSTAMER=true` and fails without it — or vice versa — after you have edited `crates/` is a stale-wheel signal, not necessarily a real backend divergence.
 
 ## Common tasks (all via `just`)
 
 | Recipe | What it does |
 |---|---|
-| `just install` | `uv sync --all-extras` |
+| `just install` | `uv sync --all-extras` + `just build-rust` — **the only recipe that syncs** |
 | `just build-rust` | `maturin develop` — rebuild rustamer in-place into the venv (dev iteration) |
+| `just up-checkout` | Clone or re-pin `./up-checkout` to the `unified-planning` commit `uv.lock` resolves |
 | `just build` | Produce both `tamerlite` and `rustamer` wheels + sdists into `./dist/` |
 | `just build-python` | Only the `tamerlite` wheel (used by CI's `tamerlite` publish job) |
 | `just build-rust-wheel` | Only the `rustamer` wheel + sdist for current interpreter |
-| `just test` | `uv run pytest tests/ -n auto` — runs in parallel via pytest-xdist; set `PYTHONPATH=up-checkout/up_test_cases` if you need the UP fixtures |
+| `just test` | `uv run --no-sync pytest tests/ -n auto` — runs in parallel via pytest-xdist; set `PYTHONPATH=up-checkout/up_test_cases` if you need the UP fixtures |
 | `just lint` | Ruff (check + format --check) + cargo fmt --check + cargo clippy (informational, -W warnings) |
 | `just format` | Ruff format + ruff --fix + cargo fmt --all |
 | `just typecheck` | `uv run mypy` (config in `pyproject.toml`, scope `src/tamerlite`) |
@@ -76,13 +80,11 @@ uv run pre-commit install  # one-time
 Most tests need `unified-planning`'s `up_test_cases/` directory. `uv sync` installs `unified-planning` from a pinned git commit; the test fixtures live in the same repo and must be cloned and **checked out to the locked commit** (CI does this automatically in [test.yml](.github/workflows/test.yml)):
 
 ```bash
-sha=$(python3 -c "import tomllib; d=tomllib.load(open('uv.lock','rb')); print(next(p['source']['git'].rsplit('#',1)[1] for p in d['package'] if p['name']=='unified-planning'))")
-git clone --filter=blob:none https://github.com/aiplan4eu/unified-planning.git up-checkout
-git -C up-checkout checkout "$sha"
+just up-checkout          # clones, or re-pins an existing checkout, to the locked commit
 PYTHONPATH=up-checkout/up_test_cases just test
 ```
 
-Mismatched commits cause `NameError` collection failures from newer TAMP fixtures referencing symbols absent in the installed UP version.
+Re-run `just up-checkout` whenever `uv.lock` changes — an existing checkout does **not** move on its own. Mismatched commits cause `NameError` collection failures from newer TAMP fixtures referencing symbols absent in the installed UP version, and can also make otherwise-healthy regression tests (e.g. `test_heuristic_values`) fail with diffs that have nothing to do with your change.
 
 ## Architecture
 
