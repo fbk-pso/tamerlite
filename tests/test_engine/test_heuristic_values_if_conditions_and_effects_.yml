@@ -1,8 +1,8 @@
 hadd:
-- 2
-- 2
-- 0
+- 3
+- 3
 - 1
+- 2
 - 0
 - 1
 - 0
@@ -1000,10 +1000,10 @@ hadd:
 - 0
 - 1
 hadd_inadmissible:
-- 2
-- 2
-- 0
+- 3
+- 3
 - 1
+- 2
 - 0
 - 1
 - 0
@@ -2001,10 +2001,10 @@ hadd_inadmissible:
 - 0
 - 1
 hadd_no_numbers:
-- 2
-- 2
-- 0
+- 3
+- 3
 - 1
+- 2
 - 0
 - 1
 - 0
@@ -6007,7 +6007,7 @@ hff_no_numbers:
 hmax:
 - 2
 - 1
-- 0
+- 1
 - 1
 - 0
 - 1
@@ -7006,9 +7006,9 @@ hmax:
 - 0
 - 1
 hmax_explicit:
+- 3
 - 2
-- 1
-- 0
+- 2
 - 1
 - 0
 - 1
@@ -8009,7 +8009,7 @@ hmax_explicit:
 hmax_inadmissible:
 - 2
 - 1
-- 0
+- 1
 - 1
 - 0
 - 1
@@ -9010,7 +9010,7 @@ hmax_inadmissible:
 hmax_no_numbers:
 - 2
 - 1
-- 0
+- 1
 - 1
 - 0
 - 1

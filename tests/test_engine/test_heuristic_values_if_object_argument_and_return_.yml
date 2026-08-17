@@ -1,24 +1,24 @@
 hadd:
 - 1
+- 1
 - 0
 hadd_no_numbers:
+- 1
 - 1
 - 0
 hff:
 - 1
+- 1
 - 0
 hff_no_numbers:
+- 1
 - 1
 - 0
 hmax:
 - 1
-- 0
-hmax_explicit_python:
-- 1
-- 0
-hmax_explicit_rust:
 - 1
 - 0
 hmax_no_numbers:
+- 1
 - 1
 - 0

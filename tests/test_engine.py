@@ -23,6 +23,7 @@ import warnings
 from collections import OrderedDict
 from collections.abc import Callable
 from functools import partial
+from typing import NamedTuple
 
 import pytest
 import unified_planning
@@ -41,7 +42,7 @@ import tamerlite.engine
 import testing_utils
 from tamerlite.core.heuristics import Heuristic
 from tamerlite.core.search_space import SearchSpaceABC
-from tamerlite.encoder import Encoder
+from tamerlite.encoder import Encoder, has_interpreted_functions
 
 env = get_environment()
 env.factory.add_engine("tamerlite", "tamerlite.engine", "TamerLite")
@@ -55,6 +56,7 @@ HEURISTICS = [
     "hadd_no_numbers",
     "hmax_no_numbers",
     "hmax_explicit",
+    "blind",
 ]
 
 
@@ -66,6 +68,15 @@ def _build_problems():
         problems_generator.get_problem_hierarchical_types(),
         problems_generator.get_problem_temporal_flight(),
         problems_generator.get_problem_flight(),
+        problems_generator.get_problem_if_bool_condition(),
+        problems_generator.get_problem_if_numeric_effect(),
+        problems_generator.get_problem_if_object_effect(),
+        problems_generator.get_problem_if_object_argument_and_return(),
+        problems_generator.get_problem_if_undefined_initial_numeric(),
+        problems_generator.get_problem_if_temporal_compression_safe(),
+        problems_generator.get_problem_if_duration(),
+        problems_generator.get_problem_if_conditions_and_effects(),
+        problems_generator.get_problem_if_signature_shapes(),
     ]
 
     up_example_problems = list(
@@ -185,121 +196,205 @@ def reload_tamerlite(disable_rustamer: bool):
     reload_package(tamerlite)
 
 
-def skip(
-    problem,
-    search,
-    heuristic,
-    weak_equality,
-    symmetry_breaking,
-    disable_rustamer,
-    internal_heuristic_cache,
-):
-    """Whether this parametrization should be skipped.
+class PruneCase(NamedTuple):
+    """The dimensions `PERFORMANCE_PRUNES` predicates can look at -- the subset
+    of solve-matrix parameters that actually affect runtime."""
 
-    Every rule below is a performance prune, not a correctness exclusion: on the
-    heaviest instances these combinations run for minutes under an unbounded
-    (timeout=None) search and/or exhaust available memory, dominating the suite's
-    wall-clock. Each search/heuristic involved is still exercised on many other
-    problems, so dropping these specific combinations costs little coverage.
-    """
-    return (
-        (problem.name == "robot_fluent_of_user_type" and search == "dfs")
-        or (problem.name == "robot_loader" and search == "dfs")
-        or (problem.name == "robot_loader_mod" and search == "dfs")
-        or (problem.name == "robot_loader_adv" and search == "dfs")
-        or (problem.name == "robot_fluent_of_user_type_with_int_id" and search == "dfs")
-        or (problem.name == "depots_p01" and search in ["dfs", "bfs"])
-        or (problem.name == "RoboLogistics" and search == "dfs")
-        or (problem.name == "NumericProblem" and search == "dfs")
-        or (problem.name == "hierarchical-types" and search in ["dfs", "bfs"])
-        or (problem.name == "hierarchical_blocks_world" and search == "dfs")
-        or (
-            problem.name == "hierarchical_blocks_world_object_as_root"
-            and search == "dfs"
+    search: str
+    heuristic: str | None
+    weak_equality: bool
+    symmetry_breaking: bool
+
+
+# Problem name -> which uninformed-style traversals are known to blow up on
+# it: "dfs" (can wander arbitrarily deep down a bad branch) and/or "blind".
+UNINFORMED_SEARCH_RISK: dict[str, set[str]] = {
+    "robot_fluent_of_user_type": {"dfs"},
+    "robot_loader": {"dfs"},
+    "robot_loader_mod": {"dfs"},
+    "robot_loader_adv": {"dfs"},
+    "robot_fluent_of_user_type_with_int_id": {"dfs"},
+    "depots_p01": {"dfs", "blind"},
+    "RoboLogistics": {"dfs", "blind"},
+    "NumericProblem": {"dfs"},
+    "hierarchical-types": {"dfs", "blind"},
+    "hierarchical_blocks_world": {"dfs"},
+    "hierarchical_blocks_world_object_as_root": {"dfs"},
+    "hierarchical_blocks_world_with_object": {"dfs"},
+    "tpp_p01": {"dfs"},
+    "satellite": {"dfs", "blind"},
+    "robot_holding": {"dfs", "blind"},
+    "timed_connected_locations": {"dfs"},
+    "hierarchical_blocks_world_exists": {"dfs"},
+    "existential_linear_conditions": {"dfs"},
+    "rovers_pfile2": {"dfs", "blind"},
+    "depots_pfile1": {"dfs"},
+    "depots_pfile10": {"dfs", "blind"},
+    "universal_existential_linear_conditions": {"dfs"},
+    "interpreted_functions_minimal_chain_of_assignments": {"dfs"},
+    "treasure_hunting_robot_simple": {"dfs"},
+    "if_bool_condition": {"dfs"},
+    "if_signature_shapes": {"dfs"},
+    "block_grouping_5_5_1_1": {"blind"},
+    "farmland_2_100_1229": {"blind"},
+    "if_reals_condition_effect_pizza": {"blind"},
+}
+
+# (problem_name(s), predicate, reason). Every entry is a performance prune, not
+# a correctness exclusion: on the heaviest instances these combinations run for
+# minutes under an unbounded (timeout=None) search and/or exhaust available
+# memory, dominating the suite's wall-clock. Each search/heuristic involved is
+# still exercised on many other problems, so pruning a specific combination
+# here costs little coverage.
+PERFORMANCE_PRUNES: list[
+    tuple[str | tuple[str, ...], Callable[[PruneCase], bool], str]
+] = [
+    *(
+        (name, lambda c: c.search == "dfs", "dfs can wander arbitrarily deep")
+        for name, risk in UNINFORMED_SEARCH_RISK.items()
+        if "dfs" in risk
+    ),
+    *(
+        (
+            name,
+            lambda c: c.heuristic == "blind",
+            "blind is as uninformed as bfs here",
         )
-        or (problem.name == "hierarchical_blocks_world_with_object" and search == "dfs")
-        or (problem.name == "tpp_p01" and search == "dfs")
-        or (
-            problem.name == "satellite"
+        for name, risk in UNINFORMED_SEARCH_RISK.items()
+        if "blind" in risk
+    ),
+    (
+        (
+            "depots_p01",
+            "hierarchical-types",
+            "satellite",
+            "robot_holding",
+            "rovers_pfile2",
+        ),
+        lambda c: c.search == "bfs",
+        "bfs explores the whole state space",
+    ),
+    (
+        ("depots_pfile1", "depots_pfile10"),
+        lambda c: c.search == "bfs",
+        "bfs explores the whole state space",
+    ),
+    (
+        "satellite",
+        lambda c: c.heuristic == "custom",
+        "custom heuristic times out",
+    ),
+    (
+        "satellite",
+        lambda c: (
+            c.heuristic in {"hmax", "hmax_no_numbers", "hmax_explicit"}
+            and not c.weak_equality
+        ),
+        "non-weak hmax family times out",
+    ),
+    (
+        "robot_holding",
+        lambda c: (
+            not c.weak_equality and (c.heuristic == "custom" or c.search == "gbfs")
+        ),
+        "non-weak custom heuristic / gbfs times out",
+    ),
+    (
+        "plant_watering_4_1",
+        lambda c: c.search == "multiqueue" or c.heuristic != "hadd",
+        "only hadd (non-multiqueue) solves in reasonable time",
+    ),
+    (
+        "block_grouping_5_5_1_1",
+        lambda c: (
+            c.heuristic
+            in {"custom", "hmax_no_numbers", "hff_no_numbers", "hmax_explicit"}
+            or c.search in {"bfs", "ehc"}
+        ),
+        "weak heuristics / uninformed-ish search time out",
+    ),
+    (
+        "farmland_2_100_1229",
+        lambda c: c.search in {"dfs", "bfs", "ehc"} or c.heuristic == "hmax_explicit",
+        "uninformed search / hmax_explicit time out on this instance",
+    ),
+    (
+        "depots_pfile1",
+        lambda c: (
+            c.search in {"wastar", "astar", "gbfs", "multiqueue"}
+            and not c.weak_equality
+        ),
+        "non-weak search exhausts memory on this instance",
+    ),
+    (
+        "RoboLogistics",
+        lambda c: c.search == "bfs" or c.heuristic == "custom",
+        "bfs / custom heuristic time out",
+    ),
+    (
+        "block_grouping_5_5_1_1",
+        lambda c: (
+            c.search == "astar" or (c.heuristic == "hmax" and not c.weak_equality)
+        ),
+        "astar / non-weak hmax time out",
+    ),
+    (
+        "rovers_pfile2",
+        lambda c: c.heuristic == "custom",
+        "custom heuristic times out",
+    ),
+    (
+        "logistic",
+        lambda c: (
+            not c.weak_equality
             and (
-                search in ["dfs", "bfs"]
-                or heuristic == "custom"
+                c.search in {"gbfs", "dfs", "bfs"}
                 or (
-                    heuristic in ["hmax", "hmax_no_numbers", "hmax_explicit"]
-                    and not weak_equality
+                    c.search == "wastar"
+                    and c.heuristic in {"hff", "hff_no_numbers", "custom", "blind"}
                 )
             )
+        ),
+        "non-weak uninformed/gbfs search or wastar+hff-family/blind times out",
+    ),
+    (
+        "if_reals_condition_effect_pizza",
+        lambda c: c.search in {"bfs", "ehc"},
+        "uninformed search explores the whole state space",
+    ),
+    # Not a performance prune like everything above -- a known, documented
+    # heuristic-precision divergence. `hmax_explicit` cross-products an
+    # effect's argument fluents' already-reachable values on the Rust side,
+    # while Python's classifier over-approximates any non-constant object
+    # effect to "every object of the type"; the two backends can legitimately
+    # reach different (both admissible) values on these two problems' non-
+    # constant object effects. `test_interpreted_functions_heuristic_values`
+    # pins both values under backend-specific keys instead of asserting them
+    # equal; the generic `test_heuristics`/`test_heuristic_values`, which
+    # only compare recorded metrics, have no such escape hatch, so the
+    # combination is pruned here instead of forced to (dis)agree.
+    (
+        ("if_object_effect", "if_object_argument_and_return"),
+        lambda c: c.heuristic == "hmax_explicit",
+        "hmax_explicit legitimately diverges between backends on this "
+        "problem's non-constant object effect",
+    ),
+]
+
+
+def prune_reason(
+    problem, search, heuristic, weak_equality, symmetry_breaking
+) -> str | None:
+    """The reason this parametrization should be pruned, or `None` if it
+    shouldn't be. See `PERFORMANCE_PRUNES`."""
+    case = PruneCase(search, heuristic, weak_equality, symmetry_breaking)
+    for names, predicate, reason in PERFORMANCE_PRUNES:
+        matches_name = (
+            problem.name == names if isinstance(names, str) else problem.name in names
         )
-        or (
-            problem.name == "robot_holding"
-            and (
-                search in ["dfs", "bfs"]
-                or (not weak_equality and (heuristic == "custom" or search == "gbfs"))
-            )
-        )
-        or (problem.name == "timed_connected_locations" and search == "dfs")
-        or (problem.name == "hierarchical_blocks_world_exists" and search == "dfs")
-        or (problem.name == "existential_linear_conditions" and search == "dfs")
-        or (
-            problem.name == "plant_watering_4_1"
-            and (search == "multiqueue" or heuristic != "hadd")
-        )
-        or (problem.name == "rovers_pfile2" and search in ["dfs", "bfs"])
-        or (
-            problem.name == "block_grouping_5_5_1_1"
-            and (
-                heuristic
-                in ["custom", "hmax_no_numbers", "hff_no_numbers", "hmax_explicit"]
-                or search in ["bfs", "ehc"]
-            )
-        )
-        or (
-            problem.name == "farmland_2_100_1229"
-            and (search in ["dfs", "bfs", "ehc"] or heuristic == "hmax_explicit")
-        )
-        or (
-            problem.name in ["depots_pfile1", "depots_pfile10"]
-            and search in ["dfs", "bfs"]
-        )
-        or (
-            problem.name == "depots_pfile1"
-            and search in ["wastar", "astar", "gbfs", "multiqueue"]
-            and not weak_equality
-        )
-        or (
-            problem.name == "universal_existential_linear_conditions"
-            and search == "dfs"
-        )
-        or (
-            problem.name == "RoboLogistics"
-            and (search == "bfs" or heuristic == "custom")
-        )
-        or (
-            problem.name == "block_grouping_5_5_1_1"
-            and (search == "astar" or (heuristic == "hmax" and not weak_equality))
-        )
-        or (problem.name == "rovers_pfile2" and heuristic == "custom")
-        or (
-            problem.name == "logistic"
-            and not weak_equality
-            and (
-                search in ["gbfs", "dfs", "bfs"]
-                or (
-                    search == "wastar"
-                    and heuristic in ["hff", "hff_no_numbers", "custom"]
-                )
-            )
-        )
-        or (
-            problem.name == "interpreted_functions_minimal_chain_of_assignments"
-            and search == "dfs"
-        )
-        or (problem.name == "treasure_hunting_robot_simple" and search == "dfs")
-        or (
-            problem.name == "if_reals_condition_effect_pizza"
-            and search in ["bfs", "ehc"]
-        )
-    )
+        if matches_name and predicate(case):
+            return reason
+    return None
 
 
 def max_generated_states(problem):
@@ -400,21 +495,16 @@ def test_heuristics(
     symmetry_breaking,
 ):
     search_kind = "wastar"
+    reason = prune_reason(
+        problem, search_kind, heuristic, weak_equality, symmetry_breaking
+    )
+    if reason is not None:
+        pytest.skip(reason)
+
     results = []
     for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
         for internal_heuristic_cache in [True, False]:
-            if skip(
-                problem,
-                search_kind,
-                heuristic,
-                weak_equality,
-                symmetry_breaking,
-                disable_rustamer,
-                internal_heuristic_cache,
-            ):
-                continue
-
             search = tamerlite.SearchParams(
                 search=search_kind,
                 heuristic=heuristic,
@@ -554,6 +644,9 @@ def test_heuristic_values(problem, data_regression):
             (HMaxExplicit, "hmax_explicit"),
         ]
         for heuristic_class, heuristic_name in heuristic_classes:
+            if prune_reason(problem, "wastar", heuristic_name, True, True) is not None:
+                continue
+
             inadmissible_numeric_heuristic_flags = [False]
             if testing_utils.is_numeric_problem(problem) and heuristic_name in {
                 "hff",
@@ -563,17 +656,6 @@ def test_heuristic_values(problem, data_regression):
                 inadmissible_numeric_heuristic_flags = [True, False]
             for inadmissible_numeric_heuristic in inadmissible_numeric_heuristic_flags:
                 for internal_caching in [True, False]:
-                    if skip(
-                        problem,
-                        "wastar",
-                        heuristic_name,
-                        True,
-                        True,
-                        disable_rustamer,
-                        internal_caching,
-                    ):
-                        continue
-
                     heuristic: Heuristic = heuristic_class(
                         encoder.actions,
                         encoder.fluent_types,
@@ -637,6 +719,12 @@ def test_custom_heuristic(
     search_kind = "wastar"
     heuristic = "custom"
 
+    reason = prune_reason(
+        problem, search_kind, heuristic, weak_equality, symmetry_breaking
+    )
+    if reason is not None:
+        pytest.skip(reason)
+
     def custom_heuristic(state: State):
         return 1
 
@@ -645,17 +733,6 @@ def test_custom_heuristic(
         reload_tamerlite(disable_rustamer)
 
         for internal_heuristic_cache in [True, False]:
-            if skip(
-                problem,
-                search_kind,
-                heuristic,
-                weak_equality,
-                symmetry_breaking,
-                disable_rustamer,
-                internal_heuristic_cache,
-            ):
-                continue
-
             search = tamerlite.SearchParams(
                 search=search_kind,
                 heuristic=heuristic,
@@ -734,19 +811,14 @@ def test_search_algorithms(
     compression_safe_actions,
 ):
     heuristic = "hff"
+    reason = prune_reason(
+        problem, search_kind, heuristic, weak_equality, symmetry_breaking
+    )
+    if reason is not None:
+        pytest.skip(reason)
+
     results = []
     for disable_rustamer in [True, False]:
-        if skip(
-            problem,
-            search_kind,
-            heuristic,
-            weak_equality,
-            symmetry_breaking,
-            disable_rustamer,
-            True,
-        ):
-            continue
-
         reload_tamerlite(disable_rustamer)
         search = tamerlite.SearchParams(
             search=search_kind,
@@ -779,19 +851,18 @@ def test_search_algorithms(
 def test_multiqueue_search(
     problem, weak_equality, symmetry_breaking, compression_safe_actions
 ):
+    reason = prune_reason(
+        problem,
+        "multiqueue",
+        heuristic=None,
+        weak_equality=weak_equality,
+        symmetry_breaking=symmetry_breaking,
+    )
+    if reason is not None:
+        pytest.skip(reason)
+
     results = []
     for disable_rustamer in [True, False]:
-        if skip(
-            problem,
-            "multiqueue",
-            heuristic=None,
-            weak_equality=weak_equality,
-            symmetry_breaking=symmetry_breaking,
-            disable_rustamer=disable_rustamer,
-            internal_heuristic_cache=True,
-        ):
-            continue
-
         reload_tamerlite(disable_rustamer)
 
         search = tamerlite.engine.MultiqueueParams(
@@ -815,7 +886,8 @@ def test_multiqueue_search(
 
 
 @pytest.mark.parametrize("problem", PROBLEMS, ids=[p.name for p in PROBLEMS])
-def test_search_space(problem):
+@pytest.mark.parametrize("relevance_analysis", [True, False])
+def test_search_space(problem, relevance_analysis):
     states = {}
     for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
@@ -831,7 +903,7 @@ def test_search_space(problem):
             map_back_action_instance,
             symmetry_breaking=False,
             compression_safe_actions=False,
-            relevance_analysis=False,
+            relevance_analysis=relevance_analysis,
         )
         ss: SearchSpaceABC = encoder.search_space
 
@@ -897,6 +969,12 @@ def test_anytime_planner(problem, weak_equality, symmetry_breaking, disable_rust
     internal_heuristic_cache = True
     max_plans = max_generated_plans(problem)
 
+    reason = prune_reason(
+        problem, search_kind, heuristic, weak_equality, symmetry_breaking
+    )
+    if reason is not None:
+        pytest.skip(reason)
+
     reload_tamerlite(disable_rustamer)
     search = tamerlite.SearchParams(
         search=search_kind,
@@ -907,17 +985,6 @@ def test_anytime_planner(problem, weak_equality, symmetry_breaking, disable_rust
         symmetry_breaking=symmetry_breaking,
         compression_safe_actions=False,
     )
-
-    if skip(
-        problem,
-        search_kind,
-        heuristic,
-        weak_equality,
-        symmetry_breaking,
-        disable_rustamer,
-        internal_heuristic_cache,
-    ):
-        return
 
     with AnytimePlanner(name="tamerlite", params={"search": search}) as planner:
         for counter, res in enumerate(planner.get_solutions(problem, timeout=None)):
@@ -1393,110 +1460,25 @@ def test_symmetry_breaking_goal_taint_is_per_object():
 
 # --- Interpreted-function tests --------------------------------------------
 
-IF_PROBLEMS = [
-    problems_generator.get_problem_if_bool_condition(),
-    problems_generator.get_problem_if_numeric_effect(),
-    problems_generator.get_problem_if_object_effect(),
-    problems_generator.get_problem_if_object_argument(),
-    problems_generator.get_problem_if_object_argument_and_return(),
-    problems_generator.get_problem_if_minimal_chain(),
-    problems_generator.get_problem_if_undefined_initial_numeric(),
-    problems_generator.get_problem_if_temporal_compression_safe(),
-    problems_generator.get_problem_if_duration(),
-]
 
-IF_SUPPORTED_HEURISTICS = [
-    "hff",
-    "hadd",
-    "hmax",
-    "hff_no_numbers",
-    "hadd_no_numbers",
-    "hmax_no_numbers",
-    "hmax_explicit",
-]
+def test_interpreted_functions_supported_kind():
+    """`_build_problems()` only picks up UP's IF example problems because
+    `TamerLite.supported_kind()` declares all five IF feature flags -- pin
+    that declaration directly instead of re-deriving it indirectly through
+    which problems happen to get filtered in."""
+    kind = tamerlite.engine.TamerLite.supported_kind()
+    assert kind.has_interpreted_functions_in_conditions()
+    assert kind.has_interpreted_functions_in_boolean_assignments()
+    assert kind.has_interpreted_functions_in_numeric_assignments()
+    assert kind.has_interpreted_functions_in_object_assignments()
+    assert kind.has_interpreted_functions_in_durations()
 
 
-@pytest.mark.parametrize("problem", IF_PROBLEMS, ids=[p.name for p in IF_PROBLEMS])
-def test_interpreted_functions_supports(problem):
-    for disable_rustamer in [True, False]:
-        reload_tamerlite(disable_rustamer)
-        assert tamerlite.engine.TamerLite.supports(problem.kind)
-
-
-@pytest.mark.parametrize("problem", IF_PROBLEMS, ids=[p.name for p in IF_PROBLEMS])
-@pytest.mark.parametrize("search_kind", ["gbfs", "wastar", "bfs"])
-@pytest.mark.parametrize("symmetry_breaking", [True, False])
-def test_interpreted_functions_solve_with_blind_heuristic(
-    problem, search_kind, symmetry_breaking
-):
-    results = []
-    for disable_rustamer in [True, False]:
-        reload_tamerlite(disable_rustamer)
-        search = tamerlite.SearchParams(
-            search=search_kind, heuristic="blind", symmetry_breaking=symmetry_breaking
-        )
-        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
-            planner: tamerlite.engine.TamerLite
-            res: PlanGenerationResult = planner.solve(problem, timeout=None)
-            assert res.status == ResultStatus.SOLVED_SATISFICING
-            results.append(res)
-            with PlanValidator(problem_kind=problem.kind) as v:
-                assert v.validate(problem, res.plan)
-
-    check_metrics_equality(results)
-
-
-@pytest.mark.parametrize("problem", IF_PROBLEMS, ids=[p.name for p in IF_PROBLEMS])
-@pytest.mark.parametrize("symmetry_breaking", [True, False])
-def test_interpreted_functions_solve_with_custom_heuristic(problem, symmetry_breaking):
-    def custom_heuristic(state: State):
-        return 0.0
-
-    results = []
-    for disable_rustamer in [True, False]:
-        reload_tamerlite(disable_rustamer)
-        search = tamerlite.SearchParams(
-            search="gbfs", heuristic="custom", symmetry_breaking=symmetry_breaking
-        )
-        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
-            planner: tamerlite.engine.TamerLite
-            res: PlanGenerationResult = planner.solve(
-                problem, heuristic=custom_heuristic, timeout=None
-            )
-            assert res.status == ResultStatus.SOLVED_SATISFICING
-            results.append(res)
-            with PlanValidator(problem_kind=problem.kind) as v:
-                assert v.validate(problem, res.plan)
-
-    check_metrics_equality(results)
-
-
-@pytest.mark.parametrize("problem", IF_PROBLEMS, ids=[p.name for p in IF_PROBLEMS])
-@pytest.mark.parametrize("heuristic", IF_SUPPORTED_HEURISTICS)
-@pytest.mark.parametrize("symmetry_breaking", [True, False])
-@pytest.mark.parametrize("relevance_analysis", [True, False])
-def test_interpreted_functions_solve_with_delete_relaxation_heuristic(
-    problem, heuristic, symmetry_breaking, relevance_analysis
-):
-    for disable_rustamer in [True, False]:
-        reload_tamerlite(disable_rustamer)
-        search = tamerlite.SearchParams(
-            search="gbfs",
-            heuristic=heuristic,
-            symmetry_breaking=symmetry_breaking,
-            relevance_analysis=relevance_analysis,
-        )
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
-                planner: tamerlite.engine.TamerLite
-                res: PlanGenerationResult = planner.solve(problem, timeout=None)
-                assert res.status == ResultStatus.SOLVED_SATISFICING
-                with PlanValidator(problem_kind=problem.kind) as v:
-                    assert v.validate(problem, res.plan)
-
-
-@pytest.mark.parametrize("problem", IF_PROBLEMS, ids=[p.name for p in IF_PROBLEMS])
+@pytest.mark.parametrize(
+    "problem",
+    [p for p in PROBLEMS if has_interpreted_functions(p.kind)],
+    ids=[p.name for p in PROBLEMS if has_interpreted_functions(p.kind)],
+)
 def test_interpreted_functions_heuristic_values(problem, data_regression):
     """Regression-pins the heuristic values `hff`/`hadd`/`hmax` (and their
     `_no_numbers` variants) and `hmax_explicit` compute on interpreted-
@@ -1709,6 +1691,472 @@ def test_converter_shares_if_cache_across_converters_with_different_object_table
     assert calls == [l1, l2]
 
 
+def test_interpreted_function_receives_real_argument_types():
+    """The wrapped callable always receives real Python/`up.model` values --
+    an `int`, a `Fraction`, a `bool`, and a real `up.model.Object` -- never an
+    internal node (`FluentNode`, `ObjectNode`, ...), regardless of the
+    argument's declared type. `test_converter_shares_interpreted_function_
+    wrapper`/`..._if_cache_across_converters...` already exercise the object
+    case implicitly (via `loc == l1`); this pins all four argument shapes at
+    once and asserts their exact Python types, not just their values."""
+
+    reload_tamerlite(True)
+    from tamerlite.converter import Converter
+    from tamerlite.core.search_space import MultiSet, ObjectNode, State, evaluate
+
+    Loc = UserType("Loc")
+    l1 = Object("l1", Loc)
+
+    received = {}
+
+    def record(i, r, b, o):
+        received["i"] = i
+        received["r"] = r
+        received["b"] = b
+        received["o"] = o
+        return True
+
+    IF_record = InterpretedFunction(
+        "record",
+        BoolType(),
+        OrderedDict(i=IntType(), r=RealType(), b=BoolType(), o=Loc),
+        record,
+    )
+
+    fi = Fluent("fi", IntType())
+    fr = Fluent("fr", RealType())
+    fb = Fluent("fb", BoolType())
+    fo = Fluent("fo", Loc)
+    problem = Problem("if_arg_types")
+    problem.add_fluent(fi)
+    problem.add_fluent(fr)
+    problem.add_fluent(fb)
+    problem.add_fluent(fo)
+    problem.add_object(l1)
+
+    exp = IF_record(fi(), fr(), fb(), fo())
+    converter = Converter(
+        problem,
+        fluent_ids={"fi": 0, "fr": 1, "fb": 2, "fo": 3},
+        object_ids={"l1": 0},
+        objects_by_id=[l1],
+    )
+    converted = converter.convert(exp)
+
+    state = State([3, Fraction(1, 2), True, ObjectNode(0)], None, {}, MultiSet(), 0, [])
+    assert evaluate(converted, state) is True
+    assert received["i"] == 3 and type(received["i"]) is int
+    assert received["r"] == Fraction(1, 2) and isinstance(received["r"], Fraction)
+    assert received["b"] is True
+    assert received["o"] is l1
+
+
+def test_interpreted_function_registry_reuses_func_id_for_shared_wrapper():
+    """Rust registers each distinct wrapper callable once, deduped by
+    `function.as_ptr()` (`crates/rustamer-base/src/expressions.rs::
+    register_interpreted_function`), and never frees an entry -- the
+    registry's strong `Py<PyAny>` reference is exactly what keeps that
+    pointer from being recycled and silently aliasing a different callable's
+    `func_id`. Encoding the same problem twice (as TamerLite's anytime loop
+    does on every re-solve) must therefore still evaluate correctly: the
+    second `Encoder`'s IF nodes have to resolve through whichever `func_id`
+    the registry assigns *this* time, not silently reuse a stale id from the
+    first encoding."""
+
+    reload_tamerlite(False)
+    problem = problems_generator.get_problem_if_bool_condition()
+    for _ in range(3):
+        lifted_problem, ground_problem, map_back_action_instance = (
+            testing_utils.compile_problem(problem)
+        )
+        encoder = Encoder(
+            ground_problem,
+            lifted_problem,
+            map_back_action_instance,
+            symmetry_breaking=False,
+            compression_safe_actions=False,
+            relevance_analysis=False,
+        )
+        ss: SearchSpaceABC = encoder.search_space
+        state = ss.initial_state()
+        # `f` reads `IF_int_to_int(ithree)`, evaluated once per encoding;
+        # if a stale/aliased `func_id` were ever resolved this would raise
+        # or evaluate against the wrong callable instead of quietly working.
+        states = generate_states(ss, state, num_states=10)
+        assert len(states) >= 1
+
+
+def test_interpreted_function_unsupported_return_type_raises():
+    """`Converter.walk_interpreted_function_exp`'s return-type dispatch
+    (bool/int/real/user-type) has no reachable fifth case through the public
+    `InterpretedFunction` API -- `InterpretedFunction.__init__` only asserts
+    the type is registered with the environment, not that it's one of those
+    four. Simulate an unsupported return type the same way: build a normal,
+    validly-constructed `InterpretedFunction` and then swap its declared
+    return type for UP's own `TIME` type, which none of the four
+    `is_*_type()` checks recognize (a hand-rolled fake type won't survive
+    UP's own type-checker, which needs the *full* `Type` interface -- `TIME`
+    is a real, fully-formed one that just isn't bool/int/real/user).
+    `counter` is written by `bump`, so it isn't static and UP's Grounder
+    can't constant-fold `IF_broken(counter)` away before it ever reaches
+    TamerLite (same reasoning as `test_interpreted_function_in_fluent_
+    argument_raises`)."""
+    from unified_planning.model.types import TIME
+
+    counter = Fluent("counter", IntType())
+    IF_broken = InterpretedFunction(
+        "broken", IntType(), OrderedDict(x=IntType()), lambda x: x
+    )
+    IF_broken._return_type = TIME
+
+    bump = InstantaneousAction("bump")
+    bump.add_effect(counter, Plus(counter, 1))
+    act = InstantaneousAction("act")
+    act.add_precondition(GE(IF_broken(counter), 1))
+
+    problem = Problem("if_unsupported_return_type")
+    problem.add_fluent(counter)
+    problem.add_action(bump)
+    problem.add_action(act)
+    problem.set_initial_value(counter, 1)
+    problem.add_goal(GE(counter, 1))
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        search = tamerlite.SearchParams(search="gbfs", heuristic="blind")
+        with (
+            OneshotPlanner(name="tamerlite", params={"search": search}) as planner,
+            pytest.raises(
+                NotImplementedError,
+                match="Unsupported interpreted function return type",
+            ),
+        ):
+            planner.solve(problem, timeout=None)
+
+
+def test_interpreted_function_bad_return_value_raises():
+    """A callable declared to return an object but that actually returns
+    something else (a user bug, not a modeling error) must fail loudly on
+    both backends. Rust's `interpreted_function_result` raises a
+    `PyValueError` when it can't extract an `ObjectNode`
+    (`crates/rustamer-base/src/expressions.rs`). Python's own wrapper
+    (`Converter._get_interpreted_function_wrapper`) doesn't validate the raw
+    result before wrapping it -- `make_object_node(self._object_ids[raw_
+    result.name])` -- so a non-`Object` return surfaces as a bare
+    `AttributeError` right there (`src/tamerlite/converter.py`), not as the
+    cleaner `assert isinstance(r, ObjectNode)` in `InterpretedFunctionNode.
+    call`, which only runs for calls the wrapper doesn't already resolve to
+    an object. `counter` is written by `bump`, so it isn't static and UP's
+    own Grounder/Simplifier can't constant-fold `IF_broken(counter)` away
+    first -- without that, the bad return would instead surface as an
+    `AttributeError` from UP's own `Simplifier.walk_interpreted_function_exp`
+    during grounding, one layer before TamerLite ever sees it."""
+    Loc = UserType("Loc")
+    l1 = Object("l1", Loc)
+    l2 = Object("l2", Loc)
+
+    def broken(x):
+        return "not an object"
+
+    IF_broken = InterpretedFunction(
+        "broken_object_return", Loc, OrderedDict(x=IntType()), broken
+    )
+
+    counter = Fluent("counter", IntType())
+    at = Fluent("at", Loc)
+    bump = InstantaneousAction("bump")
+    bump.add_effect(counter, Plus(counter, 1))
+    act = InstantaneousAction("act")
+    act.add_precondition(GE(counter, 0))
+    act.add_effect(at, IF_broken(counter))
+
+    problem = Problem("if_bad_return_value")
+    problem.add_fluent(counter)
+    problem.add_fluent(at)
+    problem.add_object(l1)
+    problem.add_object(l2)
+    problem.add_action(bump)
+    problem.add_action(act)
+    problem.set_initial_value(counter, 0)
+    # `at` starts at `l2`, so reaching the goal requires actually applying
+    # `act` -- if it started at `l1` already, the goal would be trivially
+    # true and `act`'s broken effect would never get evaluated at all.
+    problem.set_initial_value(at, l2)
+    problem.add_goal(Equals(at, l1))
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        search = tamerlite.SearchParams(search="gbfs", heuristic="blind")
+        with (
+            OneshotPlanner(name="tamerlite", params={"search": search}) as planner,
+            pytest.raises((AssertionError, ValueError, TypeError, AttributeError)),
+        ):
+            planner.solve(problem, timeout=None)
+
+
+def test_hmax_explicit_partial_callable_can_raise():
+    """`hmax_explicit` cross-products an effect's argument fluents'
+    already-reachable values and evaluates the interpreted function on every
+    combination (`heuristics.py`'s `HMaxExplicit` docstring;
+    `crates/rustamer-base/src/heuristics.rs::possible_values`) -- including
+    combinations that never jointly occur in any real reachable state. A
+    *partial* callable (one that's only defined for some inputs) can
+    therefore be called out-of-domain and raise, purely as an artifact of the
+    over-approximation -- documented in `TODO.txt` as an open question, not a
+    bug to silently swallow. hff/hadd/hmax, by contrast, evaluate an IF
+    effect as an opaque `complex_numeric_effect` and never call the callable
+    during heuristic computation at all, so they must NOT raise here."""
+
+    Loc = UserType("Loc")
+    l1 = Object("l1", Loc)
+    l2 = Object("l2", Loc)
+
+    def partial_next(loc, allowed):
+        # Only defined when `allowed` is `True` -- `hmax_explicit`'s
+        # reachable-value cross-product doesn't know that constraint and may
+        # call this with `allowed=False` regardless.
+        if not allowed:
+            raise ValueError("next_loc is undefined when not allowed")
+        return l2 if loc == l1 else l1
+
+    IF_partial_next = InterpretedFunction(
+        "partial_next", Loc, OrderedDict(loc=Loc, allowed=BoolType()), partial_next
+    )
+
+    at = Fluent("at", Loc)
+    allowed = Fluent("allowed", BoolType())
+    move = InstantaneousAction("move")
+    move.add_precondition(allowed)
+    move.add_effect(at, IF_partial_next(at, allowed))
+
+    problem = Problem("if_hmax_explicit_partial_callable")
+    problem.add_fluent(at)
+    problem.add_fluent(allowed)
+    problem.add_object(l1)
+    problem.add_object(l2)
+    problem.add_action(move)
+    problem.set_initial_value(at, l1)
+    problem.set_initial_value(allowed, True)
+    problem.add_goal(Equals(at, l2))
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.core import HFF, HAdd, HMax
+
+        lifted_problem, ground_problem, map_back_action_instance = (
+            testing_utils.compile_problem(problem)
+        )
+        encoder = Encoder(
+            ground_problem,
+            lifted_problem,
+            map_back_action_instance,
+            symmetry_breaking=False,
+            compression_safe_actions=False,
+            relevance_analysis=False,
+        )
+        ss: SearchSpaceABC = encoder.search_space
+        init_state = ss.initial_state()
+
+        heuristic_classes: list[Callable[..., Heuristic]] = [HFF, HAdd, HMax]
+        for heuristic_class in heuristic_classes:
+            heuristic: Heuristic = heuristic_class(
+                encoder.actions,
+                encoder.fluent_types,
+                encoder.objects,
+                encoder.events,
+                encoder.goal,
+                internal_caching=True,
+                cache_value_in_state=False,
+                inadmissible_numeric_heuristic_variant=False,
+            )
+            # Must not raise: the IF effect is opaque to these heuristics.
+            heuristic.eval(init_state, ss)
+
+
+def test_interpreted_functions_compression_safe_actions_reached():
+    """`get_problem_if_temporal_compression_safe` exists specifically to be
+    solved with `compression_safe_actions=True` -- exercising `Encoder.
+    _compute_compression_safe_actions` and the `TimedToSequential` recompile
+    on an IF problem, per its own docstring -- but nothing calls it with that
+    flag directly; `test_search_algorithms`/`test_heuristics` only reach it
+    via the generic `_compression_flags` matrix, indistinguishable from any
+    other flag combination. Pin the specific case this problem was built
+    for."""
+    problem = problems_generator.get_problem_if_temporal_compression_safe()
+    assert testing_utils.is_temporal_problem(problem)
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        search = tamerlite.SearchParams(
+            search="wastar", heuristic="hff", compression_safe_actions=True
+        )
+        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+            planner: tamerlite.engine.TamerLite
+            res: PlanGenerationResult = planner.solve(problem, timeout=None)
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+            with PlanValidator(problem_kind=problem.kind) as v:
+                assert v.validate(problem, res.plan)
+
+
+def test_interpreted_functions_problem_not_picklable():
+    """`InterpretedFunction.__getstate__` deliberately nulls out `_function`
+    before pickling instead of letting the pickler raise on it (its own
+    comment: "removing the function here so that pickler does not get mad at
+    us... interpreted functions in parallel problems won't work") -- so
+    `pickle.dumps` itself succeeds, but a round-tripped `InterpretedFunction`
+    comes back with no callable at all. That's the real shape of "`Parallel`
+    is off the table for any IF problem" (see `interpreted-functions-
+    report.md`): the break surfaces the first time something tries to call
+    the function, not at pickle time."""
+    import pickle
+
+    def double_it(x):
+        return x * 2
+
+    IF_double = InterpretedFunction(
+        "double_it", IntType(), OrderedDict(x=IntType()), double_it
+    )
+    assert IF_double.function is double_it
+
+    restored: InterpretedFunction = pickle.loads(pickle.dumps(IF_double))
+    assert restored.function is None
+
+
+def test_interpreted_functions_bounded_types_examples_excluded():
+    """8 of UP's 13 bundled interpreted-function examples require
+    `BOUNDED_TYPES`, which `TamerLite.supported_kind` doesn't declare at all
+    -- a pre-existing gap unrelated to interpreted-function support (see
+    `problems_generator.py`'s comment above the local `get_problem_if_*`
+    builders). Pin the exact excluded set so this list visibly shrinks --
+    rather than silently changing size -- if `BOUNDED_TYPES` support ever
+    lands."""
+    examples_module = unified_planning.test.examples.interpreted_functions_examples
+    examples = examples_module.get_example_problems()
+    excluded = {
+        name
+        for name, test_case in examples.items()
+        if not tamerlite.engine.TamerLite.supports(test_case.problem.kind)
+    }
+    assert excluded == {
+        "IF_in_conditions_complex_1",
+        "go_home_with_rain_and_interpreted_functions",
+        "interpreted_functions_in_conditions",
+        "interpreted_functions_in_conditions_always_impossible",
+        "interpreted_functions_in_durative_conditions",
+        "interpreted_functions_in_boolean_assignment",
+        "interpreted_functions_in_numeric_assignment",
+        "interpreted_functions_in_durative_start_effects",
+    }
+
+
+def test_interpreted_functions_real_return_backend_normalization():
+    """Documented backend divergence on a real-typed IF return: Rust's
+    `interpreted_function_result` collapses an integral `Real` down to an
+    `Int` (`crates/rustamer-base/src/expressions.rs`), while Python's
+    `InterpretedFunctionNode.call` always keeps a `Fraction`
+    (`src/tamerlite/core/search_space.py`). This test's own `to_int`
+    deliberately returns an integral value (`4`) so the divergence is
+    actually triggered -- `get_problem_if_signature_shapes`'s real-return
+    case just needs to prove the solve path works at all, not exercise this
+    specific divergence.
+
+    Observed through `evaluate()`, not `State.get_value()`: the latter
+    returns the Rust backend's raw internal `ExpressionNode` wrapper, which
+    doesn't compare equal to a plain Python `int`/`Fraction` at all --
+    `evaluate()` is what actually normalizes a fluent read down to a native
+    Python value on both backends."""
+
+    def to_int(x):
+        return Fraction(x)
+
+    IF_to_int = InterpretedFunction(
+        "to_int", RealType(), OrderedDict(x=IntType()), to_int
+    )
+
+    n = Fluent("n", IntType())
+    problem = Problem("if_real_return_integral_probe")
+    problem.add_fluent(n)
+    problem.set_initial_value(n, 4)
+    exp = IF_to_int(n())
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.converter import Converter
+        from tamerlite.core import evaluate
+
+        lifted_problem, ground_problem, map_back_action_instance = (
+            testing_utils.compile_problem(problem)
+        )
+        encoder = Encoder(
+            ground_problem,
+            lifted_problem,
+            map_back_action_instance,
+            symmetry_breaking=False,
+            compression_safe_actions=False,
+            relevance_analysis=False,
+        )
+        init_state = encoder.search_space.initial_state()
+        converter = Converter(
+            ground_problem,
+            fluent_ids=encoder.fluent_ids,
+            object_ids={},
+            objects_by_id=[],
+        )
+        converted = converter.convert(exp)
+        value = evaluate(converted, init_state)
+        if disable_rustamer:
+            assert value == Fraction(4) and isinstance(value, Fraction)
+        else:
+            assert value == 4 and type(value) is int
+
+
+def test_simplify_with_interpreted_functions():
+    """`simplify(..., evaluate_interpreted_functions=True)` is implemented in
+    both backends (`src/tamerlite/core/search_space.py`,
+    `crates/rustamer-base/src/expressions_utils.rs`) but called from nowhere
+    in `src/tamerlite/` and, before this test, from nowhere in the test suite
+    either -- `TODO.txt` records this gap explicitly ("test simplify with
+    interpreted functions"). `testing_utils.parse_expression` has no syntax
+    for an IF node, so this builds the postfix expression tuple directly with
+    the real internal constructors, the same ones `Converter` itself uses.
+    With the flag off (the default), a fully-constant IF call is still opaque
+    data and must be left alone; with it on, it must fold away into its
+    actual return value."""
+
+    def double_it(x):
+        return x * 2
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.core import (
+            IfReturnType,
+            make_int_constant_node,
+            make_interpreted_function_node,
+            simplify,
+        )
+
+        five = make_int_constant_node(5)
+        if_node = make_interpreted_function_node(double_it, IfReturnType.INT, (0,))
+        exp = (five, if_node)
+
+        # Without the flag, the IF node is untouched: still length 2, its
+        # operand (`5`) still live. (Comparing the raw element to a plain
+        # `5` isn't portable -- unlike `evaluate()`, `simplify()`'s raw
+        # output elements are the Rust backend's internal `ExpressionNode`
+        # wrapper on that side, which doesn't support `==` against a plain
+        # Python `int`; the shape check is the meaningful assertion here.)
+        not_evaluated = tuple(simplify(exp, {}))
+        assert len(not_evaluated) == 2
+
+        # With it, the call folds away into its result and the now-dead
+        # operand is dropped by simplify's reachable-node rebuild -- the
+        # whole expression collapses to a single node holding `10`. (Same
+        # portability note as above: compare the repr, not the raw value.)
+        evaluated = tuple(simplify(exp, {}, evaluate_interpreted_functions=True))
+        assert len(evaluated) == 1
+        assert "10" in str(evaluated[0])
+
+
 def test_interpreted_functions_duration():
     problem = problems_generator.get_problem_if_duration()
     assert problem.kind.has_interpreted_functions_in_durations()
@@ -1737,23 +2185,6 @@ def test_interpreted_functions_duration():
             _, _, duration = timed_actions[0]
             # charge_time(battery=4) == 10 - 4 == 6
             assert duration == Fraction(6)
-
-
-def test_interpreted_functions_object_effect():
-    problem = problems_generator.get_problem_if_object_effect()
-    assert problem.kind.has_interpreted_functions_in_object_assignments()
-
-    for disable_rustamer in [True, False]:
-        reload_tamerlite(disable_rustamer)
-
-        search = tamerlite.SearchParams(search="gbfs", heuristic="blind")
-        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
-            planner: tamerlite.engine.TamerLite
-            res: PlanGenerationResult = planner.solve(problem, timeout=None)
-            assert res.status == ResultStatus.SOLVED_SATISFICING
-
-            with PlanValidator(problem_kind=problem.kind) as v:
-                assert v.validate(problem, res.plan)
 
 
 def test_interpreted_function_in_fluent_argument_raises():
@@ -1939,6 +2370,31 @@ def test_symmetry_breaking_interpreted_function_object_return_taint():
     assert {"l1"} in group_sets
     assert {"l2"} in group_sets
     assert {"i1", "i2"} in group_sets
+
+
+def test_symmetry_breaking_interpreted_function_hierarchical_type_argument_taint():
+    """An interpreted function's tainted-type scan taints subtype instances
+    too, not just objects declared exactly as the argument's declared
+    (super)type: `is_heavy(vehicle: Vehicle)` must taint `v1` (a `Van`,
+    a subtype of `Vehicle`) the same way it taints `c1` (a plain `Vehicle`)."""
+
+    problem = problems_generator.get_problem_if_hierarchical_type_argument()
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    encoder = Encoder(
+        ground_problem,
+        lifted_problem,
+        map_back_action_instance,
+        symmetry_breaking=False,
+        compression_safe_actions=False,
+        relevance_analysis=False,
+    )
+    groups = encoder._compute_equivalent_objects()
+    group_sets = [{obj.name for obj in group} for group in groups]
+    assert {"c1"} in group_sets
+    assert {"v1"} in group_sets
+    assert {"c1", "v1"} not in group_sets
 
 
 def test_interpreted_functions_symmetry_breaking_and_relevance_analysis_not_disabled():
