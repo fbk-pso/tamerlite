@@ -112,13 +112,31 @@ pub fn gbfs_search(
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, heuristics, timeout=None, early_termination=false, weak_equality=false))]
+#[pyo3(signature = (
+    ss,
+    heuristics,
+    timeout=None,
+    early_termination=false,
+    weak_equality=false,
+    max_expanded_states=None,
+    show_expansion_progress=false,
+))]
 pub fn multiqueue_search(
     ss: &rustamer_base::SearchSpace,
     heuristics: Vec<(Heuristic, f64)>,
     timeout: Option<f32>,
     early_termination: bool,
     weak_equality: bool,
+    max_expanded_states: Option<usize>,
+    show_expansion_progress: bool,
 ) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
-    rustamer_base::multiqueue_search(ss, heuristics, timeout, early_termination, weak_equality)
+    rustamer_base::multiqueue_search(
+        ss,
+        heuristics,
+        timeout,
+        early_termination,
+        weak_equality,
+        max_expanded_states,
+        show_expansion_progress,
+    )
 }

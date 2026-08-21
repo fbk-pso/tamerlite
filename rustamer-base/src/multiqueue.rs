@@ -16,6 +16,7 @@
 //
 
 use std::cell::RefCell;
+use std::io::{self, Write};
 use std::rc::Rc;
 use std::time::SystemTime;
 use std::{collections::BinaryHeap, vec::Vec};
@@ -113,12 +114,27 @@ impl MQSwitchPolicy for RoundRobinSwitchPolicy {
     fn notify_pop(&mut self, _i: usize, _item: &PrioritizedItem) {}
 }
 
+fn print_expansion_progress(expanded: usize, limit: usize, finish_line: bool) {
+    const WIDTH: usize = 40;
+    let filled = expanded.saturating_mul(WIDTH) / limit;
+    let bar = format!("{}{}", "#".repeat(filled), "-".repeat(WIDTH - filled));
+    let percentage = expanded.saturating_mul(100) / limit;
+    eprint!("\rExpanded states: [{bar}] {expanded}/{limit} ({percentage:>3}%)");
+    if finish_line {
+        eprintln!();
+    } else {
+        let _ = io::stderr().flush();
+    }
+}
+
 pub fn multiqueue_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     ss: &S,
     heuristics: Vec<(H, f64)>,
     timeout: Option<f32>,
     early_termination: bool,
     weak_equality: bool,
+    max_expanded_states: Option<usize>,
+    show_expansion_progress: bool,
 ) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
     let mut switch_policy = RoundRobinSwitchPolicy::new(heuristics.len());
     _multiqueue_search(
@@ -128,6 +144,8 @@ pub fn multiqueue_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         timeout,
         early_termination,
         weak_equality,
+        max_expanded_states,
+        show_expansion_progress,
     )
 }
 
@@ -138,12 +156,24 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
     timeout: Option<f32>,
     early_termination: bool,
     weak_equality: bool,
+    max_expanded_states: Option<usize>,
+    show_expansion_progress: bool,
 ) -> PyResult<(Option<Vec<Action>>, FxHashMap<String, String>)> {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher::default());
     let start = SystemTime::now();
     let init = Rc::new(ss.initial_state(None)?);
     let mut expanded_states = 0;
+    if show_expansion_progress {
+        if let Some(limit) = max_expanded_states {
+            print_expansion_progress(0, limit, false);
+        }
+    }
     if early_termination && ss.goal_reached(&init, None)? {
+        if show_expansion_progress {
+            if let Some(limit) = max_expanded_states {
+                print_expansion_progress(expanded_states, limit, true);
+            }
+        }
         metrics.insert("expanded_states".to_string(), expanded_states.to_string());
         metrics.insert("goal_depth".to_string(), init.g.to_string());
         return Ok((Some(extract_path(&init)), metrics));
@@ -177,6 +207,16 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
 
     let mut i = 0;
     loop {
+        if let Some(limit) = max_expanded_states {
+            if expanded_states >= limit {
+                if show_expansion_progress {
+                    print_expansion_progress(expanded_states, limit, true);
+                }
+                metrics.insert("expanded_states".to_string(), expanded_states.to_string());
+                metrics.insert("expansion_limit_reached".to_string(), "true".to_string());
+                return Ok((None, metrics));
+            }
+        }
         if let Some(t) = timeout {
             if start.elapsed().unwrap().as_secs_f32() > t {
                 return Err(PyTimeoutError::new_err("Timeout"));
@@ -196,7 +236,20 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
             current.state_container.set_expanded(true);
             let state = &current.state_container.state;
             expanded_states += 1;
+            if show_expansion_progress {
+                if let Some(limit) = max_expanded_states {
+                    let update_interval = (limit / 100).max(1);
+                    if expanded_states % update_interval == 0 {
+                        print_expansion_progress(expanded_states, limit, false);
+                    }
+                }
+            }
             if !early_termination && ss.goal_reached(&state, None)? {
+                if show_expansion_progress {
+                    if let Some(limit) = max_expanded_states {
+                        print_expansion_progress(expanded_states, limit, true);
+                    }
+                }
                 metrics.insert("expanded_states".to_string(), expanded_states.to_string());
                 metrics.insert("goal_depth".to_string(), state.g.to_string());
                 return Ok((Some(extract_path(&state)), metrics));
@@ -206,6 +259,11 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
             for rs in ss.get_successor_states_iter(&state) {
                 let s = rs?;
                 if early_termination && ss.goal_reached(&s, None)? {
+                    if show_expansion_progress {
+                        if let Some(limit) = max_expanded_states {
+                            print_expansion_progress(expanded_states, limit, true);
+                        }
+                    }
                     metrics.insert("expanded_states".to_string(), expanded_states.to_string());
                     metrics.insert("goal_depth".to_string(), s.g.to_string());
                     return Ok((Some(extract_path(&s)), metrics));
@@ -246,6 +304,11 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
                     }
                 }
             }
+        }
+    }
+    if show_expansion_progress {
+        if let Some(limit) = max_expanded_states {
+            print_expansion_progress(expanded_states, limit, true);
         }
     }
     metrics.insert("expanded_states".to_string(), expanded_states.to_string());
