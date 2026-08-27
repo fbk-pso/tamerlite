@@ -85,6 +85,7 @@ if not use_rustamer:
         SearchSpace,
         State,
         Timing,
+        clear_interpreted_function_cache,
         evaluate,
         get_fluent_value,
         get_fluents,
@@ -144,6 +145,7 @@ else:
         shift_expression,
         simplify,
         get_fluents,
+        clear_interpreted_function_cache,
     ) = (
         rustamer_lib.make_bool_constant_node,
         rustamer_lib.make_fluent_node,
@@ -155,6 +157,7 @@ else:
         rustamer_lib.shift_expression,
         rustamer_lib.simplify,
         rustamer_lib.get_fluents,
+        rustamer_lib.clear_interpreted_function_cache,
     )
 
     (

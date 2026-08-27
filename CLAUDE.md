@@ -23,10 +23,18 @@ At runtime [src/tamerlite/core/__init__.py](src/tamerlite/core/__init__.py) trie
   `thread_local!` over `Mutex`/`RwLock` for module-level mutable state -- a plain
   `static` requires its type to be `Sync`, which `RefCell` isn't, so `thread_local!`
   is what makes that legal without `unsafe`. Concrete precedent: `expressions.rs`'s
-  `INTERPRETED_FUNCTIONS`/`IF_IDS_BY_PTR` interpreted-function callable registry. If this
-  assumption ever changes (e.g. parallel search), anything built on `thread_local!`
+  `INTERPRETED_FUNCTIONS`/`IF_IDS_BY_PTR` interpreted-function callable registry, and its
+  `IF_RESULTS` result cache (and `utils.rs`'s `FRACTION_TYPE` type cache) alongside it. If
+  this assumption ever changes (e.g. parallel search), anything built on `thread_local!`
   would need revisiting -- it fails silently (each thread gets its own empty state)
   rather than refusing to compile.
+- When a `thread_local!`-cached value is a callback into arbitrary Python (e.g.
+  `IF_RESULTS` memoizing an interpreted-function call), never hold the `RefCell` borrow
+  across the Python call itself. The callable can re-enter Rust (e.g. by calling
+  `evaluate`/`simplify` on an expression that itself contains an interpreted-function
+  call), and even argument marshalling can trigger arbitrary Python (allocating a
+  `PyExpressionNode` can run a GC pass, which can run `__del__`). A borrow held across
+  either panics with "already borrowed" the moment that happens.
 
 ## Repository layout
 

@@ -2157,6 +2157,487 @@ def test_simplify_with_interpreted_functions():
         assert "10" in str(evaluated[0])
 
 
+def test_interpreted_function_cache_avoids_python_call():
+    """The Rust backend now memoizes interpreted-function results in
+    `IF_RESULTS` (`crates/rustamer-base/src/expressions.rs`), keyed on
+    `(func_id, return_type, args)`, in front of `call_interpreted_function` --
+    so a second, identical call never touches Python at all. This registers
+    the raw counting callable directly (no `Converter`, hence no
+    `Converter._if_cache`), so any dedup observed here provably comes from
+    the new Rust-side cache and not the pre-existing Python-side one.
+
+    This is a deliberate, call-count-only divergence between backends: the
+    pure-Python `evaluate`/`simplify` has no memo of its own
+    (`InterpretedFunctionNode.call`, `src/tamerlite/core/search_space.py`),
+    so it calls the raw callable every time. In production, both backends
+    memoize -- Python via `Converter._if_cache`, Rust via `IF_RESULTS` -- this
+    difference is only visible when a raw callable bypasses the wrapper, as
+    in this test."""
+
+    calls = []
+
+    def double_it(x):
+        calls.append(x)
+        return x * 2
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.core import (
+            IfReturnType,
+            make_int_constant_node,
+            make_interpreted_function_node,
+            simplify,
+        )
+
+        calls.clear()
+        five = make_int_constant_node(5)
+        if_node = make_interpreted_function_node(double_it, IfReturnType.INT, (0,))
+        exp = (five, if_node)
+
+        simplify(exp, {}, evaluate_interpreted_functions=True)
+        simplify(exp, {}, evaluate_interpreted_functions=True)
+
+        if disable_rustamer:
+            assert calls == [5, 5]
+        else:
+            assert calls == [5]
+
+
+def test_interpreted_function_cache_distinguishes_return_type():
+    """`make_interpreted_function_node` is a public constructor that can
+    register the same raw callable under two different `IfReturnType`s (as
+    this test does) -- something `Converter._get_interpreted_function_wrapper`
+    never does in production, since one `InterpretedFunction` always has one
+    declared `return_type`. `register_interpreted_function` dedups by pointer
+    identity alone, so both registrations resolve to the same `func_id`; the
+    Rust cache's key must still include `return_type`, or the two calls below
+    would collide and the second would wrongly return the first's cached,
+    differently-coerced result. `half_up` returns a non-integral value so the
+    two coercions (`int()` truncates, `Fraction()` doesn't) actually produce
+    different results -- if the cache ever collided on `func_id` alone, the
+    second (real) call would wrongly come back truncated like the first."""
+
+    def half_up(x):
+        return x + Fraction(1, 2)
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.core import (
+            IfReturnType,
+            make_int_constant_node,
+            make_interpreted_function_node,
+            simplify,
+        )
+
+        three = make_int_constant_node(3)
+        int_node = make_interpreted_function_node(half_up, IfReturnType.INT, (0,))
+        real_node = make_interpreted_function_node(half_up, IfReturnType.REAL, (0,))
+
+        int_result = tuple(
+            simplify((three, int_node), {}, evaluate_interpreted_functions=True)
+        )
+        real_result = tuple(
+            simplify((three, real_node), {}, evaluate_interpreted_functions=True)
+        )
+        assert len(int_result) == 1
+        assert len(real_result) == 1
+        assert str(int_result[0]) != str(real_result[0])
+
+
+def test_interpreted_function_cache_is_scoped_to_object_table():
+    """Rust counterpart of `test_converter_shares_if_cache_across_converters_
+    with_different_object_tables`, which pins the same invariant for the
+    pre-existing Python-side `_if_cache` (Python-only, via `reload_
+    tamerlite(True)`). Here two `Converter`s number `l1`/`l2` oppositely and
+    do NOT share an `if_cache`, so a correct result can only come from each
+    Converter's own wrapper closure -- and therefore its own `func_id` in the
+    Rust-side `IF_RESULTS` cache underneath it. `is_l1` discriminates on the
+    real object's identity, not just round-trips it, so a leak between the
+    two converters' cache entries would flip one result's boolean rather than
+    silently agreeing. This is the regression test for the invariant that
+    `Converter._if_wrappers` -- and therefore each interpreted function's
+    `func_id` -- must stay scoped to one Converter's object table; see the
+    warning in `_get_interpreted_function_wrapper`'s docstring.
+
+    Built directly from the wrapper + the real node constructors (as
+    `test_simplify_with_interpreted_functions` does) and evaluated via
+    `simplify`, not `evaluate`/`State`: Rust's `State` has no Python
+    constructor, so tests can't build one directly for the Rust backend."""
+
+    reload_tamerlite(False)
+    from tamerlite.converter import Converter
+    from tamerlite.core import (
+        IfReturnType,
+        make_interpreted_function_node,
+        make_object_node,
+        simplify,
+    )
+
+    Loc = UserType("Loc")
+    l1 = Object("l1", Loc)
+    l2 = Object("l2", Loc)
+
+    def is_l1(loc):
+        return loc == l1
+
+    IF_is_l1 = InterpretedFunction("is_l1", BoolType(), OrderedDict(loc=Loc), is_l1)
+
+    problem = Problem("if_cache_object_table_scoping")
+    problem.add_object(l1)
+    problem.add_object(l2)
+
+    converter_a = Converter(
+        problem,
+        fluent_ids={},
+        object_ids={"l1": 0, "l2": 1},
+        objects_by_id=[l1, l2],
+    )
+    converter_b = Converter(
+        problem,
+        fluent_ids={},
+        object_ids={"l1": 1, "l2": 0},
+        objects_by_id=[l2, l1],
+    )
+
+    wrapper_a = converter_a._get_interpreted_function_wrapper(IF_is_l1)
+    wrapper_b = converter_b._get_interpreted_function_wrapper(IF_is_l1)
+    node_a = make_interpreted_function_node(wrapper_a, IfReturnType.BOOL, (0,))
+    node_b = make_interpreted_function_node(wrapper_b, IfReturnType.BOOL, (0,))
+
+    # oid 0 means l1 under converter_a and l2 under converter_b -- correct
+    # results must diverge accordingly.
+    obj0 = make_object_node(0)
+
+    result_a = tuple(simplify((obj0, node_a), {}, evaluate_interpreted_functions=True))
+    result_b = tuple(simplify((obj0, node_b), {}, evaluate_interpreted_functions=True))
+    assert len(result_a) == 1 and len(result_b) == 1
+    # Compare the repr, not the raw value -- same portability note as
+    # `test_simplify_with_interpreted_functions`: `simplify()`'s raw output
+    # elements are the Rust backend's internal `ExpressionNode` wrapper here,
+    # which doesn't support `==` against a plain Python `bool`.
+    assert "true" in str(result_a[0])
+    assert "false" in str(result_b[0])
+
+
+def test_clear_interpreted_function_cache_drops_memoized_results():
+    """`clear_interpreted_function_cache` (`crates/rustamer-base/src/expressions.rs`
+    on Rust, a no-op stub in `src/tamerlite/core/search_space.py` on Python)
+    drops every entry of `IF_RESULTS`. Registers the raw counting callable
+    directly (no `Converter`), so there is no `Converter._if_cache` to
+    confound the count: on Rust, the second `simplify` call is a hit (no
+    append), clearing forces the third call back to a miss (an append); on
+    Python, which has no memo of its own, every call is a miss regardless --
+    proving the stub is importable, callable, and inert."""
+
+    calls = []
+
+    def double_it(x):
+        calls.append(x)
+        return x * 2
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.core import (
+            IfReturnType,
+            clear_interpreted_function_cache,
+            make_int_constant_node,
+            make_interpreted_function_node,
+            simplify,
+        )
+
+        calls.clear()
+        five = make_int_constant_node(5)
+        if_node = make_interpreted_function_node(double_it, IfReturnType.INT, (0,))
+        exp = (five, if_node)
+
+        simplify(exp, {}, evaluate_interpreted_functions=True)
+        simplify(exp, {}, evaluate_interpreted_functions=True)
+        # Python has no memo: every call is a miss. Rust: the second call is
+        # a cache hit.
+        before_clear = 2 if disable_rustamer else 1
+        assert len(calls) == before_clear
+
+        clear_interpreted_function_cache()
+        simplify(exp, {}, evaluate_interpreted_functions=True)
+        # Clearing forces this third call back to a miss on both backends
+        # (a genuine miss on Rust, an unconditional miss on Python).
+        assert len(calls) == before_clear + 1
+
+
+def test_clear_interpreted_function_cache_preserves_correctness_across_converters():
+    """Regression test for the `Encoder.__init__` clear hook's core safety
+    property, at the level of the cache primitive itself rather than through
+    a full solve: clearing mid-stream must not let a *later* Converter's
+    entry leak into an *earlier* Converter's still-live wrapper. Mirrors
+    `test_interpreted_function_cache_is_scoped_to_object_table`, but with an
+    explicit `clear_interpreted_function_cache()` call sandwiched between
+    the two converters' evaluations -- `converter_a`'s result must survive
+    the clear and `converter_b`'s construction/evaluation unchanged.
+
+    Uses raw `Converter(...)`, not `Encoder`, so the new auto-clear-on-
+    `Encoder.__init__` hook plays no role here -- this test's own explicit
+    call is what's under test."""
+
+    reload_tamerlite(False)
+    from tamerlite.converter import Converter
+    from tamerlite.core import (
+        IfReturnType,
+        clear_interpreted_function_cache,
+        make_interpreted_function_node,
+        make_object_node,
+        simplify,
+    )
+
+    Loc = UserType("Loc")
+    l1 = Object("l1", Loc)
+    l2 = Object("l2", Loc)
+
+    def is_l1(loc):
+        return loc == l1
+
+    IF_is_l1 = InterpretedFunction("is_l1", BoolType(), OrderedDict(loc=Loc), is_l1)
+
+    problem = Problem("if_clear_preserves_correctness")
+    problem.add_object(l1)
+    problem.add_object(l2)
+
+    converter_a = Converter(
+        problem,
+        fluent_ids={},
+        object_ids={"l1": 0, "l2": 1},
+        objects_by_id=[l1, l2],
+    )
+    converter_b = Converter(
+        problem,
+        fluent_ids={},
+        object_ids={"l1": 1, "l2": 0},
+        objects_by_id=[l2, l1],
+    )
+
+    wrapper_a = converter_a._get_interpreted_function_wrapper(IF_is_l1)
+    wrapper_b = converter_b._get_interpreted_function_wrapper(IF_is_l1)
+    node_a = make_interpreted_function_node(wrapper_a, IfReturnType.BOOL, (0,))
+    node_b = make_interpreted_function_node(wrapper_b, IfReturnType.BOOL, (0,))
+    obj0 = make_object_node(0)
+
+    result_a = tuple(simplify((obj0, node_a), {}, evaluate_interpreted_functions=True))
+    assert "true" in str(result_a[0])
+
+    clear_interpreted_function_cache()
+
+    result_b = tuple(simplify((obj0, node_b), {}, evaluate_interpreted_functions=True))
+    assert "false" in str(result_b[0])
+
+    # The regression check: re-deriving converter_a's entry after the clear
+    # (and after converter_b's construction/evaluation) must not pick up
+    # converter_b's object numbering.
+    result_a_again = tuple(
+        simplify((obj0, node_a), {}, evaluate_interpreted_functions=True)
+    )
+    assert "true" in str(result_a_again[0])
+
+
+def test_encoder_clears_interpreted_function_cache():
+    """Proves `clear_interpreted_function_cache` actually fires from
+    `Encoder.__init__`, and exactly how many times -- pinning "once per
+    `Encoder`" rather than "once per solve". `reload_tamerlite` reloads
+    `tamerlite.encoder` in place (`reload_package`, not a fresh import), so
+    monkeypatching `tamerlite.encoder.clear_interpreted_function_cache`
+    after the reload survives for the rest of the test."""
+
+    reload_tamerlite(False)
+    calls: list[None] = []
+    real = tamerlite.encoder.clear_interpreted_function_cache
+
+    def spy():
+        calls.append(None)
+        real()
+
+    tamerlite.encoder.clear_interpreted_function_cache = spy
+    try:
+        # A single, non-compression-safe Encoder: exactly one clear.
+        problem = problems_generator.get_problem_if_bool_condition()
+        lifted_problem, ground_problem, map_back_action_instance = (
+            testing_utils.compile_problem(problem)
+        )
+        Encoder(
+            ground_problem,
+            lifted_problem,
+            map_back_action_instance,
+            symmetry_breaking=False,
+            compression_safe_actions=False,
+            relevance_analysis=False,
+        )
+        assert len(calls) == 1
+
+        # The compression-safe path builds a second Encoder mid-solve
+        # (`TamerLite._solve_ground_problem`, engine.py) -- exactly two.
+        calls.clear()
+        compression_safe_problem = (
+            problems_generator.get_problem_if_temporal_compression_safe()
+        )
+        search = tamerlite.SearchParams(
+            search="wastar", heuristic="hff", compression_safe_actions=True
+        )
+        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+            planner: tamerlite.engine.TamerLite
+            res: PlanGenerationResult = planner.solve(
+                compression_safe_problem, timeout=None
+            )
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+        assert len(calls) == 2
+    finally:
+        tamerlite.encoder.clear_interpreted_function_cache = real
+
+
+def test_interpreted_function_cache_does_not_cache_errors():
+    """A `PyErr` result must never be memoized: a replayed error would carry a
+    stale traceback and could permanently poison a callable that raises once
+    and later succeeds. Calling the same failing IF twice must raise both
+    times, and the callable must actually run both times (`raises == 2`), not
+    just once with the second call replaying a cached exception."""
+
+    raises = []
+
+    def always_fails(x):
+        raises.append(x)
+        raise ValueError("nope")
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.core import (
+            IfReturnType,
+            make_int_constant_node,
+            make_interpreted_function_node,
+            simplify,
+        )
+
+        raises.clear()
+        five = make_int_constant_node(5)
+        if_node = make_interpreted_function_node(always_fails, IfReturnType.INT, (0,))
+        exp = (five, if_node)
+
+        for _ in range(2):
+            with pytest.raises(ValueError):
+                simplify(exp, {}, evaluate_interpreted_functions=True)
+        assert len(raises) == 2
+
+
+def test_interpreted_function_reentrant_callable():
+    """The Rust cache probes/inserts into a `thread_local! RefCell` around
+    the actual Python call (`IF_RESULTS` in `expressions.rs`) -- the borrow
+    must never be held while that call runs, since the callable is arbitrary
+    Python and can re-enter `evaluate`/`simplify`, which can call back into
+    `call_interpreted_function` for a *different* IF node. If the two borrow
+    scopes (probe, insert) were ever merged into one, this would panic with
+    "already borrowed" instead of returning a value."""
+
+    def outer(x):
+        from tamerlite.core import (
+            IfReturnType,
+            make_int_constant_node,
+            make_interpreted_function_node,
+            simplify,
+        )
+
+        def inner(y):
+            return y + 1
+
+        one = make_int_constant_node(1)
+        inner_node = make_interpreted_function_node(inner, IfReturnType.INT, (0,))
+        result = tuple(
+            simplify((one, inner_node), {}, evaluate_interpreted_functions=True)
+        )
+        assert "2" in str(result[0])
+        return x * 10
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.core import (
+            IfReturnType,
+            make_int_constant_node,
+            make_interpreted_function_node,
+            simplify,
+        )
+
+        five = make_int_constant_node(5)
+        outer_node = make_interpreted_function_node(outer, IfReturnType.INT, (0,))
+        result = tuple(
+            simplify((five, outer_node), {}, evaluate_interpreted_functions=True)
+        )
+        assert len(result) == 1
+        assert "50" in str(result[0])
+
+
+def test_interpreted_function_real_arg_int_normalization():
+    """A real-typed argument position can arrive as either `Int` or
+    `Rational`, depending on whether a prior computation normalized it down
+    (Rust's `interpreted_function_result` collapses an integral `Real` result
+    to `Int`, `crates/rustamer-base/src/expressions.rs`). The Rust memo keys
+    on the raw `ExpressionNode`, so `Int(3)` and `Rational(3, 1)` are two
+    distinct cache entries -- this callable is invoked twice, once receiving
+    a Python `int` and once a `Fraction`, never sharing a cached answer. This
+    is finer-grained than the pre-existing Python-side `_if_cache`
+    (`Converter._get_interpreted_function_wrapper`), whose dict key silently
+    merges the two (`Fraction(3) == 3`, equal hashes) -- a pre-existing
+    wrinkle this change neither fixes nor worsens.
+
+    Uses `evaluate()`, not `simplify()`: `simplify`'s own node-rebuild
+    normalizes any bare, integral `Rational` leaf down to `Int` as a general
+    simplification rule, independent of interpreted functions
+    (`expressions_utils.rs`), which would silently erase the very
+    distinction this test needs. `internal_evaluate`'s leaf case does not
+    (`other => (*other).clone()`), so a raw, un-normalized `Rational(3, 1)`
+    node survives through to the interpreted-function call. `evaluate()`
+    needs a real `State`, which the two expressions below never read (they
+    contain no `Fluent` node) -- it exists only because Rust's `State` has
+    no Python constructor, so one has to come from a real (otherwise
+    irrelevant) `Encoder`."""
+
+    received_types = []
+
+    def record_type(x):
+        received_types.append(type(x))
+        return True
+
+    reload_tamerlite(False)
+    from tamerlite.core import (
+        IfReturnType,
+        evaluate,
+        make_int_constant_node,
+        make_interpreted_function_node,
+        make_rational_constant_node,
+    )
+
+    problem = Problem("if_real_arg_int_normalization_dummy")
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    encoder = Encoder(
+        ground_problem,
+        lifted_problem,
+        map_back_action_instance,
+        symmetry_breaking=False,
+        compression_safe_actions=False,
+        relevance_analysis=False,
+    )
+    state = encoder.search_space.initial_state()
+
+    three_int = make_int_constant_node(3)
+    three_real = make_rational_constant_node(3, 1)
+    if_node_for_int = make_interpreted_function_node(
+        record_type, IfReturnType.BOOL, (0,)
+    )
+    if_node_for_real = make_interpreted_function_node(
+        record_type, IfReturnType.BOOL, (0,)
+    )
+
+    evaluate((three_int, if_node_for_int), state)
+    evaluate((three_real, if_node_for_real), state)
+
+    assert received_types == [int, Fraction]
+
+
 def test_interpreted_functions_duration():
     problem = problems_generator.get_problem_if_duration()
     assert problem.kind.has_interpreted_functions_in_durations()

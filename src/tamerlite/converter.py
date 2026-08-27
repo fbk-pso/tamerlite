@@ -69,6 +69,8 @@ class Converter(DagWalker):
         self._object_ids = object_ids
         self._objects_by_id = objects_by_id
         self.static_fluents = problem.get_static_fluents()
+        # Per-instance and never shared -- see the warning in
+        # `_get_interpreted_function_wrapper`'s docstring.
         self._if_wrappers: dict[InterpretedFunction, Callable] = {}
         self._if_cache: dict[InterpretedFunction, dict[tuple, Any]] = (
             if_cache if if_cache is not None else {}
@@ -257,6 +259,15 @@ class Converter(DagWalker):
         on every call, cache hit or not -- never against whichever Converter
         first populated a shared cache. This assumes interpreted functions
         are deterministic and side-effect-free.
+
+        `self._if_wrappers` itself (as opposed to `self._if_cache`) MUST stay
+        per-Converter and never be shared or hoisted: the Rust backend's own
+        result cache (`IF_RESULTS` in `expressions.rs`) is keyed on the
+        wrapper's `func_id`, and its soundness relies on each `func_id`
+        mapping back to exactly one Converter's (immutable) object-id table.
+        Sharing `_if_wrappers` across Converters with different object
+        numbering would let that cache return an `ObjectNode` translated
+        under the wrong table.
         """
         cached = self._if_wrappers.get(interpreted_function)
         if cached is not None:

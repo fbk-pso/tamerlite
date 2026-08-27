@@ -18,6 +18,7 @@
 use num::{rational::BigRational, BigInt, ToPrimitive};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use std::cell::RefCell;
 use std::sync::Arc;
 
 pub fn is_fraction(obj: &pyo3::Bound<'_, PyAny>) -> PyResult<bool> {
@@ -72,13 +73,31 @@ pub fn get_option_big_rational(obj: &pyo3::Bound<'_, PyAny>) -> PyResult<Option<
     }
 }
 
+// Cached `fractions.Fraction` type object, resolved via `import fractions`
+// once per thread instead of on every call that needs it (interpreted
+// function real-typed args/returns, plan reconstruction, `Event.delay`).
+thread_local! {
+    static FRACTION_TYPE: RefCell<Option<Py<PyAny>>> = const { RefCell::new(None) };
+}
+
+pub fn get_fraction_type(py: Python<'_>) -> PyResult<Py<PyAny>> {
+    if let Some(cached) = FRACTION_TYPE.with_borrow(|cell| cell.as_ref().map(|f| f.clone_ref(py))) {
+        return Ok(cached);
+    }
+    let fraction_type = PyModule::import(py, "fractions")?
+        .getattr("Fraction")?
+        .unbind();
+    FRACTION_TYPE.with_borrow_mut(|cell| *cell = Some(fraction_type.clone_ref(py)));
+    Ok(fraction_type)
+}
+
 pub fn big_rational_to_py_fraction<'py>(
     n: &BigRational,
     py: Python<'py>,
 ) -> PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
-    let fractions = PyModule::import(py, "fractions")?;
-    let fraction_type = fractions.getattr("Fraction")?;
-    fraction_type.call1((format!("{}/{}", n.numer(), n.denom()),))
+    get_fraction_type(py)?
+        .bind(py)
+        .call1((n.numer(), n.denom()))
 }
 
 pub fn mk_rational(n: i32, d: i32) -> BigRational {

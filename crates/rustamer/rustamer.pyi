@@ -201,6 +201,7 @@ def simplify(
     assignments: dict[int, ExpressionNode],
     evaluate_interpreted_functions: bool = ...,
 ) -> Expression: ...
+def clear_interpreted_function_cache() -> None: ...
 
 # --- search algorithms ---------------------------------------------------
 

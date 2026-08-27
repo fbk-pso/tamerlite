@@ -26,7 +26,9 @@ use pyo3::{
 };
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
-use crate::utils::{big_rational_to_py_fraction, get_big_rational_bigint, integer_to_i32};
+use crate::utils::{
+    big_rational_to_py_fraction, get_big_rational_bigint, get_fraction_type, integer_to_i32,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ExpressionNode {
@@ -157,8 +159,7 @@ fn interpreted_function_result(
             Ok(ExpressionNode::Int(Box::new(v)))
         }
         IfReturnType::Real => {
-            let fractions = PyModule::import(py, "fractions")?;
-            let fraction = fractions.getattr("Fraction")?.call1((result,))?;
+            let fraction = get_fraction_type(py)?.bind(py).call1((result,))?;
             let v = get_big_rational_bigint(&fraction)?;
             Ok(if v.is_integer() {
                 ExpressionNode::Int(Box::new(v.to_integer()))
@@ -180,10 +181,7 @@ fn interpreted_function_result(
     }
 }
 
-/// Calls the interpreted function registered under `func_id` with the given
-/// already-evaluated argument nodes, returning its result coerced to
-/// `return_type`.
-pub fn call_interpreted_function(
+fn call_interpreted_function_uncached(
     func_id: usize,
     return_type: IfReturnType,
     args: &[&ExpressionNode],
@@ -197,6 +195,91 @@ pub fn call_interpreted_function(
         let result = callable.call1(py, PyTuple::new(py, py_args)?)?;
         interpreted_function_result(result.bind(py), return_type)
     })
+}
+
+/// Memoized result of one interpreted-function call: `func_id` (which
+/// callable), `return_type` (see below), and the already-evaluated argument
+/// nodes.
+///
+/// `return_type` is part of the key even though a given `func_id` is
+/// normally called with a single, fixed `return_type`: `register_interpreted_function`
+/// dedups purely by `Py` pointer, and `make_interpreted_function_node` is a
+/// public `#[pyfunction]` that can be (and in tests is) called directly with
+/// a raw, non-wrapper callable. Two registrations of the *same* raw callable
+/// under two different `IfReturnType`s would otherwise share one `func_id`
+/// and collide in this cache. `IfReturnType` is `Copy + Hash`, so including
+/// it costs nothing on the wrapper path where it never varies.
+///
+/// `args` is `Box<[ExpressionNode]>` rather than `Vec` -- exactly-sized and
+/// smaller (16 vs 24 bytes) for a key that lives as long as the cache entry.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct IfCallKey {
+    func_id: usize,
+    return_type: IfReturnType,
+    args: Box<[ExpressionNode]>,
+}
+
+// Result cache for interpreted-function calls, keyed on `IfCallKey`. Sound to
+// key on `func_id` alone (modulo `return_type`, see `IfCallKey`) because
+// `func_id` is effectively scoped to one immutable object-id table:
+// `Converter._if_wrappers` (the Python side) builds one memoizing closure per
+// `InterpretedFunction` *per `Converter` instance* and never shares them, and
+// `register_interpreted_function` dedups by pointer identity while never
+// dropping a registered callable -- so no two `Converter`s with different
+// object numbering can ever collide on the same `func_id`. This invariant
+// depends on `_if_wrappers` staying per-`Converter`; see the warning at its
+// definition in `converter.py`.
+//
+// Errors are deliberately never cached (see the `?` before the insert
+// below): a replayed `PyErr` carries a stale traceback, could permanently
+// poison a callable that raises once and later succeeds, and the one
+// production path that expects errors (`HMaxExplicit::possible_values`
+// probing a partial callable out of domain) aborts the whole solve on the
+// first one anyway, so there is nothing to amortize.
+thread_local! {
+    static IF_RESULTS: RefCell<FxHashMap<IfCallKey, ExpressionNode>> =
+        const { RefCell::new(FxHashMap::with_hasher(FxBuildHasher)) };
+}
+
+/// Calls the interpreted function registered under `func_id` with the given
+/// already-evaluated argument nodes, returning its result coerced to
+/// `return_type`. Memoized in `IF_RESULTS`: a hit returns the previously
+/// coerced result without touching Python at all.
+pub fn call_interpreted_function(
+    func_id: usize,
+    return_type: IfReturnType,
+    args: &[&ExpressionNode],
+) -> PyResult<ExpressionNode> {
+    let key = IfCallKey {
+        func_id,
+        return_type,
+        args: args.iter().map(|&a| a.clone()).collect(),
+    };
+
+    if let Some(hit) = IF_RESULTS.with_borrow(|cache| cache.get(&key).cloned()) {
+        return Ok(hit);
+    }
+
+    let value = call_interpreted_function_uncached(func_id, return_type, args)?;
+    IF_RESULTS.with_borrow_mut(|cache| {
+        cache.insert(key, value.clone());
+    });
+    Ok(value)
+}
+
+/// Drops every memoized interpreted-function result. Called once at the top
+/// of every `Encoder.__init__` -- free in hit-rate terms for the common
+/// case, since a new `Encoder` builds fresh wrapper closures (fresh
+/// `func_id`s), so nothing cached under a prior encoding's ids is reachable
+/// anyway. Always safe to call at any time: a dropped entry just re-invokes
+/// the still-registered wrapper (which itself usually still hits
+/// `Converter._if_cache`). Does NOT touch `INTERPRETED_FUNCTIONS`/
+/// `IF_IDS_BY_PTR` -- those are the callable registry, not the result cache,
+/// and `func_id`s baked into already-built `ExpressionNode::InterpretedFunction`
+/// nodes must keep resolving.
+#[pyfunction]
+pub fn clear_interpreted_function_cache() {
+    IF_RESULTS.with_borrow_mut(|cache| *cache = FxHashMap::with_hasher(FxBuildHasher));
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

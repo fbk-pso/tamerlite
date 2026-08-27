@@ -159,6 +159,13 @@ def has_interpreted_function(exp: Expression) -> bool:
     return any(isinstance(e, InterpretedFunctionNode) for e in exp)
 
 
+def clear_interpreted_function_cache() -> None:
+    """No-op on the pure-Python backend: `InterpretedFunctionNode.call` has no
+    result memo of its own to drop -- the only interpreted-function cache
+    here is `Converter._if_cache`, which is deliberately persistent across
+    encodings/problems and must NOT be cleared by this call."""
+
+
 @dataclass(eq=True, frozen=True)
 class Effect:
     fluent: int
