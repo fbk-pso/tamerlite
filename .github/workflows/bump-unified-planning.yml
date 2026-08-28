@@ -1,0 +1,79 @@
+name: bump-unified-planning
+
+# Dependabot cannot keep `unified-planning` up to date. The dependency is
+# declared as a git URL, but Dependabot's uv updater version-checks it against
+# PyPI instead of the git repository.
+
+on:
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Generate a GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.RELEASER_APP_ID }}
+          private-key: ${{ secrets.RELEASER_APP_PRIVATE_KEY }}
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # Rewrites the pinned commit in uv.lock.
+      - name: Bump the locked unified-planning commit
+        run: uv lock --upgrade-package unified-planning
+
+      - name: Open or update the bump pull request
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          if git diff --quiet uv.lock; then
+            echo "unified-planning master has not moved; nothing to do."
+            exit 0
+          fi
+
+          # Use system python3 (>= 3.11) for tomllib, as in test.yml.
+          sha=$(python3 -c "import tomllib; d = tomllib.load(open('uv.lock', 'rb')); print(next(p['source']['git'].rsplit('#', 1)[1] for p in d['package'] if p['name'] == 'unified-planning'))")
+          short=${sha:0:8}
+          title="deps(deps-dev): bump unified-planning to $short"
+
+          git config user.name "tamerlite-releaser[bot]"
+          git config user.email "tamerlite-releaser[bot]@users.noreply.github.com"
+          git checkout -B deps/unified-planning
+          git commit -am "$title"
+          git push --force origin deps/unified-planning
+
+          cat > "$RUNNER_TEMP/pr-body.md" <<BODY
+          Automated bump to the current \`unified-planning\` master (\`$sha\`).
+          BODY
+
+          # The branch is force-updated above, so refresh title and body too:
+          # otherwise an already-open PR keeps advertising an earlier commit.
+          if gh pr view deps/unified-planning --json state --jq .state 2>/dev/null | grep -q OPEN; then
+            gh pr edit deps/unified-planning \
+              --title "$title" \
+              --body-file "$RUNNER_TEMP/pr-body.md"
+            echo "Pull request for deps/unified-planning is already open; updated in place."
+            exit 0
+          fi
+
+          gh pr create \
+            --base main \
+            --head deps/unified-planning \
+            --title "$title" \
+            --body-file "$RUNNER_TEMP/pr-body.md" \
+            --label dependencies \
+            --label python
