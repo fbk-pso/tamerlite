@@ -265,8 +265,8 @@ class Converter(DagWalker):
         real_args)`) is safe to share across Converters regardless of object
         numbering -- `real_args` is already unwrapped to real `Object`s.
 
-        `self._if_wrappers` is NOT: the closure captures `self` and reads
-        `self._objects_by_id`/`self._object_ids` directly, so sharing it
+        `self._if_wrappers` is NOT: the closure captures `_objects_by_id`/
+        `_object_ids` from *this* Converter at build time, so sharing it
         across Converters with different numbering would translate a cached
         `ObjectNode` under the wrong table. `TamerLite` shares it anyway
         within one top-level solve, where numbering is provably identical
@@ -296,11 +296,19 @@ class Converter(DagWalker):
         # memo of its own at all, so it still needs `_if_cache`
         # unconditionally.
         skip_python_cache = use_rustamer
+        # Close over these, not `self`: both are set once and never
+        # reassigned, so it's equivalent but faster (closure-cell read vs.
+        # attribute lookup), and avoids a `Converter -> _if_wrappers ->
+        # wrapper -> self` reference cycle, which only cyclic GC could
+        # collect.
+        objects_by_id = self._objects_by_id
+        object_ids = self._object_ids
+        if_cache = self._if_cache
 
         def wrapper(*call_args):
             if any(object_params):
                 real_args = tuple(
-                    self._objects_by_id[a.object] if is_obj else a
+                    objects_by_id[a.object] if is_obj else a
                     for a, is_obj in zip(call_args, object_params, strict=True)
                 )
             else:
@@ -309,13 +317,13 @@ class Converter(DagWalker):
                 raw_result = interpreted_function.function(*real_args)
             else:
                 cache_key = (interpreted_function, real_args)
-                if cache_key in self._if_cache:
-                    raw_result = self._if_cache[cache_key]
+                if cache_key in if_cache:
+                    raw_result = if_cache[cache_key]
                 else:
                     raw_result = interpreted_function.function(*real_args)
-                    self._if_cache[cache_key] = raw_result
+                    if_cache[cache_key] = raw_result
             if wraps_result:
-                return make_object_node(self._object_ids[raw_result.name])
+                return make_object_node(object_ids[raw_result.name])
             return raw_result
 
         self._if_wrappers[interpreted_function] = wrapper
