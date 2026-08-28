@@ -16,7 +16,9 @@
 //
 
 use std::cell::RefCell;
+use std::num::NonZeroUsize;
 
+use lru::LruCache;
 use num::BigInt;
 use num_rational::BigRational;
 use pyo3::{
@@ -78,13 +80,6 @@ pub enum IfReturnType {
 // identity so the single, memoizing wrapper callable
 // `Converter._get_interpreted_function_wrapper` builds per
 // `InterpretedFunction` always maps back to the same `func_id`.
-//
-// Entries are never removed. Growth is bounded by the number of distinct
-// interpreted-function wrapper callables built across the process's
-// lifetime -- a handful per problem, and `Encoder`/`Converter` rebuild
-// fresh wrappers on every anytime re-encode -- so this is not unbounded in
-// practice, but it is a deliberate, permanent leak rather than a scoped
-// resource.
 //
 // `thread_local!` + `RefCell`: TamerLite's Rust search is single-threaded,
 // so there is no concurrent access to guard against. `thread_local!` is what
@@ -219,26 +214,31 @@ struct IfCallKey {
     args: Box<[ExpressionNode]>,
 }
 
-// Result cache for interpreted-function calls, keyed on `IfCallKey`. Sound to
-// key on `func_id` alone (modulo `return_type`, see `IfCallKey`) because
-// `func_id` is effectively scoped to one immutable object-id table:
-// `Converter._if_wrappers` (the Python side) builds one memoizing closure per
-// `InterpretedFunction` *per `Converter` instance* and never shares them, and
-// `register_interpreted_function` dedups by pointer identity while never
-// dropping a registered callable -- so no two `Converter`s with different
-// object numbering can ever collide on the same `func_id`. This invariant
-// depends on `_if_wrappers` staying per-`Converter`; see the warning at its
-// definition in `converter.py`.
+// Result cache for interpreted-function calls, keyed on `IfCallKey`. Sound to key
+// on `func_id` alone (modulo `return_type`) because `register_interpreted_function`
+// dedups by pointer identity and, between resets, never drops a registered
+// callable, so a given `func_id` always resolves to the same wrapper closure --
+// and therefore the same object numbering -- for as long as it stays registered.
+// `_if_wrappers` (Python side) may be shared across every `Converter` built within
+// one `TamerLite._solve`/`_get_solutions_with_params` call, which is what lets
+// entries here persist across anytime re-encodes instead of starting cold. Not
+// shared across unrelated problems/solves, so `clear_interpreted_function_cache`
+// below resets both this cache and the registry once at the start of each.
 //
-// Errors are deliberately never cached (see the `?` before the insert
-// below): a replayed `PyErr` carries a stale traceback, could permanently
-// poison a callable that raises once and later succeeds, and the one
-// production path that expects errors (`HMaxExplicit::possible_values`
-// probing a partial callable out of domain) aborts the whole solve on the
-// first one anyway, so there is nothing to amortize.
+// Errors are never cached (see the `?` before the insert below): a replayed
+// `PyErr` carries a stale traceback and could poison a callable that raises once
+// and later succeeds; the one path that expects errors (`HMaxExplicit::
+// possible_values` probing a partial callable) aborts the whole solve on the first
+// one anyway, so there's nothing to amortize.
+//
+// Capped at `IF_RESULTS_CAPACITY` via a real LRU: entries now persist across a
+// whole solve rather than one encoding, so an unbounded map could grow across an
+// arbitrarily long anytime run.
+const IF_RESULTS_CAPACITY: usize = 65_536;
+
 thread_local! {
-    static IF_RESULTS: RefCell<FxHashMap<IfCallKey, ExpressionNode>> =
-        const { RefCell::new(FxHashMap::with_hasher(FxBuildHasher)) };
+    static IF_RESULTS: RefCell<LruCache<IfCallKey, ExpressionNode>> =
+        RefCell::new(LruCache::new(NonZeroUsize::new(IF_RESULTS_CAPACITY).unwrap()));
 }
 
 /// Calls the interpreted function registered under `func_id` with the given
@@ -256,30 +256,30 @@ pub fn call_interpreted_function(
         args: args.iter().map(|&a| a.clone()).collect(),
     };
 
-    if let Some(hit) = IF_RESULTS.with_borrow(|cache| cache.get(&key).cloned()) {
+    if let Some(hit) = IF_RESULTS.with_borrow_mut(|cache| cache.get(&key).cloned()) {
         return Ok(hit);
     }
 
     let value = call_interpreted_function_uncached(func_id, return_type, args)?;
     IF_RESULTS.with_borrow_mut(|cache| {
-        cache.insert(key, value.clone());
+        cache.put(key, value.clone());
     });
     Ok(value)
 }
 
-/// Drops every memoized interpreted-function result. Called once at the top
-/// of every `Encoder.__init__` -- free in hit-rate terms for the common
-/// case, since a new `Encoder` builds fresh wrapper closures (fresh
-/// `func_id`s), so nothing cached under a prior encoding's ids is reachable
-/// anyway. Always safe to call at any time: a dropped entry just re-invokes
-/// the still-registered wrapper (which itself usually still hits
-/// `Converter._if_cache`). Does NOT touch `INTERPRETED_FUNCTIONS`/
-/// `IF_IDS_BY_PTR` -- those are the callable registry, not the result cache,
-/// and `func_id`s baked into already-built `ExpressionNode::InterpretedFunction`
-/// nodes must keep resolving.
+/// Drops every memoized interpreted-function result and every registered
+/// callable, resetting `func_id` allocation back to zero.
+///
+/// Only sound under a caller-behavior assumption this crate cannot verify or
+/// enforce: no other still-suspended anytime generator (from an earlier,
+/// not-yet-exhausted `get_solutions()` call, on this or any other
+/// `TamerLite` instance in this thread) may hold a live `func_id` from
+/// before this call.
 #[pyfunction]
 pub fn clear_interpreted_function_cache() {
-    IF_RESULTS.with_borrow_mut(|cache| *cache = FxHashMap::with_hasher(FxBuildHasher));
+    IF_RESULTS.with_borrow_mut(|cache| cache.clear());
+    INTERPRETED_FUNCTIONS.with_borrow_mut(|registry| registry.clear());
+    IF_IDS_BY_PTR.with_borrow_mut(|by_ptr| by_ptr.clear());
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

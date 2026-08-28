@@ -163,7 +163,9 @@ def clear_interpreted_function_cache() -> None:
     """No-op on the pure-Python backend: `InterpretedFunctionNode.call` has no
     result memo of its own to drop -- the only interpreted-function cache
     here is `Converter._if_cache`, which is deliberately persistent across
-    encodings/problems and must NOT be cleared by this call."""
+    encodings/problems and must NOT be cleared by this call. Its growth is
+    bounded independently (an LRU cap, `Converter.IF_CACHE_CAPACITY`), so
+    leaving it uncleared here doesn't risk unbounded memory."""
 
 
 @dataclass(eq=True, frozen=True)

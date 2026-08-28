@@ -15,7 +15,7 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, MutableMapping
 from fractions import Fraction
 from typing import Any, cast
 
@@ -47,7 +47,6 @@ from tamerlite.core import (
     HMax,
     SearchSpace,
     Timing,
-    clear_interpreted_function_cache,
     get_fluents,
 )
 from tamerlite.core.search_space import ConstantNode, SearchSpaceABC
@@ -117,21 +116,9 @@ class Encoder:
         relevance_analysis: bool,
         full: bool = True,
         deadline: Fraction | None = None,
-        if_cache: dict[InterpretedFunction, dict[tuple, Any]] | None = None,
+        if_cache: MutableMapping[tuple[InterpretedFunction, tuple], Any] | None = None,
+        if_wrappers: dict[InterpretedFunction, Callable] | None = None,
     ):
-        # Drop the Rust backend's interpreted-function result cache (a no-op
-        # on the pure-Python backend) -- this Encoder is about to build a
-        # fresh Converter with fresh wrapper closures, hence fresh func_ids,
-        # so nothing cached under a previous encoding's ids can ever be hit
-        # again. Bounds cache growth across an anytime run and across
-        # unrelated solves in one long-lived process. Can, in the rare
-        # compression-safe two-encoder case, drop a handful of init-state
-        # entries the *first* encoder's own relevance analysis just
-        # computed before `TamerLite._solve_ground_problem` builds a second
-        # Encoder -- accepted: the fallback is a re-entry into the still-live
-        # wrapper closure (usually still a `Converter._if_cache` hit), never
-        # a lost/incorrect value.
-        clear_interpreted_function_cache()
         self._problem = problem
         self._lifted_problem = lifted_problem
         self._map_back_action_instance = map_back_action_instance
@@ -170,6 +157,7 @@ class Encoder:
             self._object_ids,
             self._objects_by_id,
             if_cache,
+            if_wrappers,
         )
         self._action_names: list[str] = sorted(
             action.name for action in problem.actions

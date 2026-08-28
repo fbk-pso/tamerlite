@@ -16,9 +16,10 @@
 #
 
 
-from collections.abc import Callable
+from collections.abc import Callable, MutableMapping
 from typing import Any
 
+from cachetools import LRUCache
 from unified_planning.model import FNode, InterpretedFunction, Object, Problem
 from unified_planning.model.walkers import DagWalker
 
@@ -33,6 +34,7 @@ from tamerlite.core import (
     make_operator_node,
     make_rational_constant_node,
     shift_expression,
+    use_rustamer,
 )
 
 
@@ -55,6 +57,17 @@ def _unresolvable_fluent_message(expression: FNode) -> str:
     )
 
 
+# Global cap on Converter._if_cache, mirroring the Rust backend's IF_RESULTS_CAPACITY.
+IF_CACHE_CAPACITY = 65_536
+
+
+def new_if_cache() -> MutableMapping[tuple[InterpretedFunction, tuple], Any]:
+    """Fresh, LRU-bounded interpreted-function result cache. A plain `dict`
+    also works anywhere this is accepted (only `[]`/`in`/assignment are ever
+    used on it) -- callers that want to opt out of the bound may pass one."""
+    return LRUCache(maxsize=IF_CACHE_CAPACITY)
+
+
 class Converter(DagWalker):
     def __init__(
         self,
@@ -62,18 +75,20 @@ class Converter(DagWalker):
         fluent_ids: dict[str, int],
         object_ids: dict[str, int],
         objects_by_id: list[Object],
-        if_cache: dict[InterpretedFunction, dict[tuple, Any]] | None = None,
+        if_cache: MutableMapping[tuple[InterpretedFunction, tuple], Any] | None = None,
+        if_wrappers: dict[InterpretedFunction, Callable] | None = None,
     ):
         DagWalker.__init__(self)
         self._fluent_ids = fluent_ids
         self._object_ids = object_ids
         self._objects_by_id = objects_by_id
         self.static_fluents = problem.get_static_fluents()
-        # Per-instance and never shared -- see the warning in
-        # `_get_interpreted_function_wrapper`'s docstring.
-        self._if_wrappers: dict[InterpretedFunction, Callable] = {}
-        self._if_cache: dict[InterpretedFunction, dict[tuple, Any]] = (
-            if_cache if if_cache is not None else {}
+        # Optionally injected and shared across Converters
+        self._if_wrappers: dict[InterpretedFunction, Callable] = (
+            if_wrappers if if_wrappers is not None else {}
+        )
+        self._if_cache: MutableMapping[tuple[InterpretedFunction, tuple], Any] = (
+            if_cache if if_cache is not None else new_if_cache()
         )
 
     def convert(self, expression: FNode) -> Expression:
@@ -243,31 +258,23 @@ class Converter(DagWalker):
     ) -> Callable:
         """Returns the single, memoizing wrapper callable for
         `interpreted_function`, shared by every occurrence of the same
-        interpreted function across the whole problem.
+        interpreted function in the problem (so `InterpretedFunctionNode`
+        equality/hashing stays meaningful within one encoding).
 
-        Sharing the wrapper keeps `InterpretedFunctionNode` equality/hashing
-        meaningful within one encoding. The wrapper's *result* cache
-        (`self._if_cache`) is a separate concern and may be shared across
-        several Converters re-encoding the same problem (see
-        `TamerLite._get_solutions_with_params`, which re-encodes on every
-        anytime iteration): it's keyed by the already-unwrapped,
-        table-agnostic argument values (real `Object`s, not this Converter's
-        internal ids), so a shared cache stays correct even if two Converters
-        happen to number their objects differently. Only the id<->`Object`
-        translation actually depends on that numbering, so it always runs
-        fresh against *this* Converter's own `_objects_by_id`/`_object_ids`,
-        on every call, cache hit or not -- never against whichever Converter
-        first populated a shared cache. This assumes interpreted functions
-        are deterministic and side-effect-free.
+        `self._if_cache` (LRU-bounded, keyed on `(interpreted_function,
+        real_args)`) is safe to share across Converters regardless of object
+        numbering -- `real_args` is already unwrapped to real `Object`s.
 
-        `self._if_wrappers` itself (as opposed to `self._if_cache`) MUST stay
-        per-Converter and never be shared or hoisted: the Rust backend's own
-        result cache (`IF_RESULTS` in `expressions.rs`) is keyed on the
-        wrapper's `func_id`, and its soundness relies on each `func_id`
-        mapping back to exactly one Converter's (immutable) object-id table.
-        Sharing `_if_wrappers` across Converters with different object
-        numbering would let that cache return an `ObjectNode` translated
-        under the wrong table.
+        `self._if_wrappers` is NOT: the closure captures `self` and reads
+        `self._objects_by_id`/`self._object_ids` directly, so sharing it
+        across Converters with different numbering would translate a cached
+        `ObjectNode` under the wrong table. `TamerLite` shares it anyway
+        within one top-level solve, where numbering is provably identical
+        across every `Encoder`/`Converter` -- that's what lets the Rust
+        backend's `IF_RESULTS` (keyed on the wrapper's `func_id`) persist
+        across re-encodes. Never safe across unrelated problems/solves.
+
+        Assumes interpreted functions are deterministic and side-effect-free.
         """
         cached = self._if_wrappers.get(interpreted_function)
         if cached is not None:
@@ -281,7 +288,14 @@ class Converter(DagWalker):
             p.type.is_user_type() for p in interpreted_function.signature
         )
         wraps_result = return_type.is_user_type()
-        result_cache = self._if_cache.setdefault(interpreted_function, {})
+        # The Rust backend memoizes independently (`IF_RESULTS` in
+        # `expressions.rs`), and once `_if_wrappers` is shared across
+        # re-encodes (see docstring above) that memo persists exactly as
+        # long as this dict does -- so also populating `_if_cache` would only
+        # duplicate storage for zero benefit. The pure-Python backend has no
+        # memo of its own at all, so it still needs `_if_cache`
+        # unconditionally.
+        skip_python_cache = use_rustamer
 
         def wrapper(*call_args):
             if any(object_params):
@@ -291,11 +305,15 @@ class Converter(DagWalker):
                 )
             else:
                 real_args = call_args
-            if real_args in result_cache:
-                raw_result = result_cache[real_args]
-            else:
+            if skip_python_cache:
                 raw_result = interpreted_function.function(*real_args)
-                result_cache[real_args] = raw_result
+            else:
+                cache_key = (interpreted_function, real_args)
+                if cache_key in self._if_cache:
+                    raw_result = self._if_cache[cache_key]
+                else:
+                    raw_result = interpreted_function.function(*real_args)
+                    self._if_cache[cache_key] = raw_result
             if wraps_result:
                 return make_object_node(self._object_ids[raw_result.name])
             return raw_result

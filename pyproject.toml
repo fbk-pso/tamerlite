@@ -12,7 +12,8 @@ authors = [
 urls = { "Homepage" = "https://github.com/fbk-pso/tamerlite" }
 dependencies = [
     "min-max-heap==1.0.1",
-    "bloom-filter2==2.0.0"
+    "bloom-filter2==2.0.0",
+    "cachetools==7.1.7"
 ]
 classifiers = [
     "Programming Language :: Python :: 3",

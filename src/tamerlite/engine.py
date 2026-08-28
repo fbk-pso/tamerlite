@@ -18,7 +18,7 @@
 import logging
 import time
 import warnings
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, MutableMapping
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import partial
@@ -42,6 +42,7 @@ from unified_planning.model import FNode, InterpretedFunction, ProblemKind, Star
 from unified_planning.model.state import State
 from unified_planning.plans import ActionInstance, PlanKind
 
+from tamerlite.converter import new_if_cache
 from tamerlite.core import (
     HFF,
     Action,
@@ -52,6 +53,7 @@ from tamerlite.core import (
     astar_search,
     astar_search_memory_bounded,
     bfs_search,
+    clear_interpreted_function_cache,
     dfs_search,
     ehc_search,
     gbfs_search,
@@ -450,7 +452,23 @@ class TamerLite(
         # Share one interpreted functions cache across every `_solve_ground_problem`
         # call in this anytime run (see `Converter._if_cache`) instead of recomputing
         # from scratch each time.
-        if_cache: dict[InterpretedFunction, dict[tuple, Any]] = {}
+        if_cache: MutableMapping[tuple[InterpretedFunction, tuple], Any] = (
+            new_if_cache()
+        )
+        # Likewise for the wrapper closures themselves (`Converter._if_wrappers`) --
+        # safe because object numbering never changes across this run's re-encodes.
+        # Sharing them is what lets the Rust backend's own IF_RESULTS cache persist
+        # across re-encodes too, since its `func_id`s are keyed on wrapper identity.
+        if_wrappers: dict[InterpretedFunction, Callable] = {}
+        # Also resets the Rust callable registry (INTERPRETED_FUNCTIONS/
+        # IF_IDS_BY_PTR), not just IF_RESULTS -- dropping whatever a previous,
+        # unrelated solve left behind before this run starts. Only sound
+        # because we assume the caller never has two `get_solutions()`
+        # generators in flight at once, and never runs a oneshot `solve()`
+        # while an earlier one sits suspended -- otherwise a still-alive
+        # suspended generator's `func_id`s could silently start resolving to
+        # a *different* problem's callables.
+        clear_interpreted_function_cache()
 
         logger.info(
             "Solving '%s' (anytime): actions=%d fluents=%d",
@@ -467,6 +485,7 @@ class TamerLite(
             output_stream=output_stream,
             is_intermediate_solution=True,
             if_cache=if_cache,
+            if_wrappers=if_wrappers,
         )
         if res.plan is not None:
             logger.info(
@@ -610,6 +629,7 @@ class TamerLite(
                     deadline=deadline,
                     is_intermediate_solution=True,
                     if_cache=if_cache,
+                    if_wrappers=if_wrappers,
                 )
             )
             if (
@@ -706,11 +726,24 @@ class TamerLite(
         output_stream: IO[str] | None = None,
         deadline: Fraction | None = None,
         is_intermediate_solution: bool = False,
-        if_cache: dict[InterpretedFunction, dict[tuple, Any]] | None = None,
+        if_cache: MutableMapping[tuple[InterpretedFunction, tuple], Any] | None = None,
+        if_wrappers: dict[InterpretedFunction, Callable] | None = None,
     ) -> tuple["up.engines.results.PlanGenerationResult", bool, bool]:
-        # Default to one fresh dict shared by both `Encoder(...)` sites below
+        # Default to one fresh pair shared by both `Encoder(...)` sites below --
+        # and, when freshly created here (as opposed to handed down from an
+        # anytime run already in progress), this is a new top-level solve, so
+        # drop whatever the Rust cache and callable registry hold from a
+        # previous, unrelated one. This path only ever runs for a standalone
+        # oneshot `_solve()` call -- `_get_solutions_with_params` always
+        # supplies its own `if_wrappers` -- so it relies on the same
+        # assumption as there: no anytime generator left suspended while this
+        # runs (see `clear_interpreted_function_cache`'s doc comment,
+        # expressions.rs).
         if if_cache is None:
-            if_cache = {}
+            if_cache = new_if_cache()
+        if if_wrappers is None:
+            if_wrappers = {}
+            clear_interpreted_function_cache()
         try:
             # Compression-safe-action detection and the TimedToSequential
             # recompile below are unaffected by interpreted functions: they
@@ -729,6 +762,7 @@ class TamerLite(
                 self._params.relevance_analysis,
                 deadline=deadline,
                 if_cache=if_cache,
+                if_wrappers=if_wrappers,
             )
 
             original_encoder = encoder
@@ -769,6 +803,7 @@ class TamerLite(
                     self._params.relevance_analysis,
                     deadline=deadline,
                     if_cache=if_cache,
+                    if_wrappers=if_wrappers,
                 )
 
             if isinstance(self._params, MultiqueueParams):

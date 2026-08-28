@@ -1761,7 +1761,13 @@ def test_interpreted_function_registry_reuses_func_id_for_shared_wrapper():
     does on every re-solve) must therefore still evaluate correctly: the
     second `Encoder`'s IF nodes have to resolve through whichever `func_id`
     the registry assigns *this* time, not silently reuse a stale id from the
-    first encoding."""
+    first encoding.
+
+    None of the three `Encoder(...)` calls below pass `if_wrappers`, so each
+    gets a fresh, unshared dict and therefore a fresh `func_id` every time --
+    the same behavior `TamerLite.engine.py` relies on across *unrelated*
+    solves, as opposed to the shared-`if_wrappers` path it uses within one
+    top-level solve."""
 
     reload_tamerlite(False)
     problem = problems_generator.get_problem_if_bool_condition()
@@ -2254,10 +2260,13 @@ def test_interpreted_function_cache_is_scoped_to_object_table():
     Rust-side `IF_RESULTS` cache underneath it. `is_l1` discriminates on the
     real object's identity, not just round-trips it, so a leak between the
     two converters' cache entries would flip one result's boolean rather than
-    silently agreeing. This is the regression test for the invariant that
-    `Converter._if_wrappers` -- and therefore each interpreted function's
-    `func_id` -- must stay scoped to one Converter's object table; see the
-    warning in `_get_interpreted_function_wrapper`'s docstring.
+    silently agreeing. This is the regression test for the *default*
+    (unshared) case: `_if_wrappers` may now be explicitly shared across
+    Converters when the caller guarantees identical object numbering (see
+    `TamerLite.engine.py`, and `_get_interpreted_function_wrapper`'s
+    docstring for when that's sound) -- but absent that opt-in, each
+    Converter still gets its own, independently-scoped wrapper/`func_id`,
+    which is exactly what these two (neither passes `if_wrappers`) pin.
 
     Built directly from the wrapper + the real node constructors (as
     `test_simplify_with_interpreted_functions` does) and evaluated via
@@ -2322,12 +2331,16 @@ def test_interpreted_function_cache_is_scoped_to_object_table():
 def test_clear_interpreted_function_cache_drops_memoized_results():
     """`clear_interpreted_function_cache` (`crates/rustamer-base/src/expressions.rs`
     on Rust, a no-op stub in `src/tamerlite/core/search_space.py` on Python)
-    drops every entry of `IF_RESULTS`. Registers the raw counting callable
+    drops every entry of `IF_RESULTS` *and* resets the callable registry
+    (`INTERPRETED_FUNCTIONS`/`IF_IDS_BY_PTR`) -- so a node built before the
+    clear must never be reused afterward; only a freshly-built node (fresh
+    registration) is safe post-clear. Registers the raw counting callable
     directly (no `Converter`), so there is no `Converter._if_cache` to
-    confound the count: on Rust, the second `simplify` call is a hit (no
-    append), clearing forces the third call back to a miss (an append); on
-    Python, which has no memo of its own, every call is a miss regardless --
-    proving the stub is importable, callable, and inert."""
+    confound the count: on Rust, the second `simplify` call (pre-clear) is a
+    hit (no append); the fresh post-clear node is always a miss (an append)
+    on both backends -- on Python, which has no memo of its own, every call
+    is a miss regardless, proving the stub is importable, callable, and
+    inert."""
 
     calls = []
 
@@ -2358,25 +2371,31 @@ def test_clear_interpreted_function_cache_drops_memoized_results():
         assert len(calls) == before_clear
 
         clear_interpreted_function_cache()
-        simplify(exp, {}, evaluate_interpreted_functions=True)
-        # Clearing forces this third call back to a miss on both backends
-        # (a genuine miss on Rust, an unconditional miss on Python).
+
+        # A *fresh* node (fresh registration) for the post-clear call --
+        # `if_node` above must never be reused now that the registry itself
+        # gets reset too.
+        fresh_if_node = make_interpreted_function_node(
+            double_it, IfReturnType.INT, (0,)
+        )
+        simplify((five, fresh_if_node), {}, evaluate_interpreted_functions=True)
+        # Clearing forces this call back to a miss on both backends (a
+        # genuine miss on Rust, an unconditional miss on Python).
         assert len(calls) == before_clear + 1
 
 
-def test_clear_interpreted_function_cache_preserves_correctness_across_converters():
-    """Regression test for the `Encoder.__init__` clear hook's core safety
-    property, at the level of the cache primitive itself rather than through
-    a full solve: clearing mid-stream must not let a *later* Converter's
-    entry leak into an *earlier* Converter's still-live wrapper. Mirrors
-    `test_interpreted_function_cache_is_scoped_to_object_table`, but with an
-    explicit `clear_interpreted_function_cache()` call sandwiched between
-    the two converters' evaluations -- `converter_a`'s result must survive
-    the clear and `converter_b`'s construction/evaluation unchanged.
-
-    Uses raw `Converter(...)`, not `Encoder`, so the new auto-clear-on-
-    `Encoder.__init__` hook plays no role here -- this test's own explicit
-    call is what's under test."""
+def test_clear_interpreted_function_cache_resets_for_fresh_use():
+    """`clear_interpreted_function_cache` resets the callable registry
+    (`INTERPRETED_FUNCTIONS`/`IF_IDS_BY_PTR`), not just `IF_RESULTS` -- so
+    anything built *before* a clear (a wrapper, a node) must never be
+    evaluated again afterward; only freshly-built wrappers/nodes are safe.
+    Clears first, then builds two Converters with opposite object numbering
+    entirely *after* the reset (mirroring
+    `test_interpreted_function_cache_is_scoped_to_object_table`), and
+    confirms both still evaluate correctly and independently -- proving the
+    reset leaves the registry in a clean, working state for subsequent,
+    correctly-scoped use, not that pre-reset state survives (which it no
+    longer does)."""
 
     reload_tamerlite(False)
     from tamerlite.converter import Converter
@@ -2388,6 +2407,8 @@ def test_clear_interpreted_function_cache_preserves_correctness_across_converter
         simplify,
     )
 
+    clear_interpreted_function_cache()
+
     Loc = UserType("Loc")
     l1 = Object("l1", Loc)
     l2 = Object("l2", Loc)
@@ -2397,7 +2418,7 @@ def test_clear_interpreted_function_cache_preserves_correctness_across_converter
 
     IF_is_l1 = InterpretedFunction("is_l1", BoolType(), OrderedDict(loc=Loc), is_l1)
 
-    problem = Problem("if_clear_preserves_correctness")
+    problem = Problem("if_clear_resets_for_fresh_use")
     problem.add_object(l1)
     problem.add_object(l2)
 
@@ -2423,71 +2444,99 @@ def test_clear_interpreted_function_cache_preserves_correctness_across_converter
     result_a = tuple(simplify((obj0, node_a), {}, evaluate_interpreted_functions=True))
     assert "true" in str(result_a[0])
 
-    clear_interpreted_function_cache()
-
     result_b = tuple(simplify((obj0, node_b), {}, evaluate_interpreted_functions=True))
     assert "false" in str(result_b[0])
 
-    # The regression check: re-deriving converter_a's entry after the clear
-    # (and after converter_b's construction/evaluation) must not pick up
-    # converter_b's object numbering.
-    result_a_again = tuple(
-        simplify((obj0, node_a), {}, evaluate_interpreted_functions=True)
-    )
-    assert "true" in str(result_a_again[0])
 
-
-def test_encoder_clears_interpreted_function_cache():
-    """Proves `clear_interpreted_function_cache` actually fires from
-    `Encoder.__init__`, and exactly how many times -- pinning "once per
-    `Encoder`" rather than "once per solve". `reload_tamerlite` reloads
-    `tamerlite.encoder` in place (`reload_package`, not a fresh import), so
-    monkeypatching `tamerlite.encoder.clear_interpreted_function_cache`
-    after the reload survives for the rest of the test."""
+def test_shared_if_wrappers_reuse_rust_cache_across_converters():
+    """The core new behavior: sharing one `if_wrappers` dict between two
+    Converters (exactly what `TamerLite.engine.py` now does across every
+    re-encode of one top-level solve) makes them resolve to the *identical*
+    wrapper closure for the same `InterpretedFunction` -- and therefore the
+    *same* Rust `func_id` -- so a result cached via `converter_a` is served
+    to `converter_b` without a second Python-callable invocation. Contrast
+    with `test_interpreted_function_cache_is_scoped_to_object_table`, which
+    pins the opposite (default, unshared) behavior."""
 
     reload_tamerlite(False)
-    calls: list[None] = []
-    real = tamerlite.encoder.clear_interpreted_function_cache
+    from tamerlite.converter import Converter
+    from tamerlite.core import (
+        IfReturnType,
+        make_int_constant_node,
+        make_interpreted_function_node,
+        simplify,
+    )
 
-    def spy():
-        calls.append(None)
-        real()
+    calls = []
 
-    tamerlite.encoder.clear_interpreted_function_cache = spy
-    try:
-        # A single, non-compression-safe Encoder: exactly one clear.
-        problem = problems_generator.get_problem_if_bool_condition()
+    def double_it(x):
+        calls.append(x)
+        return x * 2
+
+    IF_double = InterpretedFunction(
+        "double_it", IntType(), OrderedDict(x=IntType()), double_it
+    )
+
+    problem = Problem("if_shared_wrappers")
+    if_wrappers: dict = {}
+
+    converter_a = Converter(
+        problem, fluent_ids={}, object_ids={}, objects_by_id=[], if_wrappers=if_wrappers
+    )
+    converter_b = Converter(
+        problem, fluent_ids={}, object_ids={}, objects_by_id=[], if_wrappers=if_wrappers
+    )
+
+    wrapper_a = converter_a._get_interpreted_function_wrapper(IF_double)
+    wrapper_b = converter_b._get_interpreted_function_wrapper(IF_double)
+    assert wrapper_a is wrapper_b
+
+    five = make_int_constant_node(5)
+    node_a = make_interpreted_function_node(wrapper_a, IfReturnType.INT, (0,))
+    node_b = make_interpreted_function_node(wrapper_b, IfReturnType.INT, (0,))
+
+    result_a = tuple(simplify((five, node_a), {}, evaluate_interpreted_functions=True))
+    assert len(calls) == 1
+    assert "10" in str(result_a[0])
+
+    # Same logical call through converter_b's node: must be a Rust cache hit
+    # (the wrapper is the same object, hence the same func_id), not a second
+    # invocation of the real callable.
+    result_b = tuple(simplify((five, node_b), {}, evaluate_interpreted_functions=True))
+    assert len(calls) == 1
+    assert "10" in str(result_b[0])
+
+
+def test_encoder_threads_if_wrappers_to_converter():
+    """`Encoder.__init__` must thread a caller-supplied `if_wrappers` dict
+    through to `Converter` unchanged, by identity, not just by value -- this
+    is the wiring that lets `TamerLite.engine.py` share wrapper closures
+    (hence `func_id`s) across every re-encode of one solve. Builds two
+    Encoders for the same problem sharing one `if_wrappers` dict and
+    confirms both Converters hold that exact object, and that it actually
+    got populated."""
+
+    reload_tamerlite(False)
+    problem = problems_generator.get_problem_if_bool_condition()
+    if_cache: dict = {}
+    if_wrappers: dict = {}
+    for _ in range(2):
         lifted_problem, ground_problem, map_back_action_instance = (
             testing_utils.compile_problem(problem)
         )
-        Encoder(
+        encoder = Encoder(
             ground_problem,
             lifted_problem,
             map_back_action_instance,
             symmetry_breaking=False,
             compression_safe_actions=False,
             relevance_analysis=False,
+            if_cache=if_cache,
+            if_wrappers=if_wrappers,
         )
-        assert len(calls) == 1
-
-        # The compression-safe path builds a second Encoder mid-solve
-        # (`TamerLite._solve_ground_problem`, engine.py) -- exactly two.
-        calls.clear()
-        compression_safe_problem = (
-            problems_generator.get_problem_if_temporal_compression_safe()
-        )
-        search = tamerlite.SearchParams(
-            search="wastar", heuristic="hff", compression_safe_actions=True
-        )
-        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
-            planner: tamerlite.engine.TamerLite
-            res: PlanGenerationResult = planner.solve(
-                compression_safe_problem, timeout=None
-            )
-            assert res.status == ResultStatus.SOLVED_SATISFICING
-        assert len(calls) == 2
-    finally:
-        tamerlite.encoder.clear_interpreted_function_cache = real
+        assert encoder._converter._if_wrappers is if_wrappers
+        assert encoder._converter._if_cache is if_cache
+    assert len(if_wrappers) > 0
 
 
 def test_interpreted_function_cache_does_not_cache_errors():
