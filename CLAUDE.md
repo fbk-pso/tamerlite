@@ -34,7 +34,27 @@ At runtime [src/tamerlite/core/__init__.py](src/tamerlite/core/__init__.py) trie
   `evaluate`/`simplify` on an expression that itself contains an interpreted-function
   call), and even argument marshalling can trigger arbitrary Python (allocating a
   `PyExpressionNode` can run a GC pass, which can run `__del__`). A borrow held across
-  either panics with "already borrowed" the moment that happens.
+  either panics with "already borrowed" the moment that happens. The same hazard applies
+  in principle to *dropping* a cached `Py<PyAny>`, not just calling it (dropping can run
+  `__del__` too) -- `clear_interpreted_function_cache` (`expressions.rs`) does drop every
+  registered callable while holding `INTERPRETED_FUNCTIONS`'s borrow, and is documented
+  there as assuming no registered callable's closure (nor anything it captures) defines a
+  finalizer that re-enters this module. Not enforced by this crate.
+- `INTERPRETED_FUNCTIONS`' `func_id`s are recycled, not monotonic: `clear_interpreted_function_cache`
+  empties the registry back to nothing, and the next registration starts again from index
+  0. Pointer dedup (`register_interpreted_function` keying on `Py::as_ptr`) is what makes
+  that safe *within* one epoch (a still-registered pointer can't be recycled to a
+  different callable, since the registry's strong ref keeps it alive), but a `func_id`
+  from a *previous* epoch, if evaluated after the clear, resolves against whatever the new
+  epoch registered under that same number -- silently, for an in-range id (only an
+  out-of-range one raises, via `get_interpreted_function`'s `PyRuntimeError`). The correctness
+  invariant this crate depends on is therefore enforced entirely on the Python side:
+  `tamerlite.converter.interpreted_function_scope` reference-counts every solve currently
+  in flight (anytime generators for their whole suspended lifetime, not just while
+  executing, plus oneshot solves) and only calls `clear_interpreted_function_cache` when
+  that count returns to zero -- i.e. when nothing still running could hold a stale
+  `func_id`. Do not add a new call site for `clear_interpreted_function_cache` (or a new
+  path that registers interpreted functions) without routing it through that scope.
 
 ## Repository layout
 

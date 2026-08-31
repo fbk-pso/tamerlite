@@ -16,7 +16,8 @@
 #
 
 
-from collections.abc import Callable, MutableMapping
+from collections.abc import Callable, Generator, MutableMapping
+from contextlib import contextmanager
 from typing import Any
 
 from cachetools import LRUCache
@@ -26,6 +27,7 @@ from unified_planning.model.walkers import DagWalker
 from tamerlite.core import (
     Expression,
     IfReturnType,
+    clear_interpreted_function_cache,
     make_bool_constant_node,
     make_fluent_node,
     make_int_constant_node,
@@ -66,6 +68,52 @@ def new_if_cache() -> MutableMapping[tuple[InterpretedFunction, tuple], Any]:
     also works anywhere this is accepted (only `[]`/`in`/assignment are ever
     used on it) -- callers that want to opt out of the bound may pass one."""
     return LRUCache(maxsize=IF_CACHE_CAPACITY)
+
+
+# Count of live "a solve might still resume and evaluate a `func_id` it
+# registered" scopes -- see `interpreted_function_scope` below. Not
+# thread-safe by itself: a plain module-level `int`, sharing TamerLite's
+# Rust core's documented single-thread assumption.
+_live_if_scopes = 0
+
+
+@contextmanager
+def interpreted_function_scope() -> Generator[None]:
+    """Brackets one top-level solve's (`TamerLite._solve` or one whole
+    `_get_solutions_with_params` anytime run's) window during which some
+    `ExpressionNode` may carry a `func_id` registered in the Rust backend's
+    interpreted-function registry (`INTERPRETED_FUNCTIONS`/`IF_IDS_BY_PTR` in
+    `expressions.rs`), and calls `clear_interpreted_function_cache()` once the
+    live-scope count returns to zero -- the earliest point nothing can still
+    hold a registered `func_id`.
+
+    "Live" means *might resume*, not *is executing*: an anytime generator is
+    merely suspended between `yield`s and can still evaluate nodes registered
+    earlier in the run, so the count must stay up through that whole window.
+    The `try/finally` enforces this on every exit path -- normal exhaustion,
+    an exception, or the `GeneratorExit` from `close()`/GC finalizing an
+    abandoned generator -- including the common case of a caller taking a few
+    solutions and never draining the generator. Nesting is free: an inner
+    scope's exit never sees the count reach zero. No clear on entry: it'd be
+    redundant (the previous scope's exit already cleared) and would only wipe
+    registrations made by direct `tamerlite.core` callers outside any scope.
+
+    Not covered: direct `tamerlite.core` use (`make_interpreted_function_node`
+    / `clear_interpreted_function_cache`, including in tests) bypasses this
+    counter entirely. Leak path: a generator that's never finalized (a
+    reference cycle, a stored traceback, `gc.disable()`) never decrements, so
+    nothing clears for the rest of the process -- degrades to "never
+    reclaim," never to corruption; `clear_interpreted_function_cache` stays
+    exported as an escape hatch, safe to call anytime since a stale `func_id`
+    now raises instead of misresolving."""
+    global _live_if_scopes
+    _live_if_scopes += 1
+    try:
+        yield
+    finally:
+        _live_if_scopes -= 1
+        if _live_if_scopes == 0:
+            clear_interpreted_function_cache()
 
 
 class Converter(DagWalker):

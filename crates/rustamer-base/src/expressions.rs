@@ -22,7 +22,7 @@ use lru::LruCache;
 use num::BigInt;
 use num_rational::BigRational;
 use pyo3::{
-    exceptions::PyValueError,
+    exceptions::{PyRuntimeError, PyValueError},
     prelude::*,
     types::{PyBool, PyInt, PyTuple},
 };
@@ -106,8 +106,17 @@ fn register_interpreted_function(function: Py<PyAny>) -> usize {
     id
 }
 
-fn get_interpreted_function(py: Python<'_>, func_id: usize) -> Py<PyAny> {
-    INTERPRETED_FUNCTIONS.with_borrow(|registry| registry[func_id].clone_ref(py))
+/// Resolves `func_id` to its registered callable, or a `PyRuntimeError` if
+/// it isn't (or is no longer) registered.
+fn get_interpreted_function(py: Python<'_>, func_id: usize) -> PyResult<Py<PyAny>> {
+    let found = INTERPRETED_FUNCTIONS
+        .with_borrow(|registry| registry.get(func_id).map(|f| f.clone_ref(py)));
+    found.ok_or_else(|| {
+        PyRuntimeError::new_err(format!(
+            "interpreted function {func_id} is no longer registered: the \
+             expression referencing it outlived the solve that created it"
+        ))
+    })
 }
 
 /// Converts an evaluated `ExpressionNode` argument into the Python value an
@@ -182,7 +191,7 @@ fn call_interpreted_function_uncached(
     args: &[&ExpressionNode],
 ) -> PyResult<ExpressionNode> {
     Python::attach(|py| {
-        let callable = get_interpreted_function(py, func_id);
+        let callable = get_interpreted_function(py, func_id)?;
         let mut py_args = Vec::with_capacity(args.len());
         for &a in args {
             py_args.push(interpreted_function_arg(a, py)?);
@@ -222,8 +231,13 @@ struct IfCallKey {
 // `_if_wrappers` (Python side) may be shared across every `Converter` built within
 // one `TamerLite._solve`/`_get_solutions_with_params` call, which is what lets
 // entries here persist across anytime re-encodes instead of starting cold. Not
-// shared across unrelated problems/solves, so `clear_interpreted_function_cache`
-// below resets both this cache and the registry once at the start of each.
+// shared across unrelated problems/solves -- but also not reset *between* two
+// interleaved ones any more: `clear_interpreted_function_cache` below now only
+// runs once no solve is in flight (`tamerlite.converter.interpreted_function_scope`
+// tracks that with a live-scope counter on the Python side), so a solve that is
+// merely suspended (e.g. a not-yet-exhausted anytime generator) keeps its entries
+// warm across whatever else runs while it's suspended, rather than losing them to
+// an unrelated solve's start-of-run reset the way it used to.
 //
 // Errors are never cached (see the `?` before the insert below): a replayed
 // `PyErr` carries a stale traceback and could poison a callable that raises once
@@ -270,11 +284,22 @@ pub fn call_interpreted_function(
 /// Drops every memoized interpreted-function result and every registered
 /// callable, resetting `func_id` allocation back to zero.
 ///
-/// Only sound under a caller-behavior assumption this crate cannot verify or
-/// enforce: no other still-suspended anytime generator (from an earlier,
-/// not-yet-exhausted `get_solutions()` call, on this or any other
-/// `TamerLite` instance in this thread) may hold a live `func_id` from
-/// before this call.
+/// Callers are expected to only call this when no solve is in flight (see
+/// `tamerlite.converter.interpreted_function_scope`, which tracks that on
+/// the Python side via a live-scope counter and calls this once the count
+/// returns to zero). A `func_id` still referenced after this runs -- e.g. by
+/// a still-suspended anytime generator despite that expectation -- resolves
+/// against whatever the next epoch registers under the same, recycled id;
+/// `get_interpreted_function` only catches the out-of-range case, so this is
+/// still a caller-behavior assumption the crate cannot itself verify.
+///
+/// `INTERPRETED_FUNCTIONS.clear()` below drops every registered `Py<PyAny>`
+/// while still holding that `RefCell`'s mutable borrow. Assumed sound: no
+/// registered interpreted-function callable, nor anything its closure
+/// captures, defines a `__del__` or other finalizer that re-enters this module
+/// -- if one did, that reentrant call would try to borrow `INTERPRETED_FUNCTIONS`
+/// (or `IF_IDS_BY_PTR`) again while this borrow is still outstanding and panic
+/// with "already borrowed". Not enforced by this crate.
 #[pyfunction]
 pub fn clear_interpreted_function_cache() {
     IF_RESULTS.with_borrow_mut(|cache| cache.clear());

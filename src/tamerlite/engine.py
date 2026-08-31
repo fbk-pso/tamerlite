@@ -42,7 +42,7 @@ from unified_planning.model import FNode, InterpretedFunction, ProblemKind, Star
 from unified_planning.model.state import State
 from unified_planning.plans import ActionInstance, PlanKind
 
-from tamerlite.converter import new_if_cache
+from tamerlite.converter import interpreted_function_scope, new_if_cache
 from tamerlite.core import (
     HFF,
     Action,
@@ -53,7 +53,6 @@ from tamerlite.core import (
     astar_search,
     astar_search_memory_bounded,
     bfs_search,
-    clear_interpreted_function_cache,
     dfs_search,
     ehc_search,
     gbfs_search,
@@ -440,6 +439,22 @@ class TamerLite(
         if len(problem.quality_metrics) > 1:
             raise NotImplementedError("Multiple quality metrics are not supported")
 
+        # Brackets this whole run -- including every suspension between
+        # `yield`s below, not just the synchronous work in between -- so
+        # `clear_interpreted_function_cache` never runs while this generator
+        # could still resume and evaluate a `func_id` it registered. See
+        # `interpreted_function_scope`'s docstring (converter.py).
+        with interpreted_function_scope():
+            yield from self._anytime_solutions(
+                problem, timeout=timeout, output_stream=output_stream
+            )
+
+    def _anytime_solutions(
+        self,
+        problem: "up.model.Problem",
+        timeout: float | None = None,
+        output_stream: IO[str] | None = None,
+    ) -> Iterator["up.engines.results.PlanGenerationResult"]:
         start_time = time.monotonic()
         em = problem.environment.expression_manager
         tm = problem.environment.type_manager
@@ -460,15 +475,6 @@ class TamerLite(
         # Sharing them is what lets the Rust backend's own IF_RESULTS cache persist
         # across re-encodes too, since its `func_id`s are keyed on wrapper identity.
         if_wrappers: dict[InterpretedFunction, Callable] = {}
-        # Also resets the Rust callable registry (INTERPRETED_FUNCTIONS/
-        # IF_IDS_BY_PTR), not just IF_RESULTS -- dropping whatever a previous,
-        # unrelated solve left behind before this run starts. Only sound
-        # because we assume the caller never has two `get_solutions()`
-        # generators in flight at once, and never runs a oneshot `solve()`
-        # while an earlier one sits suspended -- otherwise a still-alive
-        # suspended generator's `func_id`s could silently start resolving to
-        # a *different* problem's callables.
-        clear_interpreted_function_cache()
 
         logger.info(
             "Solving '%s' (anytime): actions=%d fluents=%d",
@@ -693,15 +699,20 @@ class TamerLite(
             len(list(ground_problem.actions)),
             len(list(ground_problem.fluents)),
         )
-        res, _, _ = self._solve_ground_problem(
-            lifted_problem,
-            ground_problem,
-            map_back_action_instance,
-            heuristic=heuristic,
-            timeout=timeout - elapsed_time if timeout is not None else None,
-            output_stream=output_stream,
-            is_intermediate_solution=False,
-        )
+        # See `interpreted_function_scope`'s docstring (converter.py): brackets
+        # this standalone solve so `clear_interpreted_function_cache` never runs
+        # while it -- or a concurrently suspended anytime generator -- could
+        # still resume and evaluate a `func_id` it registered.
+        with interpreted_function_scope():
+            res, _, _ = self._solve_ground_problem(
+                lifted_problem,
+                ground_problem,
+                map_back_action_instance,
+                heuristic=heuristic,
+                timeout=timeout - elapsed_time if timeout is not None else None,
+                output_stream=output_stream,
+                is_intermediate_solution=False,
+            )
         if res.plan is not None:
             logger.info(
                 "Solution found in %.3fs: %s",
@@ -729,21 +740,16 @@ class TamerLite(
         if_cache: MutableMapping[tuple[InterpretedFunction, tuple], Any] | None = None,
         if_wrappers: dict[InterpretedFunction, Callable] | None = None,
     ) -> tuple["up.engines.results.PlanGenerationResult", bool, bool]:
-        # Default to one fresh pair shared by both `Encoder(...)` sites below --
-        # and, when freshly created here (as opposed to handed down from an
-        # anytime run already in progress), this is a new top-level solve, so
-        # drop whatever the Rust cache and callable registry hold from a
-        # previous, unrelated one. This path only ever runs for a standalone
-        # oneshot `_solve()` call -- `_get_solutions_with_params` always
-        # supplies its own `if_wrappers` -- so it relies on the same
-        # assumption as there: no anytime generator left suspended while this
-        # runs (see `clear_interpreted_function_cache`'s doc comment,
-        # expressions.rs).
+        # Default to one fresh pair shared by both `Encoder(...)` sites below.
+        # This path only ever runs for a standalone oneshot `_solve()` call --
+        # `_anytime_solutions` always supplies its own `if_cache`/`if_wrappers`
+        # -- so it's the caller's job to have opened an `interpreted_function_scope`
+        # around this call (as `_solve` does); a caller that reaches this
+        # branch outside any scope gets no reclamation at all, ever.
         if if_cache is None:
             if_cache = new_if_cache()
         if if_wrappers is None:
             if_wrappers = {}
-            clear_interpreted_function_cache()
         try:
             # Compression-safe-action detection and the TimedToSequential
             # recompile below are unaffected by interpreted functions: they

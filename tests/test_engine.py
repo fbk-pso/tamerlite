@@ -16,10 +16,12 @@
 #
 
 import contextlib
+import gc
 import importlib
 import os
 import types
 import warnings
+import weakref
 from collections import OrderedDict
 from collections.abc import Callable
 from functools import partial
@@ -1754,13 +1756,16 @@ def test_interpreted_function_receives_real_argument_types():
 def test_interpreted_function_registry_reuses_func_id_for_shared_wrapper():
     """Rust registers each distinct wrapper callable once, deduped by
     `function.as_ptr()` (`crates/rustamer-base/src/expressions.rs::
-    register_interpreted_function`), and never frees an entry -- the
-    registry's strong `Py<PyAny>` reference is exactly what keeps that
-    pointer from being recycled and silently aliasing a different callable's
-    `func_id`. Encoding the same problem twice (as TamerLite's anytime loop
-    does on every re-solve) must therefore still evaluate correctly: the
-    second `Encoder`'s IF nodes have to resolve through whichever `func_id`
-    the registry assigns *this* time, not silently reuse a stale id from the
+    register_interpreted_function`), and only ever frees an entry once
+    `tamerlite.converter.interpreted_function_scope`'s live-scope count
+    returns to zero (none of this test's three `Encoder(...)` calls opens
+    one, so nothing gets freed here) -- the registry's strong `Py<PyAny>`
+    reference is exactly what keeps a still-registered pointer from being
+    recycled and silently aliasing a different callable's `func_id`.
+    Encoding the same problem twice (as TamerLite's anytime loop does on
+    every re-solve) must therefore still evaluate correctly: the second
+    `Encoder`'s IF nodes have to resolve through whichever `func_id` the
+    registry assigns *this* time, not silently reuse a stale id from the
     first encoding.
 
     None of the three `Encoder(...)` calls below pass `if_wrappers`, so each
@@ -2947,3 +2952,316 @@ def test_interpreted_functions_symmetry_breaking_and_relevance_analysis_not_disa
         messages = [str(w.message) for w in caught]
         assert not any("relevance_analysis" in m for m in messages)
         assert not any("symmetry_breaking" in m for m in messages)
+
+
+def test_out_of_range_func_id_raises_instead_of_panicking():
+    """`get_interpreted_function` (`expressions.rs`) used to index the
+    registry unchecked (`registry[func_id]`), so a `func_id` past the current
+    registry length aborted the whole process with a Rust panic surfaced as
+    `pyo3_runtime.PanicException`. Registers two callables (ids 0 and 1),
+    clears (which also empties the registry), then registers only *one*
+    callable post-clear -- so the retained id-1 node's `func_id` is now out
+    of range -- and asserts evaluating it raises an ordinary `RuntimeError`
+    instead of panicking.
+
+    Note this only exercises the *out-of-range* half of a stale `func_id`. An
+    *in-range* stale id (recycled by the next epoch to a genuinely different
+    callable) resolves silently to that callable by design -- pointer dedup,
+    not id-range checking, is what keeps `func_id`s honest within one epoch,
+    and nothing on the Rust side can tell "recycled" apart from "still
+    mine". That's why `tamerlite.converter.interpreted_function_scope` (the
+    live-solve counter gating when `clear_interpreted_function_cache`
+    actually runs) is the real guard against stale-id resolution, not this
+    error path."""
+
+    reload_tamerlite(False)
+    from tamerlite.core import (
+        IfReturnType,
+        clear_interpreted_function_cache,
+        make_int_constant_node,
+        make_interpreted_function_node,
+        simplify,
+    )
+
+    def fn_x(v):
+        return v
+
+    def fn_y(v):
+        return v
+
+    five = make_int_constant_node(5)
+    make_interpreted_function_node(fn_x, IfReturnType.INT, (0,))  # func_id 0
+    node_y = make_interpreted_function_node(fn_y, IfReturnType.INT, (0,))  # func_id 1
+
+    clear_interpreted_function_cache()
+
+    def fn_z(v):
+        return v
+
+    make_interpreted_function_node(fn_z, IfReturnType.INT, (0,))  # fresh func_id 0
+
+    with pytest.raises(RuntimeError, match="no longer registered"):
+        simplify((five, node_y), {}, evaluate_interpreted_functions=True)
+
+
+def _drive_if_counting_problem(name: str) -> list:
+    """Drives `problems_generator.get_problem_if_counting_chain(name, ...)`
+    through two anytime `next()` calls in isolation (no other solve ever in
+    flight) and returns the resulting call log -- the baseline
+    `test_interleaved_anytime_runs_keep_if_cache_warm` compares an
+    interleaved run against. Needed because this problem's own
+    heuristic/relevance-analysis machinery re-probes some interpreted-function
+    values on every re-encode regardless of any caching bug (each solve calls
+    the IF once per value the search actually needs to check reachability
+    for), so a plain "must be exactly N calls" assertion can't distinguish
+    that inherent, pre-existing cost from extra cost caused by interleaving
+    -- only a same-problem, solo-vs-interleaved comparison can."""
+
+    calls: list = []
+    problem = problems_generator.get_problem_if_counting_chain(name, calls)
+    search = tamerlite.SearchParams(search="gbfs", heuristic="hff")
+    with AnytimePlanner(name="tamerlite", params={"search": search}) as planner:
+        gen = planner.get_solutions(problem, timeout=None)
+        next(gen)
+        next(gen, None)
+        gen.close()
+    return calls
+
+
+def test_interleaved_anytime_runs_keep_if_cache_warm():
+    """Interleaving two anytime `get_solutions()` runs must not cost either
+    one its own warm `IF_RESULTS` (Rust side): before this change,
+    `clear_interpreted_function_cache()` ran unconditionally at the start of
+    *every* top-level solve (`engine.py`, both the anytime and the oneshot
+    path), so starting B's run while A's generator merely sat suspended
+    between `yield`s wiped A's callable registry and result cache out from
+    under it -- forcing A's next re-encode to recompute values that were
+    already cached from its *own* first solve (confirmed empirically:
+    pre-fix, an uninterrupted solo run of `get_problem_if_counting_chain`
+    logs `[0, 1, 2, 3, 0, 1, 2]` -- the trailing `2` is as far as the second
+    encode's own relevance probing needs to go, `3` stays a hit from the
+    first solve -- while the same run interleaved with an unrelated anytime
+    solve over a second such problem logs `[0, 1, 2, 3, 0, 1, 2, 3]`: the
+    unrelated solve's start wiped the cache entry for `3`, forcing an extra,
+    otherwise-unnecessary recompute).
+
+    Builds two `get_problem_if_counting_chain`s, drives A interleaved with an
+    entire unrelated anytime run over B, and asserts A's call log is
+    *identical* to the solo baseline `_drive_if_counting_problem` produces
+    for the same problem run alone -- i.e. interleaving added zero extra
+    interpreted-function calls. Rust only -- the pure-Python backend has no
+    registry for interleaving to disturb."""
+
+    reload_tamerlite(False)
+
+    baseline_calls = _drive_if_counting_problem("if_warm_baseline")
+
+    calls_a: list = []
+    calls_b: list = []
+    problem_a = problems_generator.get_problem_if_counting_chain("if_warm_a", calls_a)
+    problem_b = problems_generator.get_problem_if_counting_chain("if_warm_b", calls_b)
+    search = tamerlite.SearchParams(search="gbfs", heuristic="hff")
+
+    with (
+        AnytimePlanner(name="tamerlite", params={"search": search}) as planner_a,
+        AnytimePlanner(name="tamerlite", params={"search": search}) as planner_b,
+    ):
+        gen_a = planner_a.get_solutions(problem_a, timeout=None)
+        res_a1 = next(gen_a)
+        assert res_a1.status == ResultStatus.INTERMEDIATE
+        assert calls_a == baseline_calls[: len(calls_a)]
+
+        gen_b = planner_b.get_solutions(problem_b, timeout=None)
+        res_b1 = next(gen_b)
+        assert res_b1.status == ResultStatus.INTERMEDIATE
+
+        res_a2 = next(gen_a, None)
+        assert res_a2 is not None
+
+        # An entire unrelated anytime solve ran to its first yield while A's
+        # generator was merely suspended (not executing) in between -- A's
+        # call log must come out identical to the uninterrupted baseline.
+        assert calls_a == baseline_calls
+
+        gen_a.close()
+        gen_b.close()
+
+
+def test_if_registrations_released_when_last_scope_exits():
+    """`interpreted_function_scope` (`tamerlite.converter`) reclaims a run's
+    IF registrations as soon as the live-scope count returns to zero --
+    sooner than the old unconditional-clear-at-start design, which pinned a
+    finished run's registrations until some later, unrelated solve happened
+    to start. Registers a raw callable that captures a sentinel object via a
+    default argument, exits the scope that registered it, drops every other
+    reference, and asserts the sentinel is collected -- proving the Rust
+    registry actually released its `Py<PyAny>` strong ref on the callable,
+    not just that the Python side dropped its own.
+
+    Deliberately bypasses the full engine/UP pipeline and calls
+    `make_interpreted_function_node` directly: going through a real
+    `InterpretedFunction`/`Problem` would confound the measurement, since
+    UP's global expression manager permanently memoizes every `FNode` it
+    ever builds (including one wrapping this callable) for the life of the
+    process -- keeping the callable, and hence the sentinel, alive
+    regardless of anything this change does."""
+
+    reload_tamerlite(False)
+    from tamerlite.converter import interpreted_function_scope
+    from tamerlite.core import IfReturnType, make_interpreted_function_node
+
+    class Sentinel:
+        pass
+
+    def register_and_discard() -> weakref.ReferenceType:
+        # `sentinel`'s only binding lives in this frame -- once it returns,
+        # nothing but the Rust registry (if it still holds `fn`) keeps the
+        # sentinel alive.
+        sentinel = Sentinel()
+        sentinel_ref = weakref.ref(sentinel)
+
+        def make_fn():
+            def fn(x, _keep=sentinel):
+                return x
+
+            return fn
+
+        with interpreted_function_scope():
+            make_interpreted_function_node(make_fn(), IfReturnType.INT, (0,))
+
+        return sentinel_ref
+
+    sentinel_ref = register_and_discard()
+    gc.collect()
+
+    assert sentinel_ref() is None
+
+
+def test_abandoned_anytime_generator_exits_its_scope():
+    """`interpreted_function_scope`'s decrement runs in a `finally`, so it
+    fires on `GeneratorExit` too -- not just on normal exhaustion -- which is
+    what makes abandoning a suspended anytime generator (rather than
+    explicitly `close()`-ing or draining it, the common real-world pattern)
+    still release its live-scope count. Suspends a generator mid-run,
+    abandons it without `close()`, forces GC, then runs a second, unrelated
+    solve and confirms it isn't blocked or corrupted by anything the first
+    left behind -- which would only be possible if the first's scope had
+    actually exited."""
+
+    reload_tamerlite(False)
+
+    calls_a: list = []
+    calls_b: list = []
+    problem_a = problems_generator.get_problem_if_counting_chain(
+        "if_abandoned_a", calls_a
+    )
+    problem_b = problems_generator.get_problem_if_counting_chain(
+        "if_abandoned_b", calls_b
+    )
+    search = tamerlite.SearchParams(search="gbfs", heuristic="hff")
+
+    with AnytimePlanner(name="tamerlite", params={"search": search}) as planner_a:
+        gen_a = planner_a.get_solutions(problem_a, timeout=None)
+        res_a1 = next(gen_a)
+        assert res_a1.status == ResultStatus.INTERMEDIATE
+        del gen_a  # abandoned mid-run, not closed
+
+    gc.collect()
+
+    with AnytimePlanner(name="tamerlite", params={"search": search}) as planner_b:
+        gen_b = planner_b.get_solutions(problem_b, timeout=None)
+        res_b1 = next(gen_b)
+        assert res_b1.status == ResultStatus.INTERMEDIATE
+        gen_b.close()
+
+
+def test_interleaved_anytime_if_runs_produce_valid_plans():
+    """End-to-end guard on the new plumbing (both backends): two anytime
+    planners over the two IF fixtures, interleaved `next()` calls, every
+    non-`None` plan validated against the original problem. This does *not*
+    catch the original bug on its own (interleaving was already safe at the
+    engine level, see `interpreted_function_scope`'s docstring) -- its job is
+    to catch the opposite mistake this change could introduce: a scope that
+    releases *too early*. If that happened, A's resumed `next()` would raise
+    ("no longer registered") instead of returning a plan."""
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        problem_a = problems_generator.get_problem_if_bool_condition()
+        problem_b = problems_generator.get_problem_if_numeric_effect()
+        search = tamerlite.SearchParams(
+            search="gbfs", heuristic="hff", compression_safe_actions=False
+        )
+
+        with (
+            AnytimePlanner(name="tamerlite", params={"search": search}) as planner_a,
+            AnytimePlanner(name="tamerlite", params={"search": search}) as planner_b,
+        ):
+            gen_a = planner_a.get_solutions(problem_a, timeout=None)
+            gen_b = planner_b.get_solutions(problem_b, timeout=None)
+
+            results = [
+                next(gen_a),
+                next(gen_b),
+                next(gen_a, None),
+                next(gen_b, None),
+            ]
+            gen_a.close()
+            gen_b.close()
+
+        for problem, res in [
+            (problem_a, results[0]),
+            (problem_b, results[1]),
+            (problem_a, results[2]),
+            (problem_b, results[3]),
+        ]:
+            if res is None:
+                continue
+            assert res.status in {
+                ResultStatus.INTERMEDIATE,
+                ResultStatus.SOLVED_SATISFICING,
+                ResultStatus.SOLVED_OPTIMALLY,
+            }
+            if res.plan is not None:
+                with PlanValidator(problem_kind=problem.kind) as v:
+                    val_res: ValidationResult = v.validate(problem, res.plan)
+                    assert val_res
+
+
+def test_oneshot_solve_during_suspended_anytime_run():
+    """The scope must cover oneshot `solve()` too, not just anytime
+    generators: a `solve()` call while an anytime generator sits suspended is
+    exactly the second case the old unconditional-clear-at-start design
+    could corrupt (`_solve_ground_problem` cleared unconditionally whenever
+    it wasn't handed an existing `if_wrappers`, i.e. on every standalone
+    oneshot call, regardless of what else was in flight). Suspends an
+    anytime generator over one IF problem, runs a full, independent oneshot
+    `solve()` over another, then resumes the suspended generator and asserts
+    it still produces a valid plan instead of raising."""
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        problem_a = problems_generator.get_problem_if_bool_condition()
+        problem_b = problems_generator.get_problem_if_numeric_effect()
+        search = tamerlite.SearchParams(
+            search="gbfs", heuristic="hff", compression_safe_actions=False
+        )
+
+        with AnytimePlanner(name="tamerlite", params={"search": search}) as planner_a:
+            gen_a = planner_a.get_solutions(problem_a, timeout=None)
+            res_a1 = next(gen_a)
+            assert res_a1.status == ResultStatus.INTERMEDIATE
+
+            with OneshotPlanner(
+                name="tamerlite", params={"search": search}
+            ) as planner_b:
+                res_b = planner_b.solve(problem_b, timeout=None)
+                assert res_b.status == ResultStatus.SOLVED_SATISFICING
+
+            res_a2 = next(gen_a, None)
+            if res_a2 is not None and res_a2.plan is not None:
+                with PlanValidator(problem_kind=problem_a.kind) as v:
+                    val_res: ValidationResult = v.validate(problem_a, res_a2.plan)
+                    assert val_res
+
+            gen_a.close()

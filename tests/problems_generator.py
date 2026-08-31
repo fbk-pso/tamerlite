@@ -1490,3 +1490,30 @@ def get_problem_if_hierarchical_type_argument() -> Problem:
     problem.add_action(dispatch)
     problem.add_goal(dispatched(c1))
     return problem
+
+
+def get_problem_if_counting_chain(name: str, calls: list) -> Problem:
+    """A tiny IF-gated counter problem: the only action, `inc`, is guarded by
+    a boolean interpreted function that logs every `n` it's called with (into
+    the caller-supplied `calls`) and always returns `n < 3`; the goal needs
+    exactly three `inc`s, so this is both the smallest problem with a
+    deterministic minimal plan length (for an anytime improvement loop to
+    exhaust in one iteration) and a way to observe exactly which fluent
+    values the IF was evaluated at. Unlike the other `get_problem_if_*`
+    generators here, `name` is caller-supplied rather than fixed, since
+    interleaving/warm-cache tests need several distinctly-named instances."""
+
+    def allow(n):
+        calls.append(n)
+        return n < 3
+
+    IF_allow = InterpretedFunction("allow", BoolType(), OrderedDict(n=IntType()), allow)
+    n = Fluent("n", IntType())
+    inc = InstantaneousAction("inc")
+    inc.add_precondition(IF_allow(n))
+    inc.add_effect(n, Plus(n, 1))
+    problem = Problem(name)
+    problem.add_fluent(n, default_initial_value=0)
+    problem.add_action(inc)
+    problem.add_goal(GE(n, 3))
+    return problem
