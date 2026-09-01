@@ -22,46 +22,6 @@ from unified_planning.io import PDDLReader
 from unified_planning.shortcuts import *
 
 
-def get_problem_matchcellar(n) -> Problem:
-    Match, Fuse = UserType("Match"), UserType("Fuse")
-
-    handfree, light = Fluent("handfree"), Fluent("light")
-    match_used = Fluent("match_used", BoolType(), match=Match)
-    fuse_mended = Fluent("fuse_mended", BoolType(), fuse=Fuse)
-
-    light_match = DurativeAction("light_match", m=Match)
-    light_match.set_fixed_duration(6)
-    light_match.add_condition(StartTiming(), Not(match_used(light_match.m)))
-    light_match.add_effect(StartTiming(), match_used(light_match.m), True)
-    light_match.add_effect(StartTiming(), light, True)
-    light_match.add_effect(EndTiming(), light, False)
-
-    mend_fuse = DurativeAction("mend_fuse", f=Fuse)
-    mend_fuse.set_fixed_duration(5)
-    mend_fuse.add_condition(StartTiming(), handfree)
-    mend_fuse.add_condition(StartTiming(), Not(fuse_mended(mend_fuse.f)))
-    mend_fuse.add_condition(ClosedTimeInterval(StartTiming(), EndTiming()), light)
-    mend_fuse.add_effect(StartTiming(), handfree, False)
-    mend_fuse.add_effect(EndTiming(), fuse_mended(mend_fuse.f), True)
-    mend_fuse.add_effect(EndTiming(), handfree, True)
-
-    problem = Problem("MatchCellar")
-    problem.add_fluents([handfree, light])
-    problem.add_fluent(match_used, default_initial_value=False)
-    problem.add_fluent(fuse_mended, default_initial_value=False)
-    problem.add_actions([light_match, mend_fuse])
-    problem.set_initial_value(light, False)
-    problem.set_initial_value(handfree, True)
-
-    for i in range(1, n + 1):
-        f = Object(f"f{i}", Fuse)
-        m = Object(f"m{i}", Match)
-        problem.add_objects([f, m])
-        problem.add_goal(fuse_mended(f))
-
-    return problem
-
-
 def get_problem_logistics(nRob, nPall, nPos, nTreatment) -> Problem:
     # Setting up Types
     Robot = UserType("Robot")

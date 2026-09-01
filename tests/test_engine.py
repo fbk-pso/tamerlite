@@ -44,7 +44,7 @@ import tamerlite.engine
 import testing_utils
 from tamerlite.core.heuristics import Heuristic
 from tamerlite.core.search_space import SearchSpaceABC
-from tamerlite.encoder import Encoder, has_interpreted_functions
+from tamerlite.encoder import Encoder
 
 env = get_environment()
 env.factory.add_engine("tamerlite", "tamerlite.engine", "TamerLite")
@@ -79,6 +79,9 @@ def _build_problems():
         problems_generator.get_problem_if_duration(),
         problems_generator.get_problem_if_conditions_and_effects(),
         problems_generator.get_problem_if_signature_shapes(),
+        problems_generator.get_problem_if_numeric_symmetry_retained(),
+        problems_generator.get_problem_if_object_argument_symmetry_unsound(),
+        problems_generator.get_problem_if_hierarchical_type_argument(),
     ]
 
     up_example_problems = list(
@@ -242,6 +245,10 @@ UNINFORMED_SEARCH_RISK: dict[str, set[str]] = {
     "if_reals_condition_effect_pizza": {"blind"},
 }
 
+# Problems where `hmax_explicit` legitimately diverges between backends -- see
+# the `PERFORMANCE_PRUNES` entry below and `test_heuristic_values`.
+HMAX_EXPLICIT_BACKEND_DIVERGENT = ("if_object_effect", "if_object_argument_and_return")
+
 # (problem_name(s), predicate, reason). Every entry is a performance prune, not
 # a correctness exclusion: on the heaviest instances these combinations run for
 # minutes under an unbounded (timeout=None) search and/or exhaust available
@@ -364,19 +371,25 @@ PERFORMANCE_PRUNES: list[
         lambda c: c.search in {"bfs", "ehc"},
         "uninformed search explores the whole state space",
     ),
+    (
+        "if_numeric_symmetry_retained",
+        lambda c: c.heuristic == "hmax_explicit",
+        "hmax_explicit never terminates on this problem's unbounded "
+        "monotonic interpreted-function effect",
+    ),
     # Not a performance prune like everything above -- a known, documented
     # heuristic-precision divergence. `hmax_explicit` cross-products an
     # effect's argument fluents' already-reachable values on the Rust side,
     # while Python's classifier over-approximates any non-constant object
     # effect to "every object of the type"; the two backends can legitimately
     # reach different (both admissible) values on these two problems' non-
-    # constant object effects. `test_interpreted_functions_heuristic_values`
-    # pins both values under backend-specific keys instead of asserting them
-    # equal; the generic `test_heuristics`/`test_heuristic_values`, which
-    # only compare recorded metrics, have no such escape hatch, so the
-    # combination is pruned here instead of forced to (dis)agree.
+    # constant object effects. `test_heuristic_values` pins both values under
+    # backend-specific keys instead of asserting them equal; the generic
+    # `test_heuristics`/`test_search_algorithms`, which only compare recorded
+    # metrics across backends, have no such escape hatch, so the combination
+    # is pruned here instead of forced to (dis)agree.
     (
-        ("if_object_effect", "if_object_argument_and_return"),
+        HMAX_EXPLICIT_BACKEND_DIVERGENT,
         lambda c: c.heuristic == "hmax_explicit",
         "hmax_explicit legitimately diverges between backends on this "
         "problem's non-constant object effect",
@@ -614,6 +627,16 @@ def test_heuristic_fixed_values():
 
 @pytest.mark.parametrize("problem", PROBLEMS, ids=[p.name for p in PROBLEMS])
 def test_heuristic_values(problem, data_regression):
+    """Regression-pins the heuristic values every heuristic (and its
+    `_no_numbers`/`_inadmissible` variants where applicable) computes on
+    generated states of every problem in `PROBLEMS`, asserting the two
+    backends agree exactly -- except `hmax_explicit` on
+    `HMAX_EXPLICIT_BACKEND_DIVERGENT`, which is deliberately excluded from
+    that cross-check (see the `PERFORMANCE_PRUNES` entry for why) and instead
+    recorded under backend-specific keys so the divergence stays pinned
+    rather than silently accepted or forced to agree by weakening either
+    implementation."""
+
     values: dict[str, list[int | None]] = {}
     for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
@@ -646,7 +669,15 @@ def test_heuristic_values(problem, data_regression):
             (HMaxExplicit, "hmax_explicit"),
         ]
         for heuristic_class, heuristic_name in heuristic_classes:
-            if prune_reason(problem, "wastar", heuristic_name, True, True) is not None:
+            # `hmax_explicit` legitimately diverges between backends on these
+            # problems (see `HMAX_EXPLICIT_BACKEND_DIVERGENT`); pin both
+            # values under backend-specific keys instead of skipping.
+            backend_divergent = (
+                heuristic_name == "hmax_explicit"
+                and problem.name in HMAX_EXPLICIT_BACKEND_DIVERGENT
+            )
+            reason = prune_reason(problem, "wastar", heuristic_name, True, True)
+            if reason is not None and not backend_divergent:
                 continue
 
             inadmissible_numeric_heuristic_flags = [False]
@@ -669,9 +700,11 @@ def test_heuristic_values(problem, data_regression):
                         inadmissible_numeric_heuristic_variant=inadmissible_numeric_heuristic,
                     )
 
-                    values_key = heuristic_name + (
-                        "_inadmissible" if inadmissible_numeric_heuristic else ""
-                    )
+                    values_key = heuristic_name
+                    if backend_divergent:
+                        values_key += "_python" if disable_rustamer else "_rust"
+                    elif inadmissible_numeric_heuristic:
+                        values_key += "_inadmissible"
                     if values_key not in values:
                         values[values_key] = []
                         for state in states:
@@ -1474,96 +1507,6 @@ def test_interpreted_functions_supported_kind():
     assert kind.has_interpreted_functions_in_numeric_assignments()
     assert kind.has_interpreted_functions_in_object_assignments()
     assert kind.has_interpreted_functions_in_durations()
-
-
-@pytest.mark.parametrize(
-    "problem",
-    [p for p in PROBLEMS if has_interpreted_functions(p.kind)],
-    ids=[p.name for p in PROBLEMS if has_interpreted_functions(p.kind)],
-)
-def test_interpreted_functions_heuristic_values(problem, data_regression):
-    """Regression-pins the heuristic values `hff`/`hadd`/`hmax` (and their
-    `_no_numbers` variants) and `hmax_explicit` compute on interpreted-
-    function problems.
-
-    Mirrors `test_heuristic_values` by asserting the two backends agree
-    exactly -- except for `hmax_explicit`, which is deliberately excluded
-    from that cross-check. It computes an effect's reachable values very
-    differently per backend: Rust cross-products the effect's argument
-    fluents' already-reachable values and evaluates, while Python's
-    classifier over-approximates any non-constant object/bool effect to
-    "every object of the type"/`{True, False}`. A non-constant object effect
-    (see `if_object_effect`, `if_object_argument_and_return`) can therefore
-    legitimately yield a smaller, still-admissible value on the Rust side.
-    Both backends' `hmax_explicit` values are recorded under backend-
-    specific keys, so the divergence stays pinned rather than silently
-    accepted or forced to agree by weakening either implementation."""
-
-    values: dict[str, list[int | None]] = {}
-    for disable_rustamer in [True, False]:
-        reload_tamerlite(disable_rustamer)
-        from tamerlite.core import HFF, HAdd, HMax, HMaxExplicit
-
-        lifted_problem, ground_problem, map_back_action_instance = (
-            testing_utils.compile_problem(problem)
-        )
-        encoder = Encoder(
-            ground_problem,
-            lifted_problem,
-            map_back_action_instance,
-            symmetry_breaking=False,
-            compression_safe_actions=False,
-            relevance_analysis=False,
-        )
-        ss: SearchSpaceABC = encoder.search_space
-        init_state = ss.initial_state()
-        states = generate_states(
-            ss, init_state, num_states=max_generated_states(problem)
-        )
-
-        heuristic_classes: list[tuple[Callable[..., Heuristic], str]] = [
-            (HFF, "hff"),
-            (HAdd, "hadd"),
-            (HMax, "hmax"),
-            (partial(HFF, disable_numeric_reasoning=True), "hff_no_numbers"),
-            (partial(HAdd, disable_numeric_reasoning=True), "hadd_no_numbers"),
-            (partial(HMax, disable_numeric_reasoning=True), "hmax_no_numbers"),
-            (HMaxExplicit, "hmax_explicit"),
-        ]
-        for heuristic_class, heuristic_name in heuristic_classes:
-            # `hmax_explicit` legitimately diverges between backends (see
-            # docstring): key it per-backend so both real values get
-            # recorded instead of asserted equal.
-            values_key = (
-                f"{heuristic_name}_{'python' if disable_rustamer else 'rust'}"
-                if heuristic_name == "hmax_explicit"
-                else heuristic_name
-            )
-            for internal_caching in [True, False]:
-                heuristic: Heuristic = heuristic_class(
-                    encoder.actions,
-                    encoder.fluent_types,
-                    encoder.objects,
-                    encoder.events,
-                    encoder.goal,
-                    internal_caching=internal_caching,
-                    cache_value_in_state=False,
-                    inadmissible_numeric_heuristic_variant=False,
-                )
-
-                computed = []
-                for state in states:
-                    h_val = heuristic.eval(state, ss)
-                    if h_val is not None:
-                        h_val = int(h_val)
-                    computed.append(h_val)
-
-                if values_key not in values:
-                    values[values_key] = computed
-                else:
-                    assert computed == values[values_key]
-
-    data_regression.check(values)
 
 
 def test_converter_shares_interpreted_function_wrapper():
