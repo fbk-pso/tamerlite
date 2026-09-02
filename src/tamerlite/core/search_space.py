@@ -332,7 +332,7 @@ def get_fluent_value(fluent: int, state: State) -> ConstantNode:
 def evaluate(exp: Expression, state: State) -> ConstantNode:
     res: list[ExpressionNode] = []
     for e in exp:
-        if isinstance(e, (bool, int, Fraction)):
+        if isinstance(e, (int, Fraction)):  # bool is an int subclass
             res.append(e)
         elif isinstance(e, FluentNode):
             res.append(get_fluent_value(e.fluent, state))
@@ -366,19 +366,31 @@ def evaluate(exp: Expression, state: State) -> ConstantNode:
             elif e.kind == "<":
                 res.append(res[e.operands[0]] < res[e.operands[1]])  # type: ignore[operator]
             elif e.kind == "+":
-                v: int | Fraction = 0
-                for i in e.operands:
+                it = iter(e.operands)
+                v: int | Fraction = res[next(it)]  # type: ignore[assignment]
+                for i in it:
                     v += res[i]  # type: ignore[operator]
+                if isinstance(v, Fraction) and v.denominator == 1:
+                    v = int(v)
                 res.append(v)
             elif e.kind == "-":
-                res.append(res[e.operands[0]] - res[e.operands[1]])  # type: ignore[operator]
+                r = res[e.operands[0]] - res[e.operands[1]]  # type: ignore[operator]
+                if isinstance(r, Fraction) and r.denominator == 1:
+                    r = int(r)
+                res.append(r)
             elif e.kind == "*":
-                v = 1
-                for i in e.operands:
+                it = iter(e.operands)
+                v = res[next(it)]  # type: ignore[assignment]
+                for i in it:
                     v *= res[i]  # type: ignore[operator]
+                if isinstance(v, Fraction) and v.denominator == 1:
+                    v = int(v)
                 res.append(v)
             elif e.kind == "/":
-                res.append(Fraction(res[e.operands[0]], res[e.operands[1]]))  # type: ignore[arg-type]
+                r = Fraction(res[e.operands[0]], res[e.operands[1]])  # type: ignore[arg-type]
+                if r.denominator == 1:
+                    r = int(r)
+                res.append(r)
     assert isinstance(res[-1], (bool, int, Fraction, ObjectNode))
     return res[-1]
 

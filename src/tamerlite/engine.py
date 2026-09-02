@@ -100,7 +100,10 @@ class StateWrapper(State):
         elif fluent.type.is_int_type():
             return self.em.Int(cast(int, v))
         elif fluent.type.is_real_type():
-            return self.em.Real(cast(Fraction, v))
+            # `v` is not necessarily a `Fraction`: both backends normalize an
+            # integral real value down to a plain `int`, and `em.Real` requires a
+            # `Fraction`.
+            return self.em.Real(Fraction(cast("int | Fraction", v)))
         elif fluent.type.is_user_type():
             oid = cast(search_space.ObjectNode, v).object
             return self.em.ObjectExp(

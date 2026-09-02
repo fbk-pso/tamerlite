@@ -25,7 +25,7 @@ import weakref
 from collections import OrderedDict
 from collections.abc import Callable
 from functools import partial
-from typing import NamedTuple
+from typing import NamedTuple, cast
 
 import pytest
 import unified_planning
@@ -43,7 +43,7 @@ import tamerlite.encoder
 import tamerlite.engine
 import testing_utils
 from tamerlite.core.heuristics import Heuristic
-from tamerlite.core.search_space import SearchSpaceABC
+from tamerlite.core.search_space import ConstantNode, SearchSpaceABC
 from tamerlite.encoder import Encoder
 
 env = get_environment()
@@ -1111,6 +1111,323 @@ def test_simplify_fixed_expressions(expressions):
             assert str(simplify(exp, {})) == simplified_exp
 
 
+# --- Cross-backend differential tests for `evaluate()` -----------------------
+#
+# Unlike `test_simplify` above, there was no test asserting the two
+# `evaluate()` implementations agree. These build a `SearchSpace` directly
+# (no actions), skipping `Encoder`/`Converter`: both backends' `initial_state()`
+# accept a plain list of already-built constant nodes, and each backend's own
+# `make_*_node` constructors already produce exactly what it expects.
+
+
+def test_evaluate_fixed_cases():
+    """Cross-backend differential test for `evaluate()`. Pins expected
+    values for every shape that used to diverge between
+    `src/tamerlite/core/search_space.py` and
+    `crates/rustamer-base/src/expressions_utils.rs`:
+
+    - `+ - * /` collapsing an integral result down to `int`/`Int`.
+    - `Equals` between an integer and an integral-valued real agreeing on
+      both backends even though `make_rational_constant_node` does *not*
+      normalize a denominator-1 value at construction (a real-typed fluent
+      holding an integral value stays a `Fraction`/`Rational`, see
+      `fluent_real_3` below): Rust's `internal_evaluate` gives `Equals` a
+      numeric fallback for exactly this case (mirroring `simplify`'s
+      identical fallback), rather than relying on construction-time
+      normalization to make the structural comparison always agree.
+    - Division, including by zero.
+
+    Plus one fluent read of every constant type (bool, int, real, object) as
+    a baseline."""
+
+    (
+        F_BOOL_T,
+        F_BOOL_F,
+        F_INT_3,
+        F_INT_6,
+        F_INT_NEG2,
+        F_INT_0,
+        F_REAL_3,
+        F_REAL_7_2,
+        F_OBJ_L1,
+        F_OBJ_L2,
+    ) = range(10)
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.core import (
+            SearchSpace,
+            evaluate,
+            make_bool_constant_node,
+            make_fluent_node,
+            make_int_constant_node,
+            make_object_node,
+            make_operator_node,
+            make_rational_constant_node,
+        )
+
+        search_space = SearchSpace([], {}, [], None, None, None)
+        # `make_*_node` is typed to return the general `ExpressionNode`
+        # union (per `tamerlite/core/__init__.pyi`'s stub comment, the
+        # pure-Python signatures are what the checker sees for both
+        # backends); each call here always produces a leaf constant, which
+        # is what `initial_state` actually wants (`list[ConstantNode]`).
+        state = search_space.initial_state(
+            cast(
+                "list[ConstantNode]",
+                [
+                    make_bool_constant_node(True),
+                    make_bool_constant_node(False),
+                    make_int_constant_node(3),
+                    make_int_constant_node(6),
+                    make_int_constant_node(-2),
+                    make_int_constant_node(0),
+                    make_rational_constant_node(3, 1),
+                    make_rational_constant_node(7, 2),
+                    make_object_node(0),
+                    make_object_node(1),
+                ],
+            )
+        )
+
+        bool_t = make_bool_constant_node(True)
+        i1 = make_int_constant_node(1)
+        i2 = make_int_constant_node(2)
+        i3 = make_int_constant_node(3)
+        i4 = make_int_constant_node(4)
+        i7 = make_int_constant_node(7)
+        r7_2 = make_rational_constant_node(7, 2)
+        r1_2 = make_rational_constant_node(1, 2)
+        r0_1 = make_rational_constant_node(0, 1)
+        obj_l1 = make_object_node(0)
+        f_bool_t = make_fluent_node(F_BOOL_T)
+        f_bool_f = make_fluent_node(F_BOOL_F)
+        f_int_3 = make_fluent_node(F_INT_3)
+        f_int_6 = make_fluent_node(F_INT_6)
+        f_int_neg2 = make_fluent_node(F_INT_NEG2)
+        f_int_0 = make_fluent_node(F_INT_0)
+        f_real_3 = make_fluent_node(F_REAL_3)
+        f_real_7_2 = make_fluent_node(F_REAL_7_2)
+        f_obj_l1 = make_fluent_node(F_OBJ_L1)
+        f_obj_l2 = make_fluent_node(F_OBJ_L2)
+
+        op = testing_utils._op_tree
+        cases: list[tuple[str, object, tuple]] = [
+            ("fluent_bool_true", f_bool_t, ("ok", "bool", True)),
+            ("fluent_bool_false", f_bool_f, ("ok", "bool", False)),
+            ("fluent_int_3", f_int_3, ("ok", "int", 3)),
+            ("fluent_real_3", f_real_3, ("ok", "real", 3, 1)),
+            ("fluent_real_7_2", f_real_7_2, ("ok", "real", 7, 2)),
+            ("fluent_object_l1", f_obj_l1, ("ok", "object", 0)),
+            ("real_minus_real_to_int", op("-", r7_2, r1_2), ("ok", "int", 3)),
+            ("real_times_int_to_int", op("*", r1_2, i4), ("ok", "int", 2)),
+            ("real_div_real_to_int", op("/", r7_2, r7_2), ("ok", "int", 1)),
+            ("real_plus_int_stays_real", op("+", r7_2, i1), ("ok", "real", 9, 2)),
+            ("int_minus_real_stays_real", op("-", i3, r1_2), ("ok", "real", 5, 2)),
+            ("int_div_int_exact", op("/", f_int_6, i3), ("ok", "int", 2)),
+            ("int_div_int_inexact", op("/", i7, i2), ("ok", "real", 7, 2)),
+            ("negative_div", op("/", f_int_neg2, i4), ("ok", "real", -1, 2)),
+            (
+                "div_by_zero_fluent",
+                op("/", i3, f_int_0),
+                ("raise", "ZeroDivisionError"),
+            ),
+            (
+                "div_by_zero_literal",
+                op("/", i3, r0_1),
+                ("raise", "ZeroDivisionError"),
+            ),
+            (
+                "int_fluent_eq_nonintegral_real",
+                op("==", f_int_3, r7_2),
+                ("ok", "bool", False),
+            ),
+            (
+                "real_fluent_eq_int_literal_numeric_fallback",
+                op("==", f_real_3, i3),
+                ("ok", "bool", True),
+            ),
+            (
+                "real_fluent_eq_real_literal_exact",
+                op("==", f_real_7_2, r7_2),
+                ("ok", "bool", True),
+            ),
+            (
+                "le_mixed_representations",
+                op("<=", f_int_3, f_real_7_2),
+                ("ok", "bool", True),
+            ),
+            (
+                "lt_mixed_representations_false",
+                op("<", f_real_3, f_int_3),
+                ("ok", "bool", False),
+            ),
+            ("object_eq_same", op("==", f_obj_l1, obj_l1), ("ok", "bool", True)),
+            (
+                "object_eq_different",
+                op("==", f_obj_l1, f_obj_l2),
+                ("ok", "bool", False),
+            ),
+            (
+                "and_over_fluent_and_literal",
+                op("and", f_bool_t, bool_t),
+                ("ok", "bool", True),
+            ),
+            ("not_fluent", op("not", f_bool_t), ("ok", "bool", False)),
+        ]
+
+        for name, tree, expected in cases:
+            exp = testing_utils._flatten_expression_tree(tree, make_operator_node)
+            got = testing_utils._evaluate_outcome(evaluate, exp, state)
+            assert got == expected, (
+                f"case {name!r} on {'python' if disable_rustamer else 'rust'} "
+                f"backend: expected {expected}, got {got}"
+            )
+
+
+def test_evaluate_interpreted_function_normalization():
+    """Cross-backend differential test for interpreted-function calls
+    through `evaluate()`, covering every `IfReturnType`: a `REAL` return
+    always stays a `Fraction`/`Rational` on both backends
+    (`InterpretedFunctionNode.call`'s `REAL` branch,
+    `interpreted_function_result`'s `Real` arm), even when the value is
+    integral -- mirroring UP's own `Simplifier.walk_interpreted_function_exp`.
+    Also covers `BOOL`/`OBJECT` returns and an object-typed argument, and a
+    nested interpreted-function call (the outer call's argument is itself
+    the inner call's `Fraction` result)."""
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.core import (
+            IfReturnType,
+            SearchSpace,
+            evaluate,
+            make_int_constant_node,
+            make_interpreted_function_node,
+            make_object_node,
+        )
+
+        search_space = SearchSpace([], {}, [], None, None, None)
+        state = search_space.initial_state([])
+
+        def to_real(x):
+            return Fraction(x)
+
+        def half(x):
+            return Fraction(x, 2)
+
+        def obj_identity(o):
+            return make_object_node(o.object)
+
+        def is_first_object(o):
+            return o.object == 0
+
+        three = make_int_constant_node(3)
+
+        to_real_node = make_interpreted_function_node(to_real, IfReturnType.REAL, (0,))
+        assert testing_utils._evaluate_outcome(
+            evaluate, (three, to_real_node), state
+        ) == (
+            "ok",
+            "real",
+            3,
+            1,
+        )
+
+        half_node = make_interpreted_function_node(half, IfReturnType.REAL, (0,))
+        assert testing_utils._evaluate_outcome(evaluate, (three, half_node), state) == (
+            "ok",
+            "real",
+            3,
+            2,
+        )
+
+        obj0 = make_object_node(0)
+        obj_identity_node = make_interpreted_function_node(
+            obj_identity, IfReturnType.OBJECT, (0,)
+        )
+        assert testing_utils._evaluate_outcome(
+            evaluate, (obj0, obj_identity_node), state
+        ) == (
+            "ok",
+            "object",
+            0,
+        )
+
+        is_first_object_node = make_interpreted_function_node(
+            is_first_object, IfReturnType.BOOL, (0,)
+        )
+        assert testing_utils._evaluate_outcome(
+            evaluate, (obj0, is_first_object_node), state
+        ) == (
+            "ok",
+            "bool",
+            True,
+        )
+
+        # Nested call: the outer `to_real` receives the inner one's `Fraction`
+        # result directly (`Fraction(Fraction(3, 1)) == Fraction(3, 1)`).
+        inner = make_interpreted_function_node(to_real, IfReturnType.REAL, (0,))
+        outer = make_interpreted_function_node(to_real, IfReturnType.REAL, (1,))
+        assert testing_utils._evaluate_outcome(
+            evaluate, (three, inner, outer), state
+        ) == (
+            "ok",
+            "real",
+            3,
+            1,
+        )
+
+
+def test_evaluate_random_differential():
+    """Cross-backend differential test mirroring `test_simplify` above:
+    generates the same 100 random expressions on both backends via
+    `testing_utils.construct_expressions` and asserts `evaluate()` agrees on
+    every one, including which ones raise `ZeroDivisionError`. Unlike the
+    fixed matrix, this is bool-rooted (`construct_exp_rec`'s only root
+    shape) and exercises whatever nesting of `and`/`or`/`==`/`<=`/`</+`/`-`/
+    `*`/`/` the generator happens to produce, catching combinations the
+    fixed matrix didn't think to write down -- in particular, `==` over a
+    numeric subexpression is exactly the shape that used to surface the
+    integral-rational structural-equality divergence."""
+
+    num_expressions = 100
+    results: dict[bool, list[tuple]] = {True: [], False: []}
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        reload_package(testing_utils)
+        from tamerlite.core import (
+            SearchSpace,
+            evaluate,
+            make_bool_constant_node,
+            make_int_constant_node,
+        )
+        from testing_utils import construct_expressions
+
+        search_space = SearchSpace([], {}, [], None, None, None)
+        # Matches `construct_exp_rec`/`construct_numeric_exp_rec`'s hardcoded
+        # `make_fluent_node(0)` (bool) / `make_fluent_node(1)` (numeric).
+        state = search_space.initial_state(
+            cast(
+                "list[ConstantNode]",
+                [make_bool_constant_node(True), make_int_constant_node(5)],
+            )
+        )
+
+        expressions = construct_expressions(num_expressions, max_depth=20)
+        for exp in expressions:
+            results[disable_rustamer].append(
+                testing_utils._evaluate_outcome(evaluate, exp, state)
+            )
+
+    for i in range(num_expressions):
+        assert results[True][i] == results[False][i], (
+            f"expression #{i} disagrees between backends: "
+            f"python={results[True][i]!r} rust={results[False][i]!r}"
+        )
+
+
 def test_temporal_fluent_duration():
     problem = problems_generator.get_problem_temporal_fluent_duration()
 
@@ -2004,15 +2321,16 @@ def test_interpreted_functions_bounded_types_examples_excluded():
 
 
 def test_interpreted_functions_real_return_backend_normalization():
-    """Documented backend divergence on a real-typed IF return: Rust's
-    `interpreted_function_result` collapses an integral `Real` down to an
-    `Int` (`crates/rustamer-base/src/expressions.rs`), while Python's
-    `InterpretedFunctionNode.call` always keeps a `Fraction`
-    (`src/tamerlite/core/search_space.py`). This test's own `to_int`
-    deliberately returns an integral value (`4`) so the divergence is
-    actually triggered -- `get_problem_if_signature_shapes`'s real-return
-    case just needs to prove the solve path works at all, not exercise this
-    specific divergence.
+    """Both backends always keep a real-typed IF return as a `Fraction`/
+    `Rational`, even when the value is integral: Rust's
+    `interpreted_function_result`
+    (`crates/rustamer-base/src/expressions.rs`) and Python's
+    `InterpretedFunctionNode.call` (`src/tamerlite/core/search_space.py`)
+    both mirror UP's own `Simplifier.walk_interpreted_function_exp`, which
+    does the same unconditionally. This test's own `to_int` deliberately
+    returns an integral value (`4`) so that's actually exercised --
+    `get_problem_if_signature_shapes`'s real-return case just needs to prove
+    the solve path works at all, not pin this specific rule.
 
     Observed through `evaluate()`, not `State.get_value()`: the latter
     returns the Rust backend's raw internal `ExpressionNode` wrapper, which
@@ -2058,10 +2376,7 @@ def test_interpreted_functions_real_return_backend_normalization():
         )
         converted = converter.convert(exp)
         value = evaluate(converted, init_state)
-        if disable_rustamer:
-            assert value == Fraction(4) and isinstance(value, Fraction)
-        else:
-            assert value == 4 and type(value) is int
+        assert value == 4 and type(value) is Fraction
 
 
 def test_simplify_with_interpreted_functions():

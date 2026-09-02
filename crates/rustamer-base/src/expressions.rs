@@ -28,9 +28,7 @@ use pyo3::{
 };
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
-use crate::utils::{
-    big_rational_to_py_fraction, get_big_rational_bigint, get_fraction_type, integer_to_i32,
-};
+use crate::utils::{big_rational_to_py_fraction, get_big_rational_bigint, get_fraction_type};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ExpressionNode {
@@ -165,11 +163,7 @@ fn interpreted_function_result(
         IfReturnType::Real => {
             let fraction = get_fraction_type(py)?.bind(py).call1((result,))?;
             let v = get_big_rational_bigint(&fraction)?;
-            Ok(if v.is_integer() {
-                ExpressionNode::Int(Box::new(v.to_integer()))
-            } else {
-                ExpressionNode::Rational(Box::new(v))
-            })
+            Ok(ExpressionNode::Rational(Box::new(v)))
         }
         IfReturnType::Object => {
             let node: PyExpressionNode = result.extract()?;
@@ -398,9 +392,9 @@ impl PyExpressionNode {
     }
 
     #[getter]
-    fn int_constant(&self) -> Option<i32> {
+    fn int_constant(&self) -> Option<BigInt> {
         if let ExpressionNode::Int(v) = &self.v {
-            Some(integer_to_i32(v))
+            Some((**v).clone())
         } else {
             None
         }
