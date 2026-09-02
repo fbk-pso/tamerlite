@@ -2056,12 +2056,12 @@ impl HMaxExplicit {
     /// own `Div` raising a `ZeroDivisionError` on relaxed values, just with
     /// arbitrary user code instead of a builtin operator -- so this (and
     /// every caller up to `eval`) propagates `PyResult`.
-    fn possible_values(
-        &self,
-        exp: &Vec<ExpressionNode>,
-        assignments: &[FxHashSet<ExpressionNode>],
-        exp_fluents: &[usize],
-    ) -> PyResult<Vec<ExpressionNode>> {
+    fn possible_values<'a>(
+        &'a self,
+        exp: &'a Vec<ExpressionNode>,
+        assignments: &'a [FxHashSet<ExpressionNode>],
+        exp_fluents: &'a [usize],
+    ) -> impl Iterator<Item = PyResult<ExpressionNode>> + 'a {
         let values: Vec<&FxHashSet<ExpressionNode>> =
             exp_fluents.iter().map(|&f| &assignments[f]).collect();
 
@@ -2069,11 +2069,10 @@ impl HMaxExplicit {
             .iter()
             .map(|fluent_values| fluent_values.iter())
             .multi_cartesian_product()
-            .map(|state_values: Vec<&ExpressionNode>| {
+            .map(move |state_values: Vec<&ExpressionNode>| {
                 let exp_assignments = FluentAssignments::new(exp_fluents, state_values);
                 internal_evaluate(exp, &exp_assignments)
             })
-            .collect()
     }
 
     fn exp_can_be_true(
@@ -2099,10 +2098,8 @@ impl HMaxExplicit {
             exp_fluents = self.extract_fluents(exp);
         }
 
-        let possible_values = self.possible_values(exp, assignments, &exp_fluents)?;
-
-        for value in possible_values {
-            if value == ExpressionNode::Bool(true) {
+        for value in self.possible_values(exp, assignments, &exp_fluents) {
+            if value? == ExpressionNode::Bool(true) {
                 cache_can_be_true.insert(exp_id, true);
                 return Ok(true);
             }
@@ -2232,12 +2229,12 @@ impl HMaxExplicit {
 
                 for effect in &operator.effects {
                     let exp_fluents = self.extract_fluents(&effect.value);
-                    let possible_values =
-                        self.possible_values(&effect.value, &assignments, &exp_fluents)?;
-                    new_assignments
+                    let fluent_new_assignments = new_assignments
                         .entry(effect.fluent)
-                        .or_insert_with(|| FxHashSet::with_hasher(FxBuildHasher))
-                        .extend(possible_values);
+                        .or_insert_with(|| FxHashSet::with_hasher(FxBuildHasher));
+                    for value in self.possible_values(&effect.value, &assignments, &exp_fluents) {
+                        fluent_new_assignments.insert(value?);
+                    }
                 }
             }
 
