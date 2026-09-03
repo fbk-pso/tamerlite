@@ -175,7 +175,15 @@ def reload_package(package):
         # otherwise `name` rebinds to whatever `child` had before this reload
         # pass touched it, leaving two live, non-identical objects (e.g. two
         # `Enum` classes) that compare unequal despite being "the same" type
-        # conceptually.
+        # conceptually. For this same reason, callers must always reload the
+        # whole `tamerlite` package (via `reload_tamerlite`) and never a lone
+        # submodule on its own: e.g. calling `reload_package(tamerlite.encoder)`
+        # again *after* `reload_tamerlite` rebuilds `tamerlite.encoder.Encoder`
+        # a second time without anything re-running `tamerlite.engine`'s
+        # `from tamerlite.encoder import Encoder`, leaving
+        # `tamerlite.engine.Encoder is not tamerlite.encoder.Encoder` for the
+        # rest of the process -- silently, since both classes share
+        # `__globals__` and behave identically except for object identity.
         children = []
         for module_child in vars(module).values():
             if isinstance(module_child, types.ModuleType):
@@ -926,7 +934,6 @@ def test_search_space(problem, relevance_analysis):
     states = {}
     for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
-        reload_package(tamerlite.encoder)
         from tamerlite.encoder import Encoder
 
         lifted_problem, ground_problem, map_back_action_instance = (
@@ -1533,7 +1540,6 @@ def test_temporal_no_start_event():
 
     for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
-        reload_package(tamerlite.encoder)
         from tamerlite.encoder import Encoder
 
         lifted_problem, ground_problem, map_back_action_instance = (
@@ -1607,7 +1613,6 @@ def test_temporal_condition_before_start_is_rejected():
 
     for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
-        reload_package(tamerlite.encoder)
         from tamerlite.encoder import Encoder
 
         with pytest.raises(Exception, match="before the start of a durative action"):
