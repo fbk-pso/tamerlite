@@ -580,7 +580,7 @@ def get_problem_dedup_relevant_classical() -> Problem:
     right-hand side, so without filtering `f != eff.fluent` this fluent
     would trivially mark itself relevant and the reduction would collapse to
     `None`, hiding the very bug this analysis exists to prevent. Exercises
-    the plain `not is_temporal` dedup path (`RelevantFluentsState`).
+    the plain `not is_temporal` dedup path (`DedupState`).
     """
     problem = Problem("dedup_relevant_classical")
 

@@ -118,9 +118,15 @@ class WeakEqState:
 
 
 @dataclass
-class RelevantFluentsState:
+class DedupState:
     """Wraps a State so the visited-state dedup set hashes/compares only a chosen subset
-    of fluent indices."""
+    of fluent indices, instead of every fluent.
+
+    Mirrors the Rust core's `DedupState` (`crates/rustamer-base/src/search.rs`), but
+    with a narrower shape: `fluents` here is never `None` -- `state_representation`
+    returns the bare `State` instead of constructing this wrapper when there's
+    nothing to restrict.
+    """
 
     state: State
     fluents: list[int]
@@ -136,11 +142,11 @@ class RelevantFluentsState:
 
 def state_representation(
     state: State, weak_equality: bool, dedup_relevant_fluents: list[int] | None = None
-) -> State | WeakEqState | RelevantFluentsState:
+) -> State | WeakEqState | DedupState:
     if weak_equality:
         return WeakEqState(state, dedup_relevant_fluents)
     if dedup_relevant_fluents is not None:
-        return RelevantFluentsState(state, dedup_relevant_fluents)
+        return DedupState(state, dedup_relevant_fluents)
     return state
 
 
