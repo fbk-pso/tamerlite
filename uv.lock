@@ -1088,9 +1088,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "bloom-filter2", specifier = "==2.0.0" },
-    { name = "cachetools", specifier = "==7.1.7" },
-    { name = "min-max-heap", specifier = "==1.0.1" },
+    { name = "bloom-filter2", specifier = ">=2.0" },
+    { name = "cachetools", specifier = ">=5.0" },
+    { name = "min-max-heap", specifier = ">=1.0" },
     { name = "rustamer", marker = "extra == 'rust'", editable = "crates/rustamer" },
 ]
 provides-extras = ["rust"]
