@@ -114,6 +114,8 @@ class Encoder:
         symmetry_breaking: bool,
         compression_safe_actions: bool,
         relevance_analysis: bool,
+        relevant_equality: bool = True,
+        weak_equality: bool = False,
         full: bool = True,
         deadline: Fraction | None = None,
         if_cache: MutableMapping[tuple[InterpretedFunction, tuple], Any] | None = None,
@@ -243,7 +245,11 @@ class Encoder:
                 self._search_space.relevant_actions = self._relevant_actions
 
         self._dedup_relevant_fluents: list[int] | None = None
-        if full:
+        # `is_temporal and not weak_equality` has no dedup at all (see
+        # `SearchSpace.dedup_relevant_fluents` usage in both `core.search`
+        # modules), so the reduction would never be consulted -- skip
+        # computing it.
+        if full and relevant_equality and (not self._is_temporal or weak_equality):
             dedup_relevant_fluents = self._compute_dedup_relevant_fluents()
             if len(dedup_relevant_fluents) < len(self._fluents):
                 self._dedup_relevant_fluents = sorted(dedup_relevant_fluents)
