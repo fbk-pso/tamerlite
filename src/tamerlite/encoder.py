@@ -242,6 +242,13 @@ class Encoder:
             if len(self._relevant_actions) < len(self.applicable_actions):
                 self._search_space.relevant_actions = self._relevant_actions
 
+        self._dedup_relevant_fluents: list[int] | None = None
+        if full:
+            dedup_relevant_fluents = self._compute_dedup_relevant_fluents()
+            if len(dedup_relevant_fluents) < len(self._fluents):
+                self._dedup_relevant_fluents = sorted(dedup_relevant_fluents)
+                self._search_space.dedup_relevant_fluents = self._dedup_relevant_fluents
+
     def initial_state(self, initial_values: dict[FNode, FNode]) -> list[ConstantNode]:
         initial_state_values = {}
         for f, v in initial_values.items():
@@ -351,6 +358,42 @@ class Encoder:
                         stack.append(f)
 
         return [a for a in self._actions if a.idx in relevant_actions]
+
+    def _compute_dedup_relevant_fluents(self) -> set[int]:
+        """Fluents that can affect search outcome: everything read by a
+        search-reachable action's precondition/effect-condition/duration bound,
+        the goal, or an effect's RHS -- excluding an effect's own target fluent
+        from its own RHS, since `increase`/`decrease` desugars into a
+        self-referencing assignment and without the exclusion a pure
+        bookkeeping fluent (a cost counter) would trivially mark itself
+        relevant. Feeds `SearchSpace.dedup_relevant_fluents`, restricting only
+        the duplicate-detection key, never the full tracked state.
+        """
+        relevant_fluents: set[int] = set(get_fluents(self.goal))  # type: ignore[arg-type]
+        considered_actions = (
+            self._relevant_actions
+            if self._relevant_actions is not None
+            else self.applicable_actions
+        )
+        events = {a: e for a, e in self.events.items() if a in considered_actions}
+        for timed_events in events.values():
+            for _, e in timed_events:
+                relevant_fluents.update(get_fluents(e.conditions))
+                for c in e.start_conditions:
+                    relevant_fluents.update(get_fluents(c))
+                for c in e.end_conditions:
+                    relevant_fluents.update(get_fluents(c))
+                for eff in e.effects:
+                    relevant_fluents.update(
+                        f for f in get_fluents(eff.value) if f != eff.fluent
+                    )
+        for a in considered_actions:
+            dur = self._actions_duration[a.idx]
+            if dur is not None:
+                lb, ub, _, _ = dur
+                relevant_fluents.update(get_fluents(lb))
+                relevant_fluents.update(get_fluents(ub))
+        return relevant_fluents
 
     def _compute_obj_to_prev_actions_map(
         self,
@@ -964,6 +1007,10 @@ class Encoder:
     @property
     def relevant_actions(self) -> list[Action] | None:
         return self._relevant_actions
+
+    @property
+    def dedup_relevant_fluents(self) -> list[int] | None:
+        return self._dedup_relevant_fluents
 
     @property
     def compression_safe_actions(self) -> list[Action]:

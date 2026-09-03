@@ -87,14 +87,24 @@ class BoundedPriorityQueue:
 @dataclass
 class WeakEqState:
     state: State
+    fluents: list[int] | None = None
 
     def __hash__(self) -> int:
-        return hash(tuple(self.state.assignments))
+        values = (
+            self.state.assignments
+            if self.fluents is None
+            else (self.state.assignments[i] for i in self.fluents)
+        )
+        return hash(tuple(values))
 
     def __eq__(self, oth) -> bool:
-        if (
-            len(self.state.todo) != len(oth.state.todo)
-            or self.state.assignments != oth.state.assignments
+        if len(self.state.todo) != len(oth.state.todo):
+            return False
+        if self.fluents is None:
+            if self.state.assignments != oth.state.assignments:
+                return False
+        elif any(
+            self.state.assignments[i] != oth.state.assignments[i] for i in self.fluents
         ):
             return False
 
@@ -107,9 +117,30 @@ class WeakEqState:
         return True
 
 
-def state_representation(state: State, weak_equality: bool) -> State | WeakEqState:
+@dataclass
+class RelevantFluentsState:
+    """Wraps a State so the visited-state dedup set hashes/compares only a chosen subset
+    of fluent indices."""
+
+    state: State
+    fluents: list[int]
+
+    def __hash__(self) -> int:
+        return hash(tuple(self.state.assignments[i] for i in self.fluents))
+
+    def __eq__(self, oth) -> bool:
+        return all(
+            self.state.assignments[i] == oth.state.assignments[i] for i in self.fluents
+        )
+
+
+def state_representation(
+    state: State, weak_equality: bool, dedup_relevant_fluents: list[int] | None = None
+) -> State | WeakEqState | RelevantFluentsState:
     if weak_equality:
-        return WeakEqState(state)
+        return WeakEqState(state, dedup_relevant_fluents)
+    if dedup_relevant_fluents is not None:
+        return RelevantFluentsState(state, dedup_relevant_fluents)
     return state
 
 
@@ -228,7 +259,9 @@ def wastar_search(
     open: list[PrioritizedItem] = []
     init = ss.initial_state()
     if not ss.is_temporal or weak_equality:
-        visited_states = {state_representation(init, weak_equality)}
+        visited_states = {
+            state_representation(init, weak_equality, ss.dedup_relevant_fluents)
+        }
     expanded_states = 0
     generated_states = 1
     if early_termination and ss.goal_reached(init):
@@ -279,7 +312,9 @@ def wastar_search(
                 }
 
             if not ss.is_temporal or weak_equality:
-                state_repr = state_representation(succ_state, weak_equality)
+                state_repr = state_representation(
+                    succ_state, weak_equality, ss.dedup_relevant_fluents
+                )
                 if state_repr not in visited_states:
                     visited_states.add(state_repr)
                     candidate_states.append(succ_state)
@@ -348,7 +383,12 @@ def wastar_search_memory_bounded(
 
     def bloom_key(state: State) -> bytes:
         key = []
-        for v in state.assignments:
+        values = (
+            state.assignments
+            if ss.dedup_relevant_fluents is None
+            else (state.assignments[i] for i in ss.dedup_relevant_fluents)
+        )
+        for v in values:
             if isinstance(v, bool):
                 key.append(f"{int(v)}")
             elif isinstance(v, int):
@@ -466,7 +506,9 @@ def ehc_search(
         state = open.popleft()
         expanded_states += 1
         if not ss.is_temporal or weak_equality:
-            closed.add(state_representation(state, weak_equality))
+            closed.add(
+                state_representation(state, weak_equality, ss.dedup_relevant_fluents)
+            )
 
         if not early_termination and ss.goal_reached(state):
             logger.info(
@@ -493,7 +535,9 @@ def ehc_search(
                 }
 
             if not ss.is_temporal or weak_equality:
-                state_repr = state_representation(succ_state, weak_equality)
+                state_repr = state_representation(
+                    succ_state, weak_equality, ss.dedup_relevant_fluents
+                )
                 if state_repr not in closed:
                     candidate_states.append(succ_state)
             else:

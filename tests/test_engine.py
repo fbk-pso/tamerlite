@@ -1525,6 +1525,95 @@ def test_relevance_analysis_keeps_duration_only_writer():
                 assert v.validate(problem, res.plan)
 
 
+def test_dedup_relevant_fluents_excludes_bookkeeping_fluents():
+    """
+    `Encoder._compute_dedup_relevant_fluents` restricts the search's
+    duplicate-state detection key to fluents that matter for state identity:
+    everything read by a precondition/effect-condition/goal/duration-bound,
+    excluding an effect's own target fluent from its own right-hand side. The
+    exclusion is the whole point: `_convert_effects` desugars
+    `increase`/`decrease` into a self-referencing assignment (`cost := cost +
+    1`), so without filtering `f != eff.fluent` a pure bookkeeping fluent that
+    only bumps itself would trivially mark itself relevant and the reduction
+    would collapse to `None` -- exactly the bug this analysis exists to avoid.
+
+    Covers both dedup regimes that consume the reduced set
+    (`core.search.state_representation`) via
+    `get_problem_dedup_relevant_classical` (plain `not is_temporal` dedup
+    path) and `get_problem_dedup_relevant_temporal` (temporal
+    `weak_equality` dedup path) -- see their docstrings for why each is
+    shaped the way it is.
+    """
+    classical = problems_generator.get_problem_dedup_relevant_classical()
+    temporal = problems_generator.get_problem_dedup_relevant_temporal()
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+
+        for problem, excluded_name, kept_names in [
+            (classical, "cost", ["ready"]),
+            (temporal, "tcost", ["charge", "done"]),
+        ]:
+            lifted_problem, ground_problem, map_back_action_instance = (
+                testing_utils.compile_problem(problem)
+            )
+            encoder = Encoder(
+                ground_problem,
+                lifted_problem,
+                map_back_action_instance,
+                symmetry_breaking=False,
+                compression_safe_actions=False,
+                relevance_analysis=True,
+            )
+            assert encoder.dedup_relevant_fluents is not None
+            assert len(encoder.dedup_relevant_fluents) < len(encoder.fluents)
+            dedup_names = {encoder.fluents[i] for i in encoder.dedup_relevant_fluents}
+            assert excluded_name not in dedup_names
+            for name in kept_names:
+                assert name in dedup_names
+
+            # Round-trips through the PyO3 getter/setter on the Rust backend too.
+            assert (
+                encoder.search_space.dedup_relevant_fluents
+                == encoder.dedup_relevant_fluents
+            )
+
+        # A problem where every fluent is read somewhere leaves the reduction
+        # as None -- the pre-existing full-assignments dedup path stays
+        # reachable unchanged.
+        numeric_problem = problems_generator.get_problem_numeric()
+        lifted_problem, ground_problem, map_back_action_instance = (
+            testing_utils.compile_problem(numeric_problem)
+        )
+        encoder = Encoder(
+            ground_problem,
+            lifted_problem,
+            map_back_action_instance,
+            symmetry_breaking=False,
+            compression_safe_actions=False,
+            relevance_analysis=True,
+        )
+        assert encoder.dedup_relevant_fluents is None
+        assert encoder.search_space.dedup_relevant_fluents is None
+
+        # Solve the temporal problem under weak_equality=True, exercising the
+        # new WeakEqState.fluents subset comparison end to end.
+        search = tamerlite.SearchParams(
+            search="wastar",
+            heuristic="hff",
+            weight=0.8,
+            compression_safe_actions=False,
+            relevance_analysis=True,
+            weak_equality=True,
+        )
+        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+            planner: tamerlite.engine.TamerLite
+            res: PlanGenerationResult = planner.solve(temporal, timeout=None)
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+            with PlanValidator(problem_kind=temporal.kind) as v:
+                assert v.validate(temporal, res.plan)
+
+
 def test_temporal_no_start_event():
     """Every durative action must own an event at its start timepoint.
 

@@ -168,17 +168,23 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
         },
     };
 
-    // State and WeakEqState contain interior mutability only for heuristic caches.
-    // The mutable fields are ignored by Hash/Eq, so using them as HashSet keys is safe.
+    let dedup_relevant_fluents = ss.dedup_relevant_fluents();
+    // State, WeakEqState and DedupState contain interior mutability only for heuristic
+    // caches. The mutable fields are ignored by Hash/Eq, so using them as HashSet keys is
+    // safe.
     #[allow(clippy::mutable_key_type)]
     let mut visited_weak_eq_states = FxHashSet::with_hasher(FxBuildHasher);
     #[allow(clippy::mutable_key_type)]
     let mut visited_states = FxHashSet::with_hasher(FxBuildHasher);
     if !ss.is_temporal() {
-        visited_states.insert(Rc::clone(&item.state_container.state));
+        visited_states.insert(DedupState {
+            state: Rc::clone(&item.state_container.state),
+            fluents: dedup_relevant_fluents,
+        });
     } else if weak_equality {
         visited_weak_eq_states.insert(WeakEqState {
             state: Rc::clone(&item.state_container.state),
+            fluents: dedup_relevant_fluents,
         });
     }
 
@@ -244,10 +250,14 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
                 }
                 let s = Rc::new(s);
                 let keep = if !ss.is_temporal() {
-                    visited_states.insert(Rc::clone(&s))
+                    visited_states.insert(DedupState {
+                        state: Rc::clone(&s),
+                        fluents: dedup_relevant_fluents,
+                    })
                 } else if weak_equality {
                     visited_weak_eq_states.insert(WeakEqState {
                         state: Rc::clone(&s),
+                        fluents: dedup_relevant_fluents,
                     })
                 } else {
                     true
