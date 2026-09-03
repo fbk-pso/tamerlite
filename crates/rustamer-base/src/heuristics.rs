@@ -30,6 +30,7 @@ use pyo3::types::PyTuple;
 
 use super::expressions::*;
 use super::expressions_utils::*;
+use super::interpreted_functions::*;
 use super::multiqueue::StateContainer;
 use super::search_space::SearchSpaceTrait;
 use super::search_state::State;
@@ -699,12 +700,6 @@ fn update_numeric_effects(
     } else {
         complex_numeric_effects.insert(effect.fluent, expression_manager.put(&effect.value));
     }
-}
-
-/// True if `expr` contains an interpreted-function
-fn has_interpreted_function(expr: &[ExpressionNode]) -> bool {
-    expr.iter()
-        .any(|e| matches!(e, ExpressionNode::InterpretedFunction { .. }))
 }
 
 /// Determine if a leaf expression represents a numeric expression.

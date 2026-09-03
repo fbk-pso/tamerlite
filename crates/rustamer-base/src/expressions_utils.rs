@@ -16,6 +16,7 @@
 //
 
 use super::expressions::*;
+use super::interpreted_functions::*;
 use super::search_state::*;
 use super::utils::*;
 use num::{BigInt, Zero};

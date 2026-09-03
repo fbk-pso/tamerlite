@@ -22,7 +22,7 @@ At runtime [src/tamerlite/core/__init__.py](src/tamerlite/core/__init__.py) trie
   `Python::detach`/`allow_threads` anywhere in the crate). Prefer `RefCell` +
   `thread_local!` over `Mutex`/`RwLock` for module-level mutable state -- a plain
   `static` requires its type to be `Sync`, which `RefCell` isn't, so `thread_local!`
-  is what makes that legal without `unsafe`. Concrete precedent: `expressions.rs`'s
+  is what makes that legal without `unsafe`. Concrete precedent: `interpreted_functions.rs`'s
   `INTERPRETED_FUNCTIONS`/`IF_IDS_BY_PTR` interpreted-function callable registry, and its
   `IF_RESULTS` result cache (and `utils.rs`'s `FRACTION_TYPE` type cache) alongside it. If
   this assumption ever changes (e.g. parallel search), anything built on `thread_local!`
@@ -36,7 +36,7 @@ At runtime [src/tamerlite/core/__init__.py](src/tamerlite/core/__init__.py) trie
   `PyExpressionNode` can run a GC pass, which can run `__del__`). A borrow held across
   either panics with "already borrowed" the moment that happens. The same hazard applies
   in principle to *dropping* a cached `Py<PyAny>`, not just calling it (dropping can run
-  `__del__` too) -- `clear_interpreted_function_cache` (`expressions.rs`) does drop every
+  `__del__` too) -- `clear_interpreted_function_cache` (`interpreted_functions.rs`) does drop every
   registered callable while holding `INTERPRETED_FUNCTIONS`'s borrow, and is documented
   there as assuming no registered callable's closure (nor anything it captures) defines a
   finalizer that re-enters this module. Not enforced by this crate.

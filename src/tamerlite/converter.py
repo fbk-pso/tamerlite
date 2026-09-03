@@ -83,7 +83,7 @@ def interpreted_function_scope() -> Generator[None]:
     `_get_solutions_with_params` anytime run's) window during which some
     `ExpressionNode` may carry a `func_id` registered in the Rust backend's
     interpreted-function registry (`INTERPRETED_FUNCTIONS`/`IF_IDS_BY_PTR` in
-    `expressions.rs`), and calls `clear_interpreted_function_cache()` once the
+    `interpreted_functions.rs`), and calls `clear_interpreted_function_cache()` once the
     live-scope count returns to zero -- the earliest point nothing can still
     hold a registered `func_id`.
 
@@ -337,7 +337,7 @@ class Converter(DagWalker):
         )
         wraps_result = return_type.is_user_type()
         # The Rust backend memoizes independently (`IF_RESULTS` in
-        # `expressions.rs`), and once `_if_wrappers` is shared across
+        # `interpreted_functions.rs`), and once `_if_wrappers` is shared across
         # re-encodes (see docstring above) that memo persists exactly as
         # long as this dict does -- so also populating `_if_cache` would only
         # duplicate storage for zero benefit. The pure-Python backend has no

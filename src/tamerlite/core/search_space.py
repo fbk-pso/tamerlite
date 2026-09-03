@@ -27,7 +27,7 @@ from unified_planning.model import DeltaSimpleTemporalNetwork
 class IfReturnType(Enum):
     """The declared return type of an interpreted function, as tagged by
     `Converter.walk_interpreted_function_exp`. Mirrors the `#[pyclass] enum
-    IfReturnType` in `crates/rustamer-base/src/expressions.rs` -- member
+    IfReturnType` in `crates/rustamer-base/src/interpreted_functions.rs` -- member
     names must match exactly, member values need not (nothing compares
     across backends; only one backend is ever live)."""
 

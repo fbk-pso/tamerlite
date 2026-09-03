@@ -18,6 +18,7 @@
 mod expressions;
 mod expressions_utils;
 mod heuristics;
+mod interpreted_functions;
 mod multiqueue;
 mod multiset;
 mod search;
@@ -29,15 +30,16 @@ mod tn_interpreter;
 mod utils;
 
 pub use expressions::{
-    clear_interpreted_function_cache, make_bool_constant_node, make_fluent_node,
-    make_int_constant_node, make_interpreted_function_node, make_object_node, make_operator_node,
-    make_rational_constant_node, ExpressionNode, IfReturnType, PyExpressionNode,
+    make_bool_constant_node, make_fluent_node, make_int_constant_node,
+    make_interpreted_function_node, make_object_node, make_operator_node,
+    make_rational_constant_node, ExpressionNode, PyExpressionNode,
 };
 pub use expressions_utils::{evaluate, py_shift_expression, simplify, FluentValueTrait};
 pub use heuristics::{
     CustomHeuristic, DeleteRelaxationHeuristic, DeleteRelaxationHeuristicConfig, HMaxExplicit,
     HeuristicKind, HeuristicTrait,
 };
+pub use interpreted_functions::{clear_interpreted_function_cache, IfReturnType};
 pub use multiqueue::{
     _multiqueue_search, multiqueue_search, MQSwitchPolicy, PrioritizedItem, StateContainer,
 };

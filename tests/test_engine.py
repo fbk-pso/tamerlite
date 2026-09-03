@@ -2015,7 +2015,7 @@ def test_interpreted_function_receives_real_argument_types():
 
 def test_interpreted_function_registry_reuses_func_id_for_shared_wrapper():
     """Rust registers each distinct wrapper callable once, deduped by
-    `function.as_ptr()` (`crates/rustamer-base/src/expressions.rs::
+    `function.as_ptr()` (`crates/rustamer-base/src/interpreted_functions.rs::
     register_interpreted_function`), and only ever frees an entry once
     `tamerlite.converter.interpreted_function_scope`'s live-scope count
     returns to zero (none of this test's three `Encoder(...)` calls opens
@@ -2110,7 +2110,7 @@ def test_interpreted_function_bad_return_value_raises():
     something else (a user bug, not a modeling error) must fail loudly on
     both backends. Rust's `interpreted_function_result` raises a
     `PyValueError` when it can't extract an `ObjectNode`
-    (`crates/rustamer-base/src/expressions.rs`). Python's own wrapper
+    (`crates/rustamer-base/src/interpreted_functions.rs`). Python's own wrapper
     (`Converter._get_interpreted_function_wrapper`) doesn't validate the raw
     result before wrapping it -- `make_object_node(self._object_ids[raw_
     result.name])` -- so a non-`Object` return surfaces as a bare
@@ -2324,7 +2324,7 @@ def test_interpreted_functions_real_return_backend_normalization():
     """Both backends always keep a real-typed IF return as a `Fraction`/
     `Rational`, even when the value is integral: Rust's
     `interpreted_function_result`
-    (`crates/rustamer-base/src/expressions.rs`) and Python's
+    (`crates/rustamer-base/src/interpreted_functions.rs`) and Python's
     `InterpretedFunctionNode.call` (`src/tamerlite/core/search_space.py`)
     both mirror UP's own `Simplifier.walk_interpreted_function_exp`, which
     does the same unconditionally. This test's own `to_int` deliberately
@@ -2428,7 +2428,7 @@ def test_simplify_with_interpreted_functions():
 
 def test_interpreted_function_cache_avoids_python_call():
     """The Rust backend now memoizes interpreted-function results in
-    `IF_RESULTS` (`crates/rustamer-base/src/expressions.rs`), keyed on
+    `IF_RESULTS` (`crates/rustamer-base/src/interpreted_functions.rs`), keyed on
     `(func_id, return_type, args)`, in front of `call_interpreted_function` --
     so a second, identical call never touches Python at all. This registers
     the raw counting callable directly (no `Converter`, hence no
@@ -2592,8 +2592,9 @@ def test_interpreted_function_cache_is_scoped_to_object_table():
 
 
 def test_clear_interpreted_function_cache_drops_memoized_results():
-    """`clear_interpreted_function_cache` (`crates/rustamer-base/src/expressions.rs`
-    on Rust, a no-op stub in `src/tamerlite/core/search_space.py` on Python)
+    """`clear_interpreted_function_cache` (`crates/rustamer-base/src/
+    interpreted_functions.rs` on Rust, a no-op stub in
+    `src/tamerlite/core/search_space.py` on Python)
     drops every entry of `IF_RESULTS` *and* resets the callable registry
     (`INTERPRETED_FUNCTIONS`/`IF_IDS_BY_PTR`) -- so a node built before the
     clear must never be reused afterward; only a freshly-built node (fresh
@@ -2837,7 +2838,7 @@ def test_interpreted_function_cache_does_not_cache_errors():
 
 def test_interpreted_function_reentrant_callable():
     """The Rust cache probes/inserts into a `thread_local! RefCell` around
-    the actual Python call (`IF_RESULTS` in `expressions.rs`) -- the borrow
+    the actual Python call (`IF_RESULTS` in `interpreted_functions.rs`) -- the borrow
     must never be held while that call runs, since the callable is arbitrary
     Python and can re-enter `evaluate`/`simplify`, which can call back into
     `call_interpreted_function` for a *different* IF node. If the two borrow
@@ -2885,7 +2886,7 @@ def test_interpreted_function_real_arg_int_normalization():
     """A real-typed argument position can arrive as either `Int` or
     `Rational`, depending on whether a prior computation normalized it down
     (Rust's `interpreted_function_result` collapses an integral `Real` result
-    to `Int`, `crates/rustamer-base/src/expressions.rs`). The Rust memo keys
+    to `Int`, `crates/rustamer-base/src/interpreted_functions.rs`). The Rust memo keys
     on the raw `ExpressionNode`, so `Int(3)` and `Rational(3, 1)` are two
     distinct cache entries -- this callable is invoked twice, once receiving
     a Python `int` and once a `Fraction`, never sharing a cached answer. This
@@ -3213,7 +3214,7 @@ def test_interpreted_functions_symmetry_breaking_and_relevance_analysis_not_disa
 
 
 def test_out_of_range_func_id_raises_instead_of_panicking():
-    """`get_interpreted_function` (`expressions.rs`) used to index the
+    """`get_interpreted_function` (`interpreted_functions.rs`) used to index the
     registry unchecked (`registry[func_id]`), so a `func_id` past the current
     registry length aborted the whole process with a Rust panic surfaced as
     `pyo3_runtime.PanicException`. Registers two callables (ids 0 and 1),
