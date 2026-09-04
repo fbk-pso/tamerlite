@@ -81,15 +81,18 @@ if not use_rustamer:
         Effect,
         Event,
         Expression,
+        IfReturnType,
         SearchSpace,
         State,
         Timing,
+        clear_interpreted_function_cache,
         evaluate,
         get_fluent_value,
         get_fluents,
         make_bool_constant_node,
         make_fluent_node,
         make_int_constant_node,
+        make_interpreted_function_node,
         make_object_node,
         make_operator_node,
         make_rational_constant_node,
@@ -129,27 +132,32 @@ else:
     )
     Expression = list[rustamer_lib.ExpressionNode]
     State = rustamer_lib.State
+    IfReturnType = rustamer_lib.IfReturnType
 
     (
         make_bool_constant_node,
         make_fluent_node,
         make_int_constant_node,
+        make_interpreted_function_node,
         make_object_node,
         make_operator_node,
         make_rational_constant_node,
         shift_expression,
         simplify,
         get_fluents,
+        clear_interpreted_function_cache,
     ) = (
         rustamer_lib.make_bool_constant_node,
         rustamer_lib.make_fluent_node,
         rustamer_lib.make_int_constant_node,
+        rustamer_lib.make_interpreted_function_node,
         rustamer_lib.make_object_node,
         rustamer_lib.make_operator_node,
         rustamer_lib.make_rational_constant_node,
         rustamer_lib.shift_expression,
         rustamer_lib.simplify,
         rustamer_lib.get_fluents,
+        rustamer_lib.clear_interpreted_function_cache,
     )
 
     (

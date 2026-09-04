@@ -20,7 +20,8 @@ use num_rational::BigRational;
 use pyo3::{exceptions::PyValueError, prelude::*};
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
-use crate::utils::{big_rational_to_py_fraction, integer_to_i32};
+use crate::interpreted_functions::{register_interpreted_function, IfReturnType};
+use crate::utils::big_rational_to_py_fraction;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ExpressionNode {
@@ -39,6 +40,15 @@ pub enum ExpressionNode {
     Minus(usize, usize),
     Times(Vec<usize>),
     Div(usize, usize),
+    /// An interpreted-function call. `func_id` indexes `INTERPRETED_FUNCTIONS` rather
+    /// than embedding the callable inline: `ExpressionNode` must stay
+    /// `Clone + PartialEq + Eq + Hash`, which a raw `Py<PyAny>` cannot
+    /// support without a GIL acquisition on every clone.
+    InterpretedFunction {
+        func_id: usize,
+        return_type: IfReturnType,
+        operands: Vec<usize>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -59,15 +69,6 @@ impl ExpressionManager {
             expression2id: FxHashMap::with_hasher(FxBuildHasher),
         }
     }
-
-    // pub fn get(&self, expr: &Expression) -> Option<&Vec<ExpressionNode>> {
-    //     if expr.id < self.all_expressions.len() {
-    //         Some(&self.all_expressions[expr.id])
-    //     }
-    //     else {
-    //         None
-    //     }
-    // }
 
     pub fn force_get(&self, expr: &Expression) -> &Vec<ExpressionNode> {
         &self.all_expressions[expr.id]
@@ -132,9 +133,9 @@ impl PyExpressionNode {
     }
 
     #[getter]
-    fn int_constant(&self) -> Option<i32> {
+    fn int_constant(&self) -> Option<BigInt> {
         if let ExpressionNode::Int(v) = &self.v {
-            Some(integer_to_i32(v))
+            Some((**v).clone())
         } else {
             None
         }
@@ -211,5 +212,21 @@ pub fn make_object_node(oid: usize) -> PyExpressionNode {
 pub fn make_fluent_node(fluent: usize) -> PyExpressionNode {
     PyExpressionNode {
         v: ExpressionNode::Fluent(fluent),
+    }
+}
+
+#[pyfunction]
+pub fn make_interpreted_function_node(
+    function: Py<PyAny>,
+    return_type: IfReturnType,
+    operands: Vec<usize>,
+) -> PyExpressionNode {
+    let func_id = register_interpreted_function(function);
+    PyExpressionNode {
+        v: ExpressionNode::InterpretedFunction {
+            func_id,
+            return_type,
+            operands,
+        },
     }
 }

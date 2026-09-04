@@ -17,6 +17,7 @@
 
 import ast
 import random
+from fractions import Fraction
 
 from unified_planning.model import Problem
 
@@ -196,3 +197,69 @@ def parse_expression_rec(node):
 def parse_expression(exp: str):
     tree = ast.parse(exp, mode="eval")
     return parse_expression_rec(tree.body)
+
+
+_OP_TREE_TAG = object()
+
+
+def _op_tree(kind: str, *operands):
+    """Marks a node of a nested expression tree to be built via
+    `make_operator_node`; anything else passed to `_flatten_expression_tree`
+    is treated as an already-built leaf node. Kept distinct from any real
+    leaf value by identity of `_OP_TREE_TAG`, not by shape, so it can never
+    collide with a leaf."""
+    return (_OP_TREE_TAG, kind, operands)
+
+
+def _flatten_expression_tree(tree, make_operator_node):
+    """Flattens a nested `_op_tree(...)` tree into the flat post-order tuple
+    `Expression` actually is, so fixed test cases can be written as ordinary
+    nested expressions instead of manually index-linked flat tuples."""
+    res: list = []
+
+    def visit(node) -> int:
+        if isinstance(node, tuple) and len(node) == 3 and node[0] is _OP_TREE_TAG:
+            _, kind, operands = node
+            operand_indices = tuple(visit(o) for o in operands)
+            res.append(make_operator_node(kind, operand_indices))
+        else:
+            res.append(node)
+        return len(res) - 1
+
+    visit(tree)
+    return tuple(res)
+
+
+def _canonical_evaluated_value(v):
+    """Type-sensitive canonical form for an `evaluate()` result, comparable
+    across a `reload_tamerlite`/`reload_package` boundary. Plain `==` is
+    unusable here: `Fraction(3, 1) == 3` and `True == 1` are both `True` in
+    Python, which is exactly the int/real and bool/int normalization these
+    tests exist to pin. `type(v) is ObjectNode` doesn't survive the reload
+    either -- `ObjectNode` is a repo-defined dataclass that
+    `reload_package(tamerlite)` recreates as a fresh class object on every
+    backend switch, so its class identity differs between the two loop
+    iterations even for semantically identical values; compare by name and
+    payload instead."""
+    t = type(v)
+    if t is bool:
+        return ("bool", v)
+    if t is int:
+        return ("int", v)
+    if t is Fraction:
+        return ("real", v.numerator, v.denominator)
+    if t.__name__ == "ObjectNode":
+        return ("object", v.object)
+    raise AssertionError(f"evaluate() returned an unexpected type {t!r}: {v!r}")
+
+
+def _evaluate_outcome(evaluate, exp, state):
+    """`evaluate()`'s result together with its exception outcome, as one
+    comparable value -- division by zero is reachable from well-formed input
+    on both backends (Python via `Fraction(a, 0)`, Rust via an explicit
+    `PyZeroDivisionError` check) and is part of what these tests pin, not
+    something to special-case away."""
+    try:
+        return "ok", *_canonical_evaluated_value(evaluate(exp, state))
+    except ZeroDivisionError:
+        return ("raise", "ZeroDivisionError")

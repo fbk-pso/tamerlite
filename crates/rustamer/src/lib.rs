@@ -30,6 +30,7 @@ fn rustamer(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     pyo3_log::init();
 
     m.add_class::<rustamer_base::PyExpressionNode>()?;
+    m.add_class::<rustamer_base::IfReturnType>()?;
     m.add_class::<rustamer_base::Effect>()?;
     m.add_class::<rustamer_base::Timing>()?;
     m.add_class::<rustamer_base::Event>()?;
@@ -50,6 +51,10 @@ fn rustamer(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(rustamer_base::make_object_node, &m)?)?;
     m.add_function(wrap_pyfunction!(rustamer_base::make_fluent_node, &m)?)?;
+    m.add_function(wrap_pyfunction!(
+        rustamer_base::make_interpreted_function_node,
+        &m
+    )?)?;
     m.add_function(wrap_pyfunction!(rustamer_base::py_shift_expression, &m)?)?;
     m.add_function(wrap_pyfunction!(dfs_search, &m)?)?;
     m.add_function(wrap_pyfunction!(bfs_search, &m)?)?;
@@ -64,6 +69,10 @@ fn rustamer(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rustamer_base::evaluate, &m)?)?;
     m.add_function(wrap_pyfunction!(rustamer_base::simplify, &m)?)?;
     m.add_function(wrap_pyfunction!(rustamer_base::py_get_fluents, &m)?)?;
+    m.add_function(wrap_pyfunction!(
+        rustamer_base::clear_interpreted_function_cache,
+        &m
+    )?)?;
 
     Ok(())
 }

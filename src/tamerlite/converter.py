@@ -16,29 +16,128 @@
 #
 
 
-from unified_planning.model import FNode, Problem
+from collections.abc import Callable, Generator, MutableMapping
+from contextlib import contextmanager
+from typing import Any
+
+from cachetools import LRUCache
+from unified_planning.model import FNode, InterpretedFunction, Object, Problem
 from unified_planning.model.walkers import DagWalker
 
 from tamerlite.core import (
     Expression,
+    IfReturnType,
+    clear_interpreted_function_cache,
     make_bool_constant_node,
     make_fluent_node,
     make_int_constant_node,
+    make_interpreted_function_node,
     make_object_node,
     make_operator_node,
     make_rational_constant_node,
     shift_expression,
+    use_rustamer,
 )
+
+
+def _unresolvable_fluent_message(expression: FNode) -> str:
+    """Explain why `expression` names no grounded fluent of the problem."""
+    env = expression.environment
+    ifuns = set(env.interpreted_functions_extractor.get(expression))
+    nested_fluents = set(env.free_vars_extractor.get(expression))
+    nested_fluents.discard(expression)
+    if ifuns:
+        cause = f"contains interpreted functions in its arguments: {ifuns}"
+    elif nested_fluents:
+        cause = f"contains other fluents in its arguments: {nested_fluents}"
+    else:
+        cause = "does not name a grounded fluent of the problem"
+    return (
+        f"TamerLite does not support the fluent expression `{expression}`: it "
+        f"{cause}, so it cannot be resolved to a single grounded fluent at "
+        "encoding time."
+    )
+
+
+# Global cap on Converter._if_cache, mirroring the Rust backend's IF_RESULTS_CAPACITY.
+IF_CACHE_CAPACITY = 65_536
+
+
+def new_if_cache() -> MutableMapping[tuple[InterpretedFunction, tuple], Any]:
+    """Fresh, LRU-bounded interpreted-function result cache. A plain `dict`
+    also works anywhere this is accepted (only `[]`/`in`/assignment are ever
+    used on it) -- callers that want to opt out of the bound may pass one."""
+    return LRUCache(maxsize=IF_CACHE_CAPACITY)
+
+
+# Count of live "a solve might still resume and evaluate a `func_id` it
+# registered" scopes -- see `interpreted_function_scope` below. Not
+# thread-safe by itself: a plain module-level `int`, sharing TamerLite's
+# Rust core's documented single-thread assumption.
+_live_if_scopes = 0
+
+
+@contextmanager
+def interpreted_function_scope() -> Generator[None]:
+    """Brackets one top-level solve's (`TamerLite._solve` or one whole
+    `_get_solutions_with_params` anytime run's) window during which some
+    `ExpressionNode` may carry a `func_id` registered in the Rust backend's
+    interpreted-function registry (`INTERPRETED_FUNCTIONS`/`IF_IDS_BY_PTR` in
+    `interpreted_functions.rs`), and calls `clear_interpreted_function_cache()` once the
+    live-scope count returns to zero -- the earliest point nothing can still
+    hold a registered `func_id`.
+
+    "Live" means *might resume*, not *is executing*: an anytime generator is
+    merely suspended between `yield`s and can still evaluate nodes registered
+    earlier in the run, so the count must stay up through that whole window.
+    The `try/finally` enforces this on every exit path -- normal exhaustion,
+    an exception, or the `GeneratorExit` from `close()`/GC finalizing an
+    abandoned generator -- including the common case of a caller taking a few
+    solutions and never draining the generator. Nesting is free: an inner
+    scope's exit never sees the count reach zero. No clear on entry: it'd be
+    redundant (the previous scope's exit already cleared) and would only wipe
+    registrations made by direct `tamerlite.core` callers outside any scope.
+
+    Not covered: direct `tamerlite.core` use (`make_interpreted_function_node`
+    / `clear_interpreted_function_cache`, including in tests) bypasses this
+    counter entirely. Leak path: a generator that's never finalized (a
+    reference cycle, a stored traceback, `gc.disable()`) never decrements, so
+    nothing clears for the rest of the process -- degrades to "never
+    reclaim," never to corruption; `clear_interpreted_function_cache` stays
+    exported as an escape hatch, safe to call anytime since a stale `func_id`
+    now raises instead of misresolving."""
+    global _live_if_scopes
+    _live_if_scopes += 1
+    try:
+        yield
+    finally:
+        _live_if_scopes -= 1
+        if _live_if_scopes == 0:
+            clear_interpreted_function_cache()
 
 
 class Converter(DagWalker):
     def __init__(
-        self, problem: Problem, fluent_ids: dict[str, int], object_ids: dict[str, int]
+        self,
+        problem: Problem,
+        fluent_ids: dict[str, int],
+        object_ids: dict[str, int],
+        objects_by_id: list[Object],
+        if_cache: MutableMapping[tuple[InterpretedFunction, tuple], Any] | None = None,
+        if_wrappers: dict[InterpretedFunction, Callable] | None = None,
     ):
         DagWalker.__init__(self)
         self._fluent_ids = fluent_ids
         self._object_ids = object_ids
+        self._objects_by_id = objects_by_id
         self.static_fluents = problem.get_static_fluents()
+        # Optionally injected and shared across Converters
+        self._if_wrappers: dict[InterpretedFunction, Callable] = (
+            if_wrappers if if_wrappers is not None else {}
+        )
+        self._if_cache: MutableMapping[tuple[InterpretedFunction, tuple], Any] = (
+            if_cache if if_cache is not None else new_if_cache()
+        )
 
     def convert(self, expression: FNode) -> Expression:
         """Converts the given expression."""
@@ -172,7 +271,12 @@ class Converter(DagWalker):
 
     def walk_fluent_exp(self, expression: FNode, args: list[Expression]) -> Expression:
         fluent = str(expression)
-        return (make_fluent_node(self._fluent_ids[fluent]),)
+        try:
+            return (make_fluent_node(self._fluent_ids[fluent]),)
+        except KeyError:
+            raise NotImplementedError(
+                _unresolvable_fluent_message(expression)
+            ) from None
 
     def walk_object_exp(self, expression: FNode, args: list[Expression]) -> Expression:
         assert len(args) == 0
@@ -196,6 +300,122 @@ class Converter(DagWalker):
     ) -> Expression:
         assert len(args) == 0
         return (make_int_constant_node(expression.int_constant_value()),)
+
+    def _get_interpreted_function_wrapper(
+        self, interpreted_function: InterpretedFunction
+    ) -> Callable:
+        """Returns the single, memoizing wrapper callable for
+        `interpreted_function`, shared by every occurrence of the same
+        interpreted function in the problem (so `InterpretedFunctionNode`
+        equality/hashing stays meaningful within one encoding).
+
+        `self._if_cache` (LRU-bounded, keyed on `(interpreted_function,
+        real_args)`) is safe to share across Converters regardless of object
+        numbering -- `real_args` is already unwrapped to real `Object`s.
+
+        `self._if_wrappers` is NOT: the closure captures `_objects_by_id`/
+        `_object_ids` from *this* Converter at build time, so sharing it
+        across Converters with different numbering would translate a cached
+        `ObjectNode` under the wrong table. `TamerLite` shares it anyway
+        within one top-level solve, where numbering is provably identical
+        across every `Encoder`/`Converter` -- that's what lets the Rust
+        backend's `IF_RESULTS` (keyed on the wrapper's `func_id`) persist
+        across re-encodes. Never safe across unrelated problems/solves.
+
+        Assumes interpreted functions are deterministic and side-effect-free.
+        """
+        cached = self._if_wrappers.get(interpreted_function)
+        if cached is not None:
+            return cached
+
+        return_type = interpreted_function.return_type
+        # Object-typed parameters/return values are exposed to `evaluate` as
+        # internal `ObjectNode`s, but the real callable expects/returns actual
+        # UP `Object`s -- translate both directions.
+        object_params = tuple(
+            p.type.is_user_type() for p in interpreted_function.signature
+        )
+        wraps_result = return_type.is_user_type()
+        # The Rust backend memoizes independently (`IF_RESULTS` in
+        # `interpreted_functions.rs`), and once `_if_wrappers` is shared across
+        # re-encodes (see docstring above) that memo persists exactly as
+        # long as this dict does -- so also populating `_if_cache` would only
+        # duplicate storage for zero benefit. The pure-Python backend has no
+        # memo of its own at all, so it still needs `_if_cache`
+        # unconditionally.
+        skip_python_cache = use_rustamer
+        # Close over these, not `self`: both are set once and never
+        # reassigned, so it's equivalent but faster (closure-cell read vs.
+        # attribute lookup), and avoids a `Converter -> _if_wrappers ->
+        # wrapper -> self` reference cycle, which only cyclic GC could
+        # collect.
+        objects_by_id = self._objects_by_id
+        object_ids = self._object_ids
+        if_cache = self._if_cache
+
+        def wrapper(*call_args):
+            if any(object_params):
+                real_args = tuple(
+                    objects_by_id[a.object] if is_obj else a
+                    for a, is_obj in zip(call_args, object_params, strict=True)
+                )
+            else:
+                real_args = call_args
+            if skip_python_cache:
+                raw_result = interpreted_function.function(*real_args)
+            else:
+                cache_key = (interpreted_function, real_args)
+                if cache_key in if_cache:
+                    raw_result = if_cache[cache_key]
+                else:
+                    raw_result = interpreted_function.function(*real_args)
+                    if_cache[cache_key] = raw_result
+            if wraps_result:
+                return make_object_node(object_ids[raw_result.name])
+            return raw_result
+
+        self._if_wrappers[interpreted_function] = wrapper
+        return wrapper
+
+    def walk_interpreted_function_exp(
+        self, expression: FNode, args: list[Expression]
+    ) -> Expression:
+        # `Converter` only sees interpreted-function calls with at least one
+        # non-constant argument: UP's `Grounder` already
+        # folds any call whose arguments are all constant -- including
+        # static fluents, resolved to their initial value -- by calling the
+        # real Python function during grounding. What remains here
+        # must be re-evaluated at search time.
+        interpreted_function = expression.interpreted_function()
+        return_type = interpreted_function.return_type
+        if return_type.is_bool_type():
+            return_type_tag = IfReturnType.BOOL
+        elif return_type.is_int_type():
+            return_type_tag = IfReturnType.INT
+        elif return_type.is_real_type():
+            return_type_tag = IfReturnType.REAL
+        elif return_type.is_user_type():
+            return_type_tag = IfReturnType.OBJECT
+        else:
+            raise NotImplementedError(
+                f"Unsupported interpreted function return type: {return_type}"
+            )
+
+        function = self._get_interpreted_function_wrapper(interpreted_function)
+
+        if len(args) == 0:
+            return (make_interpreted_function_node(function, return_type_tag, ()),)
+        res = args[0]
+        offset = len(res) - 1
+        operands = [offset]
+        for i in range(1, len(args)):
+            res += tuple(shift_expression(args[i], offset + 1))
+            offset += len(args[i])
+            operands.append(offset)
+        res += (
+            make_interpreted_function_node(function, return_type_tag, tuple(operands)),
+        )
+        return res
 
     def walk_implies(self, expression: FNode, args: list[Expression]) -> Expression:
         raise NotImplementedError

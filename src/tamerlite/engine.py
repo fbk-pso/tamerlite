@@ -18,26 +18,31 @@
 import logging
 import time
 import warnings
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, MutableMapping
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import partial
-from typing import IO, Protocol, cast
+from typing import IO, Any, Protocol, cast
 
 import unified_planning as up
 import unified_planning.engines
 import unified_planning.engines.mixins
+from unified_planning.engines.compilers.grounder import Grounder
 from unified_planning.engines.compilers.timed_to_sequential import TimedToSequential
+from unified_planning.engines.compilers.undefined_initial_numeric_remover import (
+    UndefinedInitialNumericRemover,
+)
 from unified_planning.engines.compilers.utils import get_fresh_name
 from unified_planning.engines.plan_validator import (
     SequentialPlanValidator,
     TimeTriggeredPlanValidator,
 )
 from unified_planning.exceptions import UPStateMissingFluentError
-from unified_planning.model import FNode, ProblemKind, StartTiming
+from unified_planning.model import FNode, InterpretedFunction, ProblemKind, StartTiming
 from unified_planning.model.state import State
 from unified_planning.plans import ActionInstance, PlanKind
 
+from tamerlite.converter import interpreted_function_scope, new_if_cache
 from tamerlite.core import (
     HFF,
     Action,
@@ -95,7 +100,10 @@ class StateWrapper(State):
         elif fluent.type.is_int_type():
             return self.em.Int(cast(int, v))
         elif fluent.type.is_real_type():
-            return self.em.Real(cast(Fraction, v))
+            # `v` is not necessarily a `Fraction`: both backends normalize an
+            # integral real value down to a plain `int`, and `em.Real` requires a
+            # `Fraction`.
+            return self.em.Real(Fraction(cast("int | Fraction", v)))
         elif fluent.type.is_user_type():
             oid = cast(search_space.ObjectNode, v).object
             return self.em.ObjectExp(
@@ -234,6 +242,11 @@ class TamerLite(
         supported_kind.set_conditions_kind("EQUALITIES")
         supported_kind.set_conditions_kind("EXISTENTIAL_CONDITIONS")
         supported_kind.set_conditions_kind("UNIVERSAL_CONDITIONS")
+        supported_kind.set_conditions_kind("INTERPRETED_FUNCTIONS_IN_CONDITIONS")
+        supported_kind.set_effects_kind("INTERPRETED_FUNCTIONS_IN_BOOLEAN_ASSIGNMENTS")
+        supported_kind.set_effects_kind("INTERPRETED_FUNCTIONS_IN_NUMERIC_ASSIGNMENTS")
+        supported_kind.set_effects_kind("INTERPRETED_FUNCTIONS_IN_OBJECT_ASSIGNMENTS")
+        supported_kind.set_expression_duration("INTERPRETED_FUNCTIONS_IN_DURATIONS")
         supported_kind.set_fluents_type("NUMERIC_FLUENTS")
         supported_kind.set_fluents_type("OBJECT_FLUENTS")
         supported_kind.set_fluents_type("INT_FLUENTS")
@@ -381,28 +394,39 @@ class TamerLite(
         "up.model.Problem",
         Callable[[ActionInstance], ActionInstance | None],
     ]:
-        with problem.environment.factory.Compiler(
-            compilation_kind="UNDEFINED_INITIAL_NUMERIC_REMOVING",
-            problem_kind=problem.kind,
-        ) as compiler:
-            compilation_res = compiler.compile(problem)
+        kind = problem.kind
+        undefined_map_back_action_instance: Callable[
+            [ActionInstance], ActionInstance | None
+        ]
+        if kind.has_undefined_initial_numeric():
+            undefined_initial_numeric_remover = UndefinedInitialNumericRemover()
+            compilation_res = undefined_initial_numeric_remover.compile(problem)
+            assert compilation_res.map_back_action_instance is not None
             undefined_map_back_action_instance = (
                 compilation_res.map_back_action_instance
             )
             problem = cast("up.model.Problem", compilation_res.problem)
+        else:
 
-        with problem.environment.factory.Compiler(
-            compilation_kind="GROUNDING", problem_kind=problem.kind
-        ) as compiler:
-            compilation_res = compiler.compile(problem)
-            ground_map_back_action_instance = compilation_res.map_back_action_instance
-            ground_problem = cast("up.model.Problem", compilation_res.problem)
-            lifted_problem = problem
+            def undefined_map_back_action_instance(
+                ai: ActionInstance,
+            ) -> ActionInstance | None:
+                return ai
 
-        def map_back_action_instance(ai):
-            return undefined_map_back_action_instance(
-                ground_map_back_action_instance(ai)
-            )
+        grounder = Grounder()
+        compilation_res = grounder.compile(problem)
+        assert compilation_res.map_back_action_instance is not None
+        ground_map_back_action_instance = compilation_res.map_back_action_instance
+        ground_problem = cast("up.model.Problem", compilation_res.problem)
+        lifted_problem = problem
+
+        def map_back_action_instance(
+            ai: ActionInstance,
+        ) -> ActionInstance | None:
+            lifted_ai = ground_map_back_action_instance(ai)
+            if lifted_ai is None:
+                return None
+            return undefined_map_back_action_instance(lifted_ai)
 
         return lifted_problem, ground_problem, map_back_action_instance
 
@@ -418,6 +442,22 @@ class TamerLite(
         if len(problem.quality_metrics) > 1:
             raise NotImplementedError("Multiple quality metrics are not supported")
 
+        # Brackets this whole run -- including every suspension between
+        # `yield`s below, not just the synchronous work in between -- so
+        # `clear_interpreted_function_cache` never runs while this generator
+        # could still resume and evaluate a `func_id` it registered. See
+        # `interpreted_function_scope`'s docstring (converter.py).
+        with interpreted_function_scope():
+            yield from self._anytime_solutions(
+                problem, timeout=timeout, output_stream=output_stream
+            )
+
+    def _anytime_solutions(
+        self,
+        problem: "up.model.Problem",
+        timeout: float | None = None,
+        output_stream: IO[str] | None = None,
+    ) -> Iterator["up.engines.results.PlanGenerationResult"]:
         start_time = time.monotonic()
         em = problem.environment.expression_manager
         tm = problem.environment.type_manager
@@ -426,6 +466,27 @@ class TamerLite(
             self._compile_problem(problem)
         )
         original_problem = problem
+
+        # Share one interpreted functions cache across every `_solve_ground_problem`
+        # call in this anytime run (see `Converter._if_cache`) instead of recomputing
+        # from scratch each time.
+        if_cache: MutableMapping[tuple[InterpretedFunction, tuple], Any] = (
+            new_if_cache()
+        )
+        # Likewise for the wrapper closures themselves (`Converter._if_wrappers`) --
+        # safe because object numbering never changes across this run's re-encodes.
+        # Sharing them is what lets the Rust backend's own IF_RESULTS cache persist
+        # across re-encodes too, since its `func_id`s are keyed on wrapper identity.
+        if_wrappers: dict[InterpretedFunction, Callable] = {}
+
+        # `lifted_problem` is the same object across every `_solve_ground_problem`
+        # call this run makes (the loop below only ever mutates/clones the
+        # *ground* problem), so compute this once here rather than paying for
+        # `Problem.kind`'s from-scratch full-problem scan on every iteration --
+        # and skip it entirely when symmetry breaking (its only consumer) is off.
+        lifted_problem_kind = (
+            lifted_problem.kind if self._params.symmetry_breaking else None
+        )
 
         logger.info(
             "Solving '%s' (anytime): actions=%d fluents=%d",
@@ -440,7 +501,10 @@ class TamerLite(
             map_back_action_instance,
             timeout=timeout - elapsed_time if timeout is not None else None,
             output_stream=output_stream,
+            lifted_problem_kind=lifted_problem_kind,
             is_intermediate_solution=True,
+            if_cache=if_cache,
+            if_wrappers=if_wrappers,
         )
         if res.plan is not None:
             logger.info(
@@ -583,6 +647,9 @@ class TamerLite(
                     output_stream=output_stream,
                     deadline=deadline,
                     is_intermediate_solution=True,
+                    if_cache=if_cache,
+                    if_wrappers=if_wrappers,
+                    lifted_problem_kind=lifted_problem_kind,
                 )
             )
             if (
@@ -646,15 +713,20 @@ class TamerLite(
             len(list(ground_problem.actions)),
             len(list(ground_problem.fluents)),
         )
-        res, _, _ = self._solve_ground_problem(
-            lifted_problem,
-            ground_problem,
-            map_back_action_instance,
-            heuristic=heuristic,
-            timeout=timeout - elapsed_time if timeout is not None else None,
-            output_stream=output_stream,
-            is_intermediate_solution=False,
-        )
+        # See `interpreted_function_scope`'s docstring (converter.py): brackets
+        # this standalone solve so `clear_interpreted_function_cache` never runs
+        # while it -- or a concurrently suspended anytime generator -- could
+        # still resume and evaluate a `func_id` it registered.
+        with interpreted_function_scope():
+            res, _, _ = self._solve_ground_problem(
+                lifted_problem,
+                ground_problem,
+                map_back_action_instance,
+                heuristic=heuristic,
+                timeout=timeout - elapsed_time if timeout is not None else None,
+                output_stream=output_stream,
+                is_intermediate_solution=False,
+            )
         if res.plan is not None:
             logger.info(
                 "Solution found in %.3fs: %s",
@@ -679,8 +751,37 @@ class TamerLite(
         output_stream: IO[str] | None = None,
         deadline: Fraction | None = None,
         is_intermediate_solution: bool = False,
+        if_cache: MutableMapping[tuple[InterpretedFunction, tuple], Any] | None = None,
+        if_wrappers: dict[InterpretedFunction, Callable] | None = None,
+        lifted_problem_kind: ProblemKind | None = None,
     ) -> tuple["up.engines.results.PlanGenerationResult", bool, bool]:
+        # Default to one fresh pair shared by both `Encoder(...)` sites below.
+        # This path only ever runs for a standalone oneshot `_solve()` call --
+        # `_anytime_solutions` always supplies its own `if_cache`/`if_wrappers`
+        # -- so it's the caller's job to have opened an `interpreted_function_scope`
+        # around this call (as `_solve` does); a caller that reaches this
+        # branch outside any scope gets no reclamation at all, ever.
+        if if_cache is None:
+            if_cache = new_if_cache()
+        if if_wrappers is None:
+            if_wrappers = {}
+        # `problem` (the lifted problem) never changes across this call's two
+        # possible `Encoder(...)` sites below, nor across `_anytime_solutions`'
+        # repeated calls for the same solve -- `Problem.kind` is a from-scratch
+        # full-problem scan, so compute this once and let callers that already
+        # know it (`_anytime_solutions`), or that don't need it at all
+        # (symmetry breaking off, `Encoder`'s only consumer), skip it entirely.
+        if lifted_problem_kind is None and self._params.symmetry_breaking:
+            lifted_problem_kind = problem.kind
         try:
+            # Compression-safe-action detection and the TimedToSequential
+            # recompile below are unaffected by interpreted functions: they
+            # are carried through both as opaque sub-expressions (see UP's
+            # TimedToSequential docstring) and TamerLite's own
+            # `_compute_compression_safe_actions` only inspects
+            # fluents/objects via generic expression-argument traversal.
+            # Relevance analysis (`Encoder._compute_relevant_actions`, which
+            # runs `HMax` reachability) is interpreted-function-safe too.
             encoder = Encoder(
                 ground_problem,
                 problem,
@@ -689,6 +790,9 @@ class TamerLite(
                 self._params.compression_safe_actions,
                 self._params.relevance_analysis,
                 deadline=deadline,
+                if_cache=if_cache,
+                if_wrappers=if_wrappers,
+                lifted_problem_kind=lifted_problem_kind,
             )
 
             original_encoder = encoder
@@ -702,7 +806,11 @@ class TamerLite(
             )
             if are_all_actions_compression_safe:
                 # Compile a temporal planning problem, where all actions are
-                # safe to compress, into an equivalent classical planning problem
+                # safe to compress, into an equivalent classical planning problem.
+                # `TimedToSequential.supported_kind()` doesn't declare
+                # MAKESPAN, but a fully compression-safe problem can still
+                # carry a minimize-makespan metric, which would make
+                # the kind check reject it.
                 t2s_compiler = TimedToSequential()
                 t2s_compiler.skip_checks = True
                 compilation_res = t2s_compiler.compile(ground_problem)
@@ -724,6 +832,9 @@ class TamerLite(
                     self._params.compression_safe_actions,
                     self._params.relevance_analysis,
                     deadline=deadline,
+                    if_cache=if_cache,
+                    if_wrappers=if_wrappers,
+                    lifted_problem_kind=lifted_problem_kind,
                 )
 
             if isinstance(self._params, MultiqueueParams):

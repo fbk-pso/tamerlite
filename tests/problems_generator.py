@@ -16,49 +16,10 @@
 #
 
 import pathlib
+from collections import OrderedDict
 
 from unified_planning.io import PDDLReader
 from unified_planning.shortcuts import *
-
-
-def get_problem_matchcellar(n) -> Problem:
-    Match, Fuse = UserType("Match"), UserType("Fuse")
-
-    handfree, light = Fluent("handfree"), Fluent("light")
-    match_used = Fluent("match_used", BoolType(), match=Match)
-    fuse_mended = Fluent("fuse_mended", BoolType(), fuse=Fuse)
-
-    light_match = DurativeAction("light_match", m=Match)
-    light_match.set_fixed_duration(6)
-    light_match.add_condition(StartTiming(), Not(match_used(light_match.m)))
-    light_match.add_effect(StartTiming(), match_used(light_match.m), True)
-    light_match.add_effect(StartTiming(), light, True)
-    light_match.add_effect(EndTiming(), light, False)
-
-    mend_fuse = DurativeAction("mend_fuse", f=Fuse)
-    mend_fuse.set_fixed_duration(5)
-    mend_fuse.add_condition(StartTiming(), handfree)
-    mend_fuse.add_condition(StartTiming(), Not(fuse_mended(mend_fuse.f)))
-    mend_fuse.add_condition(ClosedTimeInterval(StartTiming(), EndTiming()), light)
-    mend_fuse.add_effect(StartTiming(), handfree, False)
-    mend_fuse.add_effect(EndTiming(), fuse_mended(mend_fuse.f), True)
-    mend_fuse.add_effect(EndTiming(), handfree, True)
-
-    problem = Problem("MatchCellar")
-    problem.add_fluents([handfree, light])
-    problem.add_fluent(match_used, default_initial_value=False)
-    problem.add_fluent(fuse_mended, default_initial_value=False)
-    problem.add_actions([light_match, mend_fuse])
-    problem.set_initial_value(light, False)
-    problem.set_initial_value(handfree, True)
-
-    for i in range(1, n + 1):
-        f = Object(f"f{i}", Fuse)
-        m = Object(f"m{i}", Match)
-        problem.add_objects([f, m])
-        problem.add_goal(fuse_mended(f))
-
-    return problem
 
 
 def get_problem_logistics(nRob, nPall, nPos, nTreatment) -> Problem:
@@ -675,9 +636,17 @@ def get_problem_temporal_condition_before_start() -> Problem:
     a.add_condition(EndTiming() - 5, ok)
     a.add_effect(EndTiming(), done, True)
 
+    # Unreachable but present so the grounder can't prove `ok` static and
+    # simplify away the (always-true) conditions above before the encoder
+    # ever sees them.
+    unreachable = InstantaneousAction("unreachable")
+    unreachable.add_precondition(done)
+    unreachable.add_effect(ok, False)
+
     problem.add_fluent(ok, default_initial_value=True)
     problem.add_fluent(done, default_initial_value=False)
     problem.add_action(a)
+    problem.add_action(unreachable)
 
     problem.add_goal(done)
 
@@ -821,4 +790,728 @@ def get_problem_anytime_symmetric_delivery() -> Problem:
     problem.add_goal(delivered(p1))
     problem.add_goal(delivered(p2))
     problem.add_goal(delivered(p3))
+    return problem
+
+
+def get_problem_if_bool_condition() -> Problem:
+    """A boolean interpreted function gating a precondition, adapted from
+    `unified_planning.test.examples.interpreted_functions_examples
+    .IF_in_conditions_complex_1` (dropping the bounded int types)."""
+
+    def integers_to_bool(ina, inb):
+        return (ina * inb) == 60
+
+    def int_to_int(inc):
+        return inc - 2
+
+    IF_integers_to_bool = InterpretedFunction(
+        "integers_to_bool",
+        BoolType(),
+        OrderedDict(ina=IntType(), inb=IntType()),
+        integers_to_bool,
+    )
+    IF_int_to_int = InterpretedFunction(
+        "simple_int_to_int", IntType(), OrderedDict(inc=IntType()), int_to_int
+    )
+
+    g = Fluent("g", IntType())
+    ione = Fluent("ione", IntType())
+    itwo = Fluent("itwo", IntType())
+    ithree = Fluent("ithree", IntType())
+
+    a = InstantaneousAction("a")
+    a.add_precondition(And(IF_integers_to_bool(ione, itwo), LT(ione, 15)))
+    a.add_precondition(LT(g, 10))
+    a.add_effect(g, Plus(g, 3))
+    c = InstantaneousAction("c")
+    c.add_effect(ione, Plus(ione, 1))
+    d = InstantaneousAction("d")
+    d.add_effect(ione, Minus(ione, 1))
+    f = InstantaneousAction("f")
+    f.add_precondition(GT(ione, IF_int_to_int(ithree)))
+    f.add_effect(itwo, 5)
+
+    problem = Problem("if_bool_condition")
+    problem.add_fluent(g)
+    problem.add_fluent(ione)
+    problem.add_fluent(itwo)
+    problem.add_fluent(ithree)
+    problem.add_action(a)
+    problem.add_action(c)
+    problem.add_action(d)
+    problem.add_action(f)
+    problem.set_initial_value(g, 1)
+    problem.set_initial_value(ione, 11)
+    problem.set_initial_value(itwo, 1)
+    problem.set_initial_value(ithree, 15)
+    problem.add_goal(GE(g, 5))
+    return problem
+
+
+def get_problem_if_numeric_effect() -> Problem:
+    """A numeric interpreted function used as an effect assignment value."""
+
+    def double_it(x):
+        return x * 2
+
+    IF_double = InterpretedFunction(
+        "double_it", IntType(), OrderedDict(x=IntType()), double_it
+    )
+
+    counter = Fluent("counter", IntType())
+    result = Fluent("result", IntType())
+    act = InstantaneousAction("act")
+    act.add_precondition(LT(counter, 5))
+    act.add_effect(counter, Plus(counter, 1))
+    act.add_effect(result, IF_double(counter))
+
+    problem = Problem("if_numeric_effect")
+    problem.add_fluent(counter)
+    problem.add_fluent(result)
+    problem.add_action(act)
+    problem.set_initial_value(counter, 0)
+    problem.set_initial_value(result, 0)
+    problem.add_goal(Equals(result, 8))
+    return problem
+
+
+def get_problem_if_object_effect() -> Problem:
+    """An interpreted function returning an object, used as an effect
+    assignment value."""
+
+    Loc = UserType("Loc")
+    l1 = Object("l1", Loc)
+    l2 = Object("l2", Loc)
+
+    def choose_location(c):
+        return l2 if c >= 1 else l1
+
+    IF_choose = InterpretedFunction(
+        "choose_location", Loc, OrderedDict(c=IntType()), choose_location
+    )
+
+    counter = Fluent("counter", IntType())
+    at = Fluent("at", Loc)
+
+    act = InstantaneousAction("act")
+    act.add_precondition(LT(counter, 5))
+    act.add_effect(counter, Plus(counter, 1))
+    act.add_effect(at, IF_choose(counter))
+
+    problem = Problem("if_object_effect")
+    problem.add_fluent(counter)
+    problem.add_fluent(at)
+    problem.add_object(l1)
+    problem.add_object(l2)
+    problem.add_action(act)
+    problem.set_initial_value(counter, 0)
+    problem.set_initial_value(at, l1)
+    problem.add_goal(Equals(at, l2))
+    return problem
+
+
+def get_problem_if_object_argument_and_return() -> Problem:
+    """An interpreted function returning an object (`next_loc`) and one
+    taking an object-typed argument (`is_final`), chained through the same
+    object-typed fluent -- exercises both directions of the argument/
+    return-unwrapping wrapper in `Converter.walk_interpreted_function_exp`
+    together (`is_final` alone already covers plain object-argument
+    dispatch: its result depends on the argument's identity, not a
+    constant, so it fails loudly if the argument is ever passed through
+    unresolved). Three objects so reaching the goal takes two real state
+    transitions, not one degenerate step."""
+    Loc = UserType("Loc")
+    l1 = Object("l1", Loc)
+    l2 = Object("l2", Loc)
+    l3 = Object("l3", Loc)
+
+    def next_loc(loc):
+        return {l1: l2, l2: l3, l3: l3}[loc]
+
+    def is_final(loc):
+        return loc == l3
+
+    IF_next = InterpretedFunction("next_loc", Loc, OrderedDict(loc=Loc), next_loc)
+    IF_final = InterpretedFunction(
+        "is_final", BoolType(), OrderedDict(loc=Loc), is_final
+    )
+
+    at = Fluent("at", Loc)
+    act = InstantaneousAction("act")
+    act.add_precondition(Not(IF_final(at)))
+    act.add_effect(at, IF_next(at))
+
+    problem = Problem("if_object_argument_and_return")
+    problem.add_fluent(at)
+    problem.add_object(l1)
+    problem.add_object(l2)
+    problem.add_object(l3)
+    problem.add_action(act)
+    problem.set_initial_value(at, l1)
+    problem.add_goal(Equals(at, l3))
+    return problem
+
+
+def get_problem_if_undefined_initial_numeric() -> Problem:
+    """A fluent left undefined for one object, read both inside an
+    interpreted-function precondition and an interpreted-function effect
+    value -- adapted from UP's `interpreted_functions_undef_numeric` example
+    (dropping the `choose`/`use_chosen` action: `choose_if()` returns an
+    object, and `use_chosen` feeds that object into `undef_value(...)` to
+    pick *which fluent instance to read* -- a further capability, dynamic
+    fluent-parameter resolution from a runtime-computed object, that's
+    separate from and harder than a plain object-valued effect (see
+    `get_problem_if_object_effect`) and still out of scope). The
+    `set_value` action (writing `value`, mirroring the UP original) is kept:
+    without it `value` would be a static (never-written) fluent and UP's
+    Grounder would constant-fold every interpreted-function call away,
+    leaving nothing interpreted-function-related in the ground problem this
+    combination is meant to exercise."""
+    Obj = UserType("Obj")
+    o1 = Object("o1", Obj)
+    o2 = Object("o2", Obj)
+
+    def is_big(x):
+        return x >= 3
+
+    IF_is_big = InterpretedFunction(
+        "is_big", BoolType(), OrderedDict(x=IntType()), is_big
+    )
+
+    def double_it(x):
+        return 2 * x
+
+    IF_double = InterpretedFunction(
+        "double", IntType(), OrderedDict(x=IntType()), double_it
+    )
+
+    value = Fluent("value", IntType(), o=Obj)
+    total = Fluent("total", IntType())
+
+    use_value = InstantaneousAction("use_value", o=Obj)
+    use_value.add_precondition(IF_is_big(value(use_value.o)))
+    use_value.add_effect(total, IF_double(value(use_value.o)))
+
+    set_value = InstantaneousAction("set_value", o=Obj)
+    set_value.add_effect(value(set_value.o), IF_double(value(o1)))
+
+    problem = Problem("if_undefined_initial_numeric")
+    problem.add_fluent(value)
+    problem.add_fluent(total, default_initial_value=0)
+    problem.add_object(o1)
+    problem.add_object(o2)
+    problem.add_action(use_value)
+    problem.add_action(set_value)
+    problem.set_initial_value(value(o1), 4)  # value(o2) is left undefined
+    problem.add_goal(GE(total, 1))
+    return problem
+
+
+def get_problem_if_temporal_compression_safe() -> Problem:
+    """A durative action whose start condition and start effect both use an
+    interpreted function. Compression-safe per TamerLite's own
+    `Encoder._compute_compression_safe_actions`: its only condition is at
+    start, and its only non-start effect assigns a bool constant -- so
+    solving it exercises TamerLite's compression-safe-action detection and
+    the TimedToSequential recompile, not just the general IF machinery.
+    The duration here is a plain constant; see `get_problem_if_duration` for
+    interpreted functions used inside a duration itself."""
+
+    def is_low(level):
+        return level < 10
+
+    IF_is_low = InterpretedFunction(
+        "is_low", BoolType(), OrderedDict(level=IntType()), is_low
+    )
+
+    def boost(level):
+        return min(level + 3, 10)
+
+    IF_boost = InterpretedFunction(
+        "boost", IntType(), OrderedDict(level=IntType()), boost
+    )
+
+    battery = Fluent("battery", IntType())
+    charged = Fluent("charged")
+
+    charge = DurativeAction("charge")
+    charge.set_fixed_duration(1)
+    charge.add_condition(StartTiming(), IF_is_low(battery))
+    charge.add_effect(StartTiming(), battery, IF_boost(battery))
+    charge.add_effect(EndTiming(), charged, True)
+
+    problem = Problem("if_temporal_compression_safe")
+    problem.add_fluent(battery)
+    problem.add_fluent(charged, default_initial_value=False)
+    problem.add_action(charge)
+    problem.set_initial_value(battery, 2)
+    problem.add_goal(charged)
+    return problem
+
+
+def get_problem_if_duration() -> Problem:
+    """A durative action whose *duration* is an interpreted function --
+    modelled on UP's `interpreted_functions_in_durative_start_effects`
+    example, now that UP's Grounder correctly substitutes into (without
+    folding) an interpreted function used in a duration bound.
+
+    `battery` is written by `charge`'s own start effect, so it isn't a
+    static fluent -- the encoder's `Simplifier` would otherwise constant-fold
+    `charge_time_if(battery)` away during grounding, and the duration would
+    reach the search space as a plain literal, silently defeating the point
+    of this test.
+
+    The end-only condition (with no matching overall condition) makes
+    `charge` fail `Encoder._compute_compression_safe_actions`, so solving
+    this exercises the real temporal search path (`_open_action`'s duration
+    evaluation), not the `TimedToSequential` recompile, which would discard
+    the duration and re-derive it in `build_plan` instead."""
+
+    def charge_time(level):
+        return 10 - level
+
+    IF_charge_time = InterpretedFunction(
+        "charge_time", IntType(), OrderedDict(level=IntType()), charge_time
+    )
+
+    battery = Fluent("battery", IntType())
+    charged = Fluent("charged")
+
+    charge = DurativeAction("charge")
+    charge.set_fixed_duration(IF_charge_time(battery))
+    charge.add_effect(StartTiming(), battery, battery - 2)
+    charge.add_condition(EndTiming(), GE(battery, 0))
+    charge.add_effect(EndTiming(), charged, True)
+
+    problem = Problem("if_duration")
+    problem.add_fluent(battery)
+    problem.add_fluent(charged, default_initial_value=False)
+    problem.add_action(charge)
+    problem.set_initial_value(battery, 4)
+    problem.add_goal(charged)
+    return problem
+
+
+def get_problem_if_numeric_symmetry_retained() -> Problem:
+    """A numeric-only interpreted function (its signature and return type
+    are both `IntType()`) applied to symmetric objects. An IF that only
+    ever sees numeric/boolean argument values returns the same result on
+    both sides of a genuine object swap -- a real automorphism preserves
+    fluent values, and numbers aren't permuted by the swap -- so this
+    pattern must not taint the objects it's applied to: `{s1, s2}` stays a
+    legitimate equivalence class."""
+    Slot = UserType("Slot")
+    s1 = Object("s1", Slot)
+    s2 = Object("s2", Slot)
+
+    def boost(n):
+        return n + 1
+
+    IF_boost = InterpretedFunction("boost", IntType(), OrderedDict(n=IntType()), boost)
+
+    level = Fluent("level", IntType(), s=Slot)
+    bump = InstantaneousAction("bump", s=Slot)
+    s = bump.parameter("s")
+    bump.add_precondition(LT(level(s), 3))
+    bump.add_effect(level(s), IF_boost(level(s)))
+
+    problem = Problem("if_numeric_symmetry_retained")
+    problem.add_fluent(level)
+    problem.add_objects([s1, s2])
+    problem.add_action(bump)
+    problem.set_initial_value(level(s1), 0)
+    problem.set_initial_value(level(s2), 0)
+    problem.add_goal(Equals(level(s1), 1))
+    problem.add_goal(Equals(level(s2), 1))
+    return problem
+
+
+def get_problem_if_object_argument_symmetry_unsound() -> Problem:
+    """Soundness regression: an interpreted function taking an object-typed
+    argument distinguishes `l1`/`l2` in a way the initial state and goal
+    alone cannot see -- the distinguishing logic lives entirely inside the
+    IF's Python closure, so neither `l1` nor `l2` appears as a literal
+    `Object` constant anywhere in the lifted action schema, and a symmetry
+    breaker that only looks at `_extract_domain_objects`, the goal and the
+    initial state wrongly groups `{l1, l2}`.
+
+    That wrong grouping makes any `l2`-using action require some
+    `l1`-using action to already be on the plan prefix. But `enter(l1)` can
+    never fire (`is_open(l1)` is always `False`), so nothing that uses `l1`
+    is ever applicable, and the goal becomes unreachable even though
+    `enter(l2); finish(l2)` is a trivial valid plan. A sound symmetry
+    breaker must recognise that `is_open`'s object-typed argument means
+    `l1`/`l2` cannot be treated as equivalent."""
+    Loc = UserType("Loc")
+    l1 = Object("l1", Loc)
+    l2 = Object("l2", Loc)
+
+    def is_open(loc):
+        return loc == l2
+
+    IF_is_open = InterpretedFunction(
+        "is_open", BoolType(), OrderedDict(loc=Loc), is_open
+    )
+
+    visited = Fluent("visited", BoolType(), x=Loc)
+    done = Fluent("done", BoolType())
+
+    enter = InstantaneousAction("enter", x=Loc)
+    x = enter.parameter("x")
+    enter.add_precondition(And(IF_is_open(x), Not(visited(x))))
+    enter.add_effect(visited(x), True)
+
+    finish = InstantaneousAction("finish", x=Loc)
+    y = finish.parameter("x")
+    finish.add_precondition(visited(y))
+    finish.add_effect(done, True)
+
+    problem = Problem("if_object_argument_symmetry_unsound")
+    problem.add_fluent(visited, default_initial_value=False)
+    problem.add_fluent(done, default_initial_value=False)
+    problem.add_objects([l1, l2])
+    problem.add_action(enter)
+    problem.add_action(finish)
+    problem.add_goal(done)
+    return problem
+
+
+def get_problem_if_object_return_symmetry() -> Problem:
+    """An object-returning interpreted function must taint every object of
+    its return type -- the value it can produce is a dynamically-computed
+    domain constant invisible to `_extract_domain_objects` -- while leaving
+    a second, unrelated type's genuine symmetry untouched: `{l1, l2}` must
+    become singletons, but `{i1, i2}` (never seen by any IF) must stay
+    grouped, proving the taint is scoped to the IF's actual types rather
+    than a blanket effect on the whole problem."""
+    Loc = UserType("Loc")
+    l1 = Object("l1", Loc)
+    l2 = Object("l2", Loc)
+    Item = UserType("Item")
+    i1 = Object("i1", Item)
+    i2 = Object("i2", Item)
+
+    def pick(n):
+        return l2 if n >= 1 else l1
+
+    IF_pick = InterpretedFunction("pick", Loc, OrderedDict(n=IntType()), pick)
+
+    counter = Fluent("counter", IntType())
+    at = Fluent("at", Loc)
+    held = Fluent("held", BoolType(), item=Item)
+
+    move = InstantaneousAction("move")
+    move.add_precondition(LT(counter, 5))
+    move.add_effect(counter, Plus(counter, 1))
+    move.add_effect(at, IF_pick(counter))
+
+    grab = InstantaneousAction("grab", item=Item)
+    grab.add_effect(held(grab.parameter("item")), True)
+
+    problem = Problem("if_object_return_symmetry")
+    problem.add_fluent(counter)
+    problem.add_fluent(at)
+    problem.add_fluent(held, default_initial_value=False)
+    problem.add_objects([l1, l2, i1, i2])
+    problem.add_action(move)
+    problem.add_action(grab)
+    problem.set_initial_value(counter, 0)
+    problem.set_initial_value(at, l1)
+    return problem
+
+
+def get_problem_if_metric_action_cost_object_argument_taint() -> Problem:
+    """Soundness regression for interpreted functions reachable only through
+    a quality metric: an IF call inside a `MinimizeActionCosts` cost
+    expression can distinguish `l1`/`l2` via the action's own object-typed
+    parameter, even though neither the goal, the initial state, nor any
+    action precondition/effect ever does. Mirrors
+    `get_problem_if_object_argument_symmetry_unsound`, but the discriminating
+    IF call sits entirely inside the metric instead of a precondition, so a
+    tainted-object scan that skips quality metrics wrongly groups `{l1, l2}`
+    as equivalent."""
+    Loc = UserType("Loc")
+    l1 = Object("l1", Loc)
+    l2 = Object("l2", Loc)
+
+    def bonus(loc):
+        return 10 if loc == l2 else 0
+
+    IF_bonus = InterpretedFunction("bonus", IntType(), OrderedDict(loc=Loc), bonus)
+
+    visited = Fluent("visited", BoolType(), x=Loc)
+    done = Fluent("done", BoolType())
+
+    enter = InstantaneousAction("enter", x=Loc)
+    x = enter.parameter("x")
+    enter.add_precondition(Not(visited(x)))
+    enter.add_effect(visited(x), True)
+    enter.add_effect(done, True)
+
+    problem = Problem("if_metric_action_cost_object_argument_taint")
+    problem.add_fluent(visited, default_initial_value=False)
+    problem.add_fluent(done, default_initial_value=False)
+    problem.add_objects([l1, l2])
+    problem.add_action(enter)
+    problem.add_goal(done)
+    problem.add_quality_metric(MinimizeActionCosts({enter: IF_bonus(x)}, default=0))
+    return problem
+
+
+def get_problem_if_conditions_and_effects() -> Problem:
+    """Combines five placement gaps that would otherwise each need their own
+    minimal problem, all in one durative action fired twice:
+
+    - IF in a durative *overall* condition (`ClosedTimeInterval`) -- every
+      other temporal IF problem here uses a start-only or end-only
+      condition, checked once rather than held throughout.
+    - IF as the value of a *timed* (non-start), boolean-valued effect --
+      every other temporal IF problem here only assigns an IF's value at
+      `StartTiming()`. `Encoder._extract_interpreted_function_tainted_
+      objects` scans timed effects for IF usages separately from start
+      effects.
+    - IF as the value of an `increase` numeric effect -- every other
+      numeric-effect IF problem here uses a plain `assign`; `increase`/
+      `decrease` route through a different code path (`Encoder`'s effect
+      classification, `_to_linear_polynomial` in the delete-relaxation
+      heuristics).
+    - IF used directly in the goal -- every other IF problem here only puts
+      an IF in a precondition, effect, or duration.
+    - A quality metric, so this flows into `ANYTIME_PROBLEMS`
+      (`test_engine.py`'s `_build_anytime_problems` filters on
+      `len(quality_metrics) == 1`), letting `test_anytime_planner` exercise
+      TamerLite's shared `if_cache` across anytime re-solves on a real IF
+      problem, not just the synthetic `test_converter_shares_if_cache_
+      across_converters_with_different_object_tables`. The IF stays out of
+      the metric itself: `TamerLite.supported_kind` doesn't declare any
+      interpreted-functions-in-actions-cost feature.
+
+    `flow` needs two non-overlapping occurrences to reach the goal (`total`
+    only reaches 4 after two `+2` increases), which is also what exercises
+    the overall condition across a real duration rather than at a single
+    instant. (Not paired with a timed *goal*: TamerLite's `supported_kind`
+    doesn't declare `TIMED_GOALS` at all -- a pre-existing gap unrelated to
+    interpreted functions -- so `add_timed_goal` would make `supports()`
+    reject the problem outright.)"""
+
+    def is_open(level):
+        return level > 0
+
+    IF_is_open = InterpretedFunction(
+        "is_open", BoolType(), OrderedDict(level=IntType()), is_open
+    )
+
+    def flag_from(level):
+        return level >= 2
+
+    IF_flag = InterpretedFunction(
+        "flag_from", BoolType(), OrderedDict(level=IntType()), flag_from
+    )
+
+    def step(x):
+        return x + 2
+
+    IF_step = InterpretedFunction("step", IntType(), OrderedDict(x=IntType()), step)
+
+    def reached(x):
+        return x >= 4
+
+    IF_reached = InterpretedFunction(
+        "reached", BoolType(), OrderedDict(x=IntType()), reached
+    )
+
+    valve = Fluent("valve", IntType())
+    level = Fluent("level", IntType())
+    ready = Fluent("ready")
+    total = Fluent("total", IntType())
+
+    flow = DurativeAction("flow")
+    flow.set_fixed_duration(2)
+    flow.add_condition(
+        ClosedTimeInterval(StartTiming(), EndTiming()), IF_is_open(valve)
+    )
+    flow.add_effect(StartTiming(), level, 2)
+    flow.add_effect(EndTiming(), ready, IF_flag(level))
+    flow.add_increase_effect(EndTiming(), total, IF_step(total))
+
+    problem = Problem("if_conditions_and_effects")
+    problem.add_fluent(valve)
+    problem.add_fluent(level)
+    problem.add_fluent(ready, default_initial_value=False)
+    problem.add_fluent(total)
+    problem.add_action(flow)
+    problem.set_initial_value(valve, 1)
+    problem.set_initial_value(level, 0)
+    problem.set_initial_value(total, 0)
+    problem.add_goal(ready)
+    problem.add_goal(IF_reached(total))
+    # MinimizeMakespan, not MinimizeSequentialPlanLength: this is a
+    # continuous-time (durative) problem, and no validator engine supports
+    # CONTINUOUS_TIME and PLAN_LENGTH metrics together (only makespan) --
+    # matching the existing get_problem_temporal_flight_minimize_makespan
+    # pattern rather than get_problem_flight_minimize_plan_length's.
+    problem.add_quality_metric(MinimizeMakespan())
+    return problem
+
+
+def get_problem_if_signature_shapes() -> Problem:
+    """Combines three argument/return shapes that would otherwise each need
+    their own minimal problem:
+
+    - A real-typed return -- proves the solve path works at all (the
+      specific integral-vs-fractional backend divergence is pinned
+      separately by `test_interpreted_functions_real_return_backend_
+      normalization`, which builds its own tiny model and doesn't need this
+      problem to be solvable). `half` is deliberately never integral
+      (`5/2`): an *integral* real result stored via a plain `assign` effect
+      and then compared against a bare int goal literal genuinely doesn't
+      solve -- the engine represents the fluent's value as
+      `Rational(4, 1)`, which doesn't compare equal to the goal's `Int(4)`
+      constant, only to a matching `Fraction` literal. That's exactly the
+      trap this problem must not fall into just to look tidy.
+    - A bool-typed argument -- the one argument shape not already reachable
+      through a *supported* problem elsewhere. A zero-argument IF is already
+      covered by UP's own `treasure_hunting_robot_simple` example
+      (`check_treasure_map_if()`), and a real-typed argument by
+      `if_reals_condition_effect_pizza` (`if_cut`/`if_available`, both over
+      a `RealType()` parameter) -- both already arrive in `PROBLEMS` via
+      `get_example_problems()`. Bool-typed arguments do appear in UP's
+      examples too (`simple_always_false`, `wet_if`), but only inside the
+      two that also require `BOUNDED_TYPES`, which TamerLite doesn't
+      support.
+    - An interpreted function nested directly inside another interpreted
+      function's argument (`IF_outer(IF_inner(x))`) -- every other problem
+      here only ever nests an IF's argument inside a plain fluent read,
+      never inside another IF call.
+
+    `n` and `active` are read once each by a static-looking IF call, but
+    `active` is written by `flip` (so `IF_bonus(active)` isn't
+    constant-folded away); `n` genuinely is static here since only its
+    initial value matters for `to_real`, which is fine -- a real-typed
+    return only needs to be *reached*, not re-derived from a written
+    fluent."""
+
+    def half(x):
+        return Fraction(x, 2)
+
+    IF_half = InterpretedFunction("half", RealType(), OrderedDict(x=IntType()), half)
+
+    def bool_to_bonus(flag):
+        return 2 if flag else 0
+
+    IF_bonus = InterpretedFunction(
+        "bool_to_bonus", IntType(), OrderedDict(flag=BoolType()), bool_to_bonus
+    )
+
+    def inner(x):
+        return x + 1
+
+    IF_inner = InterpretedFunction("inner", IntType(), OrderedDict(x=IntType()), inner)
+
+    def outer(y):
+        return y >= 5
+
+    IF_outer = InterpretedFunction("outer", BoolType(), OrderedDict(y=IntType()), outer)
+
+    n = Fluent("n", IntType())
+    result = Fluent("result", RealType())
+    active = Fluent("active", BoolType())
+    bonus = Fluent("bonus", IntType())
+    counter = Fluent("counter", IntType())
+
+    to_real = InstantaneousAction("to_real")
+    to_real.add_precondition(Equals(result, 0))
+    to_real.add_effect(result, IF_half(n))
+
+    flip = InstantaneousAction("flip")
+    flip.add_effect(active, Not(active))
+
+    apply_bonus = InstantaneousAction("apply_bonus")
+    apply_bonus.add_effect(bonus, IF_bonus(active))
+
+    advance = InstantaneousAction("advance")
+    advance.add_precondition(Not(IF_outer(IF_inner(counter))))
+    advance.add_effect(counter, Plus(counter, 1))
+
+    problem = Problem("if_signature_shapes")
+    problem.add_fluent(n)
+    problem.add_fluent(result)
+    problem.add_fluent(active)
+    problem.add_fluent(bonus)
+    problem.add_fluent(counter)
+    problem.add_action(to_real)
+    problem.add_action(flip)
+    problem.add_action(apply_bonus)
+    problem.add_action(advance)
+    problem.set_initial_value(n, 5)
+    problem.set_initial_value(result, 0)
+    problem.set_initial_value(active, False)
+    problem.set_initial_value(bonus, 0)
+    problem.set_initial_value(counter, 0)
+    problem.add_goal(Equals(result, Fraction(5, 2)))
+    problem.add_goal(Equals(bonus, 2))
+    problem.add_goal(Equals(counter, 4))
+    return problem
+
+
+def get_problem_if_hierarchical_type_argument() -> Problem:
+    """An interpreted function taking an argument typed as a *supertype*, in
+    a problem with subtypes of it. `Encoder._extract_interpreted_function_
+    tainted_objects` taints "every object of the argument's declared type" --
+    this checks that taint also reaches subtype instances (`v1`: `Van`, a
+    subtype of `Vehicle`), not just objects declared exactly as the
+    supertype."""
+    Vehicle = UserType("Vehicle")
+    Van = UserType("Van", Vehicle)
+    c1 = Object("c1", Vehicle)
+    v1 = Object("v1", Van)
+
+    def is_heavy(vehicle):
+        return vehicle == v1
+
+    IF_is_heavy = InterpretedFunction(
+        "is_heavy", BoolType(), OrderedDict(vehicle=Vehicle), is_heavy
+    )
+
+    at_depot = Fluent("at_depot", BoolType(), v=Vehicle)
+    dispatched = Fluent("dispatched", BoolType(), v=Vehicle)
+
+    dispatch = InstantaneousAction("dispatch", v=Vehicle)
+    v = dispatch.parameter("v")
+    dispatch.add_precondition(And(at_depot(v), Not(IF_is_heavy(v))))
+    dispatch.add_effect(dispatched(v), True)
+
+    problem = Problem("if_hierarchical_type_argument")
+    problem.add_fluent(at_depot, default_initial_value=True)
+    problem.add_fluent(dispatched, default_initial_value=False)
+    problem.add_objects([c1, v1])
+    problem.add_action(dispatch)
+    problem.add_goal(dispatched(c1))
+    return problem
+
+
+def get_problem_if_counting_chain(name: str, calls: list) -> Problem:
+    """A tiny IF-gated counter problem: the only action, `inc`, is guarded by
+    a boolean interpreted function that logs every `n` it's called with (into
+    the caller-supplied `calls`) and always returns `n < 3`; the goal needs
+    exactly three `inc`s, so this is both the smallest problem with a
+    deterministic minimal plan length (for an anytime improvement loop to
+    exhaust in one iteration) and a way to observe exactly which fluent
+    values the IF was evaluated at. Unlike the other `get_problem_if_*`
+    generators here, `name` is caller-supplied rather than fixed, since
+    interleaving/warm-cache tests need several distinctly-named instances."""
+
+    def allow(n):
+        calls.append(n)
+        return n < 3
+
+    IF_allow = InterpretedFunction("allow", BoolType(), OrderedDict(n=IntType()), allow)
+    n = Fluent("n", IntType())
+    inc = InstantaneousAction("inc")
+    inc.add_precondition(IF_allow(n))
+    inc.add_effect(n, Plus(n, 1))
+    problem = Problem(name)
+    problem.add_fluent(n, default_initial_value=0)
+    problem.add_action(inc)
+    problem.add_goal(GE(n, 3))
     return problem
