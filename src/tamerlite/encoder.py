@@ -114,6 +114,8 @@ class Encoder:
         symmetry_breaking: bool,
         compression_safe_actions: bool,
         relevance_analysis: bool,
+        relevant_equality: bool = True,
+        weak_equality: bool = False,
         full: bool = True,
         deadline: Fraction | None = None,
         if_cache: MutableMapping[tuple[InterpretedFunction, tuple], Any] | None = None,
@@ -242,6 +244,17 @@ class Encoder:
             if len(self._relevant_actions) < len(self.applicable_actions):
                 self._search_space.relevant_actions = self._relevant_actions
 
+        self._dedup_relevant_fluents: list[int] | None = None
+        # `is_temporal and not weak_equality` has no dedup at all (see
+        # `SearchSpace.dedup_relevant_fluents` usage in both `core.search`
+        # modules), so the reduction would never be consulted -- skip
+        # computing it.
+        if full and relevant_equality and (not self._is_temporal or weak_equality):
+            dedup_relevant_fluents = self._compute_dedup_relevant_fluents()
+            if len(dedup_relevant_fluents) < len(self._fluents):
+                self._dedup_relevant_fluents = sorted(dedup_relevant_fluents)
+                self._search_space.dedup_relevant_fluents = self._dedup_relevant_fluents
+
     def initial_state(self, initial_values: dict[FNode, FNode]) -> list[ConstantNode]:
         initial_state_values = {}
         for f, v in initial_values.items():
@@ -351,6 +364,60 @@ class Encoder:
                         stack.append(f)
 
         return [a for a in self._actions if a.idx in relevant_actions]
+
+    def _compute_dedup_relevant_fluents(self) -> set[int]:
+        """Fluents that can affect search outcome: the least fixpoint of a
+        backward slice from what search actually reads.
+
+        Seeds are the fluents read directly by the goal, by a
+        search-reachable action's conditions (instantaneous or
+        start/end-interval), or by a duration bound. The closure rule is that
+        an effect's RHS only matters if the fluent it writes matters: for
+        every effect `f := expr`, once `f` is relevant every fluent read by
+        `expr` becomes relevant too. A self-referencing assignment
+        (`increase`/`decrease` desugars to e.g. `cost := cost + 1`) only
+        pulls `cost` in when it's already relevant, so a pure bookkeeping
+        fluent read nowhere else, or one that only feeds another bookkeeping
+        fluent transitively, is never seeded and never added.
+
+        Feeds `SearchSpace.dedup_relevant_fluents`, restricting only the
+        duplicate-detection key, never the full tracked state.
+        """
+        considered_actions = (
+            self._relevant_actions
+            if self._relevant_actions is not None
+            else self.applicable_actions
+        )
+
+        relevant_fluents: set[int] = set(get_fluents(self.goal))  # type: ignore[arg-type]
+        # Adjacency for the closure: fluent -> fluents read by the RHS of any
+        # effect that writes it.
+        written_from: dict[int, set[int]] = {}
+        for a in considered_actions:
+            for _, e in self.events[a]:
+                relevant_fluents.update(get_fluents(e.conditions))
+                for c in e.start_conditions:
+                    relevant_fluents.update(get_fluents(c))
+                for c in e.end_conditions:
+                    relevant_fluents.update(get_fluents(c))
+                for eff in e.effects:
+                    written_from.setdefault(eff.fluent, set()).update(
+                        get_fluents(eff.value)
+                    )
+            dur = self._actions_duration[a.idx]
+            if dur is not None:
+                lb, ub, _, _ = dur
+                relevant_fluents.update(get_fluents(lb))
+                relevant_fluents.update(get_fluents(ub))
+
+        # Closure: propagate relevance backward through effects.
+        stack = list(relevant_fluents)
+        while stack:
+            for f in written_from.get(stack.pop(), ()):
+                if f not in relevant_fluents:
+                    relevant_fluents.add(f)
+                    stack.append(f)
+        return relevant_fluents
 
     def _compute_obj_to_prev_actions_map(
         self,
@@ -964,6 +1031,10 @@ class Encoder:
     @property
     def relevant_actions(self) -> list[Action] | None:
         return self._relevant_actions
+
+    @property
+    def dedup_relevant_fluents(self) -> list[int] | None:
+        return self._dedup_relevant_fluents
 
     @property
     def compression_safe_actions(self) -> list[Action]:

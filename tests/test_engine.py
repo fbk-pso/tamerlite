@@ -25,7 +25,7 @@ import weakref
 from collections import OrderedDict
 from collections.abc import Callable
 from functools import partial
-from typing import NamedTuple, cast
+from typing import Any, NamedTuple, cast
 
 import pytest
 import unified_planning
@@ -1523,6 +1523,229 @@ def test_relevance_analysis_keeps_duration_only_writer():
 
             with PlanValidator(problem_kind=problem.kind) as v:
                 assert v.validate(problem, res.plan)
+
+
+def test_dedup_relevant_fluents_excludes_bookkeeping_fluents():
+    """
+    `Encoder._compute_dedup_relevant_fluents` restricts the search's
+    duplicate-state detection key to fluents that matter for state identity:
+    the least fixpoint of a backward slice seeded from the fluents read by a
+    precondition/effect-condition/goal/duration-bound, closed under "an
+    effect's RHS matters only if the fluent it writes matters". That closure
+    is what makes exclusion of an effect's own target fluent from its own
+    right-hand side fall out for free: `_convert_effects` desugars
+    `increase`/`decrease` into a self-referencing assignment (`cost := cost +
+    1`), and without the closure a pure bookkeeping fluent that only bumps
+    itself would trivially mark itself relevant and the reduction would
+    collapse to `None` -- exactly the bug this analysis exists to avoid. The
+    closure also correctly drops fluents that are only *transitively*
+    bookkeeping (fluent `A` feeds only fluent `B`, and `B` is read nowhere) --
+    see `get_problem_dedup_relevant_transitive`, which a one-step "everything
+    read by an effect's RHS is relevant" rule would get wrong even with the
+    same-fluent exclusion, since the two fluents involved are never equal.
+
+    Covers all three dedup regimes that consume the reduced set
+    (`core.search.state_representation`) via
+    `get_problem_dedup_relevant_classical` (plain `not is_temporal` dedup
+    path, direct self-reference), `get_problem_dedup_relevant_temporal`
+    (temporal `weak_equality` dedup path), and
+    `get_problem_dedup_relevant_transitive` (plain `not is_temporal` dedup
+    path, transitive chain) -- see their docstrings for why each is shaped
+    the way it is. Also covers `Encoder`'s `relevant_equality` flag: `False`
+    must leave the reduction at `None` even on a fixture that would
+    otherwise qualify. And covers the `is_temporal and not weak_equality`
+    skip: that regime has no dedup at all, so `Encoder` must leave the
+    reduction at `None` there too, by default, without needing
+    `relevant_equality=False`.
+    """
+    classical = problems_generator.get_problem_dedup_relevant_classical()
+    temporal = problems_generator.get_problem_dedup_relevant_temporal()
+    transitive = problems_generator.get_problem_dedup_relevant_transitive()
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+
+        for problem, excluded_names, kept_names in [
+            (classical, ["cost"], ["ready"]),
+            (temporal, ["tcost"], ["charge", "done"]),
+            (transitive, ["counter", "log"], ["ready"]),
+        ]:
+            lifted_problem, ground_problem, map_back_action_instance = (
+                testing_utils.compile_problem(problem)
+            )
+            encoder = Encoder(
+                ground_problem,
+                lifted_problem,
+                map_back_action_instance,
+                symmetry_breaking=False,
+                compression_safe_actions=False,
+                relevance_analysis=True,
+                # Required for the temporal fixture: `is_temporal and not
+                # weak_equality` skips computing the reduction entirely (see
+                # the dedicated check below). No-op for the classical fixture,
+                # which ignores this flag.
+                weak_equality=True,
+            )
+            assert encoder.dedup_relevant_fluents is not None
+            assert len(encoder.dedup_relevant_fluents) < len(encoder.fluents)
+            dedup_names = {encoder.fluents[i] for i in encoder.dedup_relevant_fluents}
+            for excluded_name in excluded_names:
+                assert excluded_name not in dedup_names
+            for name in kept_names:
+                assert name in dedup_names
+
+            if problem is transitive:
+                # Sharp regression guard for the transitive-chain case: the
+                # pre-fixpoint one-step rule kept `counter` (read by `log`'s
+                # RHS) even though `log` itself is never seeded as relevant.
+                # Assert the exact set, not just the two checks above, so a
+                # regression to the one-step rule is caught even if it
+                # happens to keep `ready` and drop `log`.
+                assert dedup_names == set(kept_names)
+
+            # Round-trips through the PyO3 getter/setter on the Rust backend too.
+            assert (
+                encoder.search_space.dedup_relevant_fluents
+                == encoder.dedup_relevant_fluents
+            )
+
+            # relevant_equality=False must skip the reduction entirely,
+            # even though the fixture's own fluents would otherwise qualify --
+            # this is the flag's whole purpose, distinct from a problem simply
+            # having nothing to exclude (covered by the numeric_problem case
+            # below).
+            disabled_encoder = Encoder(
+                ground_problem,
+                lifted_problem,
+                map_back_action_instance,
+                symmetry_breaking=False,
+                compression_safe_actions=False,
+                relevance_analysis=True,
+                relevant_equality=False,
+            )
+            assert disabled_encoder.dedup_relevant_fluents is None
+            assert disabled_encoder.search_space.dedup_relevant_fluents is None
+
+            if problem is temporal:
+                # `is_temporal and not weak_equality` has no dedup at all, so
+                # the reduction is never consulted there -- Encoder must skip
+                # computing it, matching the `weak_equality=False` default
+                # most temporal solves use. Contrast with the `weak_equality=True`
+                # encoder above, built from the same fixture, whose reduction
+                # is non-trivial: this isn't a coincidental None.
+                weak_equality_default_encoder = Encoder(
+                    ground_problem,
+                    lifted_problem,
+                    map_back_action_instance,
+                    symmetry_breaking=False,
+                    compression_safe_actions=False,
+                    relevance_analysis=True,
+                )
+                assert weak_equality_default_encoder.dedup_relevant_fluents is None
+                assert (
+                    weak_equality_default_encoder.search_space.dedup_relevant_fluents
+                    is None
+                )
+
+        # A problem where every fluent is read somewhere leaves the reduction
+        # as None -- the pre-existing full-assignments dedup path stays
+        # reachable unchanged.
+        numeric_problem = problems_generator.get_problem_numeric()
+        lifted_problem, ground_problem, map_back_action_instance = (
+            testing_utils.compile_problem(numeric_problem)
+        )
+        encoder = Encoder(
+            ground_problem,
+            lifted_problem,
+            map_back_action_instance,
+            symmetry_breaking=False,
+            compression_safe_actions=False,
+            relevance_analysis=True,
+        )
+        assert encoder.dedup_relevant_fluents is None
+        assert encoder.search_space.dedup_relevant_fluents is None
+
+        # Solve the temporal problem under weak_equality=True, exercising the
+        # new WeakEqState.fluents subset comparison end to end.
+        search = tamerlite.SearchParams(
+            search="wastar",
+            heuristic="hff",
+            weight=0.8,
+            compression_safe_actions=False,
+            relevance_analysis=True,
+            weak_equality=True,
+        )
+        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+            planner: tamerlite.engine.TamerLite
+            res: PlanGenerationResult = planner.solve(temporal, timeout=None)
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+            with PlanValidator(problem_kind=temporal.kind) as v:
+                assert v.validate(temporal, res.plan)
+
+
+def test_weak_equality_warns_on_non_temporal_problem():
+    """`weak_equality` only changes dedup behavior on temporal problems --
+    `WeakEqState`'s extra `todo` comparison (`core.search.WeakEqState.__eq__`)
+    is a guaranteed no-op on a classical problem, since `SearchSpace._open_action`
+    only ever populates `todo` inside its `is_temporal` branch. Setting
+    `weak_equality=True` on a non-temporal problem is therefore always a no-op,
+    most plausibly a leftover from reusing params built for a temporal problem
+    -- worth a warning, unlike the `is_temporal and not weak_equality` case
+    (`test_dedup_relevant_fluents_excludes_bookkeeping_fluents`), which is the
+    default for every temporal solve and would make the warning pure noise.
+
+    Covers both `SearchParams` and `MultiqueueParams`, since the check lives once
+    in `_solve_ground_problem`, common to both branches, rather than duplicated
+    inside `_get_search` (which `MultiqueueParams` never calls).
+    """
+    classical = problems_generator.get_problem_dedup_relevant_classical()
+    temporal = problems_generator.get_problem_dedup_relevant_temporal()
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+
+        param_cases: list[tuple[type, dict[str, Any]]] = [
+            (tamerlite.SearchParams, {"search": "wastar", "heuristic": "hff"}),
+            (
+                tamerlite.engine.MultiqueueParams,
+                {"queues": [tamerlite.HeuristicParams(heuristic="hff")]},
+            ),
+        ]
+        for params_cls, extra_kwargs in param_cases:
+            # weak_equality=True on a non-temporal problem: warns.
+            search = params_cls(
+                weak_equality=True, compression_safe_actions=False, **extra_kwargs
+            )
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                with OneshotPlanner(name="tamerlite", params={"search": search}) as p:
+                    res: PlanGenerationResult = p.solve(classical, timeout=None)
+                    assert res.status == ResultStatus.SOLVED_SATISFICING
+            messages = [str(w.message) for w in caught]
+            assert any("weak_equality" in m for m in messages)
+
+            # weak_equality=False (default) on the same non-temporal problem: silent.
+            search = params_cls(compression_safe_actions=False, **extra_kwargs)
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                with OneshotPlanner(name="tamerlite", params={"search": search}) as p:
+                    res = p.solve(classical, timeout=None)
+                    assert res.status == ResultStatus.SOLVED_SATISFICING
+            messages = [str(w.message) for w in caught]
+            assert not any("weak_equality" in m for m in messages)
+
+            # weak_equality=True on a temporal problem: silent -- this is where
+            # the flag actually does something.
+            search = params_cls(
+                weak_equality=True, compression_safe_actions=False, **extra_kwargs
+            )
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                with OneshotPlanner(name="tamerlite", params={"search": search}) as p:
+                    res = p.solve(temporal, timeout=None)
+                    assert res.status == ResultStatus.SOLVED_SATISFICING
+            messages = [str(w.message) for w in caught]
+            assert not any("weak_equality" in m for m in messages)
 
 
 def test_temporal_no_start_event():

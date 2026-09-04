@@ -580,6 +580,17 @@ class SearchSpaceABC(ABC):
     def is_temporal(self) -> bool:
         pass
 
+    @property
+    @abstractmethod
+    def dedup_relevant_fluents(self) -> list[int] | None:
+        """Fluent ids the search's visited-state dedup should key on, or None to use
+        every fluent."""
+
+    @dedup_relevant_fluents.setter
+    @abstractmethod
+    def dedup_relevant_fluents(self, dedup_relevant_fluents: list[int] | None):
+        pass
+
     @abstractmethod
     def reset(self):
         pass
@@ -630,12 +641,14 @@ class SearchSpace(SearchSpaceABC):
         relevant_actions: list[Action] | None = None,
         deadline: Fraction | None = None,
         epsilon: Fraction | None = None,
+        dedup_relevant_fluents: list[int] | None = None,
     ):
         self._actions_duration = actions_duration
         self._events = events
         self._relevant_actions = (
             relevant_actions if relevant_actions is not None else list(actions)
         )
+        self._dedup_relevant_fluents = dedup_relevant_fluents
         self._compression_safe_actions = compression_safe_actions
         self._action_objects = action_objects
         self._obj_to_prev_actions_map = obj_to_prev_actions_map
@@ -688,6 +701,14 @@ class SearchSpace(SearchSpaceABC):
     @relevant_actions.setter
     def relevant_actions(self, relevant_actions: list[Action]):
         self._relevant_actions = relevant_actions
+
+    @property
+    def dedup_relevant_fluents(self) -> list[int] | None:
+        return self._dedup_relevant_fluents
+
+    @dedup_relevant_fluents.setter
+    def dedup_relevant_fluents(self, dedup_relevant_fluents: list[int] | None):
+        self._dedup_relevant_fluents = dedup_relevant_fluents
 
     def reset(self):
         pass
