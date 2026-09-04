@@ -86,6 +86,15 @@ class BoundedPriorityQueue:
 
 @dataclass
 class WeakEqState:
+    """Wraps a State so the visited-state dedup set hashes/compares only a chosen subset
+    of fluent indices, instead of every fluent (`fluents=None` falls back to comparing/
+    hashing the full `assignments`).
+
+    Also compares `todo` (the durative actions currently in progress), which matters on
+    the temporal `weak_equality` dedup path. On the classical (`not is_temporal`) dedup
+    path `todo` is always empty, so that comparison is a no-op there.
+    """
+
     state: State
     fluents: list[int] | None = None
 
@@ -117,36 +126,11 @@ class WeakEqState:
         return True
 
 
-@dataclass
-class DedupState:
-    """Wraps a State so the visited-state dedup set hashes/compares only a chosen subset
-    of fluent indices, instead of every fluent.
-
-    Mirrors the Rust core's `DedupState` (`crates/rustamer-base/src/search.rs`), but
-    with a narrower shape: `fluents` here is never `None` -- `state_representation`
-    returns the bare `State` instead of constructing this wrapper when there's
-    nothing to restrict.
-    """
-
-    state: State
-    fluents: list[int]
-
-    def __hash__(self) -> int:
-        return hash(tuple(self.state.assignments[i] for i in self.fluents))
-
-    def __eq__(self, oth) -> bool:
-        return all(
-            self.state.assignments[i] == oth.state.assignments[i] for i in self.fluents
-        )
-
-
 def state_representation(
     state: State, weak_equality: bool, dedup_relevant_fluents: list[int] | None = None
-) -> State | WeakEqState | DedupState:
-    if weak_equality:
+) -> State | WeakEqState:
+    if weak_equality or dedup_relevant_fluents is not None:
         return WeakEqState(state, dedup_relevant_fluents)
-    if dedup_relevant_fluents is not None:
-        return DedupState(state, dedup_relevant_fluents)
     return state
 
 

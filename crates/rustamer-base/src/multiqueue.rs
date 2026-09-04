@@ -169,20 +169,14 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
     };
 
     let dedup_relevant_fluents = ss.dedup_relevant_fluents();
-    // State, WeakEqState and DedupState contain interior mutability only for heuristic
+    let dedup = !ss.is_temporal() || weak_equality;
+    // State and WeakEqState contain interior mutability only for heuristic
     // caches. The mutable fields are ignored by Hash/Eq, so using them as HashSet keys is
     // safe.
     #[allow(clippy::mutable_key_type)]
-    let mut visited_weak_eq_states = FxHashSet::with_hasher(FxBuildHasher);
-    #[allow(clippy::mutable_key_type)]
     let mut visited_states = FxHashSet::with_hasher(FxBuildHasher);
-    if !ss.is_temporal() {
-        visited_states.insert(DedupState {
-            state: Rc::clone(&item.state_container.state),
-            fluents: dedup_relevant_fluents,
-        });
-    } else if weak_equality {
-        visited_weak_eq_states.insert(WeakEqState {
+    if dedup {
+        visited_states.insert(WeakEqState {
             state: Rc::clone(&item.state_container.state),
             fluents: dedup_relevant_fluents,
         });
@@ -249,19 +243,11 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
                     return Ok((Some(extract_path(&s)), metrics));
                 }
                 let s = Rc::new(s);
-                let keep = if !ss.is_temporal() {
-                    visited_states.insert(DedupState {
+                let keep = !dedup
+                    || visited_states.insert(WeakEqState {
                         state: Rc::clone(&s),
                         fluents: dedup_relevant_fluents,
-                    })
-                } else if weak_equality {
-                    visited_weak_eq_states.insert(WeakEqState {
-                        state: Rc::clone(&s),
-                        fluents: dedup_relevant_fluents,
-                    })
-                } else {
-                    true
-                };
+                    });
                 if keep {
                     let sc = StateContainer {
                         state: s,
