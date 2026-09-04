@@ -118,10 +118,12 @@ class Encoder:
         deadline: Fraction | None = None,
         if_cache: MutableMapping[tuple[InterpretedFunction, tuple], Any] | None = None,
         if_wrappers: dict[InterpretedFunction, Callable] | None = None,
+        lifted_problem_kind: up.model.ProblemKind | None = None,
     ):
         self._problem = problem
         self._lifted_problem = lifted_problem
         self._map_back_action_instance = map_back_action_instance
+        self._lifted_problem_kind = lifted_problem_kind
         if full:
             self._simplifier = up.model.walkers.Simplifier(problem.environment, problem)
         else:
@@ -239,10 +241,6 @@ class Encoder:
             self._relevant_actions = self._compute_relevant_actions()
             if len(self._relevant_actions) < len(self.applicable_actions):
                 self._search_space.relevant_actions = self._relevant_actions
-
-    @property
-    def problem(self) -> Problem:
-        return self._problem
 
     def initial_state(self, initial_values: dict[FNode, FNode]) -> list[ConstantNode]:
         initial_state_values = {}
@@ -488,6 +486,25 @@ class Encoder:
                         yield e.fluent
                         yield e.value
 
+    def _iter_metric_expressions(self) -> Iterable[FNode]:
+        """
+        Yield every expression appearing in the problem's quality metrics.
+        """
+
+        for qm in self._lifted_problem.quality_metrics:
+            if isinstance(
+                qm,
+                (
+                    up.model.metrics.MinimizeExpressionOnFinalState,
+                    up.model.metrics.MaximizeExpressionOnFinalState,
+                ),
+            ):
+                yield qm.expression
+            elif isinstance(qm, up.model.metrics.MinimizeActionCosts):
+                for cost in (*qm.costs.values(), qm.default):
+                    if cost is not None:
+                        yield cost
+
     def _extract_domain_objects(self) -> set[Object]:
         """
         Extract all objects that appear in the problem's domain.
@@ -496,10 +513,7 @@ class Encoder:
             Set[Object]: A set of all objects that appear in the domain.
         """
 
-        domain_objects: set[Object] = set()
-        for exp in self._iter_lifted_action_expressions():
-            domain_objects.update(extract_objects(exp))
-        return domain_objects
+        return set(self._lifted_problem.domain_constants)
 
     def _extract_interpreted_function_tainted_objects(self) -> set[Object]:
         """
@@ -520,12 +534,13 @@ class Encoder:
             non-equivalent because of an interpreted function.
         """
 
-        if not has_interpreted_functions(self._lifted_problem.kind):
+        if not has_interpreted_functions(self.lifted_problem_kind):
             return set()
 
         ifun_calls: set[FNode] = set()
         extractor = self._lifted_problem.environment.interpreted_functions_extractor
         expressions: list[FNode] = list(self._iter_lifted_action_expressions())
+        expressions.extend(self._iter_metric_expressions())
         expressions.extend(self._lifted_problem.goals)
         for goals in self._lifted_problem.timed_goals.values():
             expressions.extend(goals)
@@ -875,6 +890,28 @@ class Encoder:
         return self._convert_expression(
             self._problem.environment.expression_manager.And(goals)
         )
+
+    @property
+    def problem(self) -> Problem:
+        return self._problem
+
+    @property
+    def lifted_problem(self) -> Problem:
+        return self._lifted_problem
+
+    @property
+    def lifted_problem_kind(self) -> up.model.ProblemKind:
+        """
+        Lazily resolve and cache `_lifted_problem.kind`. `Problem.kind` is a
+        from-scratch full-problem scan, so it's computed on first use here
+        (instead of unconditionally in `__init__`) rather than paying for it
+        in encoders that never need it -- unless a caller already has it and
+        supplied it via the constructor.
+        """
+
+        if self._lifted_problem_kind is None:
+            self._lifted_problem_kind = self._lifted_problem.kind
+        return self._lifted_problem_kind
 
     @property
     def search_space(self) -> SearchSpaceABC:

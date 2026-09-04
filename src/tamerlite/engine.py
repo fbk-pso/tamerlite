@@ -479,6 +479,15 @@ class TamerLite(
         # across re-encodes too, since its `func_id`s are keyed on wrapper identity.
         if_wrappers: dict[InterpretedFunction, Callable] = {}
 
+        # `lifted_problem` is the same object across every `_solve_ground_problem`
+        # call this run makes (the loop below only ever mutates/clones the
+        # *ground* problem), so compute this once here rather than paying for
+        # `Problem.kind`'s from-scratch full-problem scan on every iteration --
+        # and skip it entirely when symmetry breaking (its only consumer) is off.
+        lifted_problem_kind = (
+            lifted_problem.kind if self._params.symmetry_breaking else None
+        )
+
         logger.info(
             "Solving '%s' (anytime): actions=%d fluents=%d",
             ground_problem.name,
@@ -492,6 +501,7 @@ class TamerLite(
             map_back_action_instance,
             timeout=timeout - elapsed_time if timeout is not None else None,
             output_stream=output_stream,
+            lifted_problem_kind=lifted_problem_kind,
             is_intermediate_solution=True,
             if_cache=if_cache,
             if_wrappers=if_wrappers,
@@ -639,6 +649,7 @@ class TamerLite(
                     is_intermediate_solution=True,
                     if_cache=if_cache,
                     if_wrappers=if_wrappers,
+                    lifted_problem_kind=lifted_problem_kind,
                 )
             )
             if (
@@ -742,6 +753,7 @@ class TamerLite(
         is_intermediate_solution: bool = False,
         if_cache: MutableMapping[tuple[InterpretedFunction, tuple], Any] | None = None,
         if_wrappers: dict[InterpretedFunction, Callable] | None = None,
+        lifted_problem_kind: ProblemKind | None = None,
     ) -> tuple["up.engines.results.PlanGenerationResult", bool, bool]:
         # Default to one fresh pair shared by both `Encoder(...)` sites below.
         # This path only ever runs for a standalone oneshot `_solve()` call --
@@ -753,6 +765,14 @@ class TamerLite(
             if_cache = new_if_cache()
         if if_wrappers is None:
             if_wrappers = {}
+        # `problem` (the lifted problem) never changes across this call's two
+        # possible `Encoder(...)` sites below, nor across `_anytime_solutions`'
+        # repeated calls for the same solve -- `Problem.kind` is a from-scratch
+        # full-problem scan, so compute this once and let callers that already
+        # know it (`_anytime_solutions`), or that don't need it at all
+        # (symmetry breaking off, `Encoder`'s only consumer), skip it entirely.
+        if lifted_problem_kind is None and self._params.symmetry_breaking:
+            lifted_problem_kind = problem.kind
         try:
             # Compression-safe-action detection and the TimedToSequential
             # recompile below are unaffected by interpreted functions: they
@@ -772,6 +792,7 @@ class TamerLite(
                 deadline=deadline,
                 if_cache=if_cache,
                 if_wrappers=if_wrappers,
+                lifted_problem_kind=lifted_problem_kind,
             )
 
             original_encoder = encoder
@@ -813,6 +834,7 @@ class TamerLite(
                     deadline=deadline,
                     if_cache=if_cache,
                     if_wrappers=if_wrappers,
+                    lifted_problem_kind=lifted_problem_kind,
                 )
 
             if isinstance(self._params, MultiqueueParams):

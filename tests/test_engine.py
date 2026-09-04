@@ -3145,6 +3145,38 @@ def test_symmetry_breaking_interpreted_function_object_argument_taint():
                 assert v.validate(problem, res.plan)
 
 
+def test_symmetry_breaking_interpreted_function_metric_action_cost_taint():
+    """Same soundness bug as
+    `test_symmetry_breaking_interpreted_function_object_argument_taint`, but
+    the IF call lives only inside a `MinimizeActionCosts` quality metric
+    (`Encoder._iter_metric_expressions`) rather than an action precondition:
+    `l1`/`l2` are otherwise fully symmetric (same default-initial `visited`,
+    a goal that doesn't mention either), so
+    `_extract_interpreted_function_tainted_objects` must also scan
+    quality-metric expressions for IF calls, or it wrongly groups
+    `{l1, l2}` as equivalent."""
+
+    problem = (
+        problems_generator.get_problem_if_metric_action_cost_object_argument_taint()
+    )
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    encoder = Encoder(
+        ground_problem,
+        lifted_problem,
+        map_back_action_instance,
+        symmetry_breaking=False,
+        compression_safe_actions=False,
+        relevance_analysis=False,
+    )
+    groups = encoder._compute_equivalent_objects()
+    group_sets = [{obj.name for obj in group} for group in groups]
+    assert {"l1"} in group_sets
+    assert {"l2"} in group_sets
+    assert {"l1", "l2"} not in group_sets
+
+
 def test_symmetry_breaking_interpreted_function_object_return_taint():
     """An object-returning interpreted function must taint every object of
     its return type (`{l1, l2}` become singletons), while leaving a second,

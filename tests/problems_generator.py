@@ -1220,6 +1220,44 @@ def get_problem_if_object_return_symmetry() -> Problem:
     return problem
 
 
+def get_problem_if_metric_action_cost_object_argument_taint() -> Problem:
+    """Soundness regression for interpreted functions reachable only through
+    a quality metric: an IF call inside a `MinimizeActionCosts` cost
+    expression can distinguish `l1`/`l2` via the action's own object-typed
+    parameter, even though neither the goal, the initial state, nor any
+    action precondition/effect ever does. Mirrors
+    `get_problem_if_object_argument_symmetry_unsound`, but the discriminating
+    IF call sits entirely inside the metric instead of a precondition, so a
+    tainted-object scan that skips quality metrics wrongly groups `{l1, l2}`
+    as equivalent."""
+    Loc = UserType("Loc")
+    l1 = Object("l1", Loc)
+    l2 = Object("l2", Loc)
+
+    def bonus(loc):
+        return 10 if loc == l2 else 0
+
+    IF_bonus = InterpretedFunction("bonus", IntType(), OrderedDict(loc=Loc), bonus)
+
+    visited = Fluent("visited", BoolType(), x=Loc)
+    done = Fluent("done", BoolType())
+
+    enter = InstantaneousAction("enter", x=Loc)
+    x = enter.parameter("x")
+    enter.add_precondition(Not(visited(x)))
+    enter.add_effect(visited(x), True)
+    enter.add_effect(done, True)
+
+    problem = Problem("if_metric_action_cost_object_argument_taint")
+    problem.add_fluent(visited, default_initial_value=False)
+    problem.add_fluent(done, default_initial_value=False)
+    problem.add_objects([l1, l2])
+    problem.add_action(enter)
+    problem.add_goal(done)
+    problem.add_quality_metric(MinimizeActionCosts({enter: IF_bonus(x)}, default=0))
+    return problem
+
+
 def get_problem_if_conditions_and_effects() -> Problem:
     """Combines five placement gaps that would otherwise each need their own
     minimal problem, all in one durative action fired twice:
