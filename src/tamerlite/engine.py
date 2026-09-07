@@ -186,6 +186,7 @@ class _HeuristicCallable(Protocol):
         internal_caching: bool,
         cache_value_in_state: bool,
         inadmissible_numeric_heuristic_variant: bool,
+        relevant_fluents: list[int] | None,
     ) -> Heuristic: ...
 
 
@@ -319,13 +320,17 @@ class TamerLite(
                     f"Supported values are: custom, blind, {', '.join(sorted(hh_map))}."
                 )
 
+            # `considered_actions` is the same action set the search will
+            # actually expand (`relevant_actions` if relevance analysis
+            # narrowed it, else `applicable_actions`), and
+            # `encoder.relevant_fluents` is computed over that same set.
+            considered_actions = encoder.considered_actions
+            considered_actions_set = set(considered_actions)
             events = {
-                a: e
-                for a, e in encoder.events.items()
-                if a in encoder.applicable_actions
+                a: e for a, e in encoder.events.items() if a in considered_actions_set
             }
             h = hh_map[h_name](
-                encoder.actions,
+                considered_actions,
                 encoder.fluent_types,
                 encoder.objects,
                 events,
@@ -333,6 +338,7 @@ class TamerLite(
                 internal_caching=internal_heuristic_cache,
                 cache_value_in_state=cache_heuristic_in_state,
                 inadmissible_numeric_heuristic_variant=inadmissible_numeric_heuristic_variant,
+                relevant_fluents=encoder.relevant_fluents,
             )
             w = 0.8 if params.weight is None else params.weight
 

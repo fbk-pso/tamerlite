@@ -244,16 +244,32 @@ class Encoder:
             if len(self._relevant_actions) < len(self.applicable_actions):
                 self._search_space.relevant_actions = self._relevant_actions
 
-        self._dedup_relevant_fluents: list[int] | None = None
-        # `is_temporal and not weak_equality` has no dedup at all (see
-        # `SearchSpace.dedup_relevant_fluents` usage in both `core.search`
-        # modules), so the reduction would never be consulted -- skip
-        # computing it.
-        if full and relevant_equality and (not self._is_temporal or weak_equality):
-            dedup_relevant_fluents = self._compute_dedup_relevant_fluents()
-            if len(dedup_relevant_fluents) < len(self._fluents):
-                self._dedup_relevant_fluents = sorted(dedup_relevant_fluents)
-                self._search_space.dedup_relevant_fluents = self._dedup_relevant_fluents
+        # The set of fluents that can affect search outcome, computed over
+        # `considered_actions` (the same action set the search will actually
+        # expand -- `relevant_actions` if relevance analysis ran, else
+        # `applicable_actions`). Besides feeding the
+        # dedup key, it also feeds the heuristics (`TamerLite._get_heuristic`),
+        # which need it regardless of `relevant_equality`/`weak_equality`.
+        self._relevant_fluents: list[int] | None = None
+        if full:
+            relevant_fluents = self._compute_relevant_fluents(self.considered_actions)
+            if len(relevant_fluents) < len(self._fluents):
+                self._relevant_fluents = sorted(relevant_fluents)
+
+        # `dedup_relevant_fluents` is the gated *view* of `_relevant_fluents`
+        # consumed by the dedup key: `is_temporal and not weak_equality` has
+        # no dedup at all (see `SearchSpace.dedup_relevant_fluents` usage in
+        # both `core.search` modules), so the reduction is never consulted
+        # there and is left at `None`. `relevant_equality=False` disables the
+        # dedup use entirely, independent of whether `_relevant_fluents` was
+        # computed for the heuristics.
+        self._dedup_relevant_fluents: list[int] | None = (
+            self._relevant_fluents
+            if relevant_equality and (not self._is_temporal or weak_equality)
+            else None
+        )
+        if self._dedup_relevant_fluents is not None:
+            self._search_space.dedup_relevant_fluents = self._dedup_relevant_fluents
 
     def initial_state(self, initial_values: dict[FNode, FNode]) -> list[ConstantNode]:
         initial_state_values = {}
@@ -283,10 +299,9 @@ class Encoder:
 
         Effect *values* are excluded because the two callers route them
         differently: `_compute_relevant_actions` folds them into the same
-        dependency set as conditions, while
-        `_compute_dedup_relevant_fluents` needs them keyed by the fluent the
-        effect writes, to close over "an effect's RHS matters only if its
-        target matters".
+        dependency set as conditions, while `_compute_relevant_fluents` needs
+        them keyed by the fluent the effect writes, to close over "an
+        effect's RHS matters only if its target matters".
         """
         fluents: set[int] = set()
         for _, e in self.events[action]:
@@ -389,30 +404,28 @@ class Encoder:
 
         return [a for a in self._actions if a.idx in relevant_actions]
 
-    def _compute_dedup_relevant_fluents(self) -> set[int]:
+    def _compute_relevant_fluents(self, considered_actions: list[Action]) -> set[int]:
         """Fluents that can affect search outcome: the least fixpoint of a
-        backward slice from what search actually reads.
+        backward slice from what search actually reads, over `considered_actions`.
 
         Seeds are the fluents read directly by the goal, or by
-        `_action_read_fluents` for a search-reachable action (its conditions
-        -- instantaneous or start/end-interval -- and its duration bounds).
-        The closure rule is that an effect's RHS only matters if the fluent
-        it writes matters: for every effect `f := expr`, once `f` is relevant
+        `_action_read_fluents` for a considered action (its conditions --
+        instantaneous or start/end-interval -- and its duration bounds). The
+        closure rule is that an effect's RHS only matters if the fluent it
+        writes matters: for every effect `f := expr`, once `f` is relevant
         every fluent read by `expr` becomes relevant too. A self-referencing
         assignment (`increase`/`decrease` desugars to e.g. `cost := cost +
         1`) only pulls `cost` in when it's already relevant, so a pure
         bookkeeping fluent read nowhere else, or one that only feeds another
         bookkeeping fluent transitively, is never seeded and never added.
 
-        Feeds `SearchSpace.dedup_relevant_fluents`, restricting only the
-        duplicate-detection key, never the full tracked state.
+        Feeds both `SearchSpace.dedup_relevant_fluents` (restricting only the
+        duplicate-detection key, never the full tracked state) and the
+        heuristics (`TamerLite._get_heuristic`), where -- built over the same
+        `considered_actions` -- it restricts only work done per evaluation
+        (cache key, per-fluent seeding, pruned effects), never the value a
+        heuristic computes. See `Encoder.relevant_fluents`.
         """
-        considered_actions = (
-            self._relevant_actions
-            if self._relevant_actions is not None
-            else self.applicable_actions
-        )
-
         relevant_fluents: set[int] = set(get_fluents(self.goal))  # type: ignore[arg-type]
         # Adjacency for the closure: fluent -> fluents read by the RHS of any
         # effect that writes it.
@@ -1048,8 +1061,24 @@ class Encoder:
         return self._relevant_actions
 
     @property
+    def considered_actions(self) -> list[Action]:
+        """The action set the search will actually expand: `relevant_actions`
+        if relevance analysis narrowed it, else `applicable_actions`. The
+        single definition of "actions considered" shared by
+        `_compute_relevant_fluents` and `TamerLite._get_heuristic`."""
+        return (
+            self._relevant_actions
+            if self._relevant_actions is not None
+            else self._applicable_actions
+        )
+
+    @property
     def dedup_relevant_fluents(self) -> list[int] | None:
         return self._dedup_relevant_fluents
+
+    @property
+    def relevant_fluents(self) -> list[int] | None:
+        return self._relevant_fluents
 
     @property
     def compression_safe_actions(self) -> list[Action]:

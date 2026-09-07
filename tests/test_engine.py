@@ -707,6 +707,12 @@ def test_heuristic_values(problem, data_regression):
                         cache_value_in_state=False,
                         inadmissible_numeric_heuristic_variant=inadmissible_numeric_heuristic,
                     )
+                    computed_values: list[int | None] = []
+                    for state in states:
+                        h_val = heuristic.eval(state, ss)
+                        if h_val is not None:
+                            h_val = int(h_val)
+                        computed_values.append(h_val)
 
                     values_key = heuristic_name
                     if backend_divergent:
@@ -714,20 +720,41 @@ def test_heuristic_values(problem, data_regression):
                     elif inadmissible_numeric_heuristic:
                         values_key += "_inadmissible"
                     if values_key not in values:
-                        values[values_key] = []
-                        for state in states:
-                            h_val = heuristic.eval(state, ss)
-                            if h_val is not None:
-                                h_val = int(h_val)
-                            values[values_key].append(h_val)
-
+                        values[values_key] = computed_values
                     else:
-                        assert len(states) == len(values[values_key])
-                        for i, state in enumerate(states):
-                            h_val = heuristic.eval(state, ss)
+                        assert computed_values == values[values_key]
+
+                    # `relevant_fluents` restricts only the amount of work a
+                    # heuristic does per evaluation (cache key, per-fluent
+                    # seeding, pruned effects) -- see
+                    # `Encoder._compute_relevant_fluents` -- and must never
+                    # change the value it computes. Pin that here rather than
+                    # in `data_regression`'s baselines, since it should hold
+                    # for every problem/heuristic/backend, not just specific
+                    # fixtures.
+                    if encoder.relevant_fluents is not None:
+                        restricted_heuristic: Heuristic = heuristic_class(
+                            encoder.actions,
+                            encoder.fluent_types,
+                            encoder.objects,
+                            encoder.events,
+                            encoder.goal,
+                            internal_caching=internal_caching,
+                            cache_value_in_state=False,
+                            inadmissible_numeric_heuristic_variant=inadmissible_numeric_heuristic,
+                            relevant_fluents=encoder.relevant_fluents,
+                        )
+                        for state, expected in zip(
+                            states, computed_values, strict=True
+                        ):
+                            h_val = restricted_heuristic.eval(state, ss)
                             if h_val is not None:
                                 h_val = int(h_val)
-                            assert h_val == values[values_key][i]
+                            assert h_val == expected, (
+                                f"relevant_fluents restriction changed "
+                                f"{heuristic_name}'s value on problem "
+                                f"{problem.name!r}"
+                            )
 
     data_regression.check(values)
 
@@ -1527,13 +1554,14 @@ def test_relevance_analysis_keeps_duration_only_writer():
 
 def test_dedup_relevant_fluents_excludes_bookkeeping_fluents():
     """
-    `Encoder._compute_dedup_relevant_fluents` restricts the search's
-    duplicate-state detection key to fluents that matter for state identity:
-    the least fixpoint of a backward slice seeded from the fluents read by a
-    precondition/effect-condition/goal/duration-bound, closed under "an
-    effect's RHS matters only if the fluent it writes matters". That closure
-    is what makes exclusion of an effect's own target fluent from its own
-    right-hand side fall out for free: `_convert_effects` desugars
+    `Encoder._compute_relevant_fluents` restricts the search's
+    duplicate-state detection key (and, unconditionally, the heuristics --
+    see `Encoder.relevant_fluents`) to fluents that matter for state
+    identity: the least fixpoint of a backward slice seeded from the fluents
+    read by a precondition/effect-condition/goal/duration-bound, closed under
+    "an effect's RHS matters only if the fluent it writes matters". That
+    closure is what makes exclusion of an effect's own target fluent from its
+    own right-hand side fall out for free: `_convert_effects` desugars
     `increase`/`decrease` into a self-referencing assignment (`cost := cost +
     1`), and without the closure a pure bookkeeping fluent that only bumps
     itself would trivially mark itself relevant and the reduction would
@@ -1552,11 +1580,13 @@ def test_dedup_relevant_fluents_excludes_bookkeeping_fluents():
     `get_problem_dedup_relevant_transitive` (plain `not is_temporal` dedup
     path, transitive chain) -- see their docstrings for why each is shaped
     the way it is. Also covers `Encoder`'s `relevant_equality` flag: `False`
-    must leave the reduction at `None` even on a fixture that would
-    otherwise qualify. And covers the `is_temporal and not weak_equality`
-    skip: that regime has no dedup at all, so `Encoder` must leave the
-    reduction at `None` there too, by default, without needing
-    `relevant_equality=False`.
+    must leave the *dedup view* (`dedup_relevant_fluents`) at `None` even on
+    a fixture that would otherwise qualify, while `relevant_fluents` itself
+    stays populated for the heuristics. And covers the `is_temporal and not
+    weak_equality` skip: that regime has no dedup at all, so `Encoder` must
+    leave `dedup_relevant_fluents` at `None` there too, by default, without
+    needing `relevant_equality=False` -- while, again, `relevant_fluents`
+    stays populated, since it isn't gated by that regime at all.
     """
     classical = problems_generator.get_problem_dedup_relevant_classical()
     temporal = problems_generator.get_problem_dedup_relevant_temporal()
@@ -1588,6 +1618,11 @@ def test_dedup_relevant_fluents_excludes_bookkeeping_fluents():
             )
             assert encoder.dedup_relevant_fluents is not None
             assert len(encoder.dedup_relevant_fluents) < len(encoder.fluents)
+            # `relevant_equality=True` and `not is_temporal or weak_equality`
+            # both hold here, so `dedup_relevant_fluents` is exactly the
+            # (ungated) `relevant_fluents` the heuristics also consume -- see
+            # `Encoder._compute_relevant_fluents`.
+            assert encoder.relevant_fluents == encoder.dedup_relevant_fluents
             dedup_names = {encoder.fluents[i] for i in encoder.dedup_relevant_fluents}
             for excluded_name in excluded_names:
                 assert excluded_name not in dedup_names
@@ -1625,6 +1660,10 @@ def test_dedup_relevant_fluents_excludes_bookkeeping_fluents():
             )
             assert disabled_encoder.dedup_relevant_fluents is None
             assert disabled_encoder.search_space.dedup_relevant_fluents is None
+            # `relevant_equality=False` only disables the *dedup* use of the
+            # reduction -- the heuristics need it regardless, so
+            # `relevant_fluents` itself must still be populated.
+            assert disabled_encoder.relevant_fluents is not None
 
             if problem is temporal:
                 # `is_temporal and not weak_equality` has no dedup at all, so
@@ -1646,6 +1685,11 @@ def test_dedup_relevant_fluents_excludes_bookkeeping_fluents():
                     weak_equality_default_encoder.search_space.dedup_relevant_fluents
                     is None
                 )
+                # Sharpest split check: even in the one regime with no dedup
+                # at all, `relevant_fluents` is still computed -- it isn't a
+                # third on/off switch riding on the dedup gate, since the
+                # heuristics consume it unconditionally.
+                assert weak_equality_default_encoder.relevant_fluents is not None
 
         # A problem where every fluent is read somewhere leaves the reduction
         # as None -- the pre-existing full-assignments dedup path stays

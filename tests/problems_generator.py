@@ -575,7 +575,7 @@ def get_problem_dedup_relevant_classical() -> Problem:
     """A single-action, non-temporal problem with a pure bookkeeping fluent
     (`cost`, bumped by `turn_on`'s own increase effect and read nowhere else)
     alongside the fluent that actually drives the goal (`ready`). Isolates
-    `Encoder._compute_dedup_relevant_fluents`'s self-reference exclusion: the
+    `Encoder._compute_relevant_fluents`'s self-reference exclusion: the
     desugared `cost := cost + 1` assignment reads `cost` on its own
     right-hand side, so without filtering `f != eff.fluent` this fluent
     would trivially mark itself relevant and the reduction would collapse to
@@ -605,7 +605,7 @@ def get_problem_dedup_relevant_temporal() -> Problem:
     """The temporal counterpart to `get_problem_dedup_relevant_classical`:
     the same self-referencing bookkeeping fluent (`tcost`, bumped by `run`'s
     own start effect), but on a `DurativeAction` whose duration bound reads
-    `charge` -- exercising the branch of `_compute_dedup_relevant_fluents`
+    `charge` -- exercising the branch of `_compute_relevant_fluents`
     that pulls duration-bound fluents into the relevant set, mirroring
     `_compute_relevant_actions`'s precedent (see
     `get_problem_duration_fluent_relevance` above).
