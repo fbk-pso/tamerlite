@@ -267,6 +267,42 @@ class Encoder:
         # narrowing the wider ExpressionNode element type to ConstantNode is safe.
         return cast(list[ConstantNode], initial_state)
 
+    def _action_read_fluents(self, action: Action) -> set[int]:
+        """The fluents an action reads outside of its own effect values: its
+        event conditions and its duration bounds.
+
+        `Event.start_conditions` is deliberately not walked. `_build_events`
+        pushes an interval condition into the `start_conditions` and
+        `end_conditions` buckets unconditionally and as a pair, with the same
+        expression, so the `end_conditions` pass below already covers every
+        fluent a `start_conditions` pass would -- the two entries sit on
+        different events of this same action, and this method unions across
+        all of them. If that pairing in `_build_events` ever becomes
+        conditional, this method must start walking `start_conditions` too, or
+        both relevance analyses below will silently under-approximate.
+
+        Effect *values* are excluded because the two callers route them
+        differently: `_compute_relevant_actions` folds them into the same
+        dependency set as conditions, while
+        `_compute_dedup_relevant_fluents` needs them keyed by the fluent the
+        effect writes, to close over "an effect's RHS matters only if its
+        target matters".
+        """
+        fluents: set[int] = set()
+        for _, e in self.events[action]:
+            fluents.update(get_fluents(e.conditions))
+            for c in e.end_conditions:
+                fluents.update(get_fluents(c))
+
+        # An action's duration bounds are arbitrary expressions evaluated
+        # against the pre-action state (see `SearchSpace._open_action`), so a
+        # fluent read only there is still a genuine read.
+        duration = self._actions_duration[action.idx]
+        if duration is not None:
+            fluents.update(get_fluents(duration[0]))
+            fluents.update(get_fluents(duration[1]))
+        return fluents
+
     def _compute_relevant_actions(self) -> list[Action]:
         """Computes the actions that are relevant for reaching the goal.
 
@@ -282,9 +318,10 @@ class Encoder:
         2. **Backward goal-dependency walk.** Starting from the fluents in
         the goal, an action is *relevant* if it writes (via an effect) a
         fluent already known to be relevant. Once an action is marked
-        relevant, the fluents it *depends on* -- those in its own
-        conditions, plus those read by its own effect value expressions --
-        are added to the goal-dependency set and the walk continues from there.
+        relevant, the fluents it *depends on* -- those read by
+        `_action_read_fluents` (its own conditions and duration bounds), plus
+        those read by its own effect value expressions -- are added to the
+        goal-dependency set and the walk continues from there.
 
         Both passes only ever narrow the search space (an action never
         pruned this way stays available), so this cannot make a solvable
@@ -306,35 +343,25 @@ class Encoder:
             cache_value_in_state=False,
             inadmissible_numeric_heuristic_variant=False,
         )
-        reachable_actions = {
-            a.idx
-            for a in heuristic.reachable_actions(self._search_space.initial_state())
-        }
+        reachable_actions = heuristic.reachable_actions(
+            self._search_space.initial_state()
+        )
 
         actions_affecting_fluent: dict[int, set[int]] = {}
         action_to_dependency_fluents: dict[int, set[int]] = {}
-        for a, le in events.items():
-            if a.idx not in reachable_actions:
-                continue
+        for ra in reachable_actions:
+            # `ra` comes from `heuristic.reachable_actions`, which is not
+            # guaranteed to be the same object -- nor, under the Rust
+            # backend, hash/eq-equal to the same object -- as the canonical
+            # `Action` instance keying `events`/`self.events`. Re-fetch the
+            # canonical instance by index (a plain list lookup) before using
+            # it as a dict key.
+            a = self._actions[ra.idx]
+            action_to_dependency_fluents[a.idx] = self._action_read_fluents(a)
 
-            action_to_dependency_fluents[a.idx] = set()
-
-            # An action's duration bounds are arbitrary expressions evaluated
-            # against the pre-action state (see `SearchSpace._open_action`), so
-            # a fluent read only there is still a genuine dependency: without
-            # this, the action whose sole role is to write that fluent is never
-            # marked relevant and gets pruned away.
-            duration = self._actions_duration[a.idx]
-            if duration is not None:
-                action_to_dependency_fluents[a.idx].update(get_fluents(duration[0]))
-                action_to_dependency_fluents[a.idx].update(get_fluents(duration[1]))
-
-            for _, e in le:
+            for _, e in events[a]:
                 for eff in e.effects:
-                    if eff.fluent not in actions_affecting_fluent:
-                        actions_affecting_fluent[eff.fluent] = {a.idx}
-                    else:
-                        actions_affecting_fluent[eff.fluent].add(a.idx)
+                    actions_affecting_fluent.setdefault(eff.fluent, set()).add(a.idx)
 
                     # An effect's value expression can read other fluents
                     # (e.g. `g := mid_value`) with no corresponding
@@ -342,9 +369,6 @@ class Encoder:
                     # must count as a dependency too, or the action that
                     # writes them is never pulled in as relevant.
                     action_to_dependency_fluents[a.idx].update(get_fluents(eff.value))
-
-                for cond in [*list(e.end_conditions), e.conditions]:
-                    action_to_dependency_fluents[a.idx].update(get_fluents(cond))
 
         checked_fluents = [False] * len(self._fluents)
         stack = list(get_fluents(self.goal))
@@ -369,16 +393,16 @@ class Encoder:
         """Fluents that can affect search outcome: the least fixpoint of a
         backward slice from what search actually reads.
 
-        Seeds are the fluents read directly by the goal, by a
-        search-reachable action's conditions (instantaneous or
-        start/end-interval), or by a duration bound. The closure rule is that
-        an effect's RHS only matters if the fluent it writes matters: for
-        every effect `f := expr`, once `f` is relevant every fluent read by
-        `expr` becomes relevant too. A self-referencing assignment
-        (`increase`/`decrease` desugars to e.g. `cost := cost + 1`) only
-        pulls `cost` in when it's already relevant, so a pure bookkeeping
-        fluent read nowhere else, or one that only feeds another bookkeeping
-        fluent transitively, is never seeded and never added.
+        Seeds are the fluents read directly by the goal, or by
+        `_action_read_fluents` for a search-reachable action (its conditions
+        -- instantaneous or start/end-interval -- and its duration bounds).
+        The closure rule is that an effect's RHS only matters if the fluent
+        it writes matters: for every effect `f := expr`, once `f` is relevant
+        every fluent read by `expr` becomes relevant too. A self-referencing
+        assignment (`increase`/`decrease` desugars to e.g. `cost := cost +
+        1`) only pulls `cost` in when it's already relevant, so a pure
+        bookkeeping fluent read nowhere else, or one that only feeds another
+        bookkeeping fluent transitively, is never seeded and never added.
 
         Feeds `SearchSpace.dedup_relevant_fluents`, restricting only the
         duplicate-detection key, never the full tracked state.
@@ -394,21 +418,12 @@ class Encoder:
         # effect that writes it.
         written_from: dict[int, set[int]] = {}
         for a in considered_actions:
+            relevant_fluents.update(self._action_read_fluents(a))
             for _, e in self.events[a]:
-                relevant_fluents.update(get_fluents(e.conditions))
-                for c in e.start_conditions:
-                    relevant_fluents.update(get_fluents(c))
-                for c in e.end_conditions:
-                    relevant_fluents.update(get_fluents(c))
                 for eff in e.effects:
                     written_from.setdefault(eff.fluent, set()).update(
                         get_fluents(eff.value)
                     )
-            dur = self._actions_duration[a.idx]
-            if dur is not None:
-                lb, ub, _, _ = dur
-                relevant_fluents.update(get_fluents(lb))
-                relevant_fluents.update(get_fluents(ub))
 
         # Closure: propagate relevance backward through effects.
         stack = list(relevant_fluents)
