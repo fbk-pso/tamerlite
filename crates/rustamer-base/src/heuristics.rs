@@ -15,6 +15,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 
+use im::Vector;
 use itertools::Itertools;
 use num::{BigInt, BigRational, Zero};
 use std::hash::{Hash, Hasher};
@@ -206,12 +207,7 @@ impl Hash for OperatorHmax {
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 struct CacheKey {
-    /// Either the whole `State::assignments`, or a projection restricted to
-    /// `relevant_fluents` -- built as a fresh `Vec` in both cases (`im::Vector`
-    /// wasn't kept for the unrestricted case since hashing was already O(n)
-    /// there; a contiguous `Vec` is not a regression, and it's strictly
-    /// smaller in bytes and hash cost in the restricted case).
-    values: Vec<ExpressionNode>,
+    values: Vector<ExpressionNode>,
     todo_values: Vec<usize>,
 }
 
@@ -1134,10 +1130,6 @@ pub struct DeleteRelaxationHeuristicConfig {
     pub internal_caching: bool,
     pub inadmissible_numeric_heuristic_variant: bool,
     pub disable_numeric_reasoning: bool,
-    /// The fluents that can affect search outcome, computed over the same
-    /// action set this heuristic is built from. `None` means every fluent
-    /// is relevant (no restriction).
-    pub relevant_fluents: Option<Vec<usize>>,
 }
 
 #[derive(Clone, Debug)]
@@ -1159,7 +1151,6 @@ pub struct DeleteRelaxationHeuristic {
     expression_manager: Arc<Mutex<ExpressionManager>>,
     inadmissible_numeric_heuristic_variant: bool,
     disable_numeric_reasoning: bool,
-    relevant_fluent_ids: Option<Vec<usize>>,
 }
 
 impl DeleteRelaxationHeuristic {
@@ -1178,10 +1169,6 @@ impl DeleteRelaxationHeuristic {
         let mut expression_manager = ExpressionManager::new();
         let mut num_fluents = fluent_types.len();
         let map_to_python_exception = |e| PyException::new_err(format!("{:?}", e));
-        let relevant_fluents: Option<FxHashSet<usize>> = config
-            .relevant_fluents
-            .as_ref()
-            .map(|f| f.iter().copied().collect());
 
         for a in &actions {
             let Some(le) = events.get(a) else {
@@ -1204,11 +1191,6 @@ impl DeleteRelaxationHeuristic {
                 a_extra_fluents.push(expression_manager.put(&vec![ExpressionNode::Fluent(f)]));
                 effects.push(expression_manager.put(&vec![ExpressionNode::Fluent(f)]));
                 for eff in e.effects.iter() {
-                    if let Some(relevant_fluents) = &relevant_fluents {
-                        if !relevant_fluents.contains(&eff.fluent) {
-                            continue;
-                        }
-                    }
                     let t = fluent_types[eff.fluent].to_string();
                     if t == "bool" {
                         if eff.value.len() == 1 {
@@ -1425,7 +1407,6 @@ impl DeleteRelaxationHeuristic {
             expression_manager: Arc::new(Mutex::new(expression_manager)),
             inadmissible_numeric_heuristic_variant: config.inadmissible_numeric_heuristic_variant,
             disable_numeric_reasoning: config.disable_numeric_reasoning,
-            relevant_fluent_ids: config.relevant_fluents,
         };
         Ok(res)
     }
@@ -1462,17 +1443,13 @@ impl DeleteRelaxationHeuristic {
     pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
         let mut internal_caching = self.internal_caching.lock().unwrap();
         if let Some(internal_caching) = internal_caching.as_mut() {
-            let values: Vec<ExpressionNode> = match &self.relevant_fluent_ids {
-                Some(ids) => ids.iter().map(|&i| state.assignments[i].clone()).collect(),
-                None => state.assignments.iter().cloned().collect(),
-            };
             let todo_values: Vec<usize> = self
                 .actions
                 .iter()
                 .map(|action| state.todo.get(action).map(|(j, _)| *j).unwrap_or(0))
                 .collect();
             let cache_key = CacheKey {
-                values,
+                values: state.assignments.clone(),
                 todo_values,
             };
             if let Some(res) = internal_caching.get(&cache_key) {
@@ -1525,12 +1502,7 @@ impl DeleteRelaxationHeuristic {
             FxBuildHasher,
         );
 
-        let relevant_fluent_indices: Box<dyn Iterator<Item = usize>> =
-            match &self.relevant_fluent_ids {
-                Some(ids) => Box::new(ids.iter().copied()),
-                None => Box::new(0..state.assignments.len()),
-            };
-        for f in relevant_fluent_indices {
+        for f in 0..state.assignments.len() {
             let v = &state.assignments[f];
             let k = match v {
                 ExpressionNode::Bool(value) => {
@@ -1946,12 +1918,9 @@ pub struct HMaxExplicit {
     operator_conditions_fluents: Vec<FxHashSet<usize>>,
     operator_effects_fluents: Vec<FxHashSet<usize>>,
     internal_caching: HeuristicCache,
-    /// See `DeleteRelaxationHeuristic`'s identically-named fields.
-    relevant_fluent_ids: Option<Vec<usize>>,
-    /// `_eval` seeds `assignments_changes` with this every call. Extra
-    /// fluents (index >= `fluent_types.len()`) encode event progress and are
-    /// always relevant; when `relevant_fluent_ids` is `None` there's no
-    /// restriction, so this is the full `0..num_fluents` range.
+    /// `_eval` seeds `assignments_changes` with this every call: every
+    /// fluent, including the extra ones (index >= `fluent_types.len()`)
+    /// that encode event progress.
     initial_assignments_changes: FxHashSet<usize>,
 }
 
@@ -1962,17 +1931,12 @@ impl HMaxExplicit {
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
-        relevant_fluents: Option<Vec<usize>>,
     ) -> PyResult<Self> {
         let mut operators = Vec::new();
         let mut extra_fluents = FxHashMap::with_hasher(FxBuildHasher);
         let mut extra_goals = Vec::new();
         let mut expression_manager = ExpressionManager::new();
         let mut num_fluents = fluent_types.len();
-        let num_base_fluents = num_fluents;
-        let relevant_fluents_set: Option<FxHashSet<usize>> = relevant_fluents
-            .as_ref()
-            .map(|f| f.iter().copied().collect());
 
         for (a, le) in events.iter() {
             let mut a_extra_fluents = Vec::new();
@@ -1990,11 +1954,6 @@ impl HMaxExplicit {
                     value: vec![ExpressionNode::Bool(true)],
                 });
                 for eff in e.effects.iter() {
-                    if let Some(relevant_fluents_set) = &relevant_fluents_set {
-                        if !relevant_fluents_set.contains(&eff.fluent) {
-                            continue;
-                        }
-                    }
                     effects.push(eff.clone());
                 }
                 conditions.push(cond);
@@ -2060,14 +2019,7 @@ impl HMaxExplicit {
             None
         };
 
-        let initial_assignments_changes: FxHashSet<usize> = match &relevant_fluents {
-            Some(ids) => ids
-                .iter()
-                .copied()
-                .chain(num_base_fluents..num_fluents)
-                .collect(),
-            None => (0..num_fluents).collect(),
-        };
+        let initial_assignments_changes: FxHashSet<usize> = (0..num_fluents).collect();
 
         let res = HMaxExplicit {
             actions,
@@ -2080,7 +2032,6 @@ impl HMaxExplicit {
             operator_conditions_fluents,
             operator_effects_fluents,
             internal_caching: Arc::new(Mutex::new(internal_caching)),
-            relevant_fluent_ids: relevant_fluents,
             initial_assignments_changes,
         };
         Ok(res)
@@ -2185,17 +2136,13 @@ impl HMaxExplicit {
     pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
         let mut internal_caching = self.internal_caching.lock().unwrap();
         if let Some(internal_caching) = internal_caching.as_mut() {
-            let values: Vec<ExpressionNode> = match &self.relevant_fluent_ids {
-                Some(ids) => ids.iter().map(|&i| state.assignments[i].clone()).collect(),
-                None => state.assignments.iter().cloned().collect(),
-            };
             let todo_values: Vec<usize> = self
                 .actions
                 .iter()
                 .map(|action| state.todo.get(action).map(|(j, _)| *j).unwrap_or(0))
                 .collect();
             let cache_key = CacheKey {
-                values,
+                values: state.assignments.clone(),
                 todo_values,
             };
             if let Some(res) = internal_caching.get(&cache_key) {
@@ -2213,22 +2160,9 @@ impl HMaxExplicit {
     fn _eval(&self, state: &State) -> PyResult<Option<f64>> {
         let mut assignments: Vec<FxHashSet<ExpressionNode>> =
             vec![FxHashSet::with_hasher(FxBuildHasher); self.num_fluents];
-        // add state assignments to assignments -- restricted to
-        // `relevant_fluent_ids` when set; an irrelevant fluent keeps an
-        // empty value set, matching `DeleteRelaxationHeuristic`'s equivalent
-        // restriction and never observed by `can_be_true`/`possible_values`
-        // for the same reason it's pruned from operator effects above.
-        match &self.relevant_fluent_ids {
-            Some(ids) => {
-                for &f in ids {
-                    assignments[f] = FxHashSet::from_iter([state.assignments[f].clone()]);
-                }
-            }
-            None => {
-                for (f, v) in state.assignments.iter().enumerate() {
-                    assignments[f] = FxHashSet::from_iter([v.clone()]);
-                }
-            }
+        // add state assignments to assignments
+        for (f, v) in state.assignments.iter().enumerate() {
+            assignments[f] = FxHashSet::from_iter([v.clone()]);
         }
         // add extra fluents to assignments
         for action in self.events.keys() {

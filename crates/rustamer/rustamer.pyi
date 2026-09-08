@@ -98,12 +98,10 @@ class SearchSpace:
         relevant_actions: list[Action] | None = ...,
         deadline: Fraction | None = ...,
         epsilon: Fraction | None = ...,
-        dedup_relevant_fluents: list[int] | None = ...,
     ) -> None: ...
     @property
     def is_temporal(self) -> bool: ...
     relevant_actions: list[Action]
-    dedup_relevant_fluents: list[int] | None
     def reset(self) -> None: ...
     def initial_state(self, initial_state: Expression | None = ...) -> State: ...
     def get_successor_state(self, state: State, action: Action) -> State | None: ...
@@ -133,7 +131,6 @@ class Heuristic:
         cache_value_in_state: bool,
         inadmissible_numeric_heuristic_variant: bool,
         disable_numeric_reasoning: bool = ...,
-        relevant_fluents: list[int] | None = ...,
     ) -> Heuristic: ...
     @staticmethod
     def hadd(
@@ -146,7 +143,6 @@ class Heuristic:
         cache_value_in_state: bool,
         inadmissible_numeric_heuristic_variant: bool,
         disable_numeric_reasoning: bool = ...,
-        relevant_fluents: list[int] | None = ...,
     ) -> Heuristic: ...
     @staticmethod
     def hmax(
@@ -159,7 +155,6 @@ class Heuristic:
         cache_value_in_state: bool,
         inadmissible_numeric_heuristic_variant: bool,
         disable_numeric_reasoning: bool = ...,
-        relevant_fluents: list[int] | None = ...,
     ) -> Heuristic: ...
     @staticmethod
     def hmax_explicit(
@@ -171,7 +166,6 @@ class Heuristic:
         internal_caching: bool,
         cache_value_in_state: bool,
         inadmissible_numeric_heuristic_variant: bool,
-        relevant_fluents: list[int] | None = ...,
     ) -> Heuristic: ...
     @property
     def name(self) -> str: ...

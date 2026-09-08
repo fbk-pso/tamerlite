@@ -91,6 +91,10 @@ class StateWrapper(State):
         try:
             fluent_id = self.encoder.fluent_ids[str(fluent)]
         except KeyError:
+            # Either an unknown fluent, or one `relevant_equality` dropped
+            # from the encoding as irrelevant -- a custom heuristic reading
+            # it gets the same error either way; pass `relevant_equality=False`
+            # to keep every fluent in the state.
             raise UPStateMissingFluentError(
                 f"The state {self.state} does not have a value for the fluent {fluent}"
             ) from None
@@ -186,7 +190,6 @@ class _HeuristicCallable(Protocol):
         internal_caching: bool,
         cache_value_in_state: bool,
         inadmissible_numeric_heuristic_variant: bool,
-        relevant_fluents: list[int] | None,
     ) -> Heuristic: ...
 
 
@@ -321,9 +324,11 @@ class TamerLite(
                 )
 
             # `considered_actions` is the same action set the search will
-            # actually expand (`relevant_actions` if relevance analysis
-            # narrowed it, else `applicable_actions`), and
-            # `encoder.relevant_fluents` is computed over that same set.
+            # actually expand: `relevant_actions` if relevance analysis
+            # narrowed it, else `applicable_actions`.
+            # `encoder.fluent_types`/`encoder.objects`/`encoder.goal` already
+            # describe the (possibly `relevant_equality`-compacted) encoding,
+            # so no separate fluent restriction is needed here.
             considered_actions = encoder.considered_actions
             considered_actions_set = set(considered_actions)
             events = {
@@ -338,7 +343,6 @@ class TamerLite(
                 internal_caching=internal_heuristic_cache,
                 cache_value_in_state=cache_heuristic_in_state,
                 inadmissible_numeric_heuristic_variant=inadmissible_numeric_heuristic_variant,
-                relevant_fluents=encoder.relevant_fluents,
             )
             w = 0.8 if params.weight is None else params.weight
 
@@ -798,7 +802,6 @@ class TamerLite(
                 self._params.compression_safe_actions,
                 self._params.relevance_analysis,
                 self._params.relevant_equality,
-                self._params.weak_equality,
                 deadline=deadline,
                 if_cache=if_cache,
                 if_wrappers=if_wrappers,
@@ -842,7 +845,6 @@ class TamerLite(
                     self._params.compression_safe_actions,
                     self._params.relevance_analysis,
                     self._params.relevant_equality,
-                    self._params.weak_equality,
                     deadline=deadline,
                     if_cache=if_cache,
                     if_wrappers=if_wrappers,

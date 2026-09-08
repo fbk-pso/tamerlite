@@ -21,7 +21,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from cachetools import LRUCache
-from unified_planning.model import FNode, InterpretedFunction, Object, Problem
+from unified_planning.model import Fluent, FNode, InterpretedFunction, Object, Problem
 from unified_planning.model.walkers import DagWalker
 
 from tamerlite.core import (
@@ -125,12 +125,21 @@ class Converter(DagWalker):
         objects_by_id: list[Object],
         if_cache: MutableMapping[tuple[InterpretedFunction, tuple], Any] | None = None,
         if_wrappers: dict[InterpretedFunction, Callable] | None = None,
+        static_fluents: set[Fluent] | None = None,
     ):
         DagWalker.__init__(self)
         self._fluent_ids = fluent_ids
         self._object_ids = object_ids
         self._objects_by_id = objects_by_id
-        self.static_fluents = problem.get_static_fluents()
+        # `problem.get_static_fluents()` is a structural property of `problem`; a
+        # caller building several Converters over the same problem (e.g. `Encoder`,
+        # one per relevance-compaction pass) can compute it once and pass it in here
+        # instead of paying for `Problem._get_static_and_unused_fluents()`'s scan again.
+        self.static_fluents = (
+            static_fluents
+            if static_fluents is not None
+            else problem.get_static_fluents()
+        )
         # Optionally injected and shared across Converters
         self._if_wrappers: dict[InterpretedFunction, Callable] = (
             if_wrappers if if_wrappers is not None else {}

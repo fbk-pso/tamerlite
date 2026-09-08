@@ -162,7 +162,6 @@ class DeleteRelaxationHeuristic(Heuristic):
         cache_value_in_state: bool,
         inadmissible_numeric_heuristic_variant: bool,
         disable_numeric_reasoning: bool,
-        relevant_fluents: list[int] | None = None,
     ):
         super().__init__(cache_value_in_state)
         self._heuristic_kind = heuristic_kind
@@ -177,13 +176,6 @@ class DeleteRelaxationHeuristic(Heuristic):
             inadmissible_numeric_heuristic_variant
         )
         self._disable_numeric_reasoning = disable_numeric_reasoning
-        # `None` means every fluent is relevant (no restriction). `_ids` keeps
-        # the original (sorted) ordering, used to iterate deterministically
-        # in `_eval_core`/`eval`'s cache key.
-        self._relevant_fluent_ids: list[int] | None = relevant_fluents
-        self._relevant_fluents: set[int] | None = (
-            None if relevant_fluents is None else set(relevant_fluents)
-        )
 
         for a in actions:
             if a not in events:
@@ -202,11 +194,6 @@ class DeleteRelaxationHeuristic(Heuristic):
                 self._extra_fluents[a].append(f)
                 effects.append((f, True))
                 for eff in e.effects:
-                    if (
-                        self._relevant_fluents is not None
-                        and eff.fluent not in self._relevant_fluents
-                    ):
-                        continue
                     t = self._fluent_types[eff.fluent]
                     if t == "bool":
                         if len(eff.value) == 1 and isinstance(eff.value[0], bool):
@@ -860,12 +847,7 @@ class DeleteRelaxationHeuristic(Heuristic):
 
     def _eval(self, state: State, ss: SearchSpaceABC) -> float | None:
         if self._internal_caching is not None:
-            relevant_assignments = (
-                tuple(state.assignments)
-                if self._relevant_fluent_ids is None
-                else tuple(state.assignments[i] for i in self._relevant_fluent_ids)
-            )
-            assignments_values = relevant_assignments + tuple(
+            assignments_values = tuple(state.assignments) + tuple(
                 state.todo.get(action, (None, None))[0] for action in self._actions
             )
             if assignments_values in self._internal_caching:
@@ -904,12 +886,7 @@ class DeleteRelaxationHeuristic(Heuristic):
         """
 
         costs: dict[Expression, float] = {}
-        relevant_fluent_indices = (
-            range(len(state.assignments))
-            if self._relevant_fluent_ids is None
-            else self._relevant_fluent_ids
-        )
-        for f in relevant_fluent_indices:
+        for f in range(len(state.assignments)):
             v = state.assignments[f]
             if v is True:
                 k: Expression = (FluentNode(f),)
@@ -1234,7 +1211,6 @@ def HFF(
     cache_value_in_state: bool,
     inadmissible_numeric_heuristic_variant: bool,
     disable_numeric_reasoning: bool = False,
-    relevant_fluents: list[int] | None = None,
 ) -> DeleteRelaxationHeuristic:
     return DeleteRelaxationHeuristic(
         actions,
@@ -1247,7 +1223,6 @@ def HFF(
         cache_value_in_state,
         inadmissible_numeric_heuristic_variant,
         disable_numeric_reasoning,
-        relevant_fluents,
     )
 
 
@@ -1261,7 +1236,6 @@ def HAdd(
     cache_value_in_state: bool,
     inadmissible_numeric_heuristic_variant: bool,
     disable_numeric_reasoning: bool = False,
-    relevant_fluents: list[int] | None = None,
 ) -> DeleteRelaxationHeuristic:
     return DeleteRelaxationHeuristic(
         actions,
@@ -1274,7 +1248,6 @@ def HAdd(
         cache_value_in_state,
         inadmissible_numeric_heuristic_variant,
         disable_numeric_reasoning,
-        relevant_fluents,
     )
 
 
@@ -1288,7 +1261,6 @@ def HMax(
     cache_value_in_state: bool,
     inadmissible_numeric_heuristic_variant: bool,
     disable_numeric_reasoning: bool = False,
-    relevant_fluents: list[int] | None = None,
 ) -> DeleteRelaxationHeuristic:
     return DeleteRelaxationHeuristic(
         actions,
@@ -1301,7 +1273,6 @@ def HMax(
         cache_value_in_state,
         inadmissible_numeric_heuristic_variant,
         disable_numeric_reasoning,
-        relevant_fluents,
     )
 
 
@@ -1336,7 +1307,6 @@ class HMaxExplicit(Heuristic):
         internal_caching: bool,
         cache_value_in_state: bool,
         inadmissible_numeric_heuristic_variant: bool,
-        relevant_fluents: list[int] | None = None,
     ):
         super().__init__(cache_value_in_state)
         self._actions = actions
@@ -1346,12 +1316,6 @@ class HMaxExplicit(Heuristic):
         self._operators: list[OperatorHmax] = []
         self._extra_fluents: dict[Action, list[int]] = {}
         self._num_fluents = len(self._fluent_types)
-        # See `DeleteRelaxationHeuristic`'s identically-named fields for the
-        # semantics: `None` means every fluent is relevant.
-        self._relevant_fluent_ids: list[int] | None = relevant_fluents
-        self._relevant_fluents: set[int] | None = (
-            None if relevant_fluents is None else set(relevant_fluents)
-        )
 
         for a, le in events.items():
             self._extra_fluents[a] = []
@@ -1364,11 +1328,6 @@ class HMaxExplicit(Heuristic):
                 self._extra_fluents[a].append(f)
                 effects.append((f, True))
                 for eff in e.effects:
-                    if (
-                        self._relevant_fluents is not None
-                        and eff.fluent not in self._relevant_fluents
-                    ):
-                        continue
                     t = self._fluent_types[eff.fluent]
                     if t == "bool":
                         if len(eff.value) == 1 and isinstance(eff.value[0], bool):
@@ -1521,12 +1480,7 @@ class HMaxExplicit(Heuristic):
 
     def _eval(self, state: State, ss: SearchSpaceABC) -> float | None:
         if self._internal_caching is not None:
-            relevant_assignments = (
-                state.assignments
-                if self._relevant_fluent_ids is None
-                else (state.assignments[i] for i in self._relevant_fluent_ids)
-            )
-            assignments_values = tuple(relevant_assignments) + tuple(
+            assignments_values = tuple(state.assignments) + tuple(
                 state.todo.get(action, (None, None))[0] for action in self._actions
             )
             if assignments_values in self._internal_caching:
@@ -1540,13 +1494,7 @@ class HMaxExplicit(Heuristic):
         return res
 
     def _eval_core(self, state: State) -> float | None:
-        if self._relevant_fluents is None:
-            assignments: list[set[ConstantNode]] = [{v} for v in state.assignments]
-        else:
-            assignments = [
-                {v} if f in self._relevant_fluents else set()
-                for f, v in enumerate(state.assignments)
-            ]
+        assignments: list[set[ConstantNode]] = [{v} for v in state.assignments]
         assignments += [
             set() for _ in range(self._num_fluents - len(state.assignments))
         ]
