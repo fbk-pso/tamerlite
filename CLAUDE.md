@@ -205,6 +205,18 @@ hoisting the per-evaluation `FluentNode` construction was measured and recovers
 instance, 0.268s of cumulative time against 0.444s. Before optimizing anything
 here, profile first and check that number.
 
+**Deliberate, temporary exception to backend parity**: `novbfs_search`
+(`src/tamerlite/core/search.py`) plus its `NumericNovelty` measure
+(`src/tamerlite/core/novelty.py`) implement a partitioned numeric novelty
+search and exist **only** in the pure-Python core -- not dispatched through
+`core/__init__.py`, no Rust mirror yet.
+`TamerLite`'s `search="novbfs_hg"`/`"novbfs_lg"` raises `NotImplementedError`
+unless `DISABLE_RUSTAMER=1`. Every other name above keeps the "identical
+interface across both backends" invariant this file otherwise documents as
+load-bearing; treat any new call site for these two as needing the same
+Rust-unavailability guard `TamerLite._solve_ground_problem` uses, until a
+`crates/rustamer-base` implementation lands.
+
 Rust implementation lives in [crates/rustamer-base/src/](crates/rustamer-base/src/) (core library) and [crates/rustamer/src/](crates/rustamer/src/) (PyO3 bindings).
 
 **`"=="` covers both numeric and object equality; classification comes from
