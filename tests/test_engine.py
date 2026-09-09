@@ -17,9 +17,7 @@
 
 import contextlib
 import gc
-import importlib
 import os
-import types
 import warnings
 import weakref
 from collections import OrderedDict
@@ -163,52 +161,12 @@ def expressions():
     return expressions
 
 
-def reload_package(package):
-    assert hasattr(package, "__package__")
-    fn = package.__file__
-    fn_dir = os.path.dirname(fn) + os.sep
-    module_visit = {fn}
-    del fn
-
-    def reload_recursive_ex(module):
-        # Children must be reloaded *before* `module` itself: `module`'s own
-        # top-level code re-runs `from child import name` statements, and
-        # those need `child` already holding its freshest definitions --
-        # otherwise `name` rebinds to whatever `child` had before this reload
-        # pass touched it, leaving two live, non-identical objects (e.g. two
-        # `Enum` classes) that compare unequal despite being "the same" type
-        # conceptually. For this same reason, callers must always reload the
-        # whole `tamerlite` package (via `reload_tamerlite`) and never a lone
-        # submodule on its own: e.g. calling `reload_package(tamerlite.encoder)`
-        # again *after* `reload_tamerlite` rebuilds `tamerlite.encoder.Encoder`
-        # a second time without anything re-running `tamerlite.engine`'s
-        # `from tamerlite.encoder import Encoder`, leaving
-        # `tamerlite.engine.Encoder is not tamerlite.encoder.Encoder` for the
-        # rest of the process -- silently, since both classes share
-        # `__globals__` and behave identically except for object identity.
-        children = []
-        for module_child in vars(module).values():
-            if isinstance(module_child, types.ModuleType):
-                fn_child = getattr(module_child, "__file__", None)
-                if (
-                    (fn_child is not None)
-                    and fn_child.startswith(fn_dir)
-                    and fn_child not in module_visit
-                ):
-                    module_visit.add(fn_child)
-                    children.append(module_child)
-
-        for module_child in children:
-            reload_recursive_ex(module_child)
-
-        importlib.reload(module)
-
-    return reload_recursive_ex(package)
-
-
-def reload_tamerlite(disable_rustamer: bool):
-    os.environ["DISABLE_RUSTAMER"] = str(disable_rustamer)
-    reload_package(tamerlite)
+# `reload_package`/`reload_tamerlite` live in `testing_utils` (shared with
+# `tests/test_novbfs.py`, which needs them without pulling in this module's
+# heavier `up_test_cases` import); re-exported here under their original
+# names so every existing call site below keeps working unchanged.
+reload_package = testing_utils.reload_package
+reload_tamerlite = testing_utils.reload_tamerlite
 
 
 class PruneCase(NamedTuple):
