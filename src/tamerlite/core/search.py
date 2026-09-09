@@ -26,6 +26,7 @@ from bloom_filter2 import BloomFilter
 from min_max_heap import MinMaxHeap
 
 from tamerlite.core.heuristics import Heuristic
+from tamerlite.core.novelty import NumericNovelty
 from tamerlite.core.search_space import Action, ObjectNode, SearchSpaceABC, State
 
 logger = logging.getLogger(__name__)
@@ -521,4 +522,159 @@ def ehc_search(
                 else:
                     open.append(succ_state)
     logger.info("ehc_search: no solution found — expanded=%d", expanded_states)
+    return None, {"expanded_states": str(expanded_states)}
+
+
+@dataclass
+class NovBFSItem:
+    """Open-list entry for `novbfs_search`: the numeric-novelty tie-break
+    chain `(novelty, h^add, +-g)` plus an `idx` insertion-order tie-break for
+    determinism, matching every other search's `PrioritizedItem`."""
+
+    novelty: int  # 1 (most novel) .. 3 (not novel)
+    h: float  # h^add
+    g_key: float  # state.g, sign-flipped by `prefer_higher_g` at push time
+    idx: int
+    state: State
+    partition: int  # this state's novelty partition, needed by its children
+
+    def __lt__(self, other):
+        return (self.novelty, self.h, self.g_key, self.idx) < (
+            other.novelty,
+            other.h,
+            other.g_key,
+            other.idx,
+        )
+
+    def __le__(self, other):
+        return self < other
+
+
+def novbfs_search(
+    ss: SearchSpaceABC,
+    heuristic: Heuristic,
+    novelty: NumericNovelty,
+    prefer_higher_g: bool,
+    timeout: float | None = None,
+    early_termination: bool = False,
+    weak_equality: bool = False,
+) -> tuple[list[Action] | None, dict[str, str]]:
+    """A single open list ordered lexicographically on
+    `(novelty, h^add, +-g)` -- numeric novelty first, `h^add` only as a
+    tie-breaker, plan cost `g` last. `prefer_higher_g=True` is `novbfs_hg`
+    (cost-*maximizing* final tie-break, to dive into longer committed plans
+    and find *a* solution fast); `prefer_higher_g=False` is `novbfs_lg`
+    (cost-*minimizing*). `heuristic` must be an h^add instance -- see
+    `TamerLite._solve_ground_problem`'s novbfs dispatch branch, which always
+    builds one internally regardless of the configured heuristic.
+
+    `novelty` must not have had `start()` called yet -- this function calls
+    it once, on the initial state, and constructs a fresh instance per
+    search call (including per anytime cold-restart iteration, which
+    tamerlite already implements generically -- see
+    `TamerLite._anytime_solutions` -- so no restart logic needs to live
+    here).
+
+    Dedup is the standard tamerlite "generate-once" strategy shared with
+    every other search here (`state_representation`/`visited_states`,
+    closed at generation time), not g-based reopening: a state re-reached
+    later via a strictly cheaper path is simply dropped rather than
+    re-queued and re-scored against the novelty tables."""
+
+    logger.info(
+        "novbfs_search: prefer_higher_g=%s timeout=%s early_termination=%s "
+        "weak_equality=%s",
+        prefer_higher_g,
+        timeout,
+        early_termination,
+        weak_equality,
+    )
+    st = time.monotonic()
+    open: list[NovBFSItem] = []
+    init = ss.initial_state()
+    if not ss.is_temporal or weak_equality:
+        visited_states = {state_representation(init, weak_equality)}
+    expanded_states = 0
+    generated_states = 1
+    if early_termination and ss.goal_reached(init):
+        return extract_path(init), {
+            "expanded_states": str(expanded_states),
+            "goal_depth": str(init.g),
+        }
+
+    init_h = heuristic.eval(init, ss)
+    if init_h is None:
+        return None, {"expanded_states": str(0)}
+    init_partition = novelty.start(init, init_h)
+    # Seed the tables (return discarded); the root's *stored* novelty is
+    # hard-coded to 1 below regardless.
+    novelty.eval(init, init_partition, None, None)
+
+    def g_key(g: int) -> float:
+        return -g if prefer_higher_g else g
+
+    heapq.heappush(open, NovBFSItem(1, init_h, g_key(init.g), 0, init, init_partition))
+    while open:
+        if timeout is not None and time.monotonic() - st > timeout:
+            raise TimeoutError
+        item = heapq.heappop(open)
+        state = item.state
+        expanded_states += 1
+        if expanded_states % 10_000 == 0:
+            logger.debug(
+                "novbfs_search: expanded=%d generated=%d open=%d",
+                expanded_states,
+                generated_states,
+                len(open),
+            )
+        if not early_termination and ss.goal_reached(state):
+            logger.info(
+                "novbfs_search: goal found — expanded=%d depth=%s",
+                expanded_states,
+                state.g,
+            )
+            return extract_path(state), {
+                "expanded_states": str(expanded_states),
+                "goal_depth": str(state.g),
+            }
+
+        candidate_states = []
+        for succ_state in ss.get_successor_states(state):
+            if early_termination and ss.goal_reached(succ_state):
+                logger.info(
+                    "novbfs_search: goal found — expanded=%d depth=%s",
+                    expanded_states,
+                    succ_state.g,
+                )
+                return extract_path(succ_state), {
+                    "expanded_states": str(expanded_states),
+                    "goal_depth": str(succ_state.g),
+                }
+
+            if not ss.is_temporal or weak_equality:
+                state_repr = state_representation(succ_state, weak_equality)
+                if state_repr not in visited_states:
+                    visited_states.add(state_repr)
+                    candidate_states.append(succ_state)
+            else:
+                candidate_states.append(succ_state)
+
+        for succ_state, h in heuristic.eval_gen(candidate_states, ss):
+            if h is not None:
+                succ_partition = novelty.partition_of(h)
+                nov = novelty.eval(succ_state, succ_partition, state, item.partition)
+                heapq.heappush(
+                    open,
+                    NovBFSItem(
+                        nov,
+                        h,
+                        g_key(succ_state.g),
+                        generated_states,
+                        succ_state,
+                        succ_partition,
+                    ),
+                )
+            generated_states += 1
+
+    logger.info("novbfs_search: no solution found — expanded=%d", expanded_states)
     return None, {"expanded_states": str(expanded_states)}
