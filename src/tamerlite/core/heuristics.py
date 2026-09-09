@@ -35,12 +35,12 @@ from tamerlite.core.search_space import (
     FluentDomain,
     FluentKind,
     FluentNode,
-    InterpretedFunctionNode,
     ObjectNode,
     SearchSpaceABC,
     State,
     Timing,
     evaluate,
+    extract_sub_expression,
     has_interpreted_function,
     shift_expression,
     split_expression,
@@ -687,34 +687,9 @@ class DeleteRelaxationHeuristic(Heuristic):
                 else:
                     result.append(OrNode(len(e.operands)))
             else:
-                result.append(LeafNode(self._extract_sub_expression(exp, idx)))
+                result.append(LeafNode(extract_sub_expression(exp, idx)))
 
         return tuple(result)
-
-    def _extract_sub_expression(self, exp: Expression, idx: int) -> Expression:
-        """
-        Extract the sub-expression from a given expression rooted at a specified index.
-        All operands in the extracted sub-expression are re-indexed relative to the
-        start of the sub-expression.
-
-        Args:
-            exp (Expression): The full expression from which to extract the
-                sub-expression.
-            idx (int): The index of the root node of the sub-expression.
-
-        Returns:
-            Expression: A tuple representing the extracted sub-expression with operands
-                re-indexed relative to the sub-expression start.
-        """
-
-        # find the start index of the sub-expression
-        i = idx
-        node = exp[i]
-        while isinstance(node, (Op, InterpretedFunctionNode)) and node.operands:
-            i = node.operands[0]
-            node = exp[i]
-
-        return shift_expression(exp[i : idx + 1], -i)
 
     def _update_numeric_effects(
         self,

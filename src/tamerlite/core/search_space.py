@@ -201,6 +201,32 @@ def split_expression(exp: Expression) -> tuple[Expression, ...]:
     return tuple(res)
 
 
+def extract_sub_expression(exp: Expression, idx: int) -> Expression:
+    """
+    Extract the sub-expression from a given expression rooted at a specified index.
+    All operands in the extracted sub-expression are re-indexed relative to the
+    start of the sub-expression.
+
+    Args:
+        exp (Expression): The full expression from which to extract the
+            sub-expression.
+        idx (int): The index of the root node of the sub-expression.
+
+    Returns:
+        Expression: A tuple representing the extracted sub-expression with operands
+            re-indexed relative to the sub-expression start.
+    """
+
+    # find the start index of the sub-expression
+    i = idx
+    node = exp[i]
+    while isinstance(node, (OperatorNode, InterpretedFunctionNode)) and node.operands:
+        i = node.operands[0]
+        node = exp[i]
+
+    return shift_expression(exp[i : idx + 1], -i)
+
+
 def get_fluents(exp: Expression) -> Iterator[int]:
     for e in exp:
         if isinstance(e, FluentNode):
