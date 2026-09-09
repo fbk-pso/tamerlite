@@ -42,6 +42,7 @@ from unified_planning.model import FNode, InterpretedFunction, ProblemKind, Star
 from unified_planning.model.state import State
 from unified_planning.plans import ActionInstance, PlanKind
 
+from tamerlite import core
 from tamerlite.converter import interpreted_function_scope, new_if_cache
 from tamerlite.core import (
     HFF,
@@ -64,6 +65,8 @@ from tamerlite.core import (
     wastar_search_memory_bounded,
 )
 from tamerlite.core.heuristics import Heuristic
+from tamerlite.core.novelty import NumericNovelty
+from tamerlite.core.search import novbfs_search
 from tamerlite.encoder import Encoder
 
 logger = logging.getLogger(__name__)
@@ -897,21 +900,85 @@ class TamerLite(
                         weak_equality=False,
                     )
             else:
-                h, w = self._get_heuristic(
-                    self._params,
-                    heuristic,
-                    encoder,
-                    self._params.inadmissible_numeric_heuristic_variant,
-                    self._params.internal_heuristic_cache,
-                )
-                search_name, search = self._get_search(
-                    self._params.search,
-                    h,
-                    w,
-                    self._params.incomplete_memory_bounded_search,
-                    self._params.weak_equality,
-                    encoder.search_space.is_temporal,
-                )
+                if self._params.search in ("novbfs_hg", "novbfs_lg"):
+                    # Numeric-novelty search -- pure-Python core only for now
+                    # (`src/tamerlite/core/novelty.py`,
+                    # `src/tamerlite/core/search.py::novbfs_search`).
+                    if core.use_rustamer:
+                        raise NotImplementedError(
+                            f"search={self._params.search!r} only exists in "
+                            "the pure-Python core for now; set "
+                            "DISABLE_RUSTAMER=1."
+                        )
+                    if self._params.incomplete_memory_bounded_search:
+                        raise NotImplementedError(
+                            f"search={self._params.search!r} has no "
+                            "memory-bounded variant; "
+                            "incomplete_memory_bounded_search is not "
+                            "supported with it."
+                        )
+                    if (
+                        self._params.heuristic not in (None, "hadd")
+                        or self._params.weight is not None
+                        or heuristic is not None
+                    ):
+                        warnings.warn(
+                            "novbfs_hg/novbfs_lg always use an internal, "
+                            "unit-weighted hadd heuristic; the configured "
+                            "heuristic/weight (including any custom "
+                            "heuristic callable passed to solve()) is "
+                            "ignored.",
+                            stacklevel=2,
+                        )
+                    # `heuristic=None`: unlike every other search, novbfs
+                    # never falls back to a user-supplied heuristic callable
+                    # -- `HeuristicParams(heuristic="hadd")` above always
+                    # forces `_get_heuristic`'s "hadd" branch, so the
+                    # callable would never actually be read; passing `None`
+                    # here makes that visible instead of relying on it being
+                    # dead code at this call site.
+                    hadd, _ = self._get_heuristic(
+                        HeuristicParams(heuristic="hadd"),
+                        None,
+                        encoder,
+                        self._params.inadmissible_numeric_heuristic_variant,
+                        self._params.internal_heuristic_cache,
+                    )
+                    assert encoder.goal is not None
+                    novelty_tracker = NumericNovelty(
+                        {
+                            a: e
+                            for a, e in encoder.events.items()
+                            if a in set(encoder.considered_actions)
+                        },
+                        encoder.goal,
+                    )
+                    search_name = self._params.search
+                    search = cast(
+                        _SearchCallable,
+                        partial(
+                            novbfs_search,
+                            heuristic=hadd,
+                            novelty=novelty_tracker,
+                            prefer_higher_g=(self._params.search == "novbfs_hg"),
+                        ),
+                    )
+                else:
+                    h, w = self._get_heuristic(
+                        self._params,
+                        heuristic,
+                        encoder,
+                        self._params.inadmissible_numeric_heuristic_variant,
+                        self._params.internal_heuristic_cache,
+                    )
+                    search_name, search = self._get_search(
+                        self._params.search,
+                        h,
+                        w,
+                        self._params.incomplete_memory_bounded_search,
+                        self._params.weak_equality,
+                        encoder.search_space.is_temporal,
+                    )
 
                 if self._params.weak_equality and search_name not in ("dfs", "bfs"):
                     start = time.monotonic()
