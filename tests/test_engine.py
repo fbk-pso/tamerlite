@@ -248,6 +248,7 @@ UNINFORMED_SEARCH_RISK: dict[str, set[str]] = {
     "treasure_hunting_robot_simple": {"dfs"},
     "if_bool_condition": {"dfs"},
     "if_signature_shapes": {"dfs"},
+    "robot_package_delivery_joint_static_pruning": {"dfs"},
     "block_grouping_5_5_1_1": {"blind"},
     "farmland_2_100_1229": {"blind"},
     "if_reals_condition_effect_pizza": {"blind"},
