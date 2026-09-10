@@ -34,21 +34,28 @@ from tamerlite.core.search_space import (
     Effect,
     Event,
     Expression,
+    IfReturnType,
     SearchSpace,
     State,
     Timing,
+    clear_interpreted_function_cache,
     evaluate,
     get_fluent_value,
     get_fluents,
     make_bool_constant_node,
     make_fluent_node,
     make_int_constant_node,
+    make_interpreted_function_node,
     make_object_node,
     make_operator_node,
     make_rational_constant_node,
     shift_expression,
     simplify,
 )
+
+# Whether the Rust `rustamer` extension is the active backend (`False` means
+# the pure-Python core in this package is in use).
+use_rustamer: bool
 
 __all__ = [
     "HFF",
@@ -60,12 +67,14 @@ __all__ = [
     "HAdd",
     "HMax",
     "HMaxExplicit",
+    "IfReturnType",
     "SearchSpace",
     "State",
     "Timing",
     "astar_search",
     "astar_search_memory_bounded",
     "bfs_search",
+    "clear_interpreted_function_cache",
     "dfs_search",
     "ehc_search",
     "evaluate",
@@ -76,12 +85,14 @@ __all__ = [
     "make_bool_constant_node",
     "make_fluent_node",
     "make_int_constant_node",
+    "make_interpreted_function_node",
     "make_object_node",
     "make_operator_node",
     "make_rational_constant_node",
     "multiqueue_search",
     "shift_expression",
     "simplify",
+    "use_rustamer",
     "wastar_search",
     "wastar_search_memory_bounded",
 ]

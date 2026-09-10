@@ -30,6 +30,7 @@ use pyo3::types::PyTuple;
 
 use super::expressions::*;
 use super::expressions_utils::*;
+use super::interpreted_functions::*;
 use super::multiqueue::StateContainer;
 use super::search_space::SearchSpaceTrait;
 use super::search_state::State;
@@ -384,22 +385,27 @@ fn simplify_condition(
     let mut contains_or_node = condition.contains_or_node;
     for node in &condition.expression {
         if let HeuristicExpressionNode::Leaf(expr) = node {
-            let simplified_expr = if !disable_numeric_reasoning
-                && is_numeric_leaf_expression(expression_manager.force_get(expr))
-            {
-                simplify_numeric_leaf_node(expr, expression_manager)?
-            } else {
-                simplify_fluent_not_equals_object_expression(
-                    expr,
-                    objects,
-                    fluent_types,
-                    expression_manager,
-                )
-            };
-            if let Some(mut simplified_expr) = simplified_expr {
-                contains_or_node |= simplified_expr.contains_or_node;
-                new_condition.append(&mut simplified_expr.expression);
-                continue;
+            // Leaf nodes containing interpreted-functions match none of
+            // the rewrite rules below (they are neither plain numeric
+            // expressions nor `fluent != object`) and are left unchanged.
+            if !has_interpreted_function(expression_manager.force_get(expr)) {
+                let simplified_expr = if !disable_numeric_reasoning
+                    && is_numeric_leaf_expression(expression_manager.force_get(expr))
+                {
+                    simplify_numeric_leaf_node(expr, expression_manager)?
+                } else {
+                    simplify_fluent_not_equals_object_expression(
+                        expr,
+                        objects,
+                        fluent_types,
+                        expression_manager,
+                    )
+                };
+                if let Some(mut simplified_expr) = simplified_expr {
+                    contains_or_node |= simplified_expr.contains_or_node;
+                    new_condition.append(&mut simplified_expr.expression);
+                    continue;
+                }
             }
         }
         new_condition.push(node.clone())
@@ -1107,6 +1113,9 @@ fn extract_sub_expression(
             | ExpressionNode::Or(operands)
             | ExpressionNode::Plus(operands)
             | ExpressionNode::Times(operands) => operands[0],
+            ExpressionNode::InterpretedFunction { operands, .. } if !operands.is_empty() => {
+                operands[0]
+            }
             _ => break,
         };
     }
@@ -1134,6 +1143,7 @@ pub struct DeleteRelaxationHeuristic {
     empty_pre_operators: FxHashSet<OperatorID>,
     simple_numeric_conds: FxHashMap<Expression, (Vec<usize>, Vec<f64>)>,
     complex_numeric_conds: FxHashSet<Expression>,
+    if_conds: FxHashSet<Expression>,
     achieved_simple_numeric_conds: Vec<Vec<Expression>>,
     heuristic_kind: HeuristicKind,
     internal_caching: HeuristicCache,
@@ -1297,6 +1307,7 @@ impl DeleteRelaxationHeuristic {
             FxHashSet::with_hasher(FxBuildHasher);
         let mut complex_numeric_conds: FxHashSet<Expression> =
             FxHashSet::with_hasher(FxBuildHasher);
+        let mut if_conds: FxHashSet<Expression> = FxHashSet::with_hasher(FxBuildHasher);
         let mut empty_pre_operators: FxHashSet<OperatorID> = FxHashSet::with_hasher(FxBuildHasher);
         for o in &operators {
             if o.conditions.expression.is_empty() {
@@ -1305,7 +1316,9 @@ impl DeleteRelaxationHeuristic {
                 for node in &o.conditions.expression {
                     if let HeuristicExpressionNode::Leaf(e) = node {
                         let expr = expression_manager.force_get(e);
-                        if is_numeric_leaf_expression(expr) {
+                        if has_interpreted_function(expr) {
+                            if_conds.insert(*e);
+                        } else if is_numeric_leaf_expression(expr) {
                             update_numeric_conditions(
                                 e,
                                 &expression_manager,
@@ -1325,7 +1338,9 @@ impl DeleteRelaxationHeuristic {
         for node in goals.expression.iter() {
             if let HeuristicExpressionNode::Leaf(e) = node {
                 let expr = expression_manager.force_get(e);
-                if is_numeric_leaf_expression(expr) {
+                if has_interpreted_function(expr) {
+                    if_conds.insert(*e);
+                } else if is_numeric_leaf_expression(expr) {
                     update_numeric_conditions(
                         e,
                         &expression_manager,
@@ -1384,6 +1399,7 @@ impl DeleteRelaxationHeuristic {
             empty_pre_operators,
             simple_numeric_conds,
             complex_numeric_conds,
+            if_conds,
             achieved_simple_numeric_conds,
             heuristic_kind: config.heuristic_kind,
             internal_caching: Arc::new(Mutex::new(internal_caching)),
@@ -1481,6 +1497,7 @@ impl DeleteRelaxationHeuristic {
             state.assignments.len()
                 + self.simple_numeric_conds.len()
                 + self.complex_numeric_conds.len()
+                + self.if_conds.len()
                 + self.events.len(),
             FxBuildHasher,
         );
@@ -1518,6 +1535,16 @@ impl DeleteRelaxationHeuristic {
         }
 
         for c in &self.complex_numeric_conds {
+            if internal_evaluate(expression_manager.force_get(c), state)?
+                == ExpressionNode::Bool(true)
+            {
+                costs.insert(*c, 0.0);
+            } else {
+                costs.insert(*c, 1.0);
+            }
+        }
+
+        for c in &self.if_conds {
             if internal_evaluate(expression_manager.force_get(c), state)?
                 == ExpressionNode::Bool(true)
             {
@@ -2013,12 +2040,23 @@ impl HMaxExplicit {
         exp_fluents
     }
 
+    /// Enumerates every value `exp` can take given the current, still-growing
+    /// reachable-value sets of its fluents. Unlike `DeleteRelaxationHeuristic`,
+    /// which only ever evaluates an interpreted-function condition against
+    /// the real, concrete search state, this cross-product can hand a
+    /// callable an argument combination that never jointly occurs in a
+    /// reachable state. A partial callable (e.g. a lookup table missing a
+    /// key) can therefore raise here in a way it wouldn't under
+    /// hff/hadd/hmax -- the same class of hazard as `internal_evaluate`'s
+    /// own `Div` raising a `ZeroDivisionError` on relaxed values, just with
+    /// arbitrary user code instead of a builtin operator -- so this (and
+    /// every caller up to `eval`) propagates `PyResult`.
     fn possible_values<'a>(
         &'a self,
         exp: &'a Vec<ExpressionNode>,
         assignments: &'a [FxHashSet<ExpressionNode>],
         exp_fluents: &'a [usize],
-    ) -> impl Iterator<Item = ExpressionNode> + 'a {
+    ) -> impl Iterator<Item = PyResult<ExpressionNode>> + 'a {
         let values: Vec<&FxHashSet<ExpressionNode>> =
             exp_fluents.iter().map(|&f| &assignments[f]).collect();
 
@@ -2028,7 +2066,7 @@ impl HMaxExplicit {
             .multi_cartesian_product()
             .map(move |state_values: Vec<&ExpressionNode>| {
                 let exp_assignments = FluentAssignments::new(exp_fluents, state_values);
-                internal_evaluate(exp, &exp_assignments).unwrap()
+                internal_evaluate(exp, &exp_assignments)
             })
     }
 
@@ -2039,32 +2077,30 @@ impl HMaxExplicit {
         assignments: &[FxHashSet<ExpressionNode>],
         assignments_changes: &FxHashSet<usize>,
         cache_can_be_true: &mut FxHashMap<Expression, bool>,
-    ) -> bool {
+    ) -> PyResult<bool> {
         let exp_fluents;
         if cache_can_be_true.contains_key(&exp_id) {
             if cache_can_be_true[&exp_id] {
-                return true;
+                return Ok(true);
             }
 
             exp_fluents = self.extract_fluents(exp);
             let exp_fluents_set: FxHashSet<usize> = exp_fluents.iter().copied().collect();
             if exp_fluents_set.is_disjoint(assignments_changes) {
-                return false;
+                return Ok(false);
             }
         } else {
             exp_fluents = self.extract_fluents(exp);
         }
 
-        let possible_values = self.possible_values(exp, assignments, &exp_fluents);
-
-        for value in possible_values {
-            if value == ExpressionNode::Bool(true) {
+        for value in self.possible_values(exp, assignments, &exp_fluents) {
+            if value? == ExpressionNode::Bool(true) {
                 cache_can_be_true.insert(exp_id, true);
-                return true;
+                return Ok(true);
             }
         }
         cache_can_be_true.insert(exp_id, false);
-        false
+        Ok(false)
     }
 
     fn can_be_true(
@@ -2074,7 +2110,7 @@ impl HMaxExplicit {
         assignments: &[FxHashSet<ExpressionNode>],
         assignments_changes: &FxHashSet<usize>,
         cache_can_be_true: &mut FxHashMap<Expression, bool>,
-    ) -> bool {
+    ) -> PyResult<bool> {
         for (i, exp) in expressions.iter().enumerate() {
             if !self.exp_can_be_true(
                 exp,
@@ -2082,11 +2118,11 @@ impl HMaxExplicit {
                 assignments,
                 assignments_changes,
                 cache_can_be_true,
-            ) {
-                return false;
+            )? {
+                return Ok(false);
             }
         }
-        true
+        Ok(true)
     }
 
     pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
@@ -2106,15 +2142,15 @@ impl HMaxExplicit {
                 return Ok(*res);
             }
 
-            let result = self._eval(state);
+            let result = self._eval(state)?;
             internal_caching.insert(cache_key, result);
             Ok(result)
         } else {
-            Ok(self._eval(state))
+            self._eval(state)
         }
     }
 
-    fn _eval(&self, state: &State) -> Option<f64> {
+    fn _eval(&self, state: &State) -> PyResult<Option<f64>> {
         let mut assignments: Vec<FxHashSet<ExpressionNode>> =
             vec![FxHashSet::with_hasher(FxBuildHasher); self.num_fluents];
         // add state assignments to assignments
@@ -2148,9 +2184,9 @@ impl HMaxExplicit {
                 &assignments,
                 &assignments_changes,
                 &mut cache_can_be_true,
-            ) {
+            )? {
                 // goal satisfied
-                return Some(depth as f64);
+                return Ok(Some(depth as f64));
             }
 
             let mut new_assignments: FxHashMap<usize, FxHashSet<ExpressionNode>> =
@@ -2178,7 +2214,7 @@ impl HMaxExplicit {
                     &assignments,
                     &assignments_changes,
                     &mut cache_can_be_true,
-                ) {
+                )? {
                     // operator cannot be applied
                     continue;
                 } else {
@@ -2188,12 +2224,12 @@ impl HMaxExplicit {
 
                 for effect in &operator.effects {
                     let exp_fluents = self.extract_fluents(&effect.value);
-                    let possible_values =
-                        self.possible_values(&effect.value, &assignments, &exp_fluents);
-                    new_assignments
+                    let fluent_new_assignments = new_assignments
                         .entry(effect.fluent)
-                        .or_insert_with(|| FxHashSet::with_hasher(FxBuildHasher))
-                        .extend(possible_values);
+                        .or_insert_with(|| FxHashSet::with_hasher(FxBuildHasher));
+                    for value in self.possible_values(&effect.value, &assignments, &exp_fluents) {
+                        fluent_new_assignments.insert(value?);
+                    }
                 }
             }
 
@@ -2212,7 +2248,7 @@ impl HMaxExplicit {
             depth += 1;
         }
 
-        None
+        Ok(None)
     }
 
     pub fn name(&self) -> &'static str {

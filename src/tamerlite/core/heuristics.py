@@ -32,11 +32,13 @@ from tamerlite.core.search_space import (
     Expression,
     ExpressionNode,
     FluentNode,
+    InterpretedFunctionNode,
     ObjectNode,
     SearchSpaceABC,
     State,
     Timing,
     evaluate,
+    has_interpreted_function,
     shift_expression,
     split_expression,
 )
@@ -250,6 +252,7 @@ class DeleteRelaxationHeuristic(Heuristic):
         self._simple_numeric_conds: dict[Expression, tuple[list[int], list[float]]] = {}
         self._lt_simple_numeric_conds: set[Expression] = set()
         self._complex_numeric_conds: set[Expression] = set()
+        self._if_conds: set[Expression] = set()
         self._empty_pre_operators: list[Operator] = []
         for o in self._operators:
             if len(o.conditions) == 0:
@@ -257,7 +260,9 @@ class DeleteRelaxationHeuristic(Heuristic):
             else:
                 for node in o.conditions:
                     if isinstance(node, LeafNode):
-                        if self._is_numeric_leaf_expression(node):
+                        if has_interpreted_function(node.expression):
+                            self._if_conds.add(node.expression)
+                        elif self._is_numeric_leaf_expression(node):
                             self._update_numeric_conditions(node)
 
                         if node.expression not in self._precondition_of:
@@ -265,8 +270,11 @@ class DeleteRelaxationHeuristic(Heuristic):
                         self._precondition_of[node.expression].append(o)
 
         for node in self._goals:
-            if isinstance(node, LeafNode) and self._is_numeric_leaf_expression(node):
-                self._update_numeric_conditions(node)
+            if isinstance(node, LeafNode):
+                if has_interpreted_function(node.expression):
+                    self._if_conds.add(node.expression)
+                elif self._is_numeric_leaf_expression(node):
+                    self._update_numeric_conditions(node)
 
         self._max_net_effect = float("-inf")
         self._achieved_simple_numeric_conds: list[list[Expression]] = [
@@ -312,8 +320,8 @@ class DeleteRelaxationHeuristic(Heuristic):
         - Fluent-object inequality expressions (`fluent != object`) are
         rewritten into an equivalent form.
 
-        Non-leaf nodes or leaf nodes that do not match any simplification rule
-        are left unchanged.
+        Leaf nodes that do not match any simplification rule, non-leaf nodes, and
+        leaf nodes containing interpreted-function calls are left unchanged.
 
         Args:
             condition: A heuristic expression.
@@ -325,7 +333,9 @@ class DeleteRelaxationHeuristic(Heuristic):
         new_condition: list[HeuristicExpressionNode] = []
         for node in condition:
             new_nodes = None
-            if isinstance(node, LeafNode):
+            if isinstance(node, LeafNode) and not has_interpreted_function(
+                node.expression
+            ):
                 if (
                     not self._disable_numeric_reasoning
                     and self._is_numeric_leaf_expression(node)
@@ -564,7 +574,7 @@ class DeleteRelaxationHeuristic(Heuristic):
         # find the start index of the sub-expression
         i = idx
         node = exp[i]
-        while isinstance(node, Op):
+        while isinstance(node, (Op, InterpretedFunctionNode)) and node.operands:
             i = node.operands[0]
             node = exp[i]
 
@@ -893,6 +903,11 @@ class DeleteRelaxationHeuristic(Heuristic):
                 costs[cond] = 0.0
             else:
                 costs[cond] = 1.0
+        for cond in self._if_conds:
+            if evaluate(cond, state):
+                costs[cond] = 0.0
+            else:
+                costs[cond] = 1.0
 
         for a in self._events:
             j, _ = state.todo.get(a, (None, None))
@@ -981,7 +996,14 @@ class DeleteRelaxationHeuristic(Heuristic):
 
         if self._heuristic_kind != HeuristicKind.HFF:
             eh, _ = self._cost(self._extra_goals, costs)
-            assert eh is not None
+            if eh is None:
+                # A started-but-unfinished action's remaining events require
+                # a condition that the relaxation can never achieve (e.g. a
+                # numeric condition on a fluent no effect can increase
+                # enough) -- this action can never be completed even in the
+                # relaxed problem, so, like an unreachable goal, the state is
+                # a genuine dead end.
+                return None, None
 
             res = max(h, eh) if self._heuristic_kind == HeuristicKind.HMAX else h + eh
 
@@ -1254,6 +1276,26 @@ def HMax(
 
 
 class HMaxExplicit(Heuristic):
+    """An explicit-value-set variant of HMax: it tracks, per fluent, the growing
+    set of values reachable so far, and re-evaluates conditions/effects against
+    the cross-product of those sets on every fixpoint round.
+
+    This makes it interpreted-function-safe for free: an interpreted-function
+    call is just another node `evaluate()` knows how to invoke, and the
+    generic fluent-collecting scans (`_extract_fluents`,
+    `_operator_conditions_fluents`/`_operator_effects_fluents`) already find
+    an interpreted function's argument fluents.
+
+    One real caveat: unlike `DeleteRelaxationHeuristic`, which only ever
+    evaluates an interpreted-function condition against the real, concrete
+    search state, this class's cross-product can hand a callable an argument
+    combination that never jointly occurs in any reachable state. A partial
+    callable (e.g. a lookup table missing a key) can therefore raise here in
+    a way it wouldn't under hff/hadd/hmax -- the same class of hazard as
+    `evaluate`'s own `/` raising `ZeroDivisionError` on relaxed values, just
+    with arbitrary user code instead of a builtin operator.
+    """
+
     def __init__(
         self,
         actions: list[Action],
@@ -1293,10 +1335,14 @@ class HMaxExplicit(Heuristic):
                             effects.append((eff.fluent, True))
                             effects.append((eff.fluent, False))
                     elif t == "real" or t == "int":
-                        if len(eff.value) == 1:
-                            assert not isinstance(eff.value[0], Op)
-                            effects.append((eff.fluent, eff.value[0]))  # type: ignore[arg-type]
+                        if len(eff.value) == 1 and isinstance(
+                            eff.value[0], (int, Fraction)
+                        ):
+                            effects.append((eff.fluent, eff.value[0]))
                         else:
+                            # A single-node value that isn't a plain numeric
+                            # constant -- e.g. a bare `FluentNode` (`x := y`) --
+                            # must keep the whole `Expression`
                             effects.append((eff.fluent, eff.value))
                     else:
                         if len(eff.value) == 1 and isinstance(eff.value[0], ObjectNode):
@@ -1333,9 +1379,7 @@ class HMaxExplicit(Heuristic):
         for operator in self._operators:
             self._operator_effects_fluents.append(set())
             for _fluent, effect in operator.effects:
-                if isinstance(effect, FluentNode):
-                    self._operator_effects_fluents[-1].add(effect.fluent)
-                elif isinstance(effect, tuple):
+                if isinstance(effect, tuple):
                     self._operator_effects_fluents[-1].update(
                         expression_node.fluent
                         for expression_node in effect

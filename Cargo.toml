@@ -8,7 +8,7 @@ license = "GPL-3.0-only"
 version = "0.1.1"
 
 [workspace.dependencies]
-pyo3 = "0.29.0"
+pyo3 = { version = "0.29.0", features = ["num-bigint"] }
 rustc-hash = "2.1.1"
 log = "0.4"
 

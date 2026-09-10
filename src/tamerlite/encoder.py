@@ -15,12 +15,20 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, MutableMapping
 from fractions import Fraction
 from typing import Any, cast
 
 import unified_planning as up
-from unified_planning.model import Fluent, FNode, Object, Problem, TimepointKind, Type
+from unified_planning.model import (
+    Fluent,
+    FNode,
+    InterpretedFunction,
+    Object,
+    Problem,
+    TimepointKind,
+    Type,
+)
 from unified_planning.model.types import _UserType
 from unified_planning.model.walkers import ExpressionQuantifiersRemover, Nnf
 from unified_planning.plans import (
@@ -42,6 +50,16 @@ from tamerlite.core import (
     get_fluents,
 )
 from tamerlite.core.search_space import ConstantNode, SearchSpaceABC
+
+
+def has_interpreted_functions(kind: up.model.ProblemKind) -> bool:
+    return bool(
+        kind.has_interpreted_functions_in_conditions()
+        or kind.has_interpreted_functions_in_boolean_assignments()
+        or kind.has_interpreted_functions_in_numeric_assignments()
+        or kind.has_interpreted_functions_in_object_assignments()
+        or kind.has_interpreted_functions_in_durations()
+    )
 
 
 def extract_objects(exp: FNode) -> Iterable[Object]:
@@ -98,10 +116,14 @@ class Encoder:
         relevance_analysis: bool,
         full: bool = True,
         deadline: Fraction | None = None,
+        if_cache: MutableMapping[tuple[InterpretedFunction, tuple], Any] | None = None,
+        if_wrappers: dict[InterpretedFunction, Callable] | None = None,
+        lifted_problem_kind: up.model.ProblemKind | None = None,
     ):
         self._problem = problem
         self._lifted_problem = lifted_problem
         self._map_back_action_instance = map_back_action_instance
+        self._lifted_problem_kind = lifted_problem_kind
         if full:
             self._simplifier = up.model.walkers.Simplifier(problem.environment, problem)
         else:
@@ -127,10 +149,18 @@ class Encoder:
         self._fluent_ids = {f: i for i, f in enumerate(self._fluents)}
         self._fluent_types = [fluent_types[f] for f in self._fluents]
 
-        self._object_names: list[str] = sorted(o.name for o in problem.all_objects)
+        self._objects_by_id = sorted(problem.all_objects, key=lambda o: o.name)
+        self._object_names: list[str] = [o.name for o in self._objects_by_id]
         self._object_ids = {name: i for i, name in enumerate(self._object_names)}
 
-        self._converter = Converter(problem, self._fluent_ids, self._object_ids)
+        self._converter = Converter(
+            problem,
+            self._fluent_ids,
+            self._object_ids,
+            self._objects_by_id,
+            if_cache,
+            if_wrappers,
+        )
         self._action_names: list[str] = sorted(
             action.name for action in problem.actions
         )
@@ -212,10 +242,6 @@ class Encoder:
             if len(self._relevant_actions) < len(self.applicable_actions):
                 self._search_space.relevant_actions = self._relevant_actions
 
-    @property
-    def problem(self) -> Problem:
-        return self._problem
-
     def initial_state(self, initial_values: dict[FNode, FNode]) -> list[ConstantNode]:
         initial_state_values = {}
         for f, v in initial_values.items():
@@ -229,6 +255,32 @@ class Encoder:
         return cast(list[ConstantNode], initial_state)
 
     def _compute_relevant_actions(self) -> list[Action]:
+        """Computes the actions that are relevant for reaching the goal.
+
+        This is a two-pass over-approximation, used to prune the search space
+        to actions that could actually matter:
+
+        1. **Forward reachability.** Builds an `HMax` heuristic over the
+        applicable actions and runs its relaxed reachability analysis from
+        the initial state. An action is *reachable* only if all of its
+        events got a finite cost during the fixpoint (see
+        `DeleteRelaxationHeuristic.reachable_actions`) -- i.e. it could ever
+        be applied, start to finish, in the delete relaxation.
+        2. **Backward goal-dependency walk.** Starting from the fluents in
+        the goal, an action is *relevant* if it writes (via an effect) a
+        fluent already known to be relevant. Once an action is marked
+        relevant, the fluents it *depends on* -- those in its own
+        conditions, plus those read by its own effect value expressions --
+        are added to the goal-dependency set and the walk continues from there.
+
+        Both passes only ever narrow the search space (an action never
+        pruned this way stays available), so this cannot make a solvable
+        problem appear unsolvable through under-approximation.
+
+        Returns:
+            The subset of `self._actions` that are reachable and relevant;
+            actions outside this set can never contribute to a plan.
+        """
         assert self.goal is not None
         events = {a: e for a, e in self.events.items() if a in self.applicable_actions}
         heuristic = HMax(
@@ -247,12 +299,12 @@ class Encoder:
         }
 
         actions_affecting_fluent: dict[int, set[int]] = {}
-        action_to_condition_fluents: dict[int, set[int]] = {}
+        action_to_dependency_fluents: dict[int, set[int]] = {}
         for a, le in events.items():
             if a.idx not in reachable_actions:
                 continue
 
-            action_to_condition_fluents[a.idx] = set()
+            action_to_dependency_fluents[a.idx] = set()
 
             # An action's duration bounds are arbitrary expressions evaluated
             # against the pre-action state (see `SearchSpace._open_action`), so
@@ -261,8 +313,8 @@ class Encoder:
             # marked relevant and gets pruned away.
             duration = self._actions_duration[a.idx]
             if duration is not None:
-                action_to_condition_fluents[a.idx].update(get_fluents(duration[0]))
-                action_to_condition_fluents[a.idx].update(get_fluents(duration[1]))
+                action_to_dependency_fluents[a.idx].update(get_fluents(duration[0]))
+                action_to_dependency_fluents[a.idx].update(get_fluents(duration[1]))
 
             for _, e in le:
                 for eff in e.effects:
@@ -271,8 +323,15 @@ class Encoder:
                     else:
                         actions_affecting_fluent[eff.fluent].add(a.idx)
 
+                    # An effect's value expression can read other fluents
+                    # (e.g. `g := mid_value`) with no corresponding
+                    # precondition tying the two together -- those fluents
+                    # must count as a dependency too, or the action that
+                    # writes them is never pulled in as relevant.
+                    action_to_dependency_fluents[a.idx].update(get_fluents(eff.value))
+
                 for cond in [*list(e.end_conditions), e.conditions]:
-                    action_to_condition_fluents[a.idx].update(get_fluents(cond))
+                    action_to_dependency_fluents[a.idx].update(get_fluents(cond))
 
         checked_fluents = [False] * len(self._fluents)
         stack = list(get_fluents(self.goal))
@@ -281,12 +340,12 @@ class Encoder:
 
         relevant_actions: set[int] = set()
         while len(stack) > 0 and len(relevant_actions) < len(
-            action_to_condition_fluents
+            action_to_dependency_fluents
         ):
             f = stack.pop()
             relevant_actions.update(actions_affecting_fluent.get(f, set()))
             for action_idx in actions_affecting_fluent.get(f, set()):
-                for f in action_to_condition_fluents[action_idx]:
+                for f in action_to_dependency_fluents[action_idx]:
                     if not checked_fluents[f]:
                         checked_fluents[f] = True
                         stack.append(f)
@@ -353,7 +412,11 @@ class Encoder:
         goal_obj_to_fluent_map, goal_tainted_objects = (
             self._extract_goal_obj_to_fluent_map()
         )
-        non_equivalent_objects = self._extract_domain_objects() | goal_tainted_objects
+        non_equivalent_objects = (
+            self._extract_domain_objects()
+            | goal_tainted_objects
+            | self._extract_interpreted_function_tainted_objects()
+        )
         obj_to_init_assignments = self._compute_obj_to_init_assignments_map()
 
         objects: dict[Type, list[Object]] = {}
@@ -397,6 +460,51 @@ class Encoder:
 
         return groups
 
+    def _iter_lifted_action_expressions(self) -> Iterable[FNode]:
+        """
+        Yield every expression appearing in a lifted action's preconditions,
+        conditions, effect conditions/fluents/values, or duration bounds.
+        """
+
+        for a in self._lifted_problem.actions:
+            if isinstance(a, up.model.InstantaneousAction):
+                yield from a.preconditions
+                for e in a.effects:
+                    if e.is_conditional():
+                        yield e.condition
+                    yield e.fluent
+                    yield e.value
+            elif isinstance(a, up.model.DurativeAction):
+                yield a.duration.lower
+                yield a.duration.upper
+                for cl in a.conditions.values():
+                    yield from cl
+                for el in a.effects.values():
+                    for e in el:
+                        if e.is_conditional():
+                            yield e.condition
+                        yield e.fluent
+                        yield e.value
+
+    def _iter_metric_expressions(self) -> Iterable[FNode]:
+        """
+        Yield every expression appearing in the problem's quality metrics.
+        """
+
+        for qm in self._lifted_problem.quality_metrics:
+            if isinstance(
+                qm,
+                (
+                    up.model.metrics.MinimizeExpressionOnFinalState,
+                    up.model.metrics.MaximizeExpressionOnFinalState,
+                ),
+            ):
+                yield qm.expression
+            elif isinstance(qm, up.model.metrics.MinimizeActionCosts):
+                for cost in (*qm.costs.values(), qm.default):
+                    if cost is not None:
+                        yield cost
+
     def _extract_domain_objects(self) -> set[Object]:
         """
         Extract all objects that appear in the problem's domain.
@@ -405,29 +513,61 @@ class Encoder:
             Set[Object]: A set of all objects that appear in the domain.
         """
 
-        domain_objects: set[Object] = set()
-        for a in self._lifted_problem.actions:
-            if isinstance(a, up.model.InstantaneousAction):
-                for p in a.preconditions:
-                    domain_objects.update(extract_objects(p))
-                for e in a.effects:
-                    if e.is_conditional():
-                        domain_objects.update(extract_objects(e.condition))
-                    domain_objects.update(extract_objects(e.fluent))
-                    domain_objects.update(extract_objects(e.value))
-            elif isinstance(a, up.model.DurativeAction):
-                domain_objects.update(extract_objects(a.duration.lower))
-                domain_objects.update(extract_objects(a.duration.upper))
-                for cl in a.conditions.values():
-                    for c in cl:
-                        domain_objects.update(extract_objects(c))
-                for el in a.effects.values():
-                    for e in el:
-                        if e.is_conditional():
-                            domain_objects.update(extract_objects(e.condition))
-                        domain_objects.update(extract_objects(e.fluent))
-                        domain_objects.update(extract_objects(e.value))
-        return domain_objects
+        return set(self._lifted_problem.domain_constants)
+
+    def _extract_interpreted_function_tainted_objects(self) -> set[Object]:
+        """
+        Extract objects that an interpreted function (IF) call could observe
+        or produce, and which must therefore be excluded from equivalence.
+
+        An IF is opaque: we can't reason about its behavior, only require its
+        inputs be swap-invariant. Numeric/boolean values are swap-invariant by
+        construction. Object-typed arguments or return values are not and they
+        can change under the swap, and the IF is free to react to that
+        difference however it wants. So for every IF call reachable from the
+        lifted problem, every object compatible with an object-typed parameter
+        or the return type (i.e. that type and its subtypes, matching how objects
+        could actually be substituted in) is tainted.
+
+        Returns:
+            Set[Object]: A set of objects that must be treated as
+            non-equivalent because of an interpreted function.
+        """
+
+        if not has_interpreted_functions(self.lifted_problem_kind):
+            return set()
+
+        ifun_calls: set[FNode] = set()
+        extractor = self._lifted_problem.environment.interpreted_functions_extractor
+        expressions: list[FNode] = list(self._iter_lifted_action_expressions())
+        expressions.extend(self._iter_metric_expressions())
+        expressions.extend(self._lifted_problem.goals)
+        for goals in self._lifted_problem.timed_goals.values():
+            expressions.extend(goals)
+        for effects in self._lifted_problem.timed_effects.values():
+            for e in effects:
+                if e.is_conditional():
+                    expressions.append(e.condition)
+                expressions.append(e.fluent)
+                expressions.append(e.value)
+        for (
+            fluent_exp,
+            value_exp,
+        ) in self._lifted_problem.explicit_initial_values.items():
+            expressions.append(fluent_exp)
+            expressions.append(value_exp)
+        for exp in expressions:
+            ifun_calls.update(extractor.get(exp))
+
+        tainted_objects: set[Object] = set()
+        for call in ifun_calls:
+            ifun = call.interpreted_function()
+            for param in ifun.signature:
+                if param.type.is_user_type():
+                    tainted_objects.update(self._problem.objects(param.type))
+            if ifun.return_type.is_user_type():
+                tainted_objects.update(self._problem.objects(ifun.return_type))
+        return tainted_objects
 
     def _compute_obj_to_init_assignments_map(
         self,
@@ -750,6 +890,28 @@ class Encoder:
         return self._convert_expression(
             self._problem.environment.expression_manager.And(goals)
         )
+
+    @property
+    def problem(self) -> Problem:
+        return self._problem
+
+    @property
+    def lifted_problem(self) -> Problem:
+        return self._lifted_problem
+
+    @property
+    def lifted_problem_kind(self) -> up.model.ProblemKind:
+        """
+        Lazily resolve and cache `_lifted_problem.kind`. `Problem.kind` is a
+        from-scratch full-problem scan, so it's computed on first use here
+        (instead of unconditionally in `__init__`) rather than paying for it
+        in encoders that never need it -- unless a caller already has it and
+        supplied it via the constructor.
+        """
+
+        if self._lifted_problem_kind is None:
+            self._lifted_problem_kind = self._lifted_problem.kind
+        return self._lifted_problem_kind
 
     @property
     def search_space(self) -> SearchSpaceABC:

@@ -16,11 +16,14 @@
 //
 
 use super::expressions::*;
+use super::interpreted_functions::*;
 use super::search_state::*;
 use super::utils::*;
-use num::Zero;
+use num::{BigInt, Zero};
 use num_rational::BigRational;
-use pyo3::{exceptions::PyException, exceptions::PyZeroDivisionError, prelude::*};
+use pyo3::{
+    exceptions::PyException, exceptions::PyValueError, exceptions::PyZeroDivisionError, prelude::*,
+};
 use rustc_hash::FxHashMap;
 use std::vec::Vec;
 
@@ -71,6 +74,18 @@ pub fn do_shift(
             checked_add_sub(*o1, offset, is_negative)?,
             checked_add_sub(*o2, offset, is_negative)?,
         ),
+        ExpressionNode::InterpretedFunction {
+            func_id,
+            return_type,
+            operands,
+        } => ExpressionNode::InterpretedFunction {
+            func_id: *func_id,
+            return_type: *return_type,
+            operands: operands
+                .iter()
+                .map(|&o| checked_add_sub(o, offset, is_negative))
+                .collect::<Result<_, _>>()?,
+        },
         other => other.clone(),
     })
 }
@@ -141,6 +156,17 @@ pub fn split_expression(exp: &[ExpressionNode]) -> PyResult<Vec<Vec<ExpressionNo
                     ExpressionNode::Not(i) => {
                         new_exp.push(make_operator("not".to_string(), vec![i - last])?);
                     }
+                    ExpressionNode::InterpretedFunction {
+                        func_id,
+                        return_type,
+                        operands,
+                    } => {
+                        new_exp.push(ExpressionNode::InterpretedFunction {
+                            func_id: *func_id,
+                            return_type: *return_type,
+                            operands: operands.iter().map(|&j| j - last).collect(),
+                        });
+                    }
                     ExpressionNode::Bool(_)
                     | ExpressionNode::Int(_)
                     | ExpressionNode::Rational(_)
@@ -159,12 +185,167 @@ pub fn split_expression(exp: &[ExpressionNode]) -> PyResult<Vec<Vec<ExpressionNo
     }
 }
 
+/// A borrowed view of a numeric `ExpressionNode`'s value. Where
+/// `get_rational_from_expression_node` always hands back an owned
+/// `BigRational` (cloning either the `BigInt` or the `BigRational` behind
+/// the node, since ownership is what its other callers -- which store the
+/// value or feed it to `rational_to_f64` -- actually need), a comparison or
+/// a zero-check needs no ownership at all. Kept local to this module: it's
+/// only useful to callers happy to `match` on which variant they got, which
+/// `get_rational_from_expression_node`'s callers outside `internal_evaluate`
+/// are not.
+#[derive(Clone, Copy)]
+enum NumRef<'a> {
+    Int(&'a BigInt),
+    Rational(&'a BigRational),
+}
+
+fn as_num_ref(exp: &ExpressionNode) -> PyResult<NumRef<'_>> {
+    match exp {
+        ExpressionNode::Int(v) => Ok(NumRef::Int(v)),
+        ExpressionNode::Rational(v) => Ok(NumRef::Rational(v)),
+        _ => Err(PyValueError::new_err("Expected a number!")),
+    }
+}
+
+fn num_is_zero(n: NumRef) -> bool {
+    match n {
+        NumRef::Int(v) => v.is_zero(),
+        NumRef::Rational(v) => v.is_zero(),
+    }
+}
+
+/// Three-way numeric ordering with no allocation beyond what a mixed
+/// `Int`/`Rational` comparison's cross-multiplication itself requires.
+/// `num_rational::BigRational`'s own `PartialOrd` needs no allocation
+/// either, but `get_rational_from_expression_node` would still have paid
+/// for one converting an `Int` operand into an owned, redundantly-reduced
+/// `BigRational` just to throw it away once compared -- comparison is
+/// read-only, unlike the arithmetic `fold_numeric` handles, so it never
+/// needs to *construct* a `Rational` value, only to reason about one.
+/// Cross-multiplication is valid without a sign correction because every
+/// `BigRational` in this crate is built through `Ratio::new`/`from_integer`,
+/// whose `reduce()` forces a positive denominator.
+fn num_cmp(a: NumRef, b: NumRef) -> std::cmp::Ordering {
+    match (a, b) {
+        (NumRef::Int(a), NumRef::Int(b)) => a.cmp(b),
+        (NumRef::Rational(a), NumRef::Rational(b)) => {
+            a.partial_cmp(b).expect("rational comparison is total")
+        }
+        (NumRef::Int(a), NumRef::Rational(b)) => (a * b.denom()).cmp(b.numer()),
+        (NumRef::Rational(a), NumRef::Int(b)) => a.numer().cmp(&(b * a.denom())),
+    }
+}
+
+/// Numeric accumulator shared by `internal_evaluate`'s `fold_numeric` (every
+/// operand guaranteed numeric) and `simplify`'s partial `Plus`/`Times` fold
+/// (an operand may still be symbolic, so accumulation only starts once one
+/// is actually seen -- `seed`/`combine` are split apart, rather than folded
+/// into one function, for exactly that reason). Starts on `BigInt` -- the
+/// common case, and cheaper: no `BigRational` construction, no
+/// gcd-normalization on every op -- and promotes to `BigRational` in place
+/// the instant a `Rational` operand is combined in. That promotion happens
+/// mid-fold: unlike a "try the all-`Int` path, redo everything in
+/// `BigRational` on failure" split, a `Rational` operand encountered after N
+/// `Int` ones costs one promotion, not a second pass re-folding those N
+/// operands from scratch.
+enum Acc {
+    Int(BigInt),
+    Rational(BigRational),
+}
+
+impl Acc {
+    fn seed(n: NumRef) -> Self {
+        match n {
+            NumRef::Int(v) => Acc::Int(v.clone()),
+            NumRef::Rational(v) => Acc::Rational(v.clone()),
+        }
+    }
+
+    fn combine(
+        &mut self,
+        n: NumRef,
+        int_op: &mut impl FnMut(&mut BigInt, &BigInt),
+        rational_op: &mut impl FnMut(&mut BigRational, &BigRational),
+    ) {
+        match (&mut *self, n) {
+            (Acc::Int(a), NumRef::Int(b)) => int_op(a, b),
+            (Acc::Int(a), NumRef::Rational(b)) => {
+                let mut r = BigRational::from_integer(a.clone());
+                rational_op(&mut r, b);
+                *self = Acc::Rational(r);
+            }
+            (Acc::Rational(a), NumRef::Int(b)) => {
+                rational_op(a, &BigRational::from_integer(b.clone()));
+            }
+            (Acc::Rational(a), NumRef::Rational(b)) => rational_op(a, b),
+        }
+    }
+
+    fn into_node(self) -> ExpressionNode {
+        match self {
+            Acc::Int(v) => ExpressionNode::Int(Box::new(v)),
+            Acc::Rational(r) if r.is_integer() => ExpressionNode::Int(Box::new(r.to_integer())),
+            Acc::Rational(r) => ExpressionNode::Rational(Box::new(r)),
+        }
+    }
+}
+
+/// Folds `indices` (assumed non-empty -- well-formed `Plus`/`Minus`/`Times`
+/// never have zero operands, and every operand is numeric) over
+/// `int_op`/`rational_op` via `Acc`, in a single pass.
+fn fold_numeric(
+    res: &[ExpressionNode],
+    indices: &[usize],
+    mut int_op: impl FnMut(&mut BigInt, &BigInt),
+    mut rational_op: impl FnMut(&mut BigRational, &BigRational),
+) -> PyResult<ExpressionNode> {
+    let mut acc = Acc::seed(as_num_ref(&res[indices[0]])?);
+    for &p in indices.iter().skip(1) {
+        acc.combine(as_num_ref(&res[p])?, &mut int_op, &mut rational_op);
+    }
+    Ok(acc.into_node())
+}
+
+/// Divides two already-borrowed numeric operands, producing the normalized
+/// `Int`/`Rational` result node. Checks `b` for zero without constructing
+/// anything (`NumRef` is a borrow, not an owned value), only cloning once
+/// there's a value to actually build -- unlike going through
+/// `get_rational_from_expression_node` for both operands unconditionally
+/// before ever checking. Shared by `internal_evaluate`'s `Div` (every
+/// operand guaranteed numeric) and `simplify`'s `Div` (a non-numeric
+/// operand means "not yet foldable", handled by the caller before this is
+/// reached).
+fn num_div(a: NumRef, b: NumRef) -> PyResult<ExpressionNode> {
+    if num_is_zero(b) {
+        return Err(PyZeroDivisionError::new_err("division by zero"));
+    }
+    let r = match (a, b) {
+        (NumRef::Int(a), NumRef::Int(b)) => BigRational::new(a.clone(), b.clone()),
+        (NumRef::Int(a), NumRef::Rational(b)) => BigRational::from_integer(a.clone()) / b.clone(),
+        (NumRef::Rational(a), NumRef::Int(b)) => a.clone() / BigRational::from_integer(b.clone()),
+        (NumRef::Rational(a), NumRef::Rational(b)) => a.clone() / b.clone(),
+    };
+    Ok(if r.is_integer() {
+        ExpressionNode::Int(Box::new(r.to_integer()))
+    } else {
+        ExpressionNode::Rational(Box::new(r))
+    })
+}
+
 #[pyfunction]
+#[pyo3(signature = (exp, assignments, evaluate_interpreted_functions=false))]
 pub fn simplify(
     exp: Vec<PyExpressionNode>,
     assignments: FxHashMap<usize, PyExpressionNode>,
+    evaluate_interpreted_functions: bool,
 ) -> PyResult<Vec<PyExpressionNode>> {
-    // This function simplifies the given expression using the given assignments
+    // This function simplifies the given expression using the given assignments.
+    //
+    // If `evaluate_interpreted_functions` is true, an interpreted function
+    // whose operands have all been folded to constants is actually called
+    // and replaced by its result; otherwise (the default) it is always
+    // re-emitted unchanged.
 
     // We iterate over the expression elements and we store the simplified value in the res vector
     let mut res: Vec<ExpressionNode> = Vec::with_capacity(exp.len());
@@ -231,137 +412,128 @@ pub fn simplify(
                 if res[p1] == res[p2] {
                     ExpressionNode::Bool(true)
                 } else {
-                    let val1 = get_rational_from_expression_node(&res[p1]);
-                    let val2 = get_rational_from_expression_node(&res[p2]);
-                    match (val1, val2) {
-                        (Ok(v1), Ok(v2)) => ExpressionNode::Bool(v1 == v2),
+                    match (as_num_ref(&res[p1]), as_num_ref(&res[p2])) {
+                        (Ok(v1), Ok(v2)) => ExpressionNode::Bool(num_cmp(v1, v2).is_eq()),
                         _ => e.v,
                     }
                 }
             }
-            ExpressionNode::LE(p1, p2) => {
-                let val1 = get_rational_from_expression_node(&res[p1]);
-                let val2 = get_rational_from_expression_node(&res[p2]);
-                match (val1, val2) {
-                    (Ok(v1), Ok(v2)) => ExpressionNode::Bool(v1 <= v2),
-                    _ => e.v,
-                }
-            }
-            ExpressionNode::LT(p1, p2) => {
-                let val1 = get_rational_from_expression_node(&res[p1]);
-                let val2 = get_rational_from_expression_node(&res[p2]);
-                match (val1, val2) {
-                    (Ok(v1), Ok(v2)) => ExpressionNode::Bool(v1 < v2),
-                    _ => e.v,
-                }
-            }
+            ExpressionNode::LE(p1, p2) => match (as_num_ref(&res[p1]), as_num_ref(&res[p2])) {
+                (Ok(v1), Ok(v2)) => ExpressionNode::Bool(num_cmp(v1, v2).is_le()),
+                _ => e.v,
+            },
+            ExpressionNode::LT(p1, p2) => match (as_num_ref(&res[p1]), as_num_ref(&res[p2])) {
+                (Ok(v1), Ok(v2)) => ExpressionNode::Bool(num_cmp(v1, v2).is_lt()),
+                _ => e.v,
+            },
             ExpressionNode::Plus(ref v) => {
-                let mut r = BigRational::from_integer(mk_integer(0));
+                // A partial fold, unlike `internal_evaluate`'s `Plus`: an
+                // operand can still be symbolic, so accumulation only
+                // starts once a numeric one is actually seen (`acc` stays
+                // `None` until then), and every non-numeric operand survives
+                // into `operands` unchanged, in its original position.
+                let mut acc: Option<Acc> = None;
                 let mut first_constant_operand = None;
                 let mut operands = Vec::new();
-                for p in v.iter() {
-                    let val = get_rational_from_expression_node(&res[*p]);
-                    if let Ok(val) = val {
-                        r += val;
-
-                        if first_constant_operand.is_none() {
-                            first_constant_operand = Some(*p);
-                            operands.push(*p);
+                for &p in v.iter() {
+                    match as_num_ref(&res[p]) {
+                        Ok(n) => {
+                            match &mut acc {
+                                Some(a) => a.combine(n, &mut |a, b| *a += b, &mut |a, b| *a += b),
+                                None => acc = Some(Acc::seed(n)),
+                            }
+                            if first_constant_operand.is_none() {
+                                first_constant_operand = Some(p);
+                                operands.push(p);
+                            }
                         }
-                    } else {
-                        operands.push(*p);
+                        Err(_) => operands.push(p),
                     }
                 }
 
-                if let Some(first_constant_operand) = first_constant_operand {
-                    let new_node = if r.is_integer() {
-                        ExpressionNode::Int(Box::new(r.to_integer()))
-                    } else {
-                        ExpressionNode::Rational(Box::new(r))
-                    };
-
+                if let Some(acc) = acc {
+                    let new_node = acc.into_node();
                     if operands.len() == 1 {
                         new_node
                     } else {
-                        res[first_constant_operand] = new_node;
+                        res[first_constant_operand.unwrap()] = new_node;
                         ExpressionNode::Plus(operands)
                     }
                 } else {
                     e.v
                 }
             }
-            ExpressionNode::Minus(p1, p2) => {
-                let val1 = get_rational_from_expression_node(&res[p1]);
-                let val2 = get_rational_from_expression_node(&res[p2]);
-                match (val1, val2) {
-                    (Ok(v1), Ok(v2)) => {
-                        let r = v1 - v2;
-                        if r.is_integer() {
-                            ExpressionNode::Int(Box::new(r.to_integer()))
-                        } else {
-                            ExpressionNode::Rational(Box::new(r))
-                        }
-                    }
-                    _ => e.v,
+            ExpressionNode::Minus(p1, p2) => match (as_num_ref(&res[p1]), as_num_ref(&res[p2])) {
+                (Ok(a), Ok(b)) => {
+                    let mut acc = Acc::seed(a);
+                    acc.combine(b, &mut |a, b| *a -= b, &mut |a, b| *a -= b);
+                    acc.into_node()
                 }
-            }
+                _ => e.v,
+            },
             ExpressionNode::Times(ref v) => {
-                let mut r = BigRational::from_integer(mk_integer(1));
+                let mut acc: Option<Acc> = None;
                 let mut first_constant_operand = None;
                 let mut operands = Vec::new();
-                for p in v.iter() {
-                    let val = get_rational_from_expression_node(&res[*p]);
-                    if let Ok(val) = val {
-                        r *= val;
-
-                        if first_constant_operand.is_none() {
-                            first_constant_operand = Some(*p);
-                            operands.push(*p);
+                for &p in v.iter() {
+                    match as_num_ref(&res[p]) {
+                        Ok(n) => {
+                            match &mut acc {
+                                Some(a) => a.combine(n, &mut |a, b| *a *= b, &mut |a, b| *a *= b),
+                                None => acc = Some(Acc::seed(n)),
+                            }
+                            if first_constant_operand.is_none() {
+                                first_constant_operand = Some(p);
+                                operands.push(p);
+                            }
                         }
-                    } else {
-                        operands.push(*p);
+                        Err(_) => operands.push(p),
                     }
                 }
 
-                if let Some(first_constant_operand) = first_constant_operand {
-                    let new_node = if r.is_integer() {
-                        ExpressionNode::Int(Box::new(r.to_integer()))
-                    } else {
-                        ExpressionNode::Rational(Box::new(r))
-                    };
-
+                if let Some(acc) = acc {
+                    let new_node = acc.into_node();
                     if operands.len() == 1 {
                         new_node
                     } else {
-                        res[first_constant_operand] = new_node;
+                        res[first_constant_operand.unwrap()] = new_node;
                         ExpressionNode::Times(operands)
                     }
                 } else {
                     e.v
                 }
             }
-            ExpressionNode::Div(p1, p2) => {
-                let val1 = get_rational_from_expression_node(&res[p1]);
-                let val2 = get_rational_from_expression_node(&res[p2]);
-                match (val1, val2) {
-                    (Ok(v1), Ok(v2)) => {
-                        if v2.is_zero() {
-                            return Err(PyZeroDivisionError::new_err("division by zero"));
-                        }
-
-                        let r = v1 / v2;
-                        if r.is_integer() {
-                            ExpressionNode::Int(Box::new(r.to_integer()))
-                        } else {
-                            ExpressionNode::Rational(Box::new(r))
-                        }
-                    }
-                    _ => e.v,
-                }
-            }
+            ExpressionNode::Div(p1, p2) => match (as_num_ref(&res[p1]), as_num_ref(&res[p2])) {
+                (Ok(a), Ok(b)) => num_div(a, b)?,
+                _ => e.v,
+            },
             ExpressionNode::Fluent(s) => {
                 if let Some(v) = assignments.get(&s) {
                     v.v.clone()
+                } else {
+                    e.v
+                }
+            }
+            ExpressionNode::InterpretedFunction {
+                func_id,
+                return_type,
+                ref operands,
+            } => {
+                if evaluate_interpreted_functions
+                    && operands.iter().all(|&p| {
+                        matches!(
+                            &res[p],
+                            ExpressionNode::Bool(_)
+                                | ExpressionNode::Int(_)
+                                | ExpressionNode::Rational(_)
+                                | ExpressionNode::Object(_)
+                        )
+                    })
+                {
+                    // all operands are constants
+                    let operand_values: Vec<&ExpressionNode> =
+                        operands.iter().map(|&p| &res[p]).collect();
+                    call_interpreted_function(func_id, return_type, &operand_values)?
                 } else {
                     e.v
                 }
@@ -397,7 +569,8 @@ pub fn simplify(
             ExpressionNode::And(operands)
             | ExpressionNode::Or(operands)
             | ExpressionNode::Plus(operands)
-            | ExpressionNode::Times(operands) => {
+            | ExpressionNode::Times(operands)
+            | ExpressionNode::InterpretedFunction { operands, .. } => {
                 if processed {
                     let new_operands = operands_stack
                         .drain((operands_stack.len() - operands.len())..)
@@ -408,6 +581,15 @@ pub fn simplify(
                         ExpressionNode::Or(_) => ExpressionNode::Or(new_operands),
                         ExpressionNode::Plus(_) => ExpressionNode::Plus(new_operands),
                         ExpressionNode::Times(_) => ExpressionNode::Times(new_operands),
+                        ExpressionNode::InterpretedFunction {
+                            func_id,
+                            return_type,
+                            ..
+                        } => ExpressionNode::InterpretedFunction {
+                            func_id: *func_id,
+                            return_type: *return_type,
+                            operands: new_operands,
+                        },
                         _ => unreachable!(),
                     };
                     final_res.push(PyExpressionNode { v: exp_node });
@@ -479,71 +661,57 @@ pub fn internal_evaluate(
     for e in exp {
         let value = match &e {
             ExpressionNode::And(v) => {
-                let val = v.iter().all(|&p| res[p] == ExpressionNode::Bool(true));
+                let val = v
+                    .iter()
+                    .all(|&p| matches!(res[p], ExpressionNode::Bool(true)));
                 ExpressionNode::Bool(val)
             }
             ExpressionNode::Or(v) => {
-                let val = v.iter().any(|&p| res[p] == ExpressionNode::Bool(true));
+                let val = v
+                    .iter()
+                    .any(|&p| matches!(res[p], ExpressionNode::Bool(true)));
                 ExpressionNode::Bool(val)
             }
-            ExpressionNode::Not(p) => ExpressionNode::Bool(ExpressionNode::Bool(false) == res[*p]),
-            ExpressionNode::Equals(p1, p2) => ExpressionNode::Bool(res[*p1] == res[*p2]),
+            ExpressionNode::Not(p) => {
+                ExpressionNode::Bool(matches!(res[*p], ExpressionNode::Bool(false)))
+            }
+            ExpressionNode::Equals(p1, p2) => {
+                // Structural equality first (cheap, and correct for the
+                // overwhelmingly common case), falling back to a numeric
+                // comparison when it fails and both sides are numbers --
+                // an `Int` and a denominator-1 `Rational` holding the same
+                // value are legitimately reachable on well-formed input and
+                // must still compare equal.
+                let val = res[*p1] == res[*p2]
+                    || match (as_num_ref(&res[*p1]), as_num_ref(&res[*p2])) {
+                        (Ok(v1), Ok(v2)) => num_cmp(v1, v2).is_eq(),
+                        _ => false,
+                    };
+                ExpressionNode::Bool(val)
+            }
             ExpressionNode::LE(p1, p2) => {
-                let val1 = get_rational_from_expression_node(&res[*p1])?;
-                let val2 = get_rational_from_expression_node(&res[*p2])?;
-                ExpressionNode::Bool(val1 <= val2)
+                let val = num_cmp(as_num_ref(&res[*p1])?, as_num_ref(&res[*p2])?).is_le();
+                ExpressionNode::Bool(val)
             }
             ExpressionNode::LT(p1, p2) => {
-                let val1 = get_rational_from_expression_node(&res[*p1])?;
-                let val2 = get_rational_from_expression_node(&res[*p2])?;
-                ExpressionNode::Bool(val1 < val2)
+                let val = num_cmp(as_num_ref(&res[*p1])?, as_num_ref(&res[*p2])?).is_lt();
+                ExpressionNode::Bool(val)
             }
-            ExpressionNode::Plus(v) => {
-                let mut r = get_rational_from_expression_node(&res[v[0]])?;
-                for p in v.iter().skip(1) {
-                    r += get_rational_from_expression_node(&res[*p])?;
-                }
-                if r.is_integer() {
-                    ExpressionNode::Int(Box::new(r.to_integer()))
-                } else {
-                    ExpressionNode::Rational(Box::new(r))
-                }
-            }
+            ExpressionNode::Plus(v) => fold_numeric(&res, v, |a, b| *a += b, |a, b| *a += b)?,
             ExpressionNode::Minus(p1, p2) => {
-                let val1 = get_rational_from_expression_node(&res[*p1])?;
-                let val2 = get_rational_from_expression_node(&res[*p2])?;
-                let r = val1 - val2;
-                if r.is_integer() {
-                    ExpressionNode::Int(Box::new(r.to_integer()))
-                } else {
-                    ExpressionNode::Rational(Box::new(r))
-                }
+                fold_numeric(&res, &[*p1, *p2], |a, b| *a -= b, |a, b| *a -= b)?
             }
-            ExpressionNode::Times(v) => {
-                let mut r = get_rational_from_expression_node(&res[v[0]])?;
-                for p in v.iter().skip(1) {
-                    r *= get_rational_from_expression_node(&res[*p])?;
-                }
-                if r.is_integer() {
-                    ExpressionNode::Int(Box::new(r.to_integer()))
-                } else {
-                    ExpressionNode::Rational(Box::new(r))
-                }
-            }
-            ExpressionNode::Div(p1, p2) => {
-                let val1 = get_rational_from_expression_node(&res[*p1])?;
-                let val2 = get_rational_from_expression_node(&res[*p2])?;
-                if val2.is_zero() {
-                    return Err(PyZeroDivisionError::new_err("division by zero"));
-                }
-                let r = val1 / val2;
-                if r.is_integer() {
-                    ExpressionNode::Int(Box::new(r.to_integer()))
-                } else {
-                    ExpressionNode::Rational(Box::new(r))
-                }
-            }
+            ExpressionNode::Times(v) => fold_numeric(&res, v, |a, b| *a *= b, |a, b| *a *= b)?,
+            ExpressionNode::Div(p1, p2) => num_div(as_num_ref(&res[*p1])?, as_num_ref(&res[*p2])?)?,
             ExpressionNode::Fluent(s) => fluent_values.get_value(*s).clone(),
+            ExpressionNode::InterpretedFunction {
+                func_id,
+                return_type,
+                operands,
+            } => {
+                let args: Vec<&ExpressionNode> = operands.iter().map(|&p| &res[p]).collect();
+                call_interpreted_function(*func_id, *return_type, &args)?
+            }
             other => (*other).clone(),
         };
         if res.len() == exp.len() - 1 {
