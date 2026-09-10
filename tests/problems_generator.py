@@ -332,6 +332,86 @@ def get_problem_hierarchical_types() -> Problem:
     return problem
 
 
+def get_problem_object_equality_fluents() -> Problem:
+    """Equality (and inequality) between two object-valued *fluents*, not a
+    fluent and a literal object -- exercises `DeleteRelaxationHeuristic`'s
+    `_simplify_object_equality`, as opposed to
+    `_simplify_fluent_not_equals_object_expression` (`fluent != object`),
+    which `get_problem_hierarchical_types` above already covers.
+
+    Uses hierarchical types throughout so the two operands of an equality can
+    be declared at *different* type names while still sharing objects:
+
+    - `match`'s precondition (`leader == backup`) compares a `Vehicle`
+      (superset domain) to a `Truck` (subset domain) -- a non-empty, proper
+      intersection.
+    - `differ`'s precondition (`not(leader == spare)`) compares a `Vehicle`
+      to a `Van` -- also a non-empty intersection, but negated, exercising
+      the cross-product expansion instead of the plain intersection one.
+    - `impossible`'s precondition (`backup == spare`) compares two *sibling*
+      types (`Truck`, `Van`) with disjoint object domains -- always false,
+      exercising the empty-intersection ("False" leaf) path. `impossible`
+      is never needed to reach the goal (relevance analysis is free to prune
+      it), but it's still one of `problem.actions`, so its precondition is
+      still converted and classified.
+    """
+    problem = Problem("object-equality-fluents")
+
+    Vehicle = UserType("Vehicle")
+    Truck = UserType("Truck", Vehicle)
+    Van = UserType("Van", Vehicle)
+
+    truck1 = Object("truck1", Truck)
+    truck2 = Object("truck2", Truck)
+    van1 = Object("van1", Van)
+    problem.add_objects([truck1, truck2, van1])
+
+    leader = Fluent("leader", Vehicle)
+    backup = Fluent("backup", Truck)
+    spare = Fluent("spare", Van)
+    problem.add_fluent(leader, default_initial_value=truck1)
+    problem.add_fluent(backup, default_initial_value=truck2)
+    problem.add_fluent(spare, default_initial_value=van1)
+
+    done_match = Fluent("done_match", BoolType())
+    done_differ = Fluent("done_differ", BoolType())
+    problem.add_fluent(done_match, default_initial_value=False)
+    problem.add_fluent(done_differ, default_initial_value=False)
+
+    set_leader = InstantaneousAction("set_leader", v=Vehicle)
+    set_leader.add_effect(leader, set_leader.parameter("v"))
+
+    set_backup = InstantaneousAction("set_backup", t=Truck)
+    set_backup.add_effect(backup, set_backup.parameter("t"))
+
+    # `spare` has a single possible value (Van has only one object), but it
+    # still needs a writer -- an effect-less fluent risks being folded into a
+    # static constant at compile time, which would turn every `spare`
+    # comparison below into the already-covered `fluent == object` case
+    # instead of the fluent-vs-fluent one this problem exists to exercise.
+    set_spare = InstantaneousAction("set_spare", vn=Van)
+    set_spare.add_effect(spare, set_spare.parameter("vn"))
+
+    match = InstantaneousAction("match")
+    match.add_precondition(Equals(leader, backup))
+    match.add_effect(done_match, True)
+
+    differ = InstantaneousAction("differ")
+    differ.add_precondition(Not(Equals(leader, spare)))
+    differ.add_effect(done_differ, True)
+
+    impossible = InstantaneousAction("impossible")
+    impossible.add_precondition(Equals(backup, spare))
+    impossible.add_effect(done_match, True)
+
+    problem.add_actions([set_leader, set_backup, set_spare, match, differ, impossible])
+
+    problem.add_goal(done_match)
+    problem.add_goal(done_differ)
+
+    return problem
+
+
 def get_problem_flight() -> Problem:
     problem = Problem("flight")
     City = UserType("City")

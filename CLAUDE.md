@@ -157,6 +157,52 @@ Adjust `--space-limit` (MB) down for a single test file/case, and prefer targeti
 
 Rust implementation lives in [crates/rustamer-base/src/](crates/rustamer-base/src/) (core library) and [crates/rustamer/src/](crates/rustamer/src/) (PyO3 bindings).
 
+**`"=="` covers both numeric and object equality; classification is derived from
+`fluent_types`, not sniffed from operands.** UP's `EQUALS` covers both numeric
+equality and user-type (object) equality, and both compile down to the same
+`"=="` / `ExpressionNode::Equals` node -- there is no separate operator kind for
+the two. `DeleteRelaxationHeuristic._is_numeric_leaf_expression`
+(`src/tamerlite/core/heuristics.py`) / `is_numeric_leaf_expression`
+(`crates/rustamer-base/src/heuristics.rs`) therefore decide per-operand, via
+`_is_object_typed_operand`/`is_object_typed`: an operand is object-typed if it's
+a literal object, or a `FluentNode`/`Fluent` whose `fluent_types` entry is a
+user type (anything other than `bool`/`int`/`real`). This replaced an earlier,
+buggy version that only checked for a literal `ObjectNode` operand -- a fluent
+compared to *another* fluent of the same object type (`loc_a == loc_b`) has no
+such literal, so it was misclassified as numeric, rewritten into `<=`/`<`
+pairs, and crashed both backends.
+
+The delete relaxation's cost table only ever holds `fluent == object` facts
+(seeded from the state and from operator effects), so a fluent-vs-fluent
+object equality has nothing to match once it's correctly classified as
+non-numeric -- it must be expanded before it can reach the cost table, exactly,
+in both polarities:
+
+- `fluent1 == fluent2` into `OR` over `o` in the intersection of both
+  fluents' domains of `(fluent1 == o AND fluent2 == o)`.
+- `not(fluent1 == fluent2)` into `OR` over every ordered pair `(o1, o2)` with
+  `o1 != o2`, one from each fluent's domain, of `(fluent1 == o1 AND fluent2 == o2)`.
+
+(`_simplify_object_equality`/`simplify_object_equality` in the two
+`heuristics.py`/`.rs` files, sibling to the pre-existing `fluent != object`
+rewrite.) Domain iteration order (first fluent's domain outer, second's inner,
+first fluent's atom before the second's in each conjunct) must match
+**exactly** between the two cores -- `hff`'s relaxed-plan extraction breaks
+ties in an `OR` by operand order, so a different order changes
+`expanded_states`, which `check_metrics_equality` asserts identical between
+backends.
+
+Because there's no separate node kind marking object equality, the shape
+`fluent1 == fluent2` (or its negation) that `_simplify_object_equality` matches
+would equally match a *numeric* fluent-vs-fluent equality. What prevents that:
+`_simplify_leaf`/`simplify_leaf`'s dispatch tries the numeric rewrite first and
+never falls through when it applies, so a numeric leaf never reaches the
+object-equality rule -- this ordering is load-bearing, not an optimization.
+The invariant is exercised by `problems_generator.get_problem_object_equality_fluents`
+(both polarities, hierarchical types, an always-false sibling-type equality for
+the empty-domain-intersection case) via `tests/test_engine.py`'s
+cross-backend/cross-heuristic parametrization.
+
 ### Problem encoding ([src/tamerlite/encoder.py](src/tamerlite/encoder.py))
 
 `Encoder` bridges Unified Planning and TamerLite's internal search space:
