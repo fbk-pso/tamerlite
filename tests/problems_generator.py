@@ -571,6 +571,126 @@ def get_problem_duration_fluent_relevance() -> Problem:
     return problem
 
 
+def get_problem_dedup_relevant_classical() -> Problem:
+    """A single-action, non-temporal problem with a pure bookkeeping fluent
+    (`cost`, bumped by `turn_on`'s own increase effect and read nowhere else)
+    alongside the fluent that actually drives the goal (`ready`). Isolates
+    `Encoder._compute_dedup_relevant_fluents`'s self-reference exclusion: the
+    desugared `cost := cost + 1` assignment reads `cost` on its own
+    right-hand side, so without filtering `f != eff.fluent` this fluent
+    would trivially mark itself relevant and the reduction would collapse to
+    `None`, hiding the very bug this analysis exists to prevent. Exercises
+    the plain `not is_temporal` dedup path.
+    """
+    problem = Problem("dedup_relevant_classical")
+
+    ready = Fluent("ready")
+    cost = Fluent("cost", IntType())
+
+    turn_on = InstantaneousAction("turn_on")
+    turn_on.add_precondition(Not(ready))
+    turn_on.add_effect(ready, True)
+    turn_on.add_increase_effect(cost, 1)
+
+    problem.add_fluent(ready, default_initial_value=False)
+    problem.add_fluent(cost, default_initial_value=0)
+    problem.add_action(turn_on)
+
+    problem.add_goal(ready)
+
+    return problem
+
+
+def get_problem_dedup_relevant_temporal() -> Problem:
+    """The temporal counterpart to `get_problem_dedup_relevant_classical`:
+    the same self-referencing bookkeeping fluent (`tcost`, bumped by `run`'s
+    own start effect), but on a `DurativeAction` whose duration bound reads
+    `charge` -- exercising the branch of `_compute_dedup_relevant_fluents`
+    that pulls duration-bound fluents into the relevant set, mirroring
+    `_compute_relevant_actions`'s precedent (see
+    `get_problem_duration_fluent_relevance` above).
+
+    `tune` writing `charge` is load-bearing, not incidental: a fluent with
+    no writer anywhere is constant-folded by UP's `GROUNDING` compiler
+    straight into the duration bound (the ground action ends up with a
+    literal `[1, 10]`, no fluent reference left at all), which would make
+    `charge` correctly but uninterestingly absent from the ground problem's
+    fluents entirely, rather than exercising the duration-bound-read branch.
+
+    Exercises the temporal `weak_equality` dedup path
+    (`WeakEqState.fluents`), since `is_temporal and not weak_equality` never
+    dedups at all.
+    """
+    problem = Problem("dedup_relevant_temporal")
+
+    charge = Fluent("charge", RealType(0, 100))
+    done = Fluent("done")
+    tcost = Fluent("tcost", IntType())
+
+    tune = InstantaneousAction("tune")
+    tune.add_effect(charge, 10)
+
+    run = DurativeAction("run")
+    run.set_duration_constraint(DurationInterval(Int(1), charge()))
+    run.add_increase_effect(StartTiming(), tcost, 1)
+    run.add_effect(EndTiming(), done, True)
+
+    problem.add_fluent(charge, default_initial_value=0)
+    problem.add_fluent(done, default_initial_value=False)
+    problem.add_fluent(tcost, default_initial_value=0)
+    problem.add_action(tune)
+    problem.add_action(run)
+
+    problem.add_goal(done)
+
+    return problem
+
+
+def get_problem_dedup_relevant_transitive() -> Problem:
+    """A single-action, non-temporal problem with a *chain* of bookkeeping
+    fluents, alongside the fluent that actually drives the goal (`ready`):
+
+    - `counter` is bumped by `turn_on`'s own increase effect (self-referencing
+      RHS, like `get_problem_dedup_relevant_classical`'s `cost`).
+    - `log` is assigned `counter`'s value, and is read by nothing else.
+
+    Neither fluent is read by any condition, goal, or duration bound, so both
+    are irrelevant to search outcome. But a one-step "everything read by an
+    effect's RHS is relevant" rule (the reduction's pre-fixpoint shape) would
+    incorrectly keep `counter`: `log`'s RHS reads it, and `log != counter` so
+    a same-fluent self-reference exclusion alone doesn't filter it out. Only
+    the least-fixpoint closure -- an effect's RHS matters only if the fluent
+    it writes matters -- correctly drops both, since `log` itself is never
+    seeded as relevant. Isolates that transitive case, distinct from
+    `get_problem_dedup_relevant_classical`'s direct self-reference.
+
+    Both `counter` and `log` need a writer, like `get_problem_dedup_relevant_temporal`'s
+    `charge`: a fluent with no writer anywhere is constant-folded away entirely
+    by UP's `GROUNDING` compiler / `Simplifier`, rather than exercising the
+    closure. Exercises the plain `not is_temporal` dedup path.
+    """
+    problem = Problem("dedup_relevant_transitive")
+
+    ready = Fluent("ready")
+    counter = Fluent("counter", IntType())
+    log = Fluent("log", IntType())
+
+    turn_on = InstantaneousAction("turn_on")
+    turn_on.add_precondition(Not(ready))
+    turn_on.add_effect(ready, True)
+    turn_on.add_effect(log, counter)
+    turn_on.add_increase_effect(counter, 1)
+
+    problem.add_fluent(ready, default_initial_value=False)
+    problem.add_fluent(counter, default_initial_value=0)
+    problem.add_fluent(log, default_initial_value=0)
+    problem.add_action(turn_on)
+
+    problem.add_goal(ready)
+
+    return problem
+
+
 def get_problem_temporal_no_start_event() -> Problem:
     """A temporal problem with:
     - `noop`, a durative action with no conditions and no effects at all, so

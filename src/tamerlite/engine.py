@@ -135,6 +135,7 @@ class SearchParams(HeuristicParams):
     inadmissible_numeric_heuristic_variant: bool = False
     early_termination: bool = False
     weak_equality: bool = False
+    relevant_equality: bool = True
     symmetry_breaking: bool = True
     compression_safe_actions: bool = True
     relevance_analysis: bool = True
@@ -148,6 +149,7 @@ class MultiqueueParams:
     inadmissible_numeric_heuristic_variant: bool = False
     early_termination: bool = False
     weak_equality: bool = False
+    relevant_equality: bool = True
     symmetry_breaking: bool = True
     compression_safe_actions: bool = True
     relevance_analysis: bool = True
@@ -789,6 +791,8 @@ class TamerLite(
                 self._params.symmetry_breaking,
                 self._params.compression_safe_actions,
                 self._params.relevance_analysis,
+                self._params.relevant_equality,
+                self._params.weak_equality,
                 deadline=deadline,
                 if_cache=if_cache,
                 if_wrappers=if_wrappers,
@@ -831,10 +835,18 @@ class TamerLite(
                     self._params.symmetry_breaking,
                     self._params.compression_safe_actions,
                     self._params.relevance_analysis,
+                    self._params.relevant_equality,
+                    self._params.weak_equality,
                     deadline=deadline,
                     if_cache=if_cache,
                     if_wrappers=if_wrappers,
                     lifted_problem_kind=lifted_problem_kind,
+                )
+
+            if self._params.weak_equality and not encoder.search_space.is_temporal:
+                warnings.warn(
+                    "weak_equality has no effect on non-temporal problems.",
+                    stacklevel=2,
                 )
 
             if isinstance(self._params, MultiqueueParams):

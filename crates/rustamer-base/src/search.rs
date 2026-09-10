@@ -15,6 +15,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 
+use im::Vector;
 use log::{debug, info};
 use min_max_heap::MinMaxHeap;
 use std::collections::VecDeque;
@@ -30,6 +31,7 @@ use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use pyo3::exceptions::PyTimeoutError;
 use pyo3::prelude::*;
 
+use super::expressions::ExpressionNode;
 use super::heuristics::*;
 use super::search_space::*;
 use super::search_state::*;
@@ -135,26 +137,51 @@ impl<T: Ord> BoundedPriorityQueue<T> {
     }
 }
 
-pub struct WeakEqState {
+/// `fluents = None` compares/hashes the full `assignments` vector. `fluents = Some(_)` restricts
+/// both to a chosen subset of fluent indices -- e.g. excluding pure
+/// bookkeeping fluents (an accumulated cost counter) that never affect reachability but
+/// would otherwise make every path to "the same" physical state look like a distinct one.
+///
+/// Also compares `todo` (durative actions in progress), which is what the temporal
+/// `weak_equality` dedup path needs. On the classical (`!is_temporal()`) dedup path
+/// `todo` is always empty, so that comparison is a no-op there.
+pub struct WeakEqState<'a> {
     pub state: Rc<State>,
+    pub fluents: Option<&'a [usize]>,
 }
 
-impl PartialEq for WeakEqState {
+impl PartialEq for WeakEqState<'_> {
     fn eq(&self, other: &Self) -> bool {
-        weak_eq(&self.state, &other.state)
+        weak_eq(&self.state, &other.state, self.fluents)
     }
 }
 
-impl Eq for WeakEqState {}
+impl Eq for WeakEqState<'_> {}
 
-impl Hash for WeakEqState {
+impl Hash for WeakEqState<'_> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        Hash::hash(&self.state.assignments, state);
+        match self.fluents {
+            Some(fluents) => {
+                for &i in fluents {
+                    self.state.assignments[i].hash(state);
+                }
+            }
+            None => Hash::hash(&self.state.assignments, state),
+        }
     }
 }
 
-pub fn weak_eq(state1: &State, state2: &State) -> bool {
-    if state1.todo.len() != state2.todo.len() || state1.assignments != state2.assignments {
+pub fn weak_eq(state1: &State, state2: &State, fluents: Option<&[usize]>) -> bool {
+    if state1.todo.len() != state2.todo.len() {
+        return false;
+    }
+    let assignments_eq = match fluents {
+        Some(fluents) => fluents
+            .iter()
+            .all(|&i| state1.assignments[i] == state2.assignments[i]),
+        None => state1.assignments == state2.assignments,
+    };
+    if !assignments_eq {
         return false;
     }
     for (a, (idx, _)) in &state1.todo {
@@ -164,6 +191,27 @@ pub fn weak_eq(state1: &State, state2: &State) -> bool {
         }
     }
     true
+}
+
+/// Same purpose as WeakEqState, for dedup keys built from a plain &Vector<ExpressionNode>
+/// rather than an owned Rc<State> (the memory-bounded bloom-filter path only ever needs to
+/// hash a key, never to store/compare full states in a set).
+pub struct DedupKey<'a> {
+    assignments: &'a Vector<ExpressionNode>,
+    fluents: Option<&'a [usize]>,
+}
+
+impl Hash for DedupKey<'_> {
+    fn hash<H: Hasher>(&self, hasher: &mut H) {
+        match self.fluents {
+            Some(fluents) => {
+                for &i in fluents {
+                    self.assignments[i].hash(hasher);
+                }
+            }
+            None => Hash::hash(self.assignments, hasher),
+        }
+    }
 }
 
 pub fn extract_path(state: &State) -> Vec<Action> {
@@ -196,17 +244,17 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         return Ok((Some(extract_path(&init)), metrics));
     }
 
-    // State and WeakEqState contain interior mutability only for heuristic caches.
-    // The mutable fields are ignored by Hash/Eq, so using them as HashSet keys is safe.
-    #[allow(clippy::mutable_key_type)]
-    let mut visited_weak_eq_states = FxHashSet::with_hasher(FxBuildHasher);
+    let dedup_relevant_fluents = ss.dedup_relevant_fluents();
+    let dedup = !ss.is_temporal() || weak_equality;
+    // State and WeakEqState contain interior mutability only for heuristic
+    // caches. The mutable fields are ignored by Hash/Eq, so using them as HashSet keys is
+    // safe.
     #[allow(clippy::mutable_key_type)]
     let mut visited_states = FxHashSet::with_hasher(FxBuildHasher);
-    if !ss.is_temporal() {
-        visited_states.insert(Rc::clone(&init));
-    } else if weak_equality {
-        visited_weak_eq_states.insert(WeakEqState {
+    if dedup {
+        visited_states.insert(WeakEqState {
             state: Rc::clone(&init),
+            fluents: dedup_relevant_fluents,
         });
     }
 
@@ -253,15 +301,11 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
                 .filter_map(|rs| match rs {
                     Ok(s) => {
                         let s = Rc::new(s);
-                        let keep = if !ss.is_temporal() {
-                            visited_states.insert(Rc::clone(&s))
-                        } else if weak_equality {
-                            visited_weak_eq_states.insert(WeakEqState {
+                        let keep = !dedup
+                            || visited_states.insert(WeakEqState {
                                 state: Rc::clone(&s),
-                            })
-                        } else {
-                            true
-                        };
+                                fluents: dedup_relevant_fluents,
+                            });
                         keep.then_some(Ok(s))
                     }
                     Err(e) => Some(Err(e)),
@@ -321,6 +365,7 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
         return Ok((Some(extract_path(&init)), metrics));
     }
 
+    let dedup_relevant_fluents = ss.dedup_relevant_fluents();
     let mut visited_states: Option<BloomFilter<RandomState>> = if !ss.is_temporal() || weak_equality
     {
         const BLOOM_ITEMS: usize = 20_000_000;
@@ -328,7 +373,10 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
         let mut visited_states = BloomFilter::with_false_pos(BLOOM_FP_RATE)
             .hasher(RandomState::default())
             .expected_items(BLOOM_ITEMS);
-        visited_states.insert(&init.assignments);
+        visited_states.insert(&DedupKey {
+            assignments: &init.assignments,
+            fluents: dedup_relevant_fluents,
+        });
         Some(visited_states)
     } else {
         None
@@ -379,7 +427,10 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
                 .filter_map(|rs| match rs {
                     Ok(s) => {
                         let keep = if let Some(ref mut visited) = visited_states {
-                            !visited.insert(&s.assignments)
+                            !visited.insert(&DedupKey {
+                                assignments: &s.assignments,
+                                fluents: dedup_relevant_fluents,
+                            })
                         } else {
                             true
                         };
@@ -548,12 +599,13 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     let mut open = VecDeque::new();
     open.push_back(init);
 
-    // State and WeakEqState contain interior mutability only for heuristic caches.
-    // The mutable fields are ignored by Hash/Eq, so using them as HashSet keys is safe.
+    let dedup_relevant_fluents = ss.dedup_relevant_fluents();
+    let dedup = !ss.is_temporal() || weak_equality;
+    // State and WeakEqState contain interior mutability only for heuristic
+    // caches. The mutable fields are ignored by Hash/Eq, so using them as HashSet keys is
+    // safe.
     #[allow(clippy::mutable_key_type)]
     let mut closed = FxHashSet::with_hasher(FxBuildHasher);
-    #[allow(clippy::mutable_key_type)]
-    let mut closed_weak_eq = FxHashSet::with_hasher(FxBuildHasher);
     while let Some(state) = open.pop_front() {
         if let Some(t) = timeout {
             if start.elapsed().unwrap().as_secs_f32() > t {
@@ -571,11 +623,10 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
             metrics.insert("goal_depth".to_string(), state.g.to_string());
             return Ok((Some(extract_path(&state)), metrics));
         } else {
-            if !ss.is_temporal() {
-                closed.insert(Rc::clone(&state));
-            } else if weak_equality {
-                closed_weak_eq.insert(WeakEqState {
+            if dedup {
+                closed.insert(WeakEqState {
                     state: Rc::clone(&state),
+                    fluents: dedup_relevant_fluents,
                 });
             }
 
@@ -584,12 +635,12 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
                 .filter_map(|rs| match rs {
                     Ok(s) => {
                         let s = Rc::new(s);
-                        if !ss.is_temporal() {
-                            (!closed.contains(&s)).then_some(Ok(s))
-                        } else if weak_equality {
-                            let weak_eq_state = WeakEqState { state: s };
-                            (!closed_weak_eq.contains(&weak_eq_state))
-                                .then_some(Ok(weak_eq_state.state))
+                        if dedup {
+                            let weak_eq_state = WeakEqState {
+                                state: s,
+                                fluents: dedup_relevant_fluents,
+                            };
+                            (!closed.contains(&weak_eq_state)).then_some(Ok(weak_eq_state.state))
                         } else {
                             Some(Ok(s))
                         }
@@ -628,7 +679,6 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
                     best_h, expanded_states, generated_states
                 );
                 closed.clear();
-                closed_weak_eq.clear();
             }
         }
     }

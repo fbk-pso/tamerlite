@@ -49,6 +49,7 @@ type PyDurationInterval = (Vec<PyExpressionNode>, Vec<PyExpressionNode>, bool, b
 pub trait SearchSpaceTrait {
     fn is_temporal(&self) -> bool;
     fn tn_interpreter(&self) -> &TNInterpreter;
+    fn dedup_relevant_fluents(&self) -> Option<&[usize]>;
     fn initial_state(&self, initial_state: Option<Vec<PyExpressionNode>>) -> PyResult<State>;
     fn get_successor_state(&self, state: &State, action: Action) -> PyResult<Option<State>>;
     fn get_successor_states_iter<'a>(
@@ -166,6 +167,7 @@ pub struct SearchSpace {
     actions_duration: Vec<Option<DurationInterval>>,
     events: FxHashMap<Action, Vec<(Timing, Event)>>,
     relevant_actions: Vec<Action>,
+    dedup_relevant_fluents: Option<Vec<usize>>,
     compression_safe_actions: Option<Vec<bool>>,
     event_fluents: EventFluents,
     mutex: MutexChecker,
@@ -185,7 +187,7 @@ pub struct SearchSpace {
 #[pymethods]
 impl SearchSpace {
     #[new]
-    #[pyo3(signature = (actions_duration, events, actions, compression_safe_actions, action_objects, obj_to_prev_actions_map, initial_state=None, goal=None, relevant_actions=None, deadline=None, epsilon=None))]
+    #[pyo3(signature = (actions_duration, events, actions, compression_safe_actions, action_objects, obj_to_prev_actions_map, initial_state=None, goal=None, relevant_actions=None, deadline=None, epsilon=None, dedup_relevant_fluents=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         actions_duration: Vec<Option<PyDurationInterval>>,
@@ -199,6 +201,7 @@ impl SearchSpace {
         relevant_actions: Option<Vec<Action>>,
         #[pyo3(from_py_with = get_option_big_rational)] deadline: Option<BigRational>,
         #[pyo3(from_py_with = get_option_big_rational)] epsilon: Option<BigRational>,
+        dedup_relevant_fluents: Option<Vec<usize>>,
     ) -> PyResult<Self> {
         let relevant_actions = if let Some(relevant_actions) = relevant_actions {
             relevant_actions
@@ -287,6 +290,7 @@ impl SearchSpace {
             },
             is_temporal,
             counter: Mutex::new(0),
+            dedup_relevant_fluents,
         };
         Ok(res)
     }
@@ -307,6 +311,18 @@ impl SearchSpace {
     #[pyo3(name = "relevant_actions")]
     fn py_set_relevant_actions(&mut self, relevant_actions: Vec<Action>) {
         self.relevant_actions = relevant_actions;
+    }
+
+    #[getter]
+    #[pyo3(name = "dedup_relevant_fluents")]
+    fn py_dedup_relevant_fluents(&self) -> Option<Vec<usize>> {
+        self.dedup_relevant_fluents.clone()
+    }
+
+    #[setter]
+    #[pyo3(name = "dedup_relevant_fluents")]
+    fn py_set_dedup_relevant_fluents(&mut self, dedup_relevant_fluents: Option<Vec<usize>>) {
+        self.dedup_relevant_fluents = dedup_relevant_fluents;
     }
 
     #[pyo3(name = "reset")]
@@ -623,6 +639,10 @@ impl SearchSpaceTrait for SearchSpace {
 
     fn tn_interpreter(&self) -> &TNInterpreter {
         &self.tn_interpreter
+    }
+
+    fn dedup_relevant_fluents(&self) -> Option<&[usize]> {
+        self.dedup_relevant_fluents.as_deref()
     }
 
     fn reset(&self) {

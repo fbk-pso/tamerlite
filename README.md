@@ -68,6 +68,7 @@ Defines parameters for a single search strategy.
 | `inadmissible_numeric_heuristic_variant` | `bool`            | Enable the inadmissible numeric variant for `hff`, `hadd`, `hmax` heuristics. Default: `False`.                                                            |
 | `early_termination`                      | `bool`            | Stop as soon as a generated successor state satisfies the goal, instead of waiting until the state is selected for expansion. Default: `False`.            |
 | `weak_equality`                          | `bool`            | Use weaker state equality on temporal problems. If no plan is found, retry with weak equality disabled. Default: `False`.                                  |
+| `relevant_equality`                      | `bool`            | Restrict the duplicate-state detection key to fluents that can affect search outcome, ignoring pure bookkeeping fluents. Default: `True`.                 |
 | `symmetry_breaking`                      | `bool`            | Prune equivalent symmetric states during search. Default: `True`.                                                                                          |
 | `compression_safe_actions`               | `bool`            | Enable contiguous expansion of compression-safe temporal actions. Default: `True`.                                                                         |
 | `relevance_analysis`                     | `bool`            | Filter out actions that cannot contribute to the goal. Default: `True`.                                                                                    |
@@ -87,6 +88,7 @@ Defines a multi-queue search strategy composed of multiple `HeuristicParams`.
 | `symmetry_breaking`                      | `bool`                  | Prune equivalent symmetric states during search. Default: `True`.                                                                                          |
 | `compression_safe_actions`               | `bool`                  | Enable contiguous expansion of compression-safe temporal actions. Default: `True`.                                                                         |
 | `relevance_analysis`                     | `bool`                  | Filter out actions that cannot contribute to the goal. Default: `True`.                                                                                    |
+| `relevant_equality`                      | `bool`                  | Restrict the duplicate-state detection key to fluents that can affect search outcome, ignoring pure bookkeeping fluents. Default: `True`.                 |
 
 ### Example
 
