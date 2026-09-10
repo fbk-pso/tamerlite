@@ -272,10 +272,13 @@ class Converter(DagWalker):
         else:
             a0 = args[0]
             a1 = args[1]
+        # UP's `EQUALS` covers both numeric equality and user-type (object)
+        # equality; the two need different node kinds downstream
+        kind = "==obj" if expression.arg(0).type.is_user_type() else "=="
         return (
             a0
             + tuple(shift_expression(a1, len(a0)))
-            + (make_operator_node("==", (len(a0) - 1, len(a0) + len(a1) - 1)),)
+            + (make_operator_node(kind, (len(a0) - 1, len(a0) + len(a1) - 1)),)
         )
 
     def walk_fluent_exp(self, expression: FNode, args: list[Expression]) -> Expression:

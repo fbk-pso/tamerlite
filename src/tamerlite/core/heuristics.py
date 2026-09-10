@@ -312,16 +312,9 @@ class DeleteRelaxationHeuristic(Heuristic):
     ) -> HeuristicExpression:
         """Simplify leaf expressions in a condition.
 
-        Each `LeafNode` in the condition is rewritten when possible.
-        The following simplifications are applied:
-
-        - Simple numeric leaf expressions containing logical negation (`not`)
-        or equality (`==`) are simplified, unless numeric reasoning is disabled.
-        - Fluent-object inequality expressions (`fluent != object`) are
-        rewritten into an equivalent form.
-
-        Leaf nodes that do not match any simplification rule, non-leaf nodes, and
-        leaf nodes containing interpreted-function calls are left unchanged.
+        Each `LeafNode` in the condition is rewritten when possible, via
+        `_simplify_leaf` -- see there for the rules and their order. Non-leaf
+        nodes, and leaf nodes no rule matches, are left unchanged.
 
         Args:
             condition: A heuristic expression.
@@ -332,24 +325,55 @@ class DeleteRelaxationHeuristic(Heuristic):
 
         new_condition: list[HeuristicExpressionNode] = []
         for node in condition:
-            new_nodes = None
-            if isinstance(node, LeafNode) and not has_interpreted_function(
-                node.expression
-            ):
-                if (
-                    not self._disable_numeric_reasoning
-                    and self._is_numeric_leaf_expression(node)
-                ):
-                    new_nodes = self._simplify_numeric_leaf_node(node)
-                else:
-                    new_nodes = self._simplify_fluent_not_equals_object_expression(node)
-
+            new_nodes = (
+                self._simplify_leaf(node) if isinstance(node, LeafNode) else None
+            )
             if new_nodes is None:
                 new_condition.append(node)
             else:
                 new_condition.extend(new_nodes)
 
         return tuple(new_condition)
+
+    def _simplify_leaf(self, node: LeafNode) -> HeuristicExpression | None:
+        """Try each leaf-rewrite rule in turn; the first one whose shape
+        matches `node` wins.
+
+        - A leaf containing an interpreted-function call matches no rule --
+        the callable is opaque, evaluated at search time.
+        - A numeric leaf (equality/`<=`/`<` over a linear expression, or its
+        negation) is simplified, unless numeric reasoning is disabled, in
+        which case it's left as-is. Either way, no other rule is tried: a
+        numeric leaf's root is never `"==obj"`, so the two object-equality
+        rules below could never match it anyway.
+        - Otherwise, a `fluent != object` expression is rewritten into a
+        disjunction of equalities.
+        - Otherwise, an object-equality expression between two fluents
+        (`fluent1 == fluent2`, `not(fluent1 == fluent2)`) is rewritten into an
+        equivalent disjunction of `fluent == object` facts.
+
+        Returns:
+            The rewritten expression, or `None` if no rule matches (`node`
+            should be kept as-is).
+        """
+
+        if has_interpreted_function(node.expression):
+            return None
+
+        if self._is_numeric_leaf_expression(node):
+            if self._disable_numeric_reasoning:
+                return None
+            return self._simplify_numeric_leaf_node(node)
+
+        for simplify in (
+            self._simplify_fluent_not_equals_object_expression,
+            self._simplify_object_equality,
+        ):
+            new_nodes = simplify(node)
+            if new_nodes is not None:
+                return new_nodes
+
+        return None
 
     def _simplify_numeric_leaf_node(self, node: LeafNode) -> HeuristicExpression | None:
         """Simplify a simple numeric leaf node expression.
@@ -459,12 +483,12 @@ class DeleteRelaxationHeuristic(Heuristic):
             and isinstance(exp[0], FluentNode)
             and isinstance(exp[1], ObjectNode)
             and isinstance(exp[2], Op)
-            and exp[2].kind == "=="
+            and exp[2].kind == "==obj"
             and isinstance(exp[3], Op)
             and exp[3].kind == "not"
         ):
             nodes: list[HeuristicExpressionNode] = [
-                LeafNode((exp[0], ObjectNode(obj), Op("==", (0, 1))))
+                LeafNode((exp[0], ObjectNode(obj), Op("==obj", (0, 1))))
                 for obj in self._objects[self._fluent_types[exp[0].fluent]]
                 if obj != exp[1].object
             ]
@@ -474,6 +498,91 @@ class DeleteRelaxationHeuristic(Heuristic):
                 nodes.append(OrNode(len(nodes)))
             return tuple(nodes)
         return None
+
+    def _simplify_object_equality(self, node: LeafNode) -> HeuristicExpression | None:
+        """Simplify an equality (or its negation) between two object-typed
+        fluents.
+
+        The delete relaxation's cost table only ever holds `fluent == object`
+        facts -- seeded from the state and achieved by operator effects, see
+        `_eval_core` -- so a leaf comparing two fluents to each other has
+        nothing to match against and would otherwise dead-end every state
+        that needs it. Both polarities are expanded exactly:
+
+            `fluent1 == fluent2` into
+                `(fluent1 == o and fluent2 == o) or ...`
+            for `o` ranging over the objects both fluents can hold (the
+            intersection of their domains -- hierarchical types mean the two
+            fluents can be declared at different type names while still
+            sharing objects).
+
+            `not(fluent1 == fluent2)` into
+                `(fluent1 == o1 and fluent2 == o2) or ...`
+            for every ordered pair `(o1, o2)` with `o1 != o2`, one from each
+            fluent's domain.
+
+        Iteration order (fluent1's domain outer, fluent2's inner, fluent1's
+        atom before fluent2's in each conjunct) must match the Rust core's
+        `simplify_object_equality` exactly -- `_cost`'s `OrNode` handling
+        breaks ties by operand order, so a different order can change the
+        relaxed plan and, with it, `expanded_states`.
+
+        Args:
+            node: A `LeafNode` potentially representing `fluent1 == fluent2`
+                or its negation.
+
+        Returns:
+            A new `HeuristicExpression` representing the expanded disjunction
+            if simplification is possible; otherwise, `None`.
+        """
+
+        exp = node.expression
+        is_equality_shape = (
+            len(exp) >= 3
+            and isinstance(exp[0], FluentNode)
+            and isinstance(exp[1], FluentNode)
+            and isinstance(exp[2], Op)
+            and exp[2].kind == "==obj"
+        )
+        positive = is_equality_shape and len(exp) == 3
+        negative = (
+            is_equality_shape
+            and len(exp) == 4
+            and isinstance(exp[3], Op)
+            and exp[3].kind == "not"
+        )
+        if not positive and not negative:
+            return None
+
+        f1, f2 = exp[0], exp[1]
+        assert isinstance(f1, FluentNode) and isinstance(f2, FluentNode)
+        objs1 = self._objects[self._fluent_types[f1.fluent]]
+        objs2 = self._objects[self._fluent_types[f2.fluent]]
+
+        nodes: list[HeuristicExpressionNode] = []
+        if positive:
+            objs2_set = set(objs2)
+            for o in objs1:
+                if o not in objs2_set:
+                    continue
+                nodes.append(LeafNode((f1, ObjectNode(o), Op("==obj", (0, 1)))))
+                nodes.append(LeafNode((f2, ObjectNode(o), Op("==obj", (0, 1)))))
+                nodes.append(AndNode(2))
+        else:
+            for o1 in objs1:
+                for o2 in objs2:
+                    if o1 == o2:
+                        continue
+                    nodes.append(LeafNode((f1, ObjectNode(o1), Op("==obj", (0, 1)))))
+                    nodes.append(LeafNode((f2, ObjectNode(o2), Op("==obj", (0, 1)))))
+                    nodes.append(AndNode(2))
+
+        num_disjuncts = len(nodes) // 3
+        if num_disjuncts == 0:
+            return (LeafNode((False,)),)
+        if num_disjuncts > 1:
+            nodes.append(OrNode(num_disjuncts))
+        return tuple(nodes)
 
     def _build_operator_condition(
         self, conditions: list[Expression], extra_fluent: FluentNode
@@ -618,14 +727,7 @@ class DeleteRelaxationHeuristic(Heuristic):
 
             exp_node = exp[i]
             if isinstance(exp_node, Op):
-                if exp_node.kind != "==":
-                    return True
-
-                op1, op2 = exp_node.operands
-                if not isinstance(exp[op1], ObjectNode) and not isinstance(
-                    exp[op2], ObjectNode
-                ):
-                    return True
+                return exp_node.kind != "==obj"
 
         return False
 
@@ -868,7 +970,8 @@ class DeleteRelaxationHeuristic(Heuristic):
             elif v is False:
                 k = (FluentNode(f), Op("not", (0,)))
             else:
-                k = (FluentNode(f), v, Op("==", (0, 1)))
+                kind = "==obj" if isinstance(v, ObjectNode) else "=="
+                k = (FluentNode(f), v, Op(kind, (0, 1)))
             costs[k] = 0.0
 
         for cond in self._simple_numeric_conds:
@@ -917,7 +1020,11 @@ class DeleteRelaxationHeuristic(Heuristic):
                         elif e is False:
                             k = (FluentNode(f), Op("not", (0,)))
                         else:
-                            k = (FluentNode(f), e, Op("==", (0, 1)))
+                            # `Operator.effects` only ever holds bool or
+                            # `ObjectNode` values (numeric effects are kept
+                            # separately, see `_update_numeric_effects`), so
+                            # `e` here is always an `ObjectNode`.
+                            k = (FluentNode(f), e, Op("==obj", (0, 1)))
                         achieved_expressions.append((k, o.cost + c))
 
                     for simple_cond in self._achieved_simple_numeric_conds[o.id]:

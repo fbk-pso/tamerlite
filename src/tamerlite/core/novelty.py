@@ -52,12 +52,12 @@ Implementation notes:
   `tamerlite.core.search_space.Expression` is already a frozen, hashable,
   structurally-comparable tuple, so no separate id-remapping table is
   needed (see `_leaf_index` below).
-- A subgoal's propositional-vs-numeric classification is structural for
-  ``<=``/``<`` (always numeric -- only `int`/`Fraction` support ordering);
-  ``==`` needs a one-time runtime probe against the initial state, since it
-  can compare numbers *or* objects and tamerlite's postfix `Expression`
-  doesn't carry fluent types at the leaf level. A ``not(...)`` leaf is
-  always treated as propositional-only.
+- A subgoal's propositional-vs-numeric classification is structural and
+  eager, for ``<=``/``<``/``==`` alike (always numeric -- only
+  `int`/`Fraction` support ordering, and ``Converter.walk_equals`` tags
+  object equality with its own ``"==obj"`` kind, so a bare ``"=="`` root
+  always means numeric equality). A ``not(...)`` leaf, and an ``"==obj"``
+  leaf, are always treated as propositional-only.
 - The distance feature (`_sdist_and_sat`) is computed once per state, in one
   place, alongside satisfaction (avoiding a second, redundant evaluation of
   both operands just to get a boolean already implicit in the distance), in
@@ -129,12 +129,12 @@ class NumericNovelty:
     """Partitioned numeric novelty over the subgoals of `events`/`goals`.
 
     Construct once per search (subgoal catalogue only, no state needed), call
-    `start(initial_state, initial_h)` once to fix the partition count and
-    resolve `==` ambiguity, then call `eval(...)` once per generated state,
-    in generation order, passing its parent. Not thread-safe / not reusable
-    across searches without calling `start` again -- construct a fresh
-    instance per search call, including per anytime cold-restart iteration
-    (see `TamerLite._anytime_solutions`).
+    `start(initial_h)` once to fix the partition count, then
+    call `eval(...)` once per generated state, in generation order, passing
+    its parent. Not thread-safe / not reusable across searches without
+    calling `start` again -- construct a fresh instance per search call,
+    including per anytime cold-restart iteration (see
+    `TamerLite._anytime_solutions`).
     """
 
     def __init__(
@@ -144,11 +144,10 @@ class NumericNovelty:
     ):
         self._leaves: list[Expression] = []
         self._leaf_index: dict[Expression, int] = {}
-        # (leaf_id, lhs, rhs, kind) for "<="/"<" (resolved eagerly, always
-        # numeric) and "==" (resolved lazily in `start`, since only a state
-        # probe can tell numeric equality from object equality).
+        # (leaf_id, lhs, rhs, kind) for "<="/"<"/"==" -- all resolved
+        # eagerly, always numeric ("==obj" is a distinct kind and never
+        # lands here, see the module docstring).
         self._numeric_leaves: dict[int, tuple[Expression, Expression, str]] = {}
-        self._pending_eq: list[tuple[int, Expression, Expression]] = []
 
         def add_leaf(exp: Expression) -> None:
             if exp in self._leaf_index:
@@ -157,14 +156,10 @@ class NumericNovelty:
             self._leaves.append(exp)
             self._leaf_index[exp] = idx
             root = exp[-1]
-            if isinstance(root, OperatorNode) and root.kind in ("<=", "<"):
+            if isinstance(root, OperatorNode) and root.kind in ("<=", "<", "=="):
                 lhs = extract_sub_expression(exp, root.operands[0])
                 rhs = extract_sub_expression(exp, root.operands[1])
                 self._numeric_leaves[idx] = (lhs, rhs, root.kind)
-            elif isinstance(root, OperatorNode) and root.kind == "==":
-                lhs = extract_sub_expression(exp, root.operands[0])
-                rhs = extract_sub_expression(exp, root.operands[1])
-                self._pending_eq.append((idx, lhs, rhs))
 
         for event_list in events.values():
             for _, event in event_list:
@@ -177,23 +172,13 @@ class NumericNovelty:
         self._partitions: dict[int, _PartitionTables] = {}
         self._max_partition = 1
 
-    def start(self, initial_state: State, initial_h: float) -> int:
+    def start(self, initial_h: float) -> int:
         """(Re)initializes partition bookkeeping from the initial state's
-        h^add value and resolves every pending `==` leaf's numeric-vs-object
-        classification against it. Must be called exactly once, before any
-        `eval()` call. Returns the root's (clamped) partition id; the caller
-        is responsible for seeding the tables with an explicit `eval()` call
-        on the initial state and then pushing the root with novelty
-        hard-coded to 1, regardless of that call's return value (see
-        `novbfs_search`)."""
-        for idx, lhs, rhs in self._pending_eq:
-            lv = evaluate(lhs, initial_state)
-            rv = evaluate(rhs, initial_state)
-            # `==` leaves are always either both-numeric or both-object-typed
-            # so `lv`/`rv` can never actually be `bool` here.
-            if isinstance(lv, (int, Fraction)) and isinstance(rv, (int, Fraction)):
-                self._numeric_leaves[idx] = (lhs, rhs, "==")
-        self._pending_eq = []
+        h^add value. Must be called exactly once, before any `eval()` call.
+        Returns the root's (clamped) partition id; the caller is responsible
+        for seeding the tables with an explicit `eval()` call on the initial
+        state and then pushing the root with novelty hard-coded to 1,
+        regardless of that call's return value (see `novbfs_search`)."""
         self._partitions = {}
         self._max_partition = max(1, math.floor(initial_h))
         return self.partition_of(initial_h)

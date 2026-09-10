@@ -67,6 +67,7 @@ def _build_problems():
         problems_generator.get_problem_numeric(),
         problems_generator.get_problem_satellite(),
         problems_generator.get_problem_hierarchical_types(),
+        problems_generator.get_problem_object_equality_fluents(),
         problems_generator.get_problem_temporal_flight(),
         problems_generator.get_problem_flight(),
         problems_generator.get_problem_if_bool_condition(),
@@ -190,6 +191,7 @@ UNINFORMED_SEARCH_RISK: dict[str, set[str]] = {
     "RoboLogistics": {"dfs", "blind"},
     "NumericProblem": {"dfs"},
     "hierarchical-types": {"dfs", "blind"},
+    "object-equality-fluents": {"dfs", "blind"},
     "hierarchical_blocks_world": {"dfs"},
     "hierarchical_blocks_world_object_as_root": {"dfs"},
     "hierarchical_blocks_world_with_object": {"dfs"},
@@ -246,6 +248,7 @@ PERFORMANCE_PRUNES: list[
             "satellite",
             "robot_holding",
             "rovers_pfile2",
+            "object-equality-fluents",
         ),
         lambda c: c.search == "bfs",
         "bfs explores the whole state space",
@@ -1223,10 +1226,10 @@ def test_evaluate_fixed_cases():
                 op("<", f_real_3, f_int_3),
                 ("ok", "bool", False),
             ),
-            ("object_eq_same", op("==", f_obj_l1, obj_l1), ("ok", "bool", True)),
+            ("object_eq_same", op("==obj", f_obj_l1, obj_l1), ("ok", "bool", True)),
             (
                 "object_eq_different",
-                op("==", f_obj_l1, f_obj_l2),
+                op("==obj", f_obj_l1, f_obj_l2),
                 ("ok", "bool", False),
             ),
             (
@@ -1363,16 +1366,22 @@ def test_evaluate_random_differential():
             evaluate,
             make_bool_constant_node,
             make_int_constant_node,
+            make_object_node,
         )
         from testing_utils import construct_expressions
 
         search_space = SearchSpace([], {}, [], None, None, None)
-        # Matches `construct_exp_rec`/`construct_numeric_exp_rec`'s hardcoded
-        # `make_fluent_node(0)` (bool) / `make_fluent_node(1)` (numeric).
+        # Matches `construct_exp_rec`/`construct_numeric_exp_rec`/
+        # `construct_object_exp_rec`'s hardcoded `make_fluent_node(0)` (bool)
+        # / `make_fluent_node(1)` (numeric) / `make_fluent_node(2)` (object).
         state = search_space.initial_state(
             cast(
                 "list[ConstantNode]",
-                [make_bool_constant_node(True), make_int_constant_node(5)],
+                [
+                    make_bool_constant_node(True),
+                    make_int_constant_node(5),
+                    make_object_node(0),
+                ],
             )
         )
 

@@ -150,8 +150,15 @@ def construct_numeric_exp_rec(offset=0, depth=0) -> tuple:
     return res
 
 
+def construct_object_exp_rec(offset=0, depth=0) -> tuple:
+    kind = "object" if random.randint(0, 1) == 0 else "fluent"
+    if kind == "object":
+        return (make_object_node(random.randint(0, 5)),)
+    return (make_fluent_node(2),)
+
+
 def construct_exp_rec(offset=0, depth=0) -> tuple:
-    kinds = ["bool", "fluent", "and", "or", "not", "==", "<=", "<"]
+    kinds = ["bool", "fluent", "and", "or", "not", "==", "==obj", "<=", "<"]
 
     r = random.randint(0, 1) if depth == 0 else random.randint(0, len(kinds) - 1)
 
@@ -172,6 +179,8 @@ def construct_exp_rec(offset=0, depth=0) -> tuple:
     for _i in range(num_operands):
         if kind in ["<=", "<", "=="]:
             sub_exp = construct_numeric_exp_rec(offset + len(res), depth - 1)
+        elif kind == "==obj":
+            sub_exp = construct_object_exp_rec(offset + len(res), depth - 1)
         else:
             sub_exp = construct_exp_rec(offset + len(res), depth - 1)
         res += sub_exp

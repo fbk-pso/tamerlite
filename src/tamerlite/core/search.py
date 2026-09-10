@@ -605,7 +605,7 @@ def novbfs_search(
     init_h = heuristic.eval(init, ss)
     if init_h is None:
         return None, {"expanded_states": str(0)}
-    init_partition = novelty.start(init, init_h)
+    init_partition = novelty.start(init_h)
     # Seed the tables (return discarded); the root's *stored* novelty is
     # hard-coded to 1 below regardless.
     novelty.eval(init, init_partition, None, None)

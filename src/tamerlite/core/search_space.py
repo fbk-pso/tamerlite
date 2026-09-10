@@ -385,7 +385,7 @@ def evaluate(exp: Expression, state: State) -> ConstantNode:
                 res.append(bv)
             elif e.kind == "not":
                 res.append(not res[e.operands[0]])
-            elif e.kind == "==":
+            elif e.kind in ("==", "==obj"):
                 res.append(res[e.operands[0]] == res[e.operands[1]])
             elif e.kind == "<=":
                 res.append(res[e.operands[0]] <= res[e.operands[1]])  # type: ignore[operator]
@@ -508,7 +508,7 @@ def simplify(
                     res.append(not v)
                 else:
                     res.append(e)
-            elif e.kind == "==":
+            elif e.kind in ("==", "==obj"):
                 v1 = res[e.operands[0]]
                 v2 = res[e.operands[1]]
                 if v1 == v2 or (

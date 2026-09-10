@@ -104,7 +104,7 @@ class TestNumericNovelty:
 
         # s0 (root): fuel=4, at_loc1=False, loaded=False.
         s0 = _state([False, False, 4])
-        root_partition = novelty.start(s0, 0.0)
+        root_partition = novelty.start(0.0)
         assert novelty.eval(s0, root_partition, None, None) == 1
         tables0 = novelty._get_partition(root_partition)
         assert tables0.best_sdist[fuel_id] == 4 - 10
@@ -154,7 +154,7 @@ class TestNumericNovelty:
         q_id = novelty._leaf_index[q]
 
         s0 = _state([False, False])
-        partition = novelty.start(s0, 0.0)
+        partition = novelty.start(0.0)
         assert novelty.eval(s0, partition, None, None) == 3  # nothing true yet
 
         s1 = _state([True, False], g=1)  # p: F -> T (first time)
@@ -177,23 +177,25 @@ class TestNumericNovelty:
 
     def test_equality_leaf_classified_by_operand_type(self):
         """`==` between two numeric operands gets a distance feature;
-        `==` between two object-typed operands does not (falls back to
-        propositional-only) -- resolved once, in `start()`, against the
-        initial state (see module docstring)."""
+        `==obj` between two object-typed operands does not (falls back to
+        propositional-only) -- classified statically, by operator kind alone,
+        at construction time (see module docstring)."""
         NumericNovelty, FluentNode, OperatorNode, ObjectNode, _state = (
             _fresh_novelty_test_imports()
         )
 
         F_NUM, F_OBJ = 0, 1
         numeric_eq = _leaf(FluentNode(F_NUM), 3, OperatorNode("==", (0, 1)))
-        object_eq = _leaf(FluentNode(F_OBJ), ObjectNode(0), OperatorNode("==", (0, 1)))
+        object_eq = _leaf(
+            FluentNode(F_OBJ), ObjectNode(0), OperatorNode("==obj", (0, 1))
+        )
         goal = _leaf(
             FluentNode(F_NUM),
             3,
             OperatorNode("==", (0, 1)),
             FluentNode(F_OBJ),
             ObjectNode(0),
-            OperatorNode("==", (3, 4)),
+            OperatorNode("==obj", (3, 4)),
             OperatorNode("and", (2, 5)),
         )
 
@@ -201,8 +203,6 @@ class TestNumericNovelty:
         numeric_eq_id = novelty._leaf_index[numeric_eq]
         object_eq_id = novelty._leaf_index[object_eq]
 
-        s0 = _state([0, ObjectNode(1)])
-        novelty.start(s0, 0.0)
         assert numeric_eq_id in novelty._numeric_leaves
         assert object_eq_id not in novelty._numeric_leaves
 

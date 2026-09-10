@@ -58,6 +58,10 @@ pub fn do_shift(
             checked_add_sub(*o1, offset, is_negative)?,
             checked_add_sub(*o2, offset, is_negative)?,
         ),
+        ExpressionNode::ObjectEquals(o1, o2) => ExpressionNode::ObjectEquals(
+            checked_add_sub(*o1, offset, is_negative)?,
+            checked_add_sub(*o2, offset, is_negative)?,
+        ),
         ExpressionNode::LE(o1, o2) => ExpressionNode::LE(
             checked_add_sub(*o1, offset, is_negative)?,
             checked_add_sub(*o2, offset, is_negative)?,
@@ -140,6 +144,12 @@ pub fn split_expression(exp: &[ExpressionNode]) -> PyResult<Vec<Vec<ExpressionNo
                     }
                     ExpressionNode::Equals(i1, i2) => {
                         new_exp.push(make_operator("==".to_string(), vec![i1 - last, i2 - last])?);
+                    }
+                    ExpressionNode::ObjectEquals(i1, i2) => {
+                        new_exp.push(make_operator(
+                            "==obj".to_string(),
+                            vec![i1 - last, i2 - last],
+                        )?);
                     }
                     ExpressionNode::LE(i1, i2) => {
                         new_exp.push(make_operator("<=".to_string(), vec![i1 - last, i2 - last])?);
@@ -408,7 +418,7 @@ pub fn simplify(
                     e.v
                 }
             }
-            ExpressionNode::Equals(p1, p2) => {
+            ExpressionNode::Equals(p1, p2) | ExpressionNode::ObjectEquals(p1, p2) => {
                 if res[p1] == res[p2] {
                     ExpressionNode::Bool(true)
                 } else {
@@ -613,6 +623,7 @@ pub fn simplify(
                 }
             }
             ExpressionNode::Equals(op1, op2)
+            | ExpressionNode::ObjectEquals(op1, op2)
             | ExpressionNode::LE(op1, op2)
             | ExpressionNode::LT(op1, op2)
             | ExpressionNode::Minus(op1, op2)
@@ -623,6 +634,9 @@ pub fn simplify(
                     operands_stack.push(final_res.len());
                     let exp_node = match &res[idx] {
                         ExpressionNode::Equals(_, _) => ExpressionNode::Equals(new_op1, new_op2),
+                        ExpressionNode::ObjectEquals(_, _) => {
+                            ExpressionNode::ObjectEquals(new_op1, new_op2)
+                        }
                         ExpressionNode::LE(_, _) => ExpressionNode::LE(new_op1, new_op2),
                         ExpressionNode::LT(_, _) => ExpressionNode::LT(new_op1, new_op2),
                         ExpressionNode::Minus(_, _) => ExpressionNode::Minus(new_op1, new_op2),
@@ -675,13 +689,17 @@ pub fn internal_evaluate(
             ExpressionNode::Not(p) => {
                 ExpressionNode::Bool(matches!(res[*p], ExpressionNode::Bool(false)))
             }
-            ExpressionNode::Equals(p1, p2) => {
+            ExpressionNode::Equals(p1, p2) | ExpressionNode::ObjectEquals(p1, p2) => {
                 // Structural equality first (cheap, and correct for the
                 // overwhelmingly common case), falling back to a numeric
                 // comparison when it fails and both sides are numbers --
                 // an `Int` and a denominator-1 `Rational` holding the same
                 // value are legitimately reachable on well-formed input and
-                // must still compare equal.
+                // must still compare equal. The numeric fallback is a no-op
+                // for `ObjectEquals` (its operands always evaluate to
+                // `Object`, never `Int`/`Rational`), so merging the two
+                // kinds here costs nothing and keeps this in lockstep with
+                // `simplify`'s identical merge above.
                 let val = res[*p1] == res[*p2]
                     || match (as_num_ref(&res[*p1]), as_num_ref(&res[*p2])) {
                         (Ok(v1), Ok(v2)) => num_cmp(v1, v2).is_eq(),

@@ -385,37 +385,81 @@ fn simplify_condition(
     let mut new_condition = Vec::with_capacity(condition.expression.len());
     let mut contains_or_node = condition.contains_or_node;
     for node in &condition.expression {
-        if let HeuristicExpressionNode::Leaf(expr) = node {
-            // Leaf nodes containing interpreted-functions match none of
-            // the rewrite rules below (they are neither plain numeric
-            // expressions nor `fluent != object`) and are left unchanged.
-            if !has_interpreted_function(expression_manager.force_get(expr)) {
-                let simplified_expr = if !disable_numeric_reasoning
-                    && is_numeric_leaf_expression(expression_manager.force_get(expr))
-                {
-                    simplify_numeric_leaf_node(expr, expression_manager)?
-                } else {
-                    simplify_fluent_not_equals_object_expression(
-                        expr,
-                        objects,
-                        fluent_types,
-                        expression_manager,
-                    )
-                };
-                if let Some(mut simplified_expr) = simplified_expr {
-                    contains_or_node |= simplified_expr.contains_or_node;
-                    new_condition.append(&mut simplified_expr.expression);
-                    continue;
-                }
-            }
+        let simplified_expr = match node {
+            HeuristicExpressionNode::Leaf(expr) => simplify_leaf(
+                expr,
+                objects,
+                fluent_types,
+                disable_numeric_reasoning,
+                expression_manager,
+            )?,
+            _ => None,
+        };
+        if let Some(mut simplified_expr) = simplified_expr {
+            contains_or_node |= simplified_expr.contains_or_node;
+            new_condition.append(&mut simplified_expr.expression);
+        } else {
+            new_condition.push(node.clone());
         }
-        new_condition.push(node.clone())
     }
 
     Ok(HeuristicExpression {
         expression: new_condition,
         contains_or_node,
     })
+}
+
+/// Try each leaf-rewrite rule in turn; the first one whose shape matches
+/// `expr` wins. Mirrors the Python core's `_simplify_leaf` exactly -- see
+/// there for the rules and their order.
+///
+/// - A leaf containing an interpreted-function call matches no rule -- the
+///   callable is opaque, evaluated at search time.
+/// - A numeric leaf (equality/`<=`/`<` over a linear expression, or its
+///   negation) is simplified, unless numeric reasoning is disabled, in
+///   which case it's left as-is. Either way, no other rule is tried: a
+///   numeric leaf's root is never `ObjectEquals`, so the two
+///   object-equality rules below could never match it anyway.
+/// - Otherwise, a `fluent != object` expression is rewritten into a
+///   disjunction of equalities.
+/// - Otherwise, an object-equality expression between two fluents
+///   (`fluent1 == fluent2`, `not(fluent1 == fluent2)`) is rewritten into an
+///   equivalent disjunction of `fluent == object` facts.
+///
+/// Returns `Ok(None)` if no rule matches (`expr` should be kept as-is).
+fn simplify_leaf(
+    expr: &Expression,
+    objects: &FxHashMap<String, Vec<usize>>,
+    fluent_types: &[String],
+    disable_numeric_reasoning: bool,
+    expression_manager: &mut ExpressionManager,
+) -> Result<Option<HeuristicExpression>, ArithmeticError> {
+    if has_interpreted_function(expression_manager.force_get(expr)) {
+        return Ok(None);
+    }
+
+    if is_numeric_leaf_expression(expression_manager.force_get(expr)) {
+        return if disable_numeric_reasoning {
+            Ok(None)
+        } else {
+            simplify_numeric_leaf_node(expr, expression_manager)
+        };
+    }
+
+    if let Some(result) = simplify_fluent_not_equals_object_expression(
+        expr,
+        objects,
+        fluent_types,
+        expression_manager,
+    ) {
+        return Ok(Some(result));
+    }
+    Ok(simplify_object_equality(
+        expr,
+        objects,
+        fluent_types,
+        expression_manager,
+    ))
 }
 
 /// Simplifies a simple numeric expression.
@@ -611,7 +655,7 @@ fn simplify_fluent_not_equals_object_expression(
     expression_manager: &mut ExpressionManager,
 ) -> Option<HeuristicExpression> {
     let expr = expression_manager.force_get(expr).clone();
-    let [ExpressionNode::Fluent(f), ExpressionNode::Object(o), ExpressionNode::Equals(_, _), ExpressionNode::Not(_)] =
+    let [ExpressionNode::Fluent(f), ExpressionNode::Object(o), ExpressionNode::ObjectEquals(_, _), ExpressionNode::Not(_)] =
         expr.as_slice()
     else {
         return None;
@@ -627,7 +671,7 @@ fn simplify_fluent_not_equals_object_expression(
             let leaf_expr = expression_manager.put(&vec![
                 ExpressionNode::Fluent(*f),
                 ExpressionNode::Object(*obj),
-                ExpressionNode::Equals(0, 1),
+                ExpressionNode::ObjectEquals(0, 1),
             ]);
             HeuristicExpressionNode::Leaf(leaf_expr)
         })
@@ -642,6 +686,133 @@ fn simplify_fluent_not_equals_object_expression(
         }
     } else if nodes.len() > 1 {
         nodes.push(HeuristicExpressionNode::Or(nodes.len()));
+        HeuristicExpression {
+            expression: nodes,
+            contains_or_node: true,
+        }
+    } else {
+        HeuristicExpression {
+            expression: nodes,
+            contains_or_node: false,
+        }
+    };
+    Some(res)
+}
+
+/// Simplifies an equality (or its negation) between two object-typed
+/// fluents.
+///
+/// The delete relaxation's cost table only ever holds `fluent == object`
+/// facts (seeded from the state and achieved by operator effects, see
+/// `DeleteRelaxationHeuristic::_eval`), so a leaf comparing two fluents to
+/// each other has nothing to match against and would otherwise dead-end
+/// every state that needs it. Both polarities are expanded exactly:
+///
+/// `fluent1 == fluent2` into
+///     `(fluent1 == o and fluent2 == o) or ...`
+/// for `o` ranging over the objects both fluents can hold (the intersection
+/// of their domains -- hierarchical types mean the two fluents can be
+/// declared at different type names while still sharing objects).
+///
+/// `not(fluent1 == fluent2)` into
+///     `(fluent1 == o1 and fluent2 == o2) or ...`
+/// for every ordered pair `(o1, o2)` with `o1 != o2`, one from each fluent's
+/// domain.
+///
+/// Iteration order (fluent1's domain outer, fluent2's inner, fluent1's atom
+/// before fluent2's in each conjunct) must match the Python core's
+/// `_simplify_object_equality` exactly -- `cost`/`hff_leaves`'s `Or` handling
+/// breaks ties by operand order, so a different order can change the relaxed
+/// plan and, with it, `expanded_states`.
+///
+/// A missing `fluent_types`/`objects` entry (which should never happen for a
+/// genuine problem fluent -- see `DeleteRelaxationHeuristic::new`'s
+/// classification loops, which raise if a leaf like this survives
+/// unexpanded) falls through to `None` rather than panicking, so the caller
+/// can report it as a clear error instead of crashing the process.
+///
+/// # Arguments
+///
+/// * `expr` - The expression to simplify.
+/// * `objects` - Mapping from type names to their available objects.
+/// * `fluent_types` - List of fluent type names.
+/// * `expression_manager` - A mutable reference to the `ExpressionManager`.
+///
+/// # Returns
+///
+/// Returns `Some(HeuristicExpression)` representing the expanded disjunction
+/// if simplification is possible, or `None` if the expression is not of the
+/// form `fluent1 == fluent2` or its negation.
+fn simplify_object_equality(
+    expr: &Expression,
+    objects: &FxHashMap<String, Vec<usize>>,
+    fluent_types: &[String],
+    expression_manager: &mut ExpressionManager,
+) -> Option<HeuristicExpression> {
+    let (f1, f2, positive) = match expression_manager.force_get(expr).as_slice() {
+        [ExpressionNode::Fluent(f1), ExpressionNode::Fluent(f2), ExpressionNode::ObjectEquals(0, 1)] => {
+            (*f1, *f2, true)
+        }
+        [ExpressionNode::Fluent(f1), ExpressionNode::Fluent(f2), ExpressionNode::ObjectEquals(0, 1), ExpressionNode::Not(2)] => {
+            (*f1, *f2, false)
+        }
+        _ => return None,
+    };
+
+    let t1 = fluent_types.get(f1)?;
+    let t2 = fluent_types.get(f2)?;
+    let objs1 = objects.get(t1)?;
+    let objs2 = objects.get(t2)?;
+
+    let mut nodes: Vec<HeuristicExpressionNode> = Vec::new();
+    let push_conjunct = |o1: usize, o2: usize, expression_manager: &mut ExpressionManager| {
+        let leaf1 = expression_manager.put(&vec![
+            ExpressionNode::Fluent(f1),
+            ExpressionNode::Object(o1),
+            ExpressionNode::ObjectEquals(0, 1),
+        ]);
+        let leaf2 = expression_manager.put(&vec![
+            ExpressionNode::Fluent(f2),
+            ExpressionNode::Object(o2),
+            ExpressionNode::ObjectEquals(0, 1),
+        ]);
+        (leaf1, leaf2)
+    };
+
+    if positive {
+        let objs2_set: FxHashSet<usize> = objs2.iter().copied().collect();
+        for &o in objs1.iter() {
+            if !objs2_set.contains(&o) {
+                continue;
+            }
+            let (leaf1, leaf2) = push_conjunct(o, o, expression_manager);
+            nodes.push(HeuristicExpressionNode::Leaf(leaf1));
+            nodes.push(HeuristicExpressionNode::Leaf(leaf2));
+            nodes.push(HeuristicExpressionNode::And(2));
+        }
+    } else {
+        for &o1 in objs1.iter() {
+            for &o2 in objs2.iter() {
+                if o1 == o2 {
+                    continue;
+                }
+                let (leaf1, leaf2) = push_conjunct(o1, o2, expression_manager);
+                nodes.push(HeuristicExpressionNode::Leaf(leaf1));
+                nodes.push(HeuristicExpressionNode::Leaf(leaf2));
+                nodes.push(HeuristicExpressionNode::And(2));
+            }
+        }
+    }
+
+    let num_disjuncts = nodes.len() / 3;
+    let res = if num_disjuncts == 0 {
+        let false_expr = expression_manager.put(&vec![ExpressionNode::Bool(false)]);
+        HeuristicExpression {
+            expression: vec![HeuristicExpressionNode::Leaf(false_expr)],
+            contains_or_node: false,
+        }
+    } else if num_disjuncts > 1 {
+        nodes.push(HeuristicExpressionNode::Or(num_disjuncts));
         HeuristicExpression {
             expression: nodes,
             contains_or_node: true,
@@ -718,19 +889,16 @@ fn is_numeric_leaf_expression(expr: &[ExpressionNode]) -> bool {
         Some(ExpressionNode::Not(op)) => *op,
         _ => expr.len() - 1,
     };
-    match expr[idx] {
-        ExpressionNode::Equals(op1, op2) => {
-            !matches!(expr[op1], ExpressionNode::Object(_))
-                && !matches!(expr[op2], ExpressionNode::Object(_))
-        }
-        ExpressionNode::LE(_, _)
-        | ExpressionNode::LT(_, _)
-        | ExpressionNode::Plus(_)
-        | ExpressionNode::Minus(_, _)
-        | ExpressionNode::Times(_)
-        | ExpressionNode::Div(_, _) => true,
-        _ => false,
-    }
+    matches!(
+        expr[idx],
+        ExpressionNode::Equals(_, _)
+            | ExpressionNode::LE(_, _)
+            | ExpressionNode::LT(_, _)
+            | ExpressionNode::Plus(_)
+            | ExpressionNode::Minus(_, _)
+            | ExpressionNode::Times(_)
+            | ExpressionNode::Div(_, _)
+    )
 }
 
 /// Processes a numeric condition and classifies it as simple or complex:
@@ -1106,6 +1274,7 @@ fn extract_sub_expression(
         i = match &expr[i] {
             ExpressionNode::Not(operand) => *operand,
             ExpressionNode::Equals(op1, _)
+            | ExpressionNode::ObjectEquals(op1, _)
             | ExpressionNode::LE(op1, _)
             | ExpressionNode::LT(op1, _)
             | ExpressionNode::Minus(op1, _)
@@ -1239,19 +1408,22 @@ impl DeleteRelaxationHeuristic {
                             &mut complex_numeric_effects,
                         );
                     } else {
+                        // A non-bool, non-numeric fluent type is always
+                        // object-typed, so its effect key is always tagged
+                        // `"==obj"`, never plain `"=="`.
                         if eff.value.len() == 1 && matches!(eff.value[0], ExpressionNode::Object(_))
                         {
                             effects.push(expression_manager.put(&vec![
                                 ExpressionNode::Fluent(eff.fluent),
                                 eff.value[0].clone(),
-                                make_operator("==".to_string(), vec![0, 1])?,
+                                make_operator("==obj".to_string(), vec![0, 1])?,
                             ]));
                         } else {
                             for o in objects[&t].iter() {
                                 effects.push(expression_manager.put(&vec![
                                     ExpressionNode::Fluent(eff.fluent),
                                     ExpressionNode::Object(*o),
-                                    make_operator("==".to_string(), vec![0, 1])?,
+                                    make_operator("==obj".to_string(), vec![0, 1])?,
                                 ]));
                             }
                         }
@@ -1516,10 +1688,15 @@ impl DeleteRelaxationHeuristic {
                     }
                 }
                 _ => {
+                    let kind = if matches!(v, ExpressionNode::Object(_)) {
+                        "==obj"
+                    } else {
+                        "=="
+                    };
                     vec![
                         ExpressionNode::Fluent(f),
                         v.clone(),
-                        make_operator("==".to_string(), vec![0, 1])?,
+                        make_operator(kind.to_string(), vec![0, 1])?,
                     ]
                 }
             };

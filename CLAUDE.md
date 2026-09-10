@@ -169,6 +169,56 @@ Rust-unavailability guard `TamerLite._solve_ground_problem` uses, until a
 
 Rust implementation lives in [crates/rustamer-base/src/](crates/rustamer-base/src/) (core library) and [crates/rustamer/src/](crates/rustamer/src/) (PyO3 bindings).
 
+**`"=="` is numeric-only; object equality is a distinct operator kind.** UP's
+`EQUALS` covers both numeric equality and user-type (object) equality;
+`Converter.walk_equals` (`src/tamerlite/converter.py`) tags the two
+differently at conversion time based on the UP expression's static type --
+`"=="`/`ExpressionNode::Equals` for numeric, `"==obj"`/`ExpressionNode::ObjectEquals`
+(`crates/rustamer-base/src/expressions.rs`) for object. This split exists
+because a fluent-vs-fluent object equality (e.g. `loc_a == loc_b`, both
+object-typed fluents) has no other syntactic marker distinguishing it from a
+numeric equality, and `DeleteRelaxationHeuristic`'s delete relaxation
+(`src/tamerlite/core/heuristics.py`, `crates/rustamer-base/src/heuristics.rs`)
+needs to classify every condition leaf as numeric or not. Both node kinds
+otherwise `evaluate`/`simplify` identically (plain equality comparison); the
+split only matters to that classifier and to `NumericNovelty`
+(`src/tamerlite/core/novelty.py`), which both rely on the kind alone --
+`Equals`/`"=="` is guaranteed numeric by construction, no operand sniffing or
+state probe needed.
+
+The delete relaxation's cost table only ever holds `fluent == object` facts
+(seeded from the state and from operator effects), so a fluent-vs-fluent
+object equality has nothing to match and is expanded before it can reach the
+cost table, exactly, in both polarities:
+
+- `fluent1 == fluent2` into `OR` over `o` in the intersection of both
+  fluents' domains of `(fluent1 == o AND fluent2 == o)`.
+- `not(fluent1 == fluent2)` into `OR` over every ordered pair `(o1, o2)` with
+  `o1 != o2`, one from each fluent's domain, of `(fluent1 == o1 AND fluent2 == o2)`.
+
+(`_simplify_object_equality`/`simplify_object_equality` in the two
+`heuristics.py`/`.rs` files, sibling to the pre-existing `fluent != object`
+rewrite.) The negated form is quadratic in domain size -- accepted
+deliberately for exactness in both polarities; if it ever becomes a
+bottleneck, the fallback is a bounded-cost bucket like the one interpreted-function
+conditions already get, not a smaller expansion, since a partial rewrite
+would need the same cross-backend care documented next. Domain iteration
+order (first fluent's domain outer, second's inner, first fluent's atom
+before the second's in each conjunct) must match **exactly** between the two
+cores -- `hff`'s relaxed-plan extraction breaks ties in an `OR` by operand
+order, so a different order changes `expanded_states`, which
+`check_metrics_equality` asserts identical between backends. After this
+expansion, the only object-equality leaf either core's classification loop
+should ever see is the canonical, unnegated `fluent == object` atom -- a
+leaf missing from the cost table makes `_cost` return `None`, indistinguishable
+from a genuinely unreachable goal, so a gap in this rewrite would silently
+misreport a solvable problem as unsolvable rather than crash. No runtime
+check enforces this (a defensive check was tried and removed as dead weight
+once the rewrite was shown to cover every shape the converter can produce);
+the invariant is exercised instead by `problems_generator.get_problem_object_equality_fluents`
+(both polarities, hierarchical types, an always-false sibling-type equality)
+via `tests/test_engine.py`'s cross-backend/cross-heuristic parametrization.
+
 ### Problem encoding ([src/tamerlite/encoder.py](src/tamerlite/encoder.py))
 
 `Encoder` bridges Unified Planning and TamerLite's internal search space:
