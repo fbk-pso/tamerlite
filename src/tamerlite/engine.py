@@ -182,8 +182,7 @@ class _HeuristicCallable(Protocol):
     def __call__(
         self,
         actions: list[Action],
-        fluent_types: list[str],
-        objects: dict[str, list[int]],
+        fluent_domains: list[search_space.FluentDomain],
         events: dict[Action, list[tuple[search_space.Timing, search_space.Event]]],
         goals: search_space.Expression,
         *,
@@ -326,9 +325,9 @@ class TamerLite(
             # `considered_actions` is the same action set the search will
             # actually expand: `relevant_actions` if relevance analysis
             # narrowed it, else `applicable_actions`.
-            # `encoder.fluent_types`/`encoder.objects`/`encoder.goal` already
-            # describe the (possibly `relevant_equality`-compacted) encoding,
-            # so no separate fluent restriction is needed here.
+            # `encoder.fluent_domains`/`encoder.goal` already describe the
+            # (possibly `relevant_equality`-compacted) encoding, so no
+            # separate fluent restriction is needed here.
             considered_actions = encoder.considered_actions
             considered_actions_set = set(considered_actions)
             events = {
@@ -336,8 +335,7 @@ class TamerLite(
             }
             h = hh_map[h_name](
                 considered_actions,
-                encoder.fluent_types,
-                encoder.objects,
+                encoder.fluent_domains,
                 events,
                 encoder.goal,
                 internal_caching=internal_heuristic_cache,

@@ -25,7 +25,7 @@ use std::vec::Vec;
 
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
-use pyo3::exceptions::PyException;
+use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
@@ -99,6 +99,85 @@ pub enum HeuristicKind {
     HFF,
     HADD,
     HMAX,
+}
+
+/// The set of values one fluent can hold, as the heuristics need it.
+///
+/// Mirrors `FluentDomain` in `src/tamerlite/core/search_space.py`, which is
+/// where the rationale lives: `Encoder` used to hand the heuristics a type
+/// *name* plus a name-keyed object map, and the two cores had to re-derive
+/// this classification from that name -- which they cannot do
+/// unambiguously, since builtin and user type names share one namespace.
+/// `Encoder` now decides it once, where it still has the UP type.
+///
+/// `Objects` carries the fluent's own domain, which may legally be empty
+/// (a user type with no objects); the variant, not the emptiness, is what
+/// identifies an object-typed fluent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FluentDomain {
+    Bool,
+    Int,
+    Real,
+    Objects(Vec<usize>),
+}
+
+/// Wire tag for `FluentDomain`'s kind. Not a `#[pyclass]`: `FluentDomain`
+/// (`src/tamerlite/core/search_space.py`) is shared, backend-agnostic data --
+/// `Encoder` builds it once and hands it to whichever backend is active --
+/// and its own `kind`-identity checks (`__post_init__`, `_object_domain`)
+/// always compare against *that module's* `FluentKind`. Swapping this enum
+/// in for Python's `FluentKind` the way `IfReturnType` is swapped (see
+/// `crates/rustamer-base/src/interpreted_functions.rs`) would make those
+/// checks fail for any `FluentDomain` this crate builds, since a Rust-side
+/// value would never be identical to `search_space.py`'s own enum member.
+/// `IfReturnType` avoids this because its values and comparisons never cross
+/// the backend boundary as shared data; `FluentDomain` is exactly that
+/// shared data. Values must therefore match `FluentKind`
+/// (`src/tamerlite/core/search_space.py`) by discriminant, not by identity --
+/// see `extract_fluent_kind` below.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FluentKind {
+    Bool = 0,
+    Int = 1,
+    Real = 2,
+    Object = 3,
+}
+
+/// Decodes the `kind` a `FluentDomain` (`src/tamerlite/core/search_space.py`)
+/// carries from Python's `FluentKind` (an `IntEnum`, so it coerces to `u8`
+/// with no conversion on Python's side). The discriminants above must match
+/// `search_space.py`'s `FluentKind` member values exactly.
+fn extract_fluent_kind(obj: &Bound<'_, PyAny>) -> PyResult<FluentKind> {
+    match obj.extract::<u8>()? {
+        0 => Ok(FluentKind::Bool),
+        1 => Ok(FluentKind::Int),
+        2 => Ok(FluentKind::Real),
+        3 => Ok(FluentKind::Object),
+        k => Err(PyValueError::new_err(format!(
+            "unknown FluentKind discriminant: {k}"
+        ))),
+    }
+}
+
+/// Extracts one `FluentDomain` (`src/tamerlite/core/search_space.py`) from
+/// its Python side: reads `kind` and, only for the `Object` variant,
+/// `objects`.
+fn extract_fluent_domain(obj: &Bound<'_, PyAny>) -> PyResult<FluentDomain> {
+    Ok(match extract_fluent_kind(&obj.getattr("kind")?)? {
+        FluentKind::Bool => FluentDomain::Bool,
+        FluentKind::Int => FluentDomain::Int,
+        FluentKind::Real => FluentDomain::Real,
+        FluentKind::Object => FluentDomain::Objects(obj.getattr("objects")?.extract()?),
+    })
+}
+
+/// `#[pyo3(from_py_with = ...)]` target for a `fluent_domains: Vec<FluentDomain>`
+/// parameter: extracts each element of the Python list via
+/// `extract_fluent_domain`.
+pub fn extract_fluent_domains(obj: &Bound<'_, PyAny>) -> PyResult<Vec<FluentDomain>> {
+    obj.try_iter()?
+        .map(|item| extract_fluent_domain(&item?))
+        .collect()
 }
 
 #[derive(Debug)]
@@ -246,8 +325,7 @@ fn get_event_conditions(
 fn build_operator_condition(
     conditions: &Vec<Vec<ExpressionNode>>,
     extra_fluent: ExpressionNode,
-    objects: &FxHashMap<String, Vec<usize>>,
-    fluent_types: &[String],
+    fluent_domains: &[FluentDomain],
     disable_numeric_reasoning: bool,
     expression_manager: &mut ExpressionManager,
 ) -> Result<Option<HeuristicExpression>, ArithmeticError> {
@@ -271,8 +349,7 @@ fn build_operator_condition(
     let condition = convert_to_heuristic_expression(&condition_expr, expression_manager)?;
     let condition = simplify_condition(
         &condition,
-        objects,
-        fluent_types,
+        fluent_domains,
         disable_numeric_reasoning,
         expression_manager,
     )?;
@@ -355,8 +432,8 @@ fn convert_to_heuristic_expression(
 /// # Arguments
 ///
 /// * `condition` - The expression to simplify.
-/// * `objects` - Mapping from type names to their objects, used for fluent-object inequalities.
-/// * `fluent_types` - List of fluent type names.
+/// * `fluent_domains` - Each fluent's kind and, for object-typed ones,
+///   the objects it can hold.
 /// * `disable_numeric_reasoning` - If true, numeric simplifications are skipped.
 /// * `expression_manager` - A mutable reference to the `ExpressionManager`.
 ///
@@ -370,8 +447,7 @@ fn convert_to_heuristic_expression(
 /// an arithmetic error.
 fn simplify_condition(
     condition: &HeuristicExpression,
-    objects: &FxHashMap<String, Vec<usize>>,
-    fluent_types: &[String],
+    fluent_domains: &[FluentDomain],
     disable_numeric_reasoning: bool,
     expression_manager: &mut ExpressionManager,
 ) -> Result<HeuristicExpression, ArithmeticError> {
@@ -381,8 +457,7 @@ fn simplify_condition(
         let simplified_expr = match node {
             HeuristicExpressionNode::Leaf(expr) => simplify_leaf(
                 expr,
-                objects,
-                fluent_types,
+                fluent_domains,
                 disable_numeric_reasoning,
                 expression_manager,
             )?,
@@ -423,8 +498,7 @@ fn simplify_condition(
 /// Returns `Ok(None)` if no rule matches (`expr` should be kept as-is).
 fn simplify_leaf(
     expr: &Expression,
-    objects: &FxHashMap<String, Vec<usize>>,
-    fluent_types: &[String],
+    fluent_domains: &[FluentDomain],
     disable_numeric_reasoning: bool,
     expression_manager: &mut ExpressionManager,
 ) -> Result<Option<HeuristicExpression>, ArithmeticError> {
@@ -433,7 +507,7 @@ fn simplify_leaf(
         return Ok(None);
     }
 
-    if is_numeric_leaf_expression(expr_nodes, fluent_types) {
+    if is_numeric_leaf_expression(expr_nodes, fluent_domains) {
         return if disable_numeric_reasoning {
             Ok(None)
         } else {
@@ -441,18 +515,14 @@ fn simplify_leaf(
         };
     }
 
-    if let Some(result) = simplify_fluent_not_equals_object_expression(
-        expr,
-        objects,
-        fluent_types,
-        expression_manager,
-    ) {
+    if let Some(result) =
+        simplify_fluent_not_equals_object_expression(expr, fluent_domains, expression_manager)
+    {
         return Ok(Some(result));
     }
     Ok(simplify_object_equality(
         expr,
-        objects,
-        fluent_types,
+        fluent_domains,
         expression_manager,
     ))
 }
@@ -634,8 +704,8 @@ fn inverted_operands(
 /// # Arguments
 ///
 /// * `expr` - The expression to simplify.
-/// * `objects` - Mapping from type names to their available objects.
-/// * `fluent_types` - List of fluent type names.
+/// * `fluent_domains` - Each fluent's kind and, for object-typed ones,
+///   the objects it can hold.
 /// * `expression_manager` - A mutable reference to the `ExpressionManager`.
 ///
 /// # Returns
@@ -645,8 +715,7 @@ fn inverted_operands(
 /// of the form `fluent != object`.
 fn simplify_fluent_not_equals_object_expression(
     expr: &Expression,
-    objects: &FxHashMap<String, Vec<usize>>,
-    fluent_types: &[String],
+    fluent_domains: &[FluentDomain],
     expression_manager: &mut ExpressionManager,
 ) -> Option<HeuristicExpression> {
     let expr = expression_manager.force_get(expr).clone();
@@ -656,8 +725,10 @@ fn simplify_fluent_not_equals_object_expression(
         return None;
     };
 
-    let t = fluent_types.get(*f)?;
-    let objs = objects.get(t)?;
+    // `o` is a literal object, and UP's `Equals` requires type-compatible
+    // operands, so `f` must be object-typed too.
+    let objs = object_domain(*f, fluent_domains)
+        .expect("fluent compared to an object must be object-typed");
 
     let mut nodes: Vec<_> = objs
         .iter()
@@ -717,8 +788,8 @@ fn simplify_fluent_not_equals_object_expression(
 /// # Arguments
 ///
 /// * `expr` - The expression to simplify.
-/// * `objects` - Mapping from type names to their available objects.
-/// * `fluent_types` - List of fluent type names.
+/// * `fluent_domains` - Each fluent's kind and, for object-typed ones,
+///   the objects it can hold.
 /// * `expression_manager` - A mutable reference to the `ExpressionManager`.
 ///
 /// # Returns
@@ -728,8 +799,7 @@ fn simplify_fluent_not_equals_object_expression(
 /// form `fluent1 == fluent2` or its negation.
 fn simplify_object_equality(
     expr: &Expression,
-    objects: &FxHashMap<String, Vec<usize>>,
-    fluent_types: &[String],
+    fluent_domains: &[FluentDomain],
     expression_manager: &mut ExpressionManager,
 ) -> Option<HeuristicExpression> {
     let (f1, f2, positive) = match expression_manager.force_get(expr).as_slice() {
@@ -742,10 +812,8 @@ fn simplify_object_equality(
         _ => return None,
     };
 
-    let t1 = fluent_types.get(f1)?;
-    let t2 = fluent_types.get(f2)?;
-    let objs1 = objects.get(t1)?;
-    let objs2 = objects.get(t2)?;
+    let objs1 = object_domain(f1, fluent_domains)?;
+    let objs2 = object_domain(f2, fluent_domains)?;
 
     let mut nodes: Vec<HeuristicExpressionNode> = Vec::new();
     let push_conjunct = |o1: usize, o2: usize, expression_manager: &mut ExpressionManager| {
@@ -857,31 +925,51 @@ fn update_numeric_effects(
     }
 }
 
+/// The objects a fluent can hold, or `None` if it isn't object-typed.
+///
+/// Single oracle for both questions the object-equality handling asks: "is
+/// this operand object-typed?" (`is_object_typed`) and "what does it range
+/// over?" (`simplify_object_equality`,
+/// `simplify_fluent_not_equals_object_expression`). Those must agree
+/// exactly, and must match Python's `_object_domain` just as exactly -- see
+/// there.
+///
+/// # Arguments
+///
+/// * `fluent` - The fluent to resolve.
+/// * `fluent_domains` - Each fluent's kind and, for object-typed ones,
+///   the objects it can hold.
+///
+/// # Returns
+///
+/// Returns the fluent's object domain, or `None` if it is not object-typed.
+fn object_domain(fluent: usize, fluent_domains: &[FluentDomain]) -> Option<&[usize]> {
+    match fluent_domains.get(fluent)? {
+        FluentDomain::Objects(objs) => Some(objs),
+        _ => None,
+    }
+}
+
 /// Whether an `==` operand is object-typed rather than numeric.
 ///
 /// `Equals` covers both numeric equality and user-type (object) equality --
 /// there is no separate node kind for the two, so the operands' *types* are
 /// the only thing that tells them apart. An operand is object-typed if it's
-/// a literal object, or a fluent declared at a user type (any
-/// `fluent_types` entry other than `"bool"`/`"int"`/`"real"`).
+/// a literal object, or a fluent whose `FluentDomain` says so.
 ///
 /// # Arguments
 ///
 /// * `node` - One operand of an `Equals` leaf.
-/// * `fluent_types` - List of fluent type names.
+/// * `fluent_domains` - Each fluent's kind and, for object-typed ones,
+///   the objects it can hold.
 ///
 /// # Returns
 ///
 /// Returns `true` if `node` is object-typed, `false` if numeric.
-fn is_object_typed(node: &ExpressionNode, fluent_types: &[String]) -> bool {
+fn is_object_typed(node: &ExpressionNode, fluent_domains: &[FluentDomain]) -> bool {
     match node {
         ExpressionNode::Object(_) => true,
-        ExpressionNode::Fluent(f) => fluent_types
-            .get(*f)
-            // Ids past `fluent_types.len()` are the per-event bookkeeping
-            // fluents `DeleteRelaxationHeuristic::new` appends (`f_cond`/
-            // extra fluents); those are always bool, never object-typed.
-            .is_some_and(|t| !matches!(t.as_str(), "bool" | "int" | "real")),
+        ExpressionNode::Fluent(f) => object_domain(*f, fluent_domains).is_some(),
         _ => false,
     }
 }
@@ -892,19 +980,21 @@ fn is_object_typed(node: &ExpressionNode, fluent_types: &[String]) -> bool {
 /// # Arguments
 ///
 /// * `expr` - A reference to the leaf expression (`Vec<ExpressionNode>`) to check.
-/// * `fluent_types` - List of fluent type names.
+/// * `fluent_domains` - Each fluent's kind and, for object-typed ones,
+///   the objects it can hold.
 ///
 /// # Returns
 ///
 /// Returns `true` if the leaf expression is numeric, `false` otherwise.
-fn is_numeric_leaf_expression(expr: &[ExpressionNode], fluent_types: &[String]) -> bool {
+fn is_numeric_leaf_expression(expr: &[ExpressionNode], fluent_domains: &[FluentDomain]) -> bool {
     let idx = match expr.last() {
         Some(ExpressionNode::Not(op)) => *op,
         _ => expr.len() - 1,
     };
     match expr[idx] {
         ExpressionNode::Equals(op1, op2) => {
-            !is_object_typed(&expr[op1], fluent_types) && !is_object_typed(&expr[op2], fluent_types)
+            !is_object_typed(&expr[op1], fluent_domains)
+                && !is_object_typed(&expr[op2], fluent_domains)
         }
         ExpressionNode::LE(_, _)
         | ExpressionNode::LT(_, _)
@@ -1339,8 +1429,7 @@ pub struct DeleteRelaxationHeuristic {
 impl DeleteRelaxationHeuristic {
     pub fn new(
         actions: Vec<Action>,
-        fluent_types: Vec<String>,
-        objects: FxHashMap<String, Vec<usize>>,
+        fluent_domains: Vec<FluentDomain>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         goals: Vec<PyExpressionNode>,
         config: DeleteRelaxationHeuristicConfig,
@@ -1350,7 +1439,21 @@ impl DeleteRelaxationHeuristic {
             FxHashMap::with_capacity_and_hasher(events.len(), FxBuildHasher);
         let mut extra_goals = Vec::with_capacity(events.len() + 1);
         let mut expression_manager = ExpressionManager::new();
-        let mut num_fluents = fluent_types.len();
+        let mut num_fluents = fluent_domains.len();
+        // Every bookkeeping fluent allocated below is a plain bool flag.
+        // Giving them domains up front keeps `object_domain` a *total*
+        // lookup, so no caller has to know where the real fluents end.
+        // Mirrors `DeleteRelaxationHeuristic.__init__` in the Python core.
+        let mut fluent_domains = fluent_domains;
+        fluent_domains.resize(
+            num_fluents
+                + actions
+                    .iter()
+                    .filter_map(|a| events.get(a))
+                    .map(|le| le.len())
+                    .sum::<usize>(),
+            FluentDomain::Bool,
+        );
         let map_to_python_exception = |e| PyException::new_err(format!("{:?}", e));
 
         for a in &actions {
@@ -1374,16 +1477,31 @@ impl DeleteRelaxationHeuristic {
                 a_extra_fluents.push(expression_manager.put(&vec![ExpressionNode::Fluent(f)]));
                 effects.push(expression_manager.put(&vec![ExpressionNode::Fluent(f)]));
                 for eff in e.effects.iter() {
-                    let t = fluent_types[eff.fluent].to_string();
-                    if t == "bool" {
-                        if eff.value.len() == 1 {
-                            if let ExpressionNode::Bool(value) = eff.value[0] {
-                                if value {
+                    // An exhaustive match, unlike the `if t == "bool" / else
+                    // if t == "real" || t == "int" / else` chain this replaced:
+                    // there, the final `else` silently absorbed any type name
+                    // it did not recognise, which is how a `UserType("int")`
+                    // used to reach the numeric branch.
+                    match &fluent_domains[eff.fluent] {
+                        FluentDomain::Bool => {
+                            if eff.value.len() == 1 {
+                                if let ExpressionNode::Bool(value) = eff.value[0] {
+                                    if value {
+                                        effects.push(
+                                            expression_manager
+                                                .put(&vec![ExpressionNode::Fluent(eff.fluent)]),
+                                        );
+                                    } else {
+                                        effects.push(expression_manager.put(&vec![
+                                            ExpressionNode::Fluent(eff.fluent),
+                                            make_operator("not".to_string(), vec![0])?,
+                                        ]));
+                                    }
+                                } else {
                                     effects.push(
                                         expression_manager
                                             .put(&vec![ExpressionNode::Fluent(eff.fluent)]),
                                     );
-                                } else {
                                     effects.push(expression_manager.put(&vec![
                                         ExpressionNode::Fluent(eff.fluent),
                                         make_operator("not".to_string(), vec![0])?,
@@ -1399,43 +1517,38 @@ impl DeleteRelaxationHeuristic {
                                     make_operator("not".to_string(), vec![0])?,
                                 ]));
                             }
-                        } else {
-                            effects.push(
-                                expression_manager.put(&vec![ExpressionNode::Fluent(eff.fluent)]),
-                            );
-                            effects.push(expression_manager.put(&vec![
-                                ExpressionNode::Fluent(eff.fluent),
-                                make_operator("not".to_string(), vec![0])?,
-                            ]));
                         }
-                    } else if t == "real" || t == "int" {
-                        assert!(
-                            !constant_increase_effects.contains_key(&eff.fluent)
-                                && !constant_assign_effects.contains_key(&eff.fluent)
-                                && !complex_numeric_effects.contains_key(&eff.fluent)
-                        );
-                        update_numeric_effects(
-                            eff,
-                            &mut expression_manager,
-                            &mut constant_increase_effects,
-                            &mut constant_assign_effects,
-                            &mut complex_numeric_effects,
-                        );
-                    } else {
-                        if eff.value.len() == 1 && matches!(eff.value[0], ExpressionNode::Object(_))
-                        {
-                            effects.push(expression_manager.put(&vec![
-                                ExpressionNode::Fluent(eff.fluent),
-                                eff.value[0].clone(),
-                                make_operator("==".to_string(), vec![0, 1])?,
-                            ]));
-                        } else {
-                            for o in objects[&t].iter() {
+                        FluentDomain::Int | FluentDomain::Real => {
+                            assert!(
+                                !constant_increase_effects.contains_key(&eff.fluent)
+                                    && !constant_assign_effects.contains_key(&eff.fluent)
+                                    && !complex_numeric_effects.contains_key(&eff.fluent)
+                            );
+                            update_numeric_effects(
+                                eff,
+                                &mut expression_manager,
+                                &mut constant_increase_effects,
+                                &mut constant_assign_effects,
+                                &mut complex_numeric_effects,
+                            );
+                        }
+                        FluentDomain::Objects(objs) => {
+                            if eff.value.len() == 1
+                                && matches!(eff.value[0], ExpressionNode::Object(_))
+                            {
                                 effects.push(expression_manager.put(&vec![
                                     ExpressionNode::Fluent(eff.fluent),
-                                    ExpressionNode::Object(*o),
+                                    eff.value[0].clone(),
                                     make_operator("==".to_string(), vec![0, 1])?,
                                 ]));
+                            } else {
+                                for o in objs.iter() {
+                                    effects.push(expression_manager.put(&vec![
+                                        ExpressionNode::Fluent(eff.fluent),
+                                        ExpressionNode::Object(*o),
+                                        make_operator("==".to_string(), vec![0, 1])?,
+                                    ]));
+                                }
                             }
                         }
                     }
@@ -1444,8 +1557,7 @@ impl DeleteRelaxationHeuristic {
                 if let Some(conditions) = build_operator_condition(
                     &get_event_conditions(e, &mut expression_manager)?,
                     cond.clone(),
-                    &objects,
-                    &fluent_types,
+                    &fluent_domains,
                     config.disable_numeric_reasoning,
                     &mut expression_manager,
                 )
@@ -1473,8 +1585,7 @@ impl DeleteRelaxationHeuristic {
             .map_err(map_to_python_exception)?;
         let goals = simplify_condition(
             &goals,
-            &objects,
-            &fluent_types,
+            &fluent_domains,
             config.disable_numeric_reasoning,
             &mut expression_manager,
         )
@@ -1502,7 +1613,7 @@ impl DeleteRelaxationHeuristic {
                         let expr = expression_manager.force_get(e);
                         if has_interpreted_function(expr) {
                             if_conds.insert(*e);
-                        } else if is_numeric_leaf_expression(expr, &fluent_types) {
+                        } else if is_numeric_leaf_expression(expr, &fluent_domains) {
                             update_numeric_conditions(
                                 e,
                                 &expression_manager,
@@ -1524,7 +1635,7 @@ impl DeleteRelaxationHeuristic {
                 let expr = expression_manager.force_get(e);
                 if has_interpreted_function(expr) {
                     if_conds.insert(*e);
-                } else if is_numeric_leaf_expression(expr, &fluent_types) {
+                } else if is_numeric_leaf_expression(expr, &fluent_domains) {
                     update_numeric_conditions(
                         e,
                         &expression_manager,
@@ -2109,7 +2220,7 @@ pub struct HMaxExplicit {
 impl HMaxExplicit {
     pub fn new(
         actions: Vec<Action>,
-        fluent_types: Vec<String>,
+        fluent_domains: Vec<FluentDomain>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
@@ -2118,7 +2229,7 @@ impl HMaxExplicit {
         let mut extra_fluents = FxHashMap::with_hasher(FxBuildHasher);
         let mut extra_goals = Vec::new();
         let mut expression_manager = ExpressionManager::new();
-        let mut num_fluents = fluent_types.len();
+        let mut num_fluents = fluent_domains.len();
 
         for (a, le) in events.iter() {
             let mut a_extra_fluents = Vec::new();

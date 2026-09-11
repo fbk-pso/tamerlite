@@ -622,8 +622,7 @@ def test_heuristic_fixed_values():
                 for internal_caching in [True, False]:
                     heuristic: Heuristic = heuristic_class(
                         encoder.actions,
-                        encoder.fluent_types,
-                        encoder.objects,
+                        encoder.fluent_domains,
                         encoder.events,
                         encoder.goal,
                         internal_caching=internal_caching,
@@ -704,8 +703,7 @@ def test_heuristic_values(problem, data_regression):
                 for internal_caching in [True, False]:
                     heuristic: Heuristic = heuristic_class(
                         encoder.actions,
-                        encoder.fluent_types,
-                        encoder.objects,
+                        encoder.fluent_domains,
                         encoder.events,
                         encoder.goal,
                         internal_caching=internal_caching,
@@ -2490,8 +2488,7 @@ def test_hmax_explicit_partial_callable_can_raise():
         for heuristic_class in heuristic_classes:
             heuristic: Heuristic = heuristic_class(
                 encoder.actions,
-                encoder.fluent_types,
-                encoder.objects,
+                encoder.fluent_domains,
                 encoder.events,
                 encoder.goal,
                 internal_caching=True,

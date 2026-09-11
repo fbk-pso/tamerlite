@@ -157,20 +157,52 @@ Adjust `--space-limit` (MB) down for a single test file/case, and prefer targeti
 
 Rust implementation lives in [crates/rustamer-base/src/](crates/rustamer-base/src/) (core library) and [crates/rustamer/src/](crates/rustamer/src/) (PyO3 bindings).
 
-**`"=="` covers both numeric and object equality; classification is derived from
-`fluent_types`, not sniffed from operands.** UP's `EQUALS` covers both numeric
-equality and user-type (object) equality, and both compile down to the same
-`"=="` / `ExpressionNode::Equals` node -- there is no separate operator kind for
-the two. `DeleteRelaxationHeuristic._is_numeric_leaf_expression`
+**`"=="` covers both numeric and object equality; classification comes from
+`FluentDomain`, not from the operands' shape and not from a type name.** UP's
+`EQUALS` covers both numeric equality and user-type (object) equality, and both
+compile down to the same `"=="` / `ExpressionNode::Equals` node -- there is no
+separate operator kind for the two. `DeleteRelaxationHeuristic._is_numeric_leaf_expression`
 (`src/tamerlite/core/heuristics.py`) / `is_numeric_leaf_expression`
 (`crates/rustamer-base/src/heuristics.rs`) therefore decide per-operand, via
 `_is_object_typed_operand`/`is_object_typed`: an operand is object-typed if it's
-a literal object, or a `FluentNode`/`Fluent` whose `fluent_types` entry is a
-user type (anything other than `bool`/`int`/`real`). This replaced an earlier,
-buggy version that only checked for a literal `ObjectNode` operand -- a fluent
-compared to *another* fluent of the same object type (`loc_a == loc_b`) has no
-such literal, so it was misclassified as numeric, rewritten into `<=`/`<`
-pairs, and crashed both backends.
+a literal object, or a fluent whose `FluentDomain` is the object variant.
+This replaced an earlier version that only checked for a literal `ObjectNode`
+operand -- a fluent compared to *another* fluent of the same object type
+(`loc_a == loc_b`) has no such literal, so it was misclassified as numeric,
+rewritten into `<=`/`<` pairs, and crashed both backends.
+
+**Why `FluentDomain` and not the type name.** The heuristics used to receive a
+`fluent_types: list[str]` plus an `objects: dict[str, list[int]]` keyed by type
+name, and re-derive from the name both the fluent's kind and its object domain.
+That is not decidable: `Encoder` put builtin type names (`"bool"`/`"int"`/`"real"`)
+and user-type names in one string namespace, and `UserType("int")` is legal in
+UP. An intermediate fix that classified by name got a *numeric* `n1 == n2` leaf
+wrong in exactly that case -- expanding it over the user type's objects and
+reporting a solvable problem `UNSOLVABLE` -- while the other core's spelling of
+the same predicate got it right, so the backends also disagreed. The same
+ambiguity corrupted the effect encoding (an object-valued effect on such a
+fluent took the numeric branch). `FluentDomain`
+(`src/tamerlite/core/search_space.py`, mirrored as `enum FluentDomain` in
+`crates/rustamer-base/src/heuristics.rs`) carries the kind and, for object
+fluents, the domain itself; `Encoder.__init__` builds it where it still holds
+the UP `Type`, and the name never leaves the encoder. Both cores then resolve a
+fluent through one oracle -- `_object_domain`/`object_domain` -- which is also
+what the rewrites below use, so "is it object-typed?" and "what does it range
+over?" cannot disagree. The four heuristic constructors take `fluent_domains`
+in place of the old pair, across the PyO3 boundary too (extracted via
+`extract_fluent_domains` in `crates/rustamer-base/src/heuristics.rs`;
+`FluentKind`'s member *values* are the wire tag and must match the Rust
+discriminants). Unlike `IfReturnType`,
+`FluentKind` is never swapped in for a Rust-native type: `FluentDomain` is
+shared, backend-agnostic data (`Encoder` builds it once and hands it to
+whichever backend is active), and its own `kind`-identity checks
+(`__post_init__`, `_object_domain`) always compare against
+`search_space.py`'s own `FluentKind` -- a per-backend swap would make those
+checks fail for any `FluentDomain` the Rust backend's data reaches, since a
+swapped-in Rust value would never be identical to that module's own enum
+member. Each core extends the list with a
+`Bool` domain per bookkeeping fluent it allocates, so the lookup is total and
+no caller needs to know where the real fluents end.
 
 The delete relaxation's cost table only ever holds `fluent == object` facts
 (seeded from the state and from operator effects), so a fluent-vs-fluent

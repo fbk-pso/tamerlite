@@ -21,7 +21,12 @@ import sys
 import warnings
 from typing import TYPE_CHECKING
 
-from tamerlite.core.search_space import ConstantNode, ObjectNode
+from tamerlite.core.search_space import (
+    ConstantNode,
+    FluentDomain,
+    FluentKind,
+    ObjectNode,
+)
 
 if TYPE_CHECKING:
     # `Expression`/`State` are bound at runtime below to whichever backend is

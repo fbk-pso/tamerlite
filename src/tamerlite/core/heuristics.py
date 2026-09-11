@@ -32,6 +32,8 @@ from tamerlite.core.search_space import (
     Event,
     Expression,
     ExpressionNode,
+    FluentDomain,
+    FluentKind,
     FluentNode,
     InterpretedFunctionNode,
     ObjectNode,
@@ -154,8 +156,7 @@ class DeleteRelaxationHeuristic(Heuristic):
     def __init__(
         self,
         actions: list[Action],
-        fluent_types: list[str],
-        objects: dict[str, list[int]],
+        fluent_domains: list[FluentDomain],
         events: dict[Action, list[tuple[Timing, Event]]],
         goals: Expression,
         heuristic_kind: HeuristicKind,
@@ -167,12 +168,19 @@ class DeleteRelaxationHeuristic(Heuristic):
         super().__init__(cache_value_in_state)
         self._heuristic_kind = heuristic_kind
         self._actions = actions
-        self._fluent_types = fluent_types
-        self._objects = objects
         self._events = events
         self._operators: list[Operator] = []
         self._extra_fluents: dict[Action, list[int]] = {}
-        self._num_fluents = len(self._fluent_types)
+        self._num_fluents = len(fluent_domains)
+        # Every bookkeeping fluent allocated below is a plain bool flag.
+        # Giving them domains up front keeps `_object_domain` a *total*
+        # lookup, so no caller has to know where the real fluents end.
+        self._fluent_domains = fluent_domains + [
+            FluentDomain(FluentKind.BOOL)
+            for a in actions
+            if a in events
+            for _ in events[a]
+        ]
         self._inadmissible_numeric_heuristic_variant = (
             inadmissible_numeric_heuristic_variant
         )
@@ -195,14 +203,16 @@ class DeleteRelaxationHeuristic(Heuristic):
                 self._extra_fluents[a].append(f)
                 effects.append((f, True))
                 for eff in e.effects:
-                    t = self._fluent_types[eff.fluent]
-                    if t == "bool":
+                    domain = self._fluent_domains[eff.fluent]
+                    if domain.kind is FluentKind.BOOL:
                         if len(eff.value) == 1 and isinstance(eff.value[0], bool):
                             effects.append((eff.fluent, eff.value[0]))
                         else:
                             effects.append((eff.fluent, True))
                             effects.append((eff.fluent, False))
-                    elif t == "real" or t == "int":
+                    elif (
+                        domain.kind is FluentKind.INT or domain.kind is FluentKind.REAL
+                    ):
                         assert (
                             eff.fluent not in constant_increase_effects
                             and eff.fluent not in constant_assign_effects
@@ -215,13 +225,13 @@ class DeleteRelaxationHeuristic(Heuristic):
                             complex_numeric_effects,
                         )
                     else:
+                        assert domain.kind is FluentKind.OBJECT
                         if len(eff.value) == 1 and isinstance(eff.value[0], ObjectNode):
                             # eff.value[0] is an object
                             effects.append((eff.fluent, eff.value[0]))
                         else:
                             effects.extend(
-                                (eff.fluent, ObjectNode(obj))
-                                for obj in objects[self._fluent_types[eff.fluent]]
+                                (eff.fluent, ObjectNode(obj)) for obj in domain.objects
                             )
                 is_applicable, conditions = self._build_operator_condition(
                     get_event_conditions(e), cond
@@ -489,9 +499,13 @@ class DeleteRelaxationHeuristic(Heuristic):
             and isinstance(exp[3], Op)
             and exp[3].kind == "not"
         ):
+            # exp[1] is a literal object, and UP's `==` requires
+            # type-compatible operands, so exp[0] must be object-typed too.
+            objs = self._object_domain(exp[0])
+            assert objs is not None, "fluent compared to an object must be object-typed"
             nodes: list[HeuristicExpressionNode] = [
                 LeafNode((exp[0], ObjectNode(obj), Op("==", (0, 1))))
-                for obj in self._objects[self._fluent_types[exp[0].fluent]]
+                for obj in objs
                 if obj != exp[1].object
             ]
             if len(nodes) == 0:
@@ -533,8 +547,8 @@ class DeleteRelaxationHeuristic(Heuristic):
         also match a *numeric* fluent-vs-fluent equality -- what keeps this
         from ever firing on one is `_simplify_leaf`'s numeric-first ordering,
         which never calls this method for a leaf `_is_numeric_leaf_expression`
-        already claimed. `self._objects.get(...)` below is a defensive
-        fallback for that invariant, not the primary guard.
+        already claimed. The `_object_domain` lookups below consult the same
+        oracle that classifier does, so the two cannot disagree.
 
         Args:
             node: A `LeafNode` potentially representing `fluent1 == fluent2`
@@ -552,6 +566,7 @@ class DeleteRelaxationHeuristic(Heuristic):
             and isinstance(exp[1], FluentNode)
             and isinstance(exp[2], Op)
             and exp[2].kind == "=="
+            and exp[2].operands == (0, 1)
         )
         positive = is_equality_shape and len(exp) == 3
         negative = (
@@ -559,14 +574,15 @@ class DeleteRelaxationHeuristic(Heuristic):
             and len(exp) == 4
             and isinstance(exp[3], Op)
             and exp[3].kind == "not"
+            and exp[3].operands == (2,)
         )
         if not positive and not negative:
             return None
 
         f1, f2 = exp[0], exp[1]
         assert isinstance(f1, FluentNode) and isinstance(f2, FluentNode)
-        objs1 = self._objects.get(self._fluent_types[f1.fluent])
-        objs2 = self._objects.get(self._fluent_types[f2.fluent])
+        objs1 = self._object_domain(f1)
+        objs2 = self._object_domain(f2)
         if objs1 is None or objs2 is None:
             return None
 
@@ -743,14 +759,37 @@ class DeleteRelaxationHeuristic(Heuristic):
         else:
             complex_numeric_effects[effect.fluent] = effect.value
 
+    def _object_domain(self, node: FluentNode) -> tuple[int, ...] | None:
+        """The objects a fluent can hold, or `None` if it isn't object-typed.
+
+        Single oracle for both questions the object-equality handling asks:
+        "is this operand object-typed?" (`_is_object_typed_operand`) and
+        "what does it range over?" (`_simplify_object_equality`,
+        `_simplify_fluent_not_equals_object_expression`). Those two must
+        agree exactly -- the numeric-first dispatch in `_simplify_leaf` only
+        keeps the object rewrite off numeric leaves if the predicate that
+        gates entry is the same one that resolves the domains -- and must
+        match Rust's `object_domain` just as exactly, since a disagreement
+        changes which leaves get rewritten and so `expanded_states`.
+
+        Args:
+            node: The fluent to resolve.
+
+        Returns:
+            The fluent's object domain, or `None` if it is not object-typed.
+        """
+
+        domain = self._fluent_domains[node.fluent]
+        return domain.objects if domain.kind is FluentKind.OBJECT else None
+
     def _is_object_typed_operand(self, e: ExpressionNode) -> bool:
         """Whether an `==` operand is object-typed rather than numeric.
 
         `"=="` covers both numeric equality and user-type (object) equality
         -- `Converter.walk_equals` emits the same operator kind for both, so
         the operands' *types* are the only thing that tells them apart. An
-        operand is object-typed if it's a literal object, or a fluent
-        declared at a user type (anything other than `bool`/`int`/`real`).
+        operand is object-typed if it's a literal object, or a fluent whose
+        `FluentDomain` says so.
 
         Args:
             e: One operand of an `==` leaf.
@@ -762,13 +801,7 @@ class DeleteRelaxationHeuristic(Heuristic):
         if isinstance(e, ObjectNode):
             return True
         if isinstance(e, FluentNode):
-            # Ids past `len(self._fluent_types)` are the per-event
-            # bookkeeping fluents `__init__` appends (`f_cond`/extra
-            # fluents); those are always bool, never object-typed.
-            return (
-                e.fluent < len(self._fluent_types)
-                and self._fluent_types[e.fluent] in self._objects
-            )
+            return self._object_domain(e) is not None
         return False
 
     def _is_numeric_leaf_expression(self, node: LeafNode) -> bool:
@@ -1350,8 +1383,7 @@ class DeleteRelaxationHeuristic(Heuristic):
 
 def HFF(
     actions: list[Action],
-    fluent_types: list[str],
-    objects: dict[str, list[int]],
+    fluent_domains: list[FluentDomain],
     events: dict[Action, list[tuple[Timing, Event]]],
     goals: Expression,
     internal_caching: bool,
@@ -1361,8 +1393,7 @@ def HFF(
 ) -> DeleteRelaxationHeuristic:
     return DeleteRelaxationHeuristic(
         actions,
-        fluent_types,
-        objects,
+        fluent_domains,
         events,
         goals,
         HeuristicKind.HFF,
@@ -1375,8 +1406,7 @@ def HFF(
 
 def HAdd(
     actions: list[Action],
-    fluent_types: list[str],
-    objects: dict[str, list[int]],
+    fluent_domains: list[FluentDomain],
     events: dict[Action, list[tuple[Timing, Event]]],
     goals: Expression,
     internal_caching: bool,
@@ -1386,8 +1416,7 @@ def HAdd(
 ) -> DeleteRelaxationHeuristic:
     return DeleteRelaxationHeuristic(
         actions,
-        fluent_types,
-        objects,
+        fluent_domains,
         events,
         goals,
         HeuristicKind.HADD,
@@ -1400,8 +1429,7 @@ def HAdd(
 
 def HMax(
     actions: list[Action],
-    fluent_types: list[str],
-    objects: dict[str, list[int]],
+    fluent_domains: list[FluentDomain],
     events: dict[Action, list[tuple[Timing, Event]]],
     goals: Expression,
     internal_caching: bool,
@@ -1411,8 +1439,7 @@ def HMax(
 ) -> DeleteRelaxationHeuristic:
     return DeleteRelaxationHeuristic(
         actions,
-        fluent_types,
-        objects,
+        fluent_domains,
         events,
         goals,
         HeuristicKind.HMAX,
@@ -1447,8 +1474,7 @@ class HMaxExplicit(Heuristic):
     def __init__(
         self,
         actions: list[Action],
-        fluent_types: list[str],
-        objects: dict[str, list[int]],
+        fluent_domains: list[FluentDomain],
         events: dict[Action, list[tuple[Timing, Event]]],
         goals: Expression,
         internal_caching: bool,
@@ -1457,12 +1483,15 @@ class HMaxExplicit(Heuristic):
     ):
         super().__init__(cache_value_in_state)
         self._actions = actions
-        self._fluent_types = fluent_types
-        self._objects = objects
         self._events = events
         self._operators: list[OperatorHmax] = []
         self._extra_fluents: dict[Action, list[int]] = {}
-        self._num_fluents = len(self._fluent_types)
+        self._num_fluents = len(fluent_domains)
+        # See `DeleteRelaxationHeuristic.__init__` for why the bookkeeping
+        # fluents allocated below get domains of their own.
+        self._fluent_domains = fluent_domains + [
+            FluentDomain(FluentKind.BOOL) for le in events.values() for _ in le
+        ]
 
         for a, le in events.items():
             self._extra_fluents[a] = []
@@ -1475,14 +1504,16 @@ class HMaxExplicit(Heuristic):
                 self._extra_fluents[a].append(f)
                 effects.append((f, True))
                 for eff in e.effects:
-                    t = self._fluent_types[eff.fluent]
-                    if t == "bool":
+                    domain = self._fluent_domains[eff.fluent]
+                    if domain.kind is FluentKind.BOOL:
                         if len(eff.value) == 1 and isinstance(eff.value[0], bool):
                             effects.append((eff.fluent, eff.value[0]))
                         else:
                             effects.append((eff.fluent, True))
                             effects.append((eff.fluent, False))
-                    elif t == "real" or t == "int":
+                    elif (
+                        domain.kind is FluentKind.INT or domain.kind is FluentKind.REAL
+                    ):
                         if len(eff.value) == 1 and isinstance(
                             eff.value[0], (int, Fraction)
                         ):
@@ -1493,13 +1524,13 @@ class HMaxExplicit(Heuristic):
                             # must keep the whole `Expression`
                             effects.append((eff.fluent, eff.value))
                     else:
+                        assert domain.kind is FluentKind.OBJECT
                         if len(eff.value) == 1 and isinstance(eff.value[0], ObjectNode):
                             # eff.value[0] is an object
                             effects.append((eff.fluent, eff.value[0]))
                         else:
                             effects.extend(
-                                (eff.fluent, ObjectNode(obj))
-                                for obj in objects[self._fluent_types[eff.fluent]]
+                                (eff.fluent, ObjectNode(obj)) for obj in domain.objects
                             )
                 conditions: list[tuple[ExpressionNode, ...]] = [cond]
                 for c in get_event_conditions(e):
