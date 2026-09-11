@@ -1540,23 +1540,23 @@ def test_relevant_equality_excludes_bookkeeping_fluents_from_encoding():
     ever be dropped -- exactly the bug this analysis exists to avoid. The
     closure also correctly drops fluents that are only *transitively*
     bookkeeping (fluent `A` feeds only fluent `B`, and `B` is read nowhere)
-    -- see `get_problem_dedup_relevant_transitive`, which a one-step
+    -- see `get_problem_bookkeeping_fluent_transitive`, which a one-step
     "everything read by an effect's RHS is relevant" rule would get wrong
     even with the same-fluent exclusion, since the two fluents involved are
     never equal.
 
-    Covers three fixtures: `get_problem_dedup_relevant_classical` (direct
-    self-reference), `get_problem_dedup_relevant_temporal` (temporal
+    Covers three fixtures: `get_problem_bookkeeping_fluent_classical` (direct
+    self-reference), `get_problem_bookkeeping_fluent_temporal` (temporal
     problem -- compaction is unconditional on `is_temporal`/`weak_equality`,
     unlike the old dedup-only reduction), and
-    `get_problem_dedup_relevant_transitive` (transitive chain) -- see their
+    `get_problem_bookkeeping_fluent_transitive` (transitive chain) -- see their
     docstrings for why each is shaped the way it is. Also covers
     `relevant_equality=False`, which must leave every fluent in the encoding
     even on a fixture that would otherwise qualify for compaction.
     """
-    classical = problems_generator.get_problem_dedup_relevant_classical()
-    temporal = problems_generator.get_problem_dedup_relevant_temporal()
-    transitive = problems_generator.get_problem_dedup_relevant_transitive()
+    classical = problems_generator.get_problem_bookkeeping_fluent_classical()
+    temporal = problems_generator.get_problem_bookkeeping_fluent_temporal()
+    transitive = problems_generator.get_problem_bookkeeping_fluent_transitive()
 
     for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
@@ -1660,14 +1660,14 @@ def test_custom_heuristic_get_value_respects_relevant_equality():
     """`StateWrapper.get_value` (`engine.py`) lets a user-supplied custom
     heuristic read any fluent by name. Once `relevant_equality` compacts the
     encoding, a fluent nothing in the problem reads -- like
-    `get_problem_dedup_relevant_classical`'s bookkeeping `cost` fluent (see
+    `get_problem_bookkeeping_fluent_classical`'s bookkeeping `cost` fluent (see
     its docstring) -- has no slot in `state.assignments` at all, so reading
     it must raise `UPStateMissingFluentError`, the same exception `get_value`
     already raises for a genuinely unknown fluent, rather than crash some
     other way or silently return a stale value. `relevant_equality=False`
     restores the pre-compaction behavior: every fluent stays readable.
     """
-    problem = problems_generator.get_problem_dedup_relevant_classical()
+    problem = problems_generator.get_problem_bookkeeping_fluent_classical()
     cost = problem.fluent("cost")
 
     for disable_rustamer in [True, False]:
@@ -1724,8 +1724,8 @@ def test_weak_equality_warns_on_non_temporal_problem():
     in `_solve_ground_problem`, common to both branches, rather than duplicated
     inside `_get_search` (which `MultiqueueParams` never calls).
     """
-    classical = problems_generator.get_problem_dedup_relevant_classical()
-    temporal = problems_generator.get_problem_dedup_relevant_temporal()
+    classical = problems_generator.get_problem_bookkeeping_fluent_classical()
+    temporal = problems_generator.get_problem_bookkeeping_fluent_temporal()
 
     for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)

@@ -20,6 +20,7 @@ import math
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from enum import Enum
 from fractions import Fraction
@@ -886,8 +887,7 @@ class DeleteRelaxationHeuristic(Heuristic):
         """
 
         costs: dict[Expression, float] = {}
-        for f in range(len(state.assignments)):
-            v = state.assignments[f]
+        for f, v in enumerate(state.assignments):
             if v is True:
                 k: Expression = (FluentNode(f),)
             elif v is False:
@@ -1391,7 +1391,15 @@ class HMaxExplicit(Heuristic):
             dict[tuple[ConstantNode | None, ...], float | None] | None
         ) = {} if internal_caching else None
 
-        self._initial_assignments_changes: set[int] = set(range(self._num_fluents))
+        # Seeded into `_eval_core`'s `assignments_changes` on every call: every
+        # fluent, including the extra ones (index >= `len(fluent_types)`) that
+        # encode event progress. A `frozenset` because it is shared across
+        # evaluations rather than copied -- `_eval_core` only reads it and rebinds
+        # a fresh `set` before any in-place update, so an accidental mutation
+        # here would silently corrupt every later evaluation.
+        self._initial_assignments_changes: frozenset[int] = frozenset(
+            range(self._num_fluents)
+        )
 
     @property
     def name(self) -> str:
@@ -1434,7 +1442,7 @@ class HMaxExplicit(Heuristic):
         self,
         exp: Expression,
         assignments: list[set[ConstantNode]],
-        assignments_changes: set[int],
+        assignments_changes: AbstractSet[int],
         cache_can_be_true: dict[int, bool],
         cache_extract_fluents: dict[int, set[int]],
     ) -> bool:
@@ -1463,7 +1471,7 @@ class HMaxExplicit(Heuristic):
         self,
         expressions: tuple[Expression, ...],
         assignments: list[set[ConstantNode]],
-        assignments_changes: set[int],
+        assignments_changes: AbstractSet[int],
         cache_can_be_true: dict[int, bool],
         cache_extract_fluents: dict[int, set[int]],
     ) -> bool:
@@ -1511,7 +1519,7 @@ class HMaxExplicit(Heuristic):
         cache_extract_fluents: dict[int, set[int]] = {}
         applied_operators = [False] * len(self._operators)
 
-        assignments_changes = self._initial_assignments_changes
+        assignments_changes: AbstractSet[int] = self._initial_assignments_changes
         depth = 0
         while len(assignments_changes) > 0:
             if self._can_be_true(
@@ -1562,12 +1570,13 @@ class HMaxExplicit(Heuristic):
                     new_assignments[fluent].update(possible_values)
 
             # update assignments
-            assignments_changes = set()
+            next_assignments_changes: set[int] = set()
             for fluent, vv in new_assignments.items():
                 prev_len = len(assignments[fluent])
                 assignments[fluent].update(vv)
                 if len(assignments[fluent]) > prev_len:
-                    assignments_changes.add(fluent)
+                    next_assignments_changes.add(fluent)
+            assignments_changes = next_assignments_changes
 
             depth += 1
 

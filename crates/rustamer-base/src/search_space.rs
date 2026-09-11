@@ -205,6 +205,21 @@ impl SearchSpace {
         } else {
             actions.clone()
         };
+        // Every action the search can expand must have an entry in `events`.
+        // A missing one is not a benign no-op here: `get_successor_state` and
+        // `build_plan` both look events up with `events.get(...)`, so the
+        // action would silently report as inapplicable -- and silently vanish
+        // from a reconstructed plan -- instead of failing. `Encoder` restricts
+        // `events` and `relevant_actions` to the same `considered_actions` set
+        // when it compacts the encoding (and `relevant_actions` is only ever
+        // narrowed further afterwards, through the setter), so a mismatch is an
+        // encoder bug; catch it here rather than as a wrong plan much later.
+        if let Some(a) = relevant_actions.iter().find(|a| !events.contains_key(a)) {
+            return Err(PyException::new_err(format!(
+                "Action {} is expandable but has no events entry",
+                a.idx
+            )));
+        }
         let is_temporal = actions_duration.iter().any(|value| !value.is_none());
         let converted_actions_duration: Vec<Option<DurationInterval>> = actions_duration
             .into_iter()

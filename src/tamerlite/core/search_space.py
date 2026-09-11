@@ -636,6 +636,21 @@ class SearchSpace(SearchSpaceABC):
         self._relevant_actions = (
             relevant_actions if relevant_actions is not None else list(actions)
         )
+        # Every action the search can expand must have an entry in `events`:
+        # `get_successor_state`/`build_plan` look events up by action, and a
+        # missing entry is not a benign no-op -- here it raises `KeyError`
+        # mid-search, while the Rust core's `events.get(...)` silently reports
+        # the action as inapplicable and silently drops it from a reconstructed
+        # plan. `Encoder` restricts `events` and `relevant_actions` to the same
+        # `considered_actions` set when it compacts the encoding (and only ever
+        # narrows `relevant_actions` further afterwards, through the setter), so
+        # a mismatch is an encoder bug; catch it here rather than as a wrong
+        # plan much later.
+        missing = next((a for a in self._relevant_actions if a not in events), None)
+        if missing is not None:
+            raise ValueError(
+                f"Action {missing.idx} is expandable but has no events entry"
+            )
         self._compression_safe_actions = compression_safe_actions
         self._action_objects = action_objects
         self._obj_to_prev_actions_map = obj_to_prev_actions_map

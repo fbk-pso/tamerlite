@@ -285,13 +285,10 @@ class Encoder:
                         obj_to_prev_actions_map,
                         initial_state,
                         self._goal,
-                        self._applicable_actions,
+                        self.considered_actions,
                         deadline,
                         problem.epsilon,
                     )
-                    if narrow_relevant_actions:
-                        assert self._relevant_actions is not None
-                        self._search_space.relevant_actions = self._relevant_actions
 
     def _encode(self, relevant_fluents: set[int] | None) -> None:
         """(Re)builds everything whose numbering depends on which fluents
@@ -1199,10 +1196,25 @@ class Encoder:
 
     @property
     def fluents(self) -> list[str]:
+        """The fluents this encoding has a slot for, in id order.
+
+        Not necessarily every fluent of the problem: with `relevant_equality`
+        on (the default) `__init__` compacts the encoding down to the fluents
+        that can affect search outcome, so a fluent nothing reads has no id
+        here at all -- see `_compute_relevant_fluents`. Build the encoder with
+        `relevant_equality=False` to get a slot for every fluent, which is
+        what a consumer that resolves fluents the search itself never looks at
+        needs (a custom heuristic reading a bookkeeping fluent, or a
+        `Converter` built externally over `fluent_ids` to convert an
+        expression outside the search graph).
+        """
         return self._fluents
 
     @property
     def fluent_ids(self) -> dict[str, int]:
+        """`str(fluent) -> id`, over exactly the fluents in `fluents` -- so a
+        lookup raises `KeyError` both for a fluent the problem never defined and
+        for one compaction dropped as irrelevant (see `fluents`)."""
         return self._fluent_ids
 
     @property
@@ -1223,6 +1235,15 @@ class Encoder:
 
     @property
     def events(self) -> dict[Action, list[tuple[Timing, Event]]]:
+        """Timed events per action.
+
+        Not necessarily keyed by every action of the problem: when
+        `relevant_equality` compacts the encoding, `_build_events`' pass 2 only
+        converts `considered_actions`, and anything outside that set is absent
+        rather than empty (see `_build_events`). Sound because a non-considered
+        action is never expanded -- but a consumer that must cover every action
+        needs `relevant_equality=False`.
+        """
         return self._events
 
     @property

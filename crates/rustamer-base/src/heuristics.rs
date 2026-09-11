@@ -1502,8 +1502,7 @@ impl DeleteRelaxationHeuristic {
             FxBuildHasher,
         );
 
-        for f in 0..state.assignments.len() {
-            let v = &state.assignments[f];
+        for (f, v) in state.assignments.iter().enumerate() {
             let k = match v {
                 ExpressionNode::Bool(value) => {
                     if *value {
