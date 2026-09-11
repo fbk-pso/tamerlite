@@ -168,7 +168,6 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
         },
     };
 
-    let dedup_relevant_fluents = ss.dedup_relevant_fluents();
     let dedup = !ss.is_temporal() || weak_equality;
     // State and WeakEqState contain interior mutability only for heuristic
     // caches. The mutable fields are ignored by Hash/Eq, so using them as HashSet keys is
@@ -178,7 +177,6 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
     if dedup {
         visited_states.insert(WeakEqState {
             state: Rc::clone(&item.state_container.state),
-            fluents: dedup_relevant_fluents,
         });
     }
 
@@ -246,7 +244,6 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
                 let keep = !dedup
                     || visited_states.insert(WeakEqState {
                         state: Rc::clone(&s),
-                        fluents: dedup_relevant_fluents,
                     });
                 if keep {
                     let sc = StateContainer {

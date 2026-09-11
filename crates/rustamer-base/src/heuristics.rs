@@ -15,6 +15,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 
+use im::Vector;
 use itertools::Itertools;
 use num::{BigInt, BigRational, Zero};
 use std::hash::{Hash, Hasher};
@@ -206,7 +207,7 @@ impl Hash for OperatorHmax {
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 struct CacheKey {
-    values: im::Vector<ExpressionNode>,
+    values: Vector<ExpressionNode>,
     todo_values: Vec<usize>,
 }
 
@@ -1442,14 +1443,13 @@ impl DeleteRelaxationHeuristic {
     pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
         let mut internal_caching = self.internal_caching.lock().unwrap();
         if let Some(internal_caching) = internal_caching.as_mut() {
-            let values = state.assignments.clone();
             let todo_values: Vec<usize> = self
                 .actions
                 .iter()
                 .map(|action| state.todo.get(action).map(|(j, _)| *j).unwrap_or(0))
                 .collect();
             let cache_key = CacheKey {
-                values,
+                values: state.assignments.clone(),
                 todo_values,
             };
             if let Some(res) = internal_caching.get(&cache_key) {
@@ -1917,6 +1917,10 @@ pub struct HMaxExplicit {
     operator_conditions_fluents: Vec<FxHashSet<usize>>,
     operator_effects_fluents: Vec<FxHashSet<usize>>,
     internal_caching: HeuristicCache,
+    /// `_eval` seeds `assignments_changes` with this every call: every
+    /// fluent, including the extra ones (index >= `fluent_types.len()`)
+    /// that encode event progress.
+    initial_assignments_changes: FxHashSet<usize>,
 }
 
 impl HMaxExplicit {
@@ -2014,6 +2018,8 @@ impl HMaxExplicit {
             None
         };
 
+        let initial_assignments_changes: FxHashSet<usize> = (0..num_fluents).collect();
+
         let res = HMaxExplicit {
             actions,
             events,
@@ -2025,6 +2031,7 @@ impl HMaxExplicit {
             operator_conditions_fluents,
             operator_effects_fluents,
             internal_caching: Arc::new(Mutex::new(internal_caching)),
+            initial_assignments_changes,
         };
         Ok(res)
     }
@@ -2128,14 +2135,13 @@ impl HMaxExplicit {
     pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
         let mut internal_caching = self.internal_caching.lock().unwrap();
         if let Some(internal_caching) = internal_caching.as_mut() {
-            let values = state.assignments.clone();
             let todo_values: Vec<usize> = self
                 .actions
                 .iter()
                 .map(|action| state.todo.get(action).map(|(j, _)| *j).unwrap_or(0))
                 .collect();
             let cache_key = CacheKey {
-                values,
+                values: state.assignments.clone(),
                 todo_values,
             };
             if let Some(res) = internal_caching.get(&cache_key) {
@@ -2175,7 +2181,7 @@ impl HMaxExplicit {
         let mut cache_can_be_true: FxHashMap<Expression, bool> =
             FxHashMap::with_hasher(FxBuildHasher);
         let mut applied_operators = vec![false; self.operators.len()];
-        let mut assignments_changes: FxHashSet<usize> = (0..self.num_fluents).collect();
+        let mut assignments_changes: FxHashSet<usize> = self.initial_assignments_changes.clone();
         let mut depth = 0;
         while !assignments_changes.is_empty() {
             if self.can_be_true(

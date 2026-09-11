@@ -34,6 +34,7 @@ import unified_planning.test.examples
 import up_test_cases.builtin
 from unified_planning.engines import PlanGenerationResult, ValidationResult
 from unified_planning.engines import PlanGenerationResultStatus as ResultStatus
+from unified_planning.exceptions import UPStateMissingFluentError
 from unified_planning.plans import TimeTriggeredPlan
 from unified_planning.shortcuts import *
 
@@ -707,6 +708,12 @@ def test_heuristic_values(problem, data_regression):
                         cache_value_in_state=False,
                         inadmissible_numeric_heuristic_variant=inadmissible_numeric_heuristic,
                     )
+                    computed_values: list[int | None] = []
+                    for state in states:
+                        h_val = heuristic.eval(state, ss)
+                        if h_val is not None:
+                            h_val = int(h_val)
+                        computed_values.append(h_val)
 
                     values_key = heuristic_name
                     if backend_divergent:
@@ -714,20 +721,9 @@ def test_heuristic_values(problem, data_regression):
                     elif inadmissible_numeric_heuristic:
                         values_key += "_inadmissible"
                     if values_key not in values:
-                        values[values_key] = []
-                        for state in states:
-                            h_val = heuristic.eval(state, ss)
-                            if h_val is not None:
-                                h_val = int(h_val)
-                            values[values_key].append(h_val)
-
+                        values[values_key] = computed_values
                     else:
-                        assert len(states) == len(values[values_key])
-                        for i, state in enumerate(states):
-                            h_val = heuristic.eval(state, ss)
-                            if h_val is not None:
-                                h_val = int(h_val)
-                            assert h_val == values[values_key][i]
+                        assert computed_values == values[values_key]
 
     data_regression.check(values)
 
@@ -1525,42 +1521,42 @@ def test_relevance_analysis_keeps_duration_only_writer():
                 assert v.validate(problem, res.plan)
 
 
-def test_dedup_relevant_fluents_excludes_bookkeeping_fluents():
+def test_relevant_equality_excludes_bookkeeping_fluents_from_encoding():
     """
-    `Encoder._compute_dedup_relevant_fluents` restricts the search's
-    duplicate-state detection key to fluents that matter for state identity:
-    the least fixpoint of a backward slice seeded from the fluents read by a
+    `Encoder._compute_relevant_fluents` decides what `relevant_equality`
+    (default `True`) compacts the encoding down to: the least fixpoint of a
+    backward slice seeded from the fluents read by a
     precondition/effect-condition/goal/duration-bound, closed under "an
-    effect's RHS matters only if the fluent it writes matters". That closure
-    is what makes exclusion of an effect's own target fluent from its own
-    right-hand side fall out for free: `_convert_effects` desugars
-    `increase`/`decrease` into a self-referencing assignment (`cost := cost +
-    1`), and without the closure a pure bookkeeping fluent that only bumps
-    itself would trivially mark itself relevant and the reduction would
-    collapse to `None` -- exactly the bug this analysis exists to avoid. The
-    closure also correctly drops fluents that are only *transitively*
-    bookkeeping (fluent `A` feeds only fluent `B`, and `B` is read nowhere) --
-    see `get_problem_dedup_relevant_transitive`, which a one-step "everything
-    read by an effect's RHS is relevant" rule would get wrong even with the
-    same-fluent exclusion, since the two fluents involved are never equal.
+    effect's RHS matters only if the fluent it writes matters". A dropped
+    fluent never gets a slot in `state.assignments` at all -- there is no
+    separate dedup-side or heuristic-side filter left to apply after the
+    fact, unlike the two-consumer design this replaced (see git history).
 
-    Covers all three dedup regimes that consume the reduced set
-    (`core.search.state_representation`) via
-    `get_problem_dedup_relevant_classical` (plain `not is_temporal` dedup
-    path, direct self-reference), `get_problem_dedup_relevant_temporal`
-    (temporal `weak_equality` dedup path), and
-    `get_problem_dedup_relevant_transitive` (plain `not is_temporal` dedup
-    path, transitive chain) -- see their docstrings for why each is shaped
-    the way it is. Also covers `Encoder`'s `relevant_equality` flag: `False`
-    must leave the reduction at `None` even on a fixture that would
-    otherwise qualify. And covers the `is_temporal and not weak_equality`
-    skip: that regime has no dedup at all, so `Encoder` must leave the
-    reduction at `None` there too, by default, without needing
-    `relevant_equality=False`.
+    That closure is what makes exclusion of an effect's own target fluent
+    from its own right-hand side fall out for free: `_convert_effects`
+    desugars `increase`/`decrease` into a self-referencing assignment (`cost
+    := cost + 1`), and without the closure a pure bookkeeping fluent that
+    only bumps itself would trivially mark itself relevant and nothing would
+    ever be dropped -- exactly the bug this analysis exists to avoid. The
+    closure also correctly drops fluents that are only *transitively*
+    bookkeeping (fluent `A` feeds only fluent `B`, and `B` is read nowhere)
+    -- see `get_problem_bookkeeping_fluent_transitive`, which a one-step
+    "everything read by an effect's RHS is relevant" rule would get wrong
+    even with the same-fluent exclusion, since the two fluents involved are
+    never equal.
+
+    Covers three fixtures: `get_problem_bookkeeping_fluent_classical` (direct
+    self-reference), `get_problem_bookkeeping_fluent_temporal` (temporal
+    problem -- compaction is unconditional on `is_temporal`/`weak_equality`,
+    unlike the old dedup-only reduction), and
+    `get_problem_bookkeeping_fluent_transitive` (transitive chain) -- see their
+    docstrings for why each is shaped the way it is. Also covers
+    `relevant_equality=False`, which must leave every fluent in the encoding
+    even on a fixture that would otherwise qualify for compaction.
     """
-    classical = problems_generator.get_problem_dedup_relevant_classical()
-    temporal = problems_generator.get_problem_dedup_relevant_temporal()
-    transitive = problems_generator.get_problem_dedup_relevant_transitive()
+    classical = problems_generator.get_problem_bookkeeping_fluent_classical()
+    temporal = problems_generator.get_problem_bookkeeping_fluent_temporal()
+    transitive = problems_generator.get_problem_bookkeeping_fluent_transitive()
 
     for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
@@ -1580,19 +1576,12 @@ def test_dedup_relevant_fluents_excludes_bookkeeping_fluents():
                 symmetry_breaking=False,
                 compression_safe_actions=False,
                 relevance_analysis=True,
-                # Required for the temporal fixture: `is_temporal and not
-                # weak_equality` skips computing the reduction entirely (see
-                # the dedicated check below). No-op for the classical fixture,
-                # which ignores this flag.
-                weak_equality=True,
             )
-            assert encoder.dedup_relevant_fluents is not None
-            assert len(encoder.dedup_relevant_fluents) < len(encoder.fluents)
-            dedup_names = {encoder.fluents[i] for i in encoder.dedup_relevant_fluents}
+            fluent_names = set(encoder.fluents)
             for excluded_name in excluded_names:
-                assert excluded_name not in dedup_names
+                assert excluded_name not in fluent_names
             for name in kept_names:
-                assert name in dedup_names
+                assert name in fluent_names
 
             if problem is transitive:
                 # Sharp regression guard for the transitive-chain case: the
@@ -1601,19 +1590,13 @@ def test_dedup_relevant_fluents_excludes_bookkeeping_fluents():
                 # Assert the exact set, not just the two checks above, so a
                 # regression to the one-step rule is caught even if it
                 # happens to keep `ready` and drop `log`.
-                assert dedup_names == set(kept_names)
+                assert fluent_names == set(kept_names)
 
-            # Round-trips through the PyO3 getter/setter on the Rust backend too.
-            assert (
-                encoder.search_space.dedup_relevant_fluents
-                == encoder.dedup_relevant_fluents
-            )
-
-            # relevant_equality=False must skip the reduction entirely,
-            # even though the fixture's own fluents would otherwise qualify --
-            # this is the flag's whole purpose, distinct from a problem simply
-            # having nothing to exclude (covered by the numeric_problem case
-            # below).
+            # relevant_equality=False must skip compaction entirely, even
+            # though the fixture's own fluents would otherwise qualify --
+            # this is the flag's whole purpose, distinct from a problem
+            # simply having nothing to exclude (covered by the
+            # numeric_problem case below).
             disabled_encoder = Encoder(
                 ground_problem,
                 lifted_problem,
@@ -1623,33 +1606,14 @@ def test_dedup_relevant_fluents_excludes_bookkeeping_fluents():
                 relevance_analysis=True,
                 relevant_equality=False,
             )
-            assert disabled_encoder.dedup_relevant_fluents is None
-            assert disabled_encoder.search_space.dedup_relevant_fluents is None
+            disabled_fluent_names = set(disabled_encoder.fluents)
+            for excluded_name in excluded_names:
+                assert excluded_name in disabled_fluent_names
+            assert len(disabled_fluent_names) > len(fluent_names)
 
-            if problem is temporal:
-                # `is_temporal and not weak_equality` has no dedup at all, so
-                # the reduction is never consulted there -- Encoder must skip
-                # computing it, matching the `weak_equality=False` default
-                # most temporal solves use. Contrast with the `weak_equality=True`
-                # encoder above, built from the same fixture, whose reduction
-                # is non-trivial: this isn't a coincidental None.
-                weak_equality_default_encoder = Encoder(
-                    ground_problem,
-                    lifted_problem,
-                    map_back_action_instance,
-                    symmetry_breaking=False,
-                    compression_safe_actions=False,
-                    relevance_analysis=True,
-                )
-                assert weak_equality_default_encoder.dedup_relevant_fluents is None
-                assert (
-                    weak_equality_default_encoder.search_space.dedup_relevant_fluents
-                    is None
-                )
-
-        # A problem where every fluent is read somewhere leaves the reduction
-        # as None -- the pre-existing full-assignments dedup path stays
-        # reachable unchanged.
+        # A problem where every fluent is read somewhere leaves the encoding
+        # untouched -- compaction narrows the state, but never invents a
+        # difference where every fluent is already relevant.
         numeric_problem = problems_generator.get_problem_numeric()
         lifted_problem, ground_problem, map_back_action_instance = (
             testing_utils.compile_problem(numeric_problem)
@@ -1662,11 +1626,20 @@ def test_dedup_relevant_fluents_excludes_bookkeeping_fluents():
             compression_safe_actions=False,
             relevance_analysis=True,
         )
-        assert encoder.dedup_relevant_fluents is None
-        assert encoder.search_space.dedup_relevant_fluents is None
+        disabled_encoder = Encoder(
+            ground_problem,
+            lifted_problem,
+            map_back_action_instance,
+            symmetry_breaking=False,
+            compression_safe_actions=False,
+            relevance_analysis=True,
+            relevant_equality=False,
+        )
+        assert set(encoder.fluents) == set(disabled_encoder.fluents)
 
-        # Solve the temporal problem under weak_equality=True, exercising the
-        # new WeakEqState.fluents subset comparison end to end.
+        # Solve the temporal problem end to end under weak_equality=True,
+        # exercising `WeakEqState`'s `todo` comparison over the (now
+        # already-compacted) encoding.
         search = tamerlite.SearchParams(
             search="wastar",
             heuristic="hff",
@@ -1683,6 +1656,59 @@ def test_dedup_relevant_fluents_excludes_bookkeeping_fluents():
                 assert v.validate(temporal, res.plan)
 
 
+def test_custom_heuristic_get_value_respects_relevant_equality():
+    """`StateWrapper.get_value` (`engine.py`) lets a user-supplied custom
+    heuristic read any fluent by name. Once `relevant_equality` compacts the
+    encoding, a fluent nothing in the problem reads -- like
+    `get_problem_bookkeeping_fluent_classical`'s bookkeeping `cost` fluent (see
+    its docstring) -- has no slot in `state.assignments` at all, so reading
+    it must raise `UPStateMissingFluentError`, the same exception `get_value`
+    already raises for a genuinely unknown fluent, rather than crash some
+    other way or silently return a stale value. `relevant_equality=False`
+    restores the pre-compaction behavior: every fluent stays readable.
+    """
+    problem = problems_generator.get_problem_bookkeeping_fluent_classical()
+    cost = problem.fluent("cost")
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+
+        outcomes: list[bool] = []  # True if reading `cost` raised
+
+        def read_cost(state: State, outcomes: list[bool] = outcomes) -> float:
+            try:
+                state.get_value(cost())
+            except UPStateMissingFluentError:
+                outcomes.append(True)
+            else:
+                outcomes.append(False)
+            return 1.0
+
+        search = tamerlite.SearchParams(search="wastar", heuristic="custom")
+        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+            planner: tamerlite.engine.TamerLite
+            res: PlanGenerationResult = planner.solve(
+                problem, heuristic=read_cost, timeout=None
+            )
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+        assert outcomes and all(outcomes), (
+            "reading a relevant_equality-dropped fluent must raise "
+            "UPStateMissingFluentError"
+        )
+
+        outcomes.clear()
+        search = tamerlite.SearchParams(
+            search="wastar", heuristic="custom", relevant_equality=False
+        )
+        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+            planner: tamerlite.engine.TamerLite
+            res = planner.solve(problem, heuristic=read_cost, timeout=None)
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+        assert outcomes and not any(outcomes), (
+            "relevant_equality=False must keep every fluent readable"
+        )
+
+
 def test_weak_equality_warns_on_non_temporal_problem():
     """`weak_equality` only changes dedup behavior on temporal problems --
     `WeakEqState`'s extra `todo` comparison (`core.search.WeakEqState.__eq__`)
@@ -1691,15 +1717,15 @@ def test_weak_equality_warns_on_non_temporal_problem():
     `weak_equality=True` on a non-temporal problem is therefore always a no-op,
     most plausibly a leftover from reusing params built for a temporal problem
     -- worth a warning, unlike the `is_temporal and not weak_equality` case
-    (`test_dedup_relevant_fluents_excludes_bookkeeping_fluents`), which is the
-    default for every temporal solve and would make the warning pure noise.
+    (`test_relevant_equality_excludes_bookkeeping_fluents_from_encoding`), which is
+    the default for every temporal solve and would make the warning pure noise.
 
     Covers both `SearchParams` and `MultiqueueParams`, since the check lives once
     in `_solve_ground_problem`, common to both branches, rather than duplicated
     inside `_get_search` (which `MultiqueueParams` never calls).
     """
-    classical = problems_generator.get_problem_dedup_relevant_classical()
-    temporal = problems_generator.get_problem_dedup_relevant_temporal()
+    classical = problems_generator.get_problem_bookkeeping_fluent_classical()
+    temporal = problems_generator.get_problem_bookkeeping_fluent_temporal()
 
     for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
@@ -2594,6 +2620,12 @@ def test_interpreted_functions_real_return_backend_normalization():
             symmetry_breaking=False,
             compression_safe_actions=False,
             relevance_analysis=False,
+            # This problem has no actions and no goal, so `relevant_equality`'s
+            # default would compact away every fluent -- nothing in the
+            # problem reads `n`, since the only place it appears is the probe
+            # expression `exp` converted below, standalone, outside the
+            # search graph relevance analysis looks at.
+            relevant_equality=False,
         )
         init_state = encoder.search_space.initial_state()
         converter = Converter(

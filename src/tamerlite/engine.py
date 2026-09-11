@@ -91,6 +91,10 @@ class StateWrapper(State):
         try:
             fluent_id = self.encoder.fluent_ids[str(fluent)]
         except KeyError:
+            # Either an unknown fluent, or one `relevant_equality` dropped
+            # from the encoding as irrelevant -- a custom heuristic reading
+            # it gets the same error either way; pass `relevant_equality=False`
+            # to keep every fluent in the state.
             raise UPStateMissingFluentError(
                 f"The state {self.state} does not have a value for the fluent {fluent}"
             ) from None
@@ -319,13 +323,19 @@ class TamerLite(
                     f"Supported values are: custom, blind, {', '.join(sorted(hh_map))}."
                 )
 
+            # `considered_actions` is the same action set the search will
+            # actually expand: `relevant_actions` if relevance analysis
+            # narrowed it, else `applicable_actions`.
+            # `encoder.fluent_types`/`encoder.objects`/`encoder.goal` already
+            # describe the (possibly `relevant_equality`-compacted) encoding,
+            # so no separate fluent restriction is needed here.
+            considered_actions = encoder.considered_actions
+            considered_actions_set = set(considered_actions)
             events = {
-                a: e
-                for a, e in encoder.events.items()
-                if a in encoder.applicable_actions
+                a: e for a, e in encoder.events.items() if a in considered_actions_set
             }
             h = hh_map[h_name](
-                encoder.actions,
+                considered_actions,
                 encoder.fluent_types,
                 encoder.objects,
                 events,
@@ -792,7 +802,6 @@ class TamerLite(
                 self._params.compression_safe_actions,
                 self._params.relevance_analysis,
                 self._params.relevant_equality,
-                self._params.weak_equality,
                 deadline=deadline,
                 if_cache=if_cache,
                 if_wrappers=if_wrappers,
@@ -836,7 +845,6 @@ class TamerLite(
                     self._params.compression_safe_actions,
                     self._params.relevance_analysis,
                     self._params.relevant_equality,
-                    self._params.weak_equality,
                     deadline=deadline,
                     if_cache=if_cache,
                     if_wrappers=if_wrappers,

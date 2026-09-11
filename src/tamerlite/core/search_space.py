@@ -580,17 +580,6 @@ class SearchSpaceABC(ABC):
     def is_temporal(self) -> bool:
         pass
 
-    @property
-    @abstractmethod
-    def dedup_relevant_fluents(self) -> list[int] | None:
-        """Fluent ids the search's visited-state dedup should key on, or None to use
-        every fluent."""
-
-    @dedup_relevant_fluents.setter
-    @abstractmethod
-    def dedup_relevant_fluents(self, dedup_relevant_fluents: list[int] | None):
-        pass
-
     @abstractmethod
     def reset(self):
         pass
@@ -641,14 +630,27 @@ class SearchSpace(SearchSpaceABC):
         relevant_actions: list[Action] | None = None,
         deadline: Fraction | None = None,
         epsilon: Fraction | None = None,
-        dedup_relevant_fluents: list[int] | None = None,
     ):
         self._actions_duration = actions_duration
         self._events = events
         self._relevant_actions = (
             relevant_actions if relevant_actions is not None else list(actions)
         )
-        self._dedup_relevant_fluents = dedup_relevant_fluents
+        # Every action the search can expand must have an entry in `events`:
+        # `get_successor_state`/`build_plan` look events up by action, and a
+        # missing entry is not a benign no-op -- here it raises `KeyError`
+        # mid-search, while the Rust core's `events.get(...)` silently reports
+        # the action as inapplicable and silently drops it from a reconstructed
+        # plan. `Encoder` restricts `events` and `relevant_actions` to the same
+        # `considered_actions` set when it compacts the encoding (and only ever
+        # narrows `relevant_actions` further afterwards, through the setter), so
+        # a mismatch is an encoder bug; catch it here rather than as a wrong
+        # plan much later.
+        missing = next((a for a in self._relevant_actions if a not in events), None)
+        if missing is not None:
+            raise ValueError(
+                f"Action {missing.idx} is expandable but has no events entry"
+            )
         self._compression_safe_actions = compression_safe_actions
         self._action_objects = action_objects
         self._obj_to_prev_actions_map = obj_to_prev_actions_map
@@ -701,14 +703,6 @@ class SearchSpace(SearchSpaceABC):
     @relevant_actions.setter
     def relevant_actions(self, relevant_actions: list[Action]):
         self._relevant_actions = relevant_actions
-
-    @property
-    def dedup_relevant_fluents(self) -> list[int] | None:
-        return self._dedup_relevant_fluents
-
-    @dedup_relevant_fluents.setter
-    def dedup_relevant_fluents(self, dedup_relevant_fluents: list[int] | None):
-        self._dedup_relevant_fluents = dedup_relevant_fluents
 
     def reset(self):
         pass

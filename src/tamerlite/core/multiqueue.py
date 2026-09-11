@@ -112,9 +112,7 @@ def _multiqueue_search(
     opens = []
     init = ss.initial_state()
     if not ss.is_temporal or weak_equality:
-        visited_states = {
-            state_representation(init, weak_equality, ss.dedup_relevant_fluents)
-        }
+        visited_states = {state_representation(init, weak_equality)}
     states_expanded = 0
     generated_states = 1
     if early_termination and ss.goal_reached(init):
@@ -180,9 +178,7 @@ def _multiqueue_search(
                     "goal_depth": str(s.g),
                 }
             if not ss.is_temporal or weak_equality:
-                state_repr = state_representation(
-                    s, weak_equality, ss.dedup_relevant_fluents
-                )
+                state_repr = state_representation(s, weak_equality)
                 if state_repr not in visited_states:
                     visited_states.add(state_repr)
                     candidate_states.append(s)

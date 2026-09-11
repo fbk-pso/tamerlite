@@ -115,7 +115,6 @@ class Encoder:
         compression_safe_actions: bool,
         relevance_analysis: bool,
         relevant_equality: bool = True,
-        weak_equality: bool = False,
         full: bool = True,
         deadline: Fraction | None = None,
         if_cache: MutableMapping[tuple[InterpretedFunction, tuple], Any] | None = None,
@@ -132,37 +131,35 @@ class Encoder:
             self._simplifier = problem.environment.simplifier
         self._qrm = ExpressionQuantifiersRemover(problem.environment)
         self._nnf = Nnf(problem.environment)
+        self._if_cache = if_cache
+        self._if_wrappers = if_wrappers
+        # A structural property of `problem`, unaffected by fluent numbering -- computed
+        # once and handed to every `Converter` `_encode` builds (one per pass), instead
+        # of letting each fresh `Converter` recompute it from scratch.
+        self._static_fluents = problem.get_static_fluents()
+        # Both caches below persist across `_encode`'s two possible passes (discovery,
+        # then compaction) -- populated lazily by `_convert_fluent`/
+        # `_normalize_expression`, never cleared or rebuilt by `_encode` itself, since
+        # neither result depends on fluent numbering.
+        self._fluent_name_cache: dict[FNode, str] = {}
+        self._normalized_expression_cache: dict[FNode, FNode] = {}
 
         self._problem_initial_values = problem.initial_values
-        fluent_types = {}
-        for f in self._problem_initial_values:
-            if f.type.is_bool_type():
-                t = "bool"
-            elif f.type.is_int_type():
-                t = "int"
-            elif f.type.is_real_type():
-                t = "real"
-            elif f.type.is_user_type():
-                t = cast(_UserType, f.type).name
-            else:
-                raise NotImplementedError
-            fluent_types[self._convert_fluent(f)] = t
-        self._fluents: list[str] = sorted(fluent_types.keys())
-        self._fluent_ids = {f: i for i, f in enumerate(self._fluents)}
-        self._fluent_types = [fluent_types[f] for f in self._fluents]
 
+        # The object and action universes never change with fluent
+        # numbering, so they're built once, up front -- `self._objects` in
+        # particular must exist before `_encode`'s first call, since
+        # `_compute_relevant_actions` (invoked between the two `_encode`
+        # passes below) reads it while building its own `HMax` heuristic.
         self._objects_by_id = sorted(problem.all_objects, key=lambda o: o.name)
         self._object_names: list[str] = [o.name for o in self._objects_by_id]
         self._object_ids = {name: i for i, name in enumerate(self._object_names)}
+        self._objects: dict[str, list[int]] = {}
+        for ut in problem.user_types:
+            self._objects[cast(_UserType, ut).name] = [
+                self._object_ids[o.name] for o in problem.objects(ut)
+            ]
 
-        self._converter = Converter(
-            problem,
-            self._fluent_ids,
-            self._object_ids,
-            self._objects_by_id,
-            if_cache,
-            if_wrappers,
-        )
         self._action_names: list[str] = sorted(
             action.name for action in problem.actions
         )
@@ -172,25 +169,13 @@ class Encoder:
         self._actions: list[Action] = [
             self._action_by_name[name] for name in self._action_names
         ]
-        actions_duration_map: dict[
-            str, tuple[Expression, Expression, bool, bool] | None
-        ] = {}
-        self._is_temporal = False
-        for a in problem.actions:
-            if isinstance(a, up.model.DurativeAction):
-                self._is_temporal = True
-                lb = self._convert_expression(a.duration.lower)
-                ub = self._convert_expression(a.duration.upper)
-                actions_duration_map[a.name] = (
-                    lb,
-                    ub,
-                    a.duration.is_left_open(),
-                    a.duration.is_right_open(),
-                )
-            else:
-                actions_duration_map[a.name] = None
-        self._actions_duration = [actions_duration_map[a] for a in self._action_names]
-        self._build_events()
+
+        # Pass 1 (discovery): every fluent gets a slot, exactly like `full`
+        # being off would still do below. Needed unconditionally --
+        # `_compute_relevant_fluents` (which decides what pass 2, if any,
+        # keeps) has to run over *some* numbering, and `full=False` callers
+        # (map-back-only encoders) just stop here.
+        self._encode(relevant_fluents=None)
 
         initial_state = None
         self._goal = None
@@ -201,6 +186,11 @@ class Encoder:
             initial_state = self.initial_state(self._problem_initial_values)
             self._goal = self.goals(problem.goals)
 
+            # Symmetry breaking and compression-safe detection only ever
+            # inspect the raw UP model (`self._problem`/`self._lifted_problem`),
+            # never a converted `Expression` -- unaffected by fluent
+            # numbering, so computed once here rather than repeated around a
+            # possible pass-2 re-encode below.
             if symmetry_breaking:
                 action_objects, obj_to_prev_actions_map = (
                     self._compute_obj_to_prev_actions_map()
@@ -219,6 +209,12 @@ class Encoder:
                     # No actions are safe for compression
                     self._compression_safe_actions = None
 
+        # Builds the encoding's `SearchSpace` -- tentatively final, unless
+        # compaction below forces a rebuild. Built with pass 1's (possibly
+        # uncompacted) `_actions_duration`/`_events`, but already carrying
+        # every fluent-numbering-independent setting computed above, so the
+        # common case (no compaction, or `relevant_equality=False`) needs
+        # only this one construction.
         self._search_space = SearchSpace(
             self._actions_duration,
             self._events,
@@ -232,28 +228,220 @@ class Encoder:
             deadline,
             problem.epsilon,
         )
-        self._objects = {}
-        for ut in problem.user_types:
-            self._objects[cast(_UserType, ut).name] = [
-                self._object_ids[o.name] for o in problem.objects(ut)
-            ]
 
         self._relevant_actions = None
-        if full and relevance_analysis:
-            self._relevant_actions = self._compute_relevant_actions()
-            if len(self._relevant_actions) < len(self.applicable_actions):
-                self._search_space.relevant_actions = self._relevant_actions
+        if full:
+            narrow_relevant_actions = False
+            if relevance_analysis:
+                # Needs a `State` to run `HMax.reachable_actions` against --
+                # `self._search_space` above already provides one, regardless
+                # of whether compaction ends up rebuilding it below.
+                self._relevant_actions = self._compute_relevant_actions()
+                narrow_relevant_actions = len(self._relevant_actions) < len(
+                    self.applicable_actions
+                )
+                if narrow_relevant_actions:
+                    self._search_space.relevant_actions = self._relevant_actions
 
-        self._dedup_relevant_fluents: list[int] | None = None
-        # `is_temporal and not weak_equality` has no dedup at all (see
-        # `SearchSpace.dedup_relevant_fluents` usage in both `core.search`
-        # modules), so the reduction would never be consulted -- skip
-        # computing it.
-        if full and relevant_equality and (not self._is_temporal or weak_equality):
-            dedup_relevant_fluents = self._compute_dedup_relevant_fluents()
-            if len(dedup_relevant_fluents) < len(self._fluents):
-                self._dedup_relevant_fluents = sorted(dedup_relevant_fluents)
-                self._search_space.dedup_relevant_fluents = self._dedup_relevant_fluents
+            # Compact the encoding to the fluents that can affect search
+            # outcome. Seeded from `considered_actions`, not every action in
+            # the problem -- `_encode`'s pass 2 (via `_build_events`/
+            # `_build_actions_duration`) restricts its own conversion to
+            # exactly `considered_actions` too (see those methods), so the
+            # seed set and the conversion set always match: a fluent read
+            # only by a pruned action's precondition is safe to drop, because
+            # that pruned action's precondition is never converted under the
+            # new numbering either. Gated on `relevant_equality`: off keeps
+            # every fluent, exactly like `main`.
+            if relevant_equality:
+                relevant_fluents = self._compute_relevant_fluents(
+                    self.considered_actions
+                )
+                if len(relevant_fluents) < len(self._fluents):
+                    # Pass 2 (final): re-encode restricted to `relevant_fluents`
+                    # (indices in pass 1's numbering). Sound by construction of
+                    # `_compute_relevant_fluents`'s fixpoint -- a fluent read by a
+                    # condition, a goal, a duration bound, or the RHS of an effect
+                    # targeting a kept fluent is always itself in
+                    # `relevant_fluents`, so conversion never hits a missing id;
+                    # only an effect whose *target* wasn't kept gets silently
+                    # dropped (see `_convert_effects`), since nothing reads it
+                    # anymore.
+                    self._encode(relevant_fluents)
+                    initial_state = self.initial_state(self._problem_initial_values)
+                    self._goal = self.goals(problem.goals)
+                    # Renumbering changed `_actions_duration`/`_events`, so
+                    # the mutex/precedence analysis the `SearchSpace` above
+                    # ran is now stale over the new numbering and must be
+                    # redone -- `_compression_safe_actions`/`action_objects`/
+                    # `obj_to_prev_actions_map` don't depend on fluent
+                    # numbering at all, so they're reused as-is.
+                    self._search_space = SearchSpace(
+                        self._actions_duration,
+                        self._events,
+                        self._actions,
+                        self._compression_safe_actions,
+                        action_objects,
+                        obj_to_prev_actions_map,
+                        initial_state,
+                        self._goal,
+                        self.considered_actions,
+                        deadline,
+                        problem.epsilon,
+                    )
+
+    def _encode(self, relevant_fluents: set[int] | None) -> None:
+        """(Re)builds everything whose numbering depends on which fluents
+        exist: `_fluents`/`_fluent_ids`/`_fluent_types`, the `Converter` (a
+        fresh instance every call -- `DagWalker` memoizes conversions per
+        `FNode`, so an instance that already saw the previous numbering
+        can't be reused), `_actions_duration`, and (via `_build_events`)
+        `_events`/`_applicable_actions`.
+
+        `relevant_fluents=None` means every fluent gets a slot -- pass 1
+        (discovery), or the whole encoding when compaction never runs.
+        Otherwise `relevant_fluents` is a set of *pass 1* fluent indices (as
+        returned by `_compute_relevant_fluents`) and only those get a slot;
+        see `__init__`'s pass-2 call for why every *read* is guaranteed to
+        still resolve.
+        """
+        self._build_fluents(relevant_fluents)
+
+        self._converter = Converter(
+            self._problem,
+            self._fluent_ids,
+            self._object_ids,
+            self._objects_by_id,
+            self._if_cache,
+            self._if_wrappers,
+            self._static_fluents,
+        )
+
+        self._build_actions_duration(relevant_fluents)
+        self._build_events(
+            self.considered_actions if relevant_fluents is not None else None
+        )
+
+    def _build_fluents(self, relevant_fluents: set[int] | None) -> None:
+        """Sets `_fluents`/`_fluent_ids`/`_fluent_types`. See `_encode` for what
+        `relevant_fluents` means.
+
+        Skips a full rescan on pass 2, when nothing renumbering could touch
+        would actually change: `relevant_fluents` is always a subset of the
+        fluents pass 1 (the only possible prior call) already numbered and
+        typed, so pass 2 just filters those results by their pass-1 index
+        instead of rescanning `self._problem_initial_values` and redoing FNode
+        type inference for names it has already resolved.
+        """
+        if relevant_fluents is None:
+            # Pass 1 (or a full, uncompacted encode): only place that ever needs to
+            # scan `self._problem_initial_values`/infer each fluent's type from its
+            # UP `FNode`.
+            fluent_types = {}
+            for f in self._problem_initial_values:
+                name = self._convert_fluent(f)
+                if f.type.is_bool_type():
+                    t = "bool"
+                elif f.type.is_int_type():
+                    t = "int"
+                elif f.type.is_real_type():
+                    t = "real"
+                elif f.type.is_user_type():
+                    t = cast(_UserType, f.type).name
+                else:
+                    raise NotImplementedError
+                fluent_types[name] = t
+            self._fluents: list[str] = sorted(fluent_types.keys())
+            self._fluent_ids = {f: i for i, f in enumerate(self._fluents)}
+            self._fluent_types = [fluent_types[f] for f in self._fluents]
+        else:
+            # Pass 2: filter by pass-1 index rather than converting indices to
+            # names first -- cheaper (int-set membership, no intermediate
+            # `set[str]`) and skips the name lookup entirely. `self._fluents`
+            # stays sorted since it's a subsequence of a sorted list.
+            old_fluent_types = dict(zip(self._fluents, self._fluent_types, strict=True))
+            self._fluents = [
+                f for i, f in enumerate(self._fluents) if i in relevant_fluents
+            ]
+            self._fluent_ids = {f: i for i, f in enumerate(self._fluents)}
+            self._fluent_types = [old_fluent_types[f] for f in self._fluents]
+
+    def _build_actions_duration(self, relevant_fluents: set[int] | None) -> None:
+        """Sets `_actions_duration`/`_is_temporal`. See `_encode` for what
+        `relevant_fluents` means.
+
+        Reuses pass 1's `_actions_duration` verbatim on pass 2 whenever no
+        duration bound reads a fluent at all: renumbering fluents can't
+        possibly change a duration bound's converted `Expression` if there's
+        no `FluentNode` in it to renumber. That check only matters for this
+        (pass 2) decision, so it's made here, on demand, from pass 1's
+        already-built `self._actions_duration` -- not tracked eagerly as an
+        attribute during pass 1 (which would pay for it even on a
+        `relevant_equality=False` encode, or a `relevant_equality=True` one
+        where pass 2 never runs at all, that never consults it).
+
+        Otherwise, pass 2 only reconverts durative actions in
+        `self.considered_actions` -- matching `_build_events`'s restriction --
+        and reuses pass 1's already-converted (possibly stale-numbered) tuple
+        verbatim for a non-considered durative action instead. That's safe
+        for the same reason `_build_events`'s restriction is: nothing
+        dereferences a non-considered action's `_actions_duration[a.idx]`
+        content (only actions with an `_events` entry are ever opened, and
+        `_build_events` restricts those to this same `considered_actions`
+        set). `_is_temporal` itself stays unrestricted (a cheap `isinstance`
+        check, no conversion) so its meaning -- "does *any* action in the
+        problem have a duration" -- doesn't shift with which actions happen
+        to be considered.
+        """
+        if relevant_fluents is not None and not any(
+            # `next(iter(...), None) is not None` (not a bare truthiness
+            # check) because `get_fluents` returns a plain `list[int]` on the
+            # Rust backend but an `Iterator[int]` on the Python one, and
+            # fluent id `0` is falsy -- a bare `bool(...)`/`any(...)` over the
+            # ids themselves would misreport "no fluent read" whenever the
+            # only fluent read happens to be id 0.
+            entry is not None
+            and (
+                next(iter(get_fluents(entry[0])), None) is not None
+                or next(iter(get_fluents(entry[1])), None) is not None
+            )
+            for entry in self._actions_duration
+        ):
+            # Pass 2, and no duration bound (from pass 1) reads a fluent at
+            # all -- `_actions_duration`/`_is_temporal` from pass 1 are still
+            # exactly correct; skip reconverting every action's duration
+            # bounds a second time.
+            return
+
+        restrict = relevant_fluents is not None
+        considered_names = (
+            {self.get_action_name(a) for a in self.considered_actions}
+            if restrict
+            else None
+        )
+        actions_duration_map: dict[
+            str, tuple[Expression, Expression, bool, bool] | None
+        ] = {}
+        self._is_temporal = False
+        for a in self._problem.actions:
+            if isinstance(a, up.model.DurativeAction):
+                self._is_temporal = True
+                if considered_names is not None and a.name not in considered_names:
+                    actions_duration_map[a.name] = self._actions_duration[
+                        self.action_by_name[a.name].idx
+                    ]
+                    continue
+                actions_duration_map[a.name] = (
+                    self._convert_expression(a.duration.lower),
+                    self._convert_expression(a.duration.upper),
+                    a.duration.is_left_open(),
+                    a.duration.is_right_open(),
+                )
+            else:
+                actions_duration_map[a.name] = None
+        self._actions_duration: list[
+            tuple[Expression, Expression, bool, bool] | None
+        ] = [actions_duration_map[a] for a in self._action_names]
 
     def initial_state(self, initial_values: dict[FNode, FNode]) -> list[ConstantNode]:
         initial_state_values = {}
@@ -283,10 +471,9 @@ class Encoder:
 
         Effect *values* are excluded because the two callers route them
         differently: `_compute_relevant_actions` folds them into the same
-        dependency set as conditions, while
-        `_compute_dedup_relevant_fluents` needs them keyed by the fluent the
-        effect writes, to close over "an effect's RHS matters only if its
-        target matters".
+        dependency set as conditions, while `_compute_relevant_fluents` needs
+        them keyed by the fluent the effect writes, to close over "an
+        effect's RHS matters only if its target matters".
         """
         fluents: set[int] = set()
         for _, e in self.events[action]:
@@ -389,35 +576,44 @@ class Encoder:
 
         return [a for a in self._actions if a.idx in relevant_actions]
 
-    def _compute_dedup_relevant_fluents(self) -> set[int]:
+    def _compute_relevant_fluents(self, actions: list[Action]) -> set[int]:
         """Fluents that can affect search outcome: the least fixpoint of a
-        backward slice from what search actually reads.
+        backward slice from what search actually reads, over `actions`.
 
         Seeds are the fluents read directly by the goal, or by
-        `_action_read_fluents` for a search-reachable action (its conditions
-        -- instantaneous or start/end-interval -- and its duration bounds).
-        The closure rule is that an effect's RHS only matters if the fluent
-        it writes matters: for every effect `f := expr`, once `f` is relevant
-        every fluent read by `expr` becomes relevant too. A self-referencing
+        `_action_read_fluents` for an action (its conditions -- instantaneous
+        or start/end-interval -- and its duration bounds). The closure rule
+        is that an effect's RHS only matters if the fluent it writes
+        matters: for every effect `f := expr`, once `f` is relevant every
+        fluent read by `expr` becomes relevant too. A self-referencing
         assignment (`increase`/`decrease` desugars to e.g. `cost := cost +
         1`) only pulls `cost` in when it's already relevant, so a pure
         bookkeeping fluent read nowhere else, or one that only feeds another
         bookkeeping fluent transitively, is never seeded and never added.
 
-        Feeds `SearchSpace.dedup_relevant_fluents`, restricting only the
-        duplicate-detection key, never the full tracked state.
-        """
-        considered_actions = (
-            self._relevant_actions
-            if self._relevant_actions is not None
-            else self.applicable_actions
-        )
+        `__init__` calls this with `self.considered_actions`, matching what
+        `_encode`'s pass 2 (`_build_events`/`_build_actions_duration`)
+        restricts its own conversion to -- see those methods. Seeding from
+        anything narrower than what gets converted would drop a fluent a
+        still-converted action's precondition reads, and conversion would
+        then fail to resolve it; seeding from anything broader (e.g. every
+        action in the problem, including ones pruned from
+        `considered_actions`) would keep fluents nothing converted ever
+        reads.
 
+        The result -- indices in pass 1's (uncompacted) numbering -- decides
+        what `__init__`'s pass 2 keeps: every fluent outside it is dropped
+        from the encoding entirely (`_encode`'s `relevant_fluents` parameter),
+        so `state.assignments` only ever holds fluents that can affect search
+        outcome. There is no separate consumer left to restrict after the
+        fact -- dedup and the heuristics both just operate on the
+        (potentially already-compacted) state.
+        """
         relevant_fluents: set[int] = set(get_fluents(self.goal))  # type: ignore[arg-type]
         # Adjacency for the closure: fluent -> fluents read by the RHS of any
         # effect that writes it.
         written_from: dict[int, set[int]] = {}
-        for a in considered_actions:
+        for a in actions:
             relevant_fluents.update(self._action_read_fluents(a))
             for _, e in self.events[a]:
                 for eff in e.effects:
@@ -872,8 +1068,7 @@ class Encoder:
     def _compute_compression_safe_actions(self) -> list[bool]:
         actions = [False] * len(self.action_names)
         fluent_to_conditions, complex_condition_fluents = self._extract_conditions()
-        for action_name in self.action_names:
-            action = self._problem.action(action_name)
+        for action in self._problem.actions:
             if (
                 isinstance(action, up.model.DurativeAction)
                 and not self._has_intermediate_conditions(action)
@@ -882,7 +1077,7 @@ class Encoder:
                     action, fluent_to_conditions, complex_condition_fluents
                 )
             ):
-                actions[self.action_by_name[action_name].idx] = True
+                actions[self.action_by_name[action.name].idx] = True
 
         return actions
 
@@ -1001,10 +1196,25 @@ class Encoder:
 
     @property
     def fluents(self) -> list[str]:
+        """The fluents this encoding has a slot for, in id order.
+
+        Not necessarily every fluent of the problem: with `relevant_equality`
+        on (the default) `__init__` compacts the encoding down to the fluents
+        that can affect search outcome, so a fluent nothing reads has no id
+        here at all -- see `_compute_relevant_fluents`. Build the encoder with
+        `relevant_equality=False` to get a slot for every fluent, which is
+        what a consumer that resolves fluents the search itself never looks at
+        needs (a custom heuristic reading a bookkeeping fluent, or a
+        `Converter` built externally over `fluent_ids` to convert an
+        expression outside the search graph).
+        """
         return self._fluents
 
     @property
     def fluent_ids(self) -> dict[str, int]:
+        """`str(fluent) -> id`, over exactly the fluents in `fluents` -- so a
+        lookup raises `KeyError` both for a fluent the problem never defined and
+        for one compaction dropped as irrelevant (see `fluents`)."""
         return self._fluent_ids
 
     @property
@@ -1025,6 +1235,15 @@ class Encoder:
 
     @property
     def events(self) -> dict[Action, list[tuple[Timing, Event]]]:
+        """Timed events per action.
+
+        Not necessarily keyed by every action of the problem: when
+        `relevant_equality` compacts the encoding, `_build_events`' pass 2 only
+        converts `considered_actions`, and anything outside that set is absent
+        rather than empty (see `_build_events`). Sound because a non-considered
+        action is never expanded -- but a consumer that must cover every action
+        needs `relevant_equality=False`.
+        """
         return self._events
 
     @property
@@ -1048,8 +1267,19 @@ class Encoder:
         return self._relevant_actions
 
     @property
-    def dedup_relevant_fluents(self) -> list[int] | None:
-        return self._dedup_relevant_fluents
+    def considered_actions(self) -> list[Action]:
+        """The action set the search will actually expand: `relevant_actions`
+        if relevance analysis narrowed it, else `applicable_actions`. Consumed
+        by `TamerLite._get_heuristic` to narrow the heuristics' operator set,
+        and by `_compute_relevant_fluents`/`_build_events`/
+        `_build_actions_duration`, which all restrict themselves to exactly
+        this same set (see their docstrings) so the relevance fixpoint's seed
+        set always matches what pass 2 actually converts."""
+        return (
+            self._relevant_actions
+            if self._relevant_actions is not None
+            else self._applicable_actions
+        )
 
     @property
     def compression_safe_actions(self) -> list[Action]:
@@ -1091,13 +1321,34 @@ class Encoder:
             )
 
     def _convert_fluent(self, fluent_exp: FNode) -> str:
-        return str(fluent_exp)
+        # Purely structural (`str(FNode)`), independent of fluent numbering, so the
+        # same string is reused verbatim across both `_encode` passes and every
+        # call site (`_encode`'s fluent-type loop, `_convert_effects`, `initial_state`).
+        cached = self._fluent_name_cache.get(fluent_exp)
+        if cached is None:
+            cached = str(fluent_exp)
+            self._fluent_name_cache[fluent_exp] = cached
+        return cached
+
+    def _normalize_expression(self, expression: FNode) -> FNode:
+        """Quantifier removal + simplification + NNF conversion -- everything
+        `_convert_expression` does before handing off to `self._converter`, which is
+        the only fluent-numbering-dependent part. Independent of fluent numbering (a
+        pure function of `expression` and `self._problem`, neither of which changes
+        between `_encode` passes), so cached across both passes instead of re-running
+        this from scratch on every action's preconditions/conditions/effects/duration
+        bounds a second time when pass 2 (compaction) runs.
+        """
+        cached = self._normalized_expression_cache.get(expression)
+        if cached is None:
+            cached = self._qrm.remove_quantifiers(expression, self._problem)
+            cached = self._simplifier.simplify(cached)
+            cached = self._nnf.get_nnf_expression(cached)
+            self._normalized_expression_cache[expression] = cached
+        return cached
 
     def _convert_expression(self, expression: FNode) -> Expression:
-        expression = self._qrm.remove_quantifiers(expression, self._problem)
-        expression = self._simplifier.simplify(expression)
-        expression = self._nnf.get_nnf_expression(expression)
-        return self._converter.convert(expression)
+        return self._converter.convert(self._normalize_expression(expression))
 
     def _convert_timing(self, timing: "up.model.Timing") -> Timing:
         return Timing(timing.is_from_start(), Fraction(timing.delay))
@@ -1123,6 +1374,13 @@ class Encoder:
             dec_effects,
             assign_effects,
         ) in fluent_to_effects.items():
+            fluent_id = self.fluent_ids.get(self._convert_fluent(fluent))
+            if fluent_id is None:
+                # Compaction dropped this fluent as irrelevant -- nothing
+                # reads it, so the effect that would write it can't matter
+                # either (see `_encode`/`_compute_relevant_fluents`).
+                continue
+
             some_inc_dec_effects = len(inc_effects) > 0 or len(dec_effects) > 0
             some_assign_effects = len(assign_effects) > 0
             is_bool_type = fluent.fluent().type.is_bool_type()
@@ -1168,18 +1426,42 @@ class Encoder:
                 else:
                     value = em.Minus(fluent, em.Plus(dec_effects))
 
-            f = self.fluent_ids[self._convert_fluent(fluent)]
             converted_value = self._convert_expression(value)
-            converted_effects.append(Effect(f, converted_value))
+            converted_effects.append(Effect(fluent_id, converted_value))
 
         return converted_effects
 
-    def _build_events(self):
+    def _build_events(self, considered_actions: list[Action] | None = None) -> None:
+        """Sets `_events` (and, when unrestricted, `_applicable_actions`).
+
+        `considered_actions=None` means every action gets an `_events` entry
+        (pass 1, or an unrestricted encode), and `_applicable_actions` is
+        (re)computed from this same full scan. Otherwise (pass 2) only
+        actions in `considered_actions` get converted and get an `_events`
+        entry at all -- both `SearchSpace` implementations only ever
+        dereference an action's events for actions in
+        `SearchSpace.relevant_actions` (which the encoder sets to
+        `considered_actions`'s content), so a missing entry for anything else
+        is never read. `_applicable_actions` is left untouched in this case:
+        it's a public, whole-problem property (`Encoder.applicable_actions`)
+        that must not shrink to match a restricted pass -- and since
+        applicability never depends on fluent numbering, pass 1's value is
+        still exactly correct, so the (otherwise redundant) `simplify()`
+        calls that would recompute it are skipped entirely too.
+        """
         env = self._problem.environment
         em = env.expression_manager
         self._events: dict[Action, list[tuple[Timing, Event]]] = {}
+        restrict = considered_actions is not None
+        considered_names = (
+            None
+            if considered_actions is None
+            else {self.get_action_name(a) for a in considered_actions}
+        )
         applicable_actions = set()
         for a in self._problem.actions:
+            if considered_names is not None and a.name not in considered_names:
+                continue
             action = self.get_action(a.name)
             if isinstance(a, up.model.DurativeAction):
                 from_start: dict[Any, Any] = {}
@@ -1202,11 +1484,12 @@ class Encoder:
                         if not i.is_right_open():
                             action_events.append((upper.delay, upper, 1, lc))
                         action_events.append((upper.delay, upper, 3, [em.And(lc)]))
-                    is_applicable = (
-                        is_applicable
-                        and not self._simplifier.simplify(em.And(lc)).is_false()
-                    )
-                if is_applicable:
+                    if not restrict:
+                        is_applicable = (
+                            is_applicable
+                            and not self._simplifier.simplify(em.And(lc)).is_false()
+                        )
+                if not restrict and is_applicable:
                     applicable_actions.add(self.get_action(a.name))
 
                 for t, le in a.effects.items():
@@ -1311,7 +1594,15 @@ class Encoder:
                         ),
                     )
                 ]
-                if not self._simplifier.simplify(em.And(a.preconditions)).is_false():
+                if (
+                    not restrict
+                    and not self._simplifier.simplify(
+                        em.And(a.preconditions)
+                    ).is_false()
+                ):
                     applicable_actions.add(action)
 
-        self._applicable_actions = [a for a in self._actions if a in applicable_actions]
+        if not restrict:
+            self._applicable_actions = [
+                a for a in self._actions if a in applicable_actions
+            ]

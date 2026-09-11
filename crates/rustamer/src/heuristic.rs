@@ -142,6 +142,7 @@ impl Heuristic {
     }
 
     #[staticmethod]
+    #[pyo3(signature = (actions, fluent_types, objects, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant))]
     #[allow(clippy::too_many_arguments, unused_variables)]
     pub fn hmax_explicit(
         actions: Vec<Action>,
