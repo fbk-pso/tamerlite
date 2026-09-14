@@ -579,7 +579,12 @@ def novbfs_search(
     every other search here (`state_representation`/`visited_states`,
     closed at generation time), not g-based reopening: a state re-reached
     later via a strictly cheaper path is simply dropped rather than
-    re-queued and re-scored against the novelty tables."""
+    re-queued and re-scored against the novelty tables.
+
+    Calls `novelty.begin_expansion()` once per popped state, before scoring
+    its surviving successors -- this is what lets `NumericNovelty.eval`
+    cache the parent's own features across all of one expansion's children
+    instead of recomputing them per child; see its class docstring."""
 
     logger.info(
         "novbfs_search: prefer_higher_g=%s timeout=%s early_termination=%s "
@@ -659,6 +664,7 @@ def novbfs_search(
             else:
                 candidate_states.append(succ_state)
 
+        novelty.begin_expansion()
         for succ_state, h in heuristic.eval_gen(candidate_states, ss):
             if h is not None:
                 succ_partition = novelty.partition_of(h)

@@ -161,12 +161,14 @@ def expressions():
     return expressions
 
 
-# `reload_package`/`reload_tamerlite` live in `testing_utils` (shared with
-# `tests/test_novbfs.py`, which needs them without pulling in this module's
-# heavier `up_test_cases` import); re-exported here under their original
-# names so every existing call site below keeps working unchanged.
+# `reload_package`/`reload_tamerlite`/`check_metrics_equality` live in
+# `testing_utils` (shared with `tests/test_novbfs.py`, which needs them
+# without pulling in this module's heavier `up_test_cases` import);
+# re-exported here under their original names so every existing call site
+# below keeps working unchanged.
 reload_package = testing_utils.reload_package
 reload_tamerlite = testing_utils.reload_tamerlite
+check_metrics_equality = testing_utils.check_metrics_equality
 
 
 class PruneCase(NamedTuple):
@@ -417,18 +419,6 @@ def generate_states(ss: SearchSpaceABC, state, num_states: int):
         states += list(ss.get_successor_states(state))
         i += 1
     return states
-
-
-def check_metrics_equality(results: List[PlanGenerationResult]):
-    for i in range(len(results) - 1):
-        res1: PlanGenerationResult = results[i]
-        res2: PlanGenerationResult = results[i + 1]
-        assert res1.metrics is not None and res2.metrics is not None
-        assert len(res1.metrics) == len(res2.metrics)
-        assert int(res1.metrics["expanded_states"]) == int(
-            res2.metrics["expanded_states"]
-        )
-        assert int(res1.metrics["goal_depth"]) == int(res2.metrics["goal_depth"])
 
 
 def _inadmissible_flags(problem, heuristic):
@@ -787,7 +777,16 @@ def _search_algorithms_cases():
             f"-csa{int(compression_safe_actions)}",
         )
         for problem in _solve_problems()
-        for search_kind in ["wastar", "astar", "gbfs", "dfs", "bfs", "ehc"]
+        for search_kind in [
+            "wastar",
+            "astar",
+            "gbfs",
+            "dfs",
+            "bfs",
+            "ehc",
+            "novbfs_hg",
+            "novbfs_lg",
+        ]
         for memory_bounded in _search_algo_memory_bounded_flags(problem, search_kind)
         for weak_equality in _search_algo_weak_flags(problem, search_kind)
         if not (memory_bounded and weak_equality)
@@ -816,12 +815,18 @@ def test_search_algorithms(
     if reason is not None:
         pytest.skip(reason)
 
+    # novbfs_hg/novbfs_lg always use an internal, unit-weighted hadd
+    # heuristic and ignore whatever `heuristic` names -- passing `None`
+    # here (rather than the unused "hff") avoids the "always use an
+    # internal hadd" warning firing on every one of this matrix's cases.
+    is_novbfs = search_kind in ("novbfs_hg", "novbfs_lg")
+
     results = []
     for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
         search = tamerlite.SearchParams(
             search=search_kind,
-            heuristic=heuristic,
+            heuristic=None if is_novbfs else heuristic,
             weak_equality=weak_equality,
             symmetry_breaking=symmetry_breaking,
             compression_safe_actions=compression_safe_actions,
