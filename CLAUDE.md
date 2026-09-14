@@ -151,29 +151,31 @@ Adjust `--space-limit` (MB) down for a single test file/case, and prefer targeti
 
 [src/tamerlite/core/__init__.py](src/tamerlite/core/__init__.py) is the dispatch point. The exposed interface is identical between backends:
 
-- **Search algorithms**: `wastar_search`, `astar_search`, `gbfs_search`, `bfs_search`, `dfs_search`, `ehc_search`, `multiqueue_search` (and `*_memory_bounded` variants).
+- **Search algorithms**: `wastar_search`, `astar_search`, `gbfs_search`, `bfs_search`, `dfs_search`, `ehc_search`, `multiqueue_search`, `novbfs_search` (and `*_memory_bounded` variants for every one but `novbfs_search`, which has none in either core).
 - **Heuristics**: `HFF`, `HAdd`, `HMax`, `HMaxExplicit`, `CustomHeuristic`.
-- **Data structures**: `SearchSpace`, `State`, `Action`, `Event`, `Effect`, `Timing`, `Expression`.
+- **Data structures**: `SearchSpace`, `State`, `Action`, `Event`, `Effect`, `Timing`, `Expression`, `NumericNovelty`.
 
-**Deliberate, temporary exception to backend parity**: `novbfs_search`
-(`src/tamerlite/core/search.py`) plus its `NumericNovelty` measure
-(`src/tamerlite/core/novelty.py`) implement a partitioned numeric novelty
-search and exist **only** in the pure-Python core -- not dispatched through
-`core/__init__.py`, no Rust mirror yet.
-`TamerLite`'s `search="novbfs_hg"`/`"novbfs_lg"` raises `NotImplementedError`
-unless `DISABLE_RUSTAMER=1`. Every other name above keeps the "identical
-interface across both backends" invariant this file otherwise documents as
-load-bearing; treat any new call site for these two as needing the same
-Rust-unavailability guard `TamerLite._solve_ground_problem` uses, until a
-`crates/rustamer-base` implementation lands. `NumericNovelty` classifies an
-`==` subgoal as numeric-vs-object the same way the heuristics below do --
+**`novbfs_search`/`NumericNovelty`** (partitioned numeric-novelty search,
+`search="novbfs_hg"`/`"novbfs_lg"`) is mirrored between
+[novelty.py](src/tamerlite/core/novelty.py)/[search.py](src/tamerlite/core/search.py)
+and [novelty.rs](crates/rustamer-base/src/novelty.rs)/[search.rs](crates/rustamer-base/src/search.rs),
+same invariant as the object-equality rewrite below: the returned novelty
+class and hence `expanded_states`/`goal_depth` must agree exactly
+(`tests/test_novbfs.py::test_novbfs_cross_backend_parity`, plus
+`test_novbfs_metrics_regression`'s pinned YAMLs, run on both backends).
+Unlike most of this file's cross-backend invariants, the two cores' internal
+leaf **numbering** does *not* need to match -- `novelty.rs`'s module
+docstring works through why the algorithm's outcome is invariant to leaf-id
+permutation. Both cores additionally cache a parent state's own features
+(satisfied? how close?) once per *expansion* rather than recomputing per
+child -- `NumericNovelty.begin_expansion()`, called once per popped state
+before scoring its successors; a state's own `eval()` call still runs once
+per generated child, in generation order, matching every other search's
+dedup/heuristic-evaluation contract. `NumericNovelty` classifies an `"=="`
+subgoal as numeric-vs-object the same way the heuristics below do --
 statically, from `FluentDomain`, via the same
-`search_space.is_object_typed_operand` (below) rather than a second,
-runtime-probe-based classifier; its one added wrinkle is an
-interpreted-function operand, resolved from the node's declared
-`IfReturnType` (a name swapped per-backend elsewhere in this codebase, unlike
-`FluentDomain`/`FluentKind` -- sound here only because novbfs refuses to run
-under the Rust backend; a Rust port would need to revisit it).
+`search_space.is_object_typed_operand`/`is_object_typed` (below) rather than
+a second, runtime-probe-based classifier.
 
 Rust implementation lives in [crates/rustamer-base/src/](crates/rustamer-base/src/) (core library) and [crates/rustamer/src/](crates/rustamer/src/) (PyO3 bindings).
 
@@ -192,6 +194,9 @@ verbatim with `NumericNovelty` (`src/tamerlite/core/novelty.py`, see above),
 which is also why it additionally classifies an interpreted-function operand
 (from its declared `return_type`), a case `DeleteRelaxationHeuristic` never
 reaches (`_simplify_leaf` bails out on `has_interpreted_function` first).
+`is_object_typed` (`crates/rustamer-base/src/heuristics.rs`) is `pub(crate)`
+for the identical reason: `novelty.rs` reuses it verbatim, including its own
+`InterpretedFunction` arm that `is_numeric_leaf_expression` never exercises.
 This replaced an earlier version that only checked for a literal `ObjectNode`
 operand -- a fluent compared to *another* fluent of the same object type
 (`loc_a == loc_b`) has no such literal, so it was misclassified as numeric,

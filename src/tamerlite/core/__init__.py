@@ -70,6 +70,7 @@ if not use_rustamer:
         HMaxExplicit,
     )
     from tamerlite.core.multiqueue import multiqueue_search
+    from tamerlite.core.novelty import NumericNovelty
     from tamerlite.core.search import (
         astar_search,
         astar_search_memory_bounded,
@@ -78,6 +79,7 @@ if not use_rustamer:
         ehc_search,
         gbfs_search,
         gbfs_search_memory_bounded,
+        novbfs_search,
         wastar_search,
         wastar_search_memory_bounded,
     )
@@ -128,6 +130,8 @@ else:
         rustamer_lib.dfs_search,
     )
     multiqueue_search = rustamer_lib.multiqueue_search
+    novbfs_search = rustamer_lib.novbfs_search
+    NumericNovelty = rustamer_lib.NumericNovelty
     SearchSpace, Timing, Effect, Event, Action = (
         rustamer_lib.SearchSpace,
         rustamer_lib.Timing,
