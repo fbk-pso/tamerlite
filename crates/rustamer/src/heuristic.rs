@@ -46,12 +46,11 @@ impl Heuristic {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (actions, fluent_types, objects, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant, disable_numeric_reasoning=false))]
+    #[pyo3(signature = (actions, fluent_domains, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant, disable_numeric_reasoning=false))]
     #[allow(clippy::too_many_arguments)]
     pub fn hff(
         actions: Vec<Action>,
-        fluent_types: Vec<String>,
-        objects: FxHashMap<String, Vec<usize>>,
+        #[pyo3(from_py_with = extract_fluent_domains)] fluent_domains: Vec<FluentDomain>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
@@ -62,8 +61,7 @@ impl Heuristic {
         Ok(Heuristic {
             variant: HeuristicVariant::DeleteRelaxation(DeleteRelaxationHeuristic::new(
                 actions,
-                fluent_types,
-                objects,
+                fluent_domains,
                 events,
                 goals,
                 DeleteRelaxationHeuristicConfig {
@@ -78,12 +76,11 @@ impl Heuristic {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (actions, fluent_types, objects, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant, disable_numeric_reasoning=false))]
+    #[pyo3(signature = (actions, fluent_domains, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant, disable_numeric_reasoning=false))]
     #[allow(clippy::too_many_arguments)]
     pub fn hadd(
         actions: Vec<Action>,
-        fluent_types: Vec<String>,
-        objects: FxHashMap<String, Vec<usize>>,
+        #[pyo3(from_py_with = extract_fluent_domains)] fluent_domains: Vec<FluentDomain>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
@@ -94,8 +91,7 @@ impl Heuristic {
         Ok(Heuristic {
             variant: HeuristicVariant::DeleteRelaxation(DeleteRelaxationHeuristic::new(
                 actions,
-                fluent_types,
-                objects,
+                fluent_domains,
                 events,
                 goals,
                 DeleteRelaxationHeuristicConfig {
@@ -110,12 +106,11 @@ impl Heuristic {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (actions, fluent_types, objects, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant, disable_numeric_reasoning=false))]
+    #[pyo3(signature = (actions, fluent_domains, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant, disable_numeric_reasoning=false))]
     #[allow(clippy::too_many_arguments)]
     pub fn hmax(
         actions: Vec<Action>,
-        fluent_types: Vec<String>,
-        objects: FxHashMap<String, Vec<usize>>,
+        #[pyo3(from_py_with = extract_fluent_domains)] fluent_domains: Vec<FluentDomain>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
@@ -126,8 +121,7 @@ impl Heuristic {
         Ok(Heuristic {
             variant: HeuristicVariant::DeleteRelaxation(DeleteRelaxationHeuristic::new(
                 actions,
-                fluent_types,
-                objects,
+                fluent_domains,
                 events,
                 goals,
                 DeleteRelaxationHeuristicConfig {
@@ -142,12 +136,11 @@ impl Heuristic {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (actions, fluent_types, objects, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant))]
+    #[pyo3(signature = (actions, fluent_domains, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant))]
     #[allow(clippy::too_many_arguments, unused_variables)]
     pub fn hmax_explicit(
         actions: Vec<Action>,
-        fluent_types: Vec<String>,
-        objects: FxHashMap<String, Vec<usize>>,
+        #[pyo3(from_py_with = extract_fluent_domains)] fluent_domains: Vec<FluentDomain>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
@@ -157,7 +150,7 @@ impl Heuristic {
         Ok(Heuristic {
             variant: HeuristicVariant::HMaxExplicit(HMaxExplicit::new(
                 actions,
-                fluent_types,
+                fluent_domains,
                 events,
                 goals,
                 internal_caching,

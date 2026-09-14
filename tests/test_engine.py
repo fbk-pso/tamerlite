@@ -69,6 +69,7 @@ def _build_problems():
         problems_generator.get_problem_numeric(),
         problems_generator.get_problem_satellite(),
         problems_generator.get_problem_hierarchical_types(),
+        problems_generator.get_problem_object_equality_fluents(),
         problems_generator.get_problem_temporal_flight(),
         problems_generator.get_problem_flight(),
         problems_generator.get_problem_if_bool_condition(),
@@ -232,6 +233,7 @@ UNINFORMED_SEARCH_RISK: dict[str, set[str]] = {
     "RoboLogistics": {"dfs", "blind"},
     "NumericProblem": {"dfs"},
     "hierarchical-types": {"dfs", "blind"},
+    "object-equality-fluents": {"dfs", "blind"},
     "hierarchical_blocks_world": {"dfs"},
     "hierarchical_blocks_world_object_as_root": {"dfs"},
     "hierarchical_blocks_world_with_object": {"dfs"},
@@ -289,6 +291,7 @@ PERFORMANCE_PRUNES: list[
             "satellite",
             "robot_holding",
             "rovers_pfile2",
+            "object-equality-fluents",
         ),
         lambda c: c.search == "bfs",
         "bfs explores the whole state space",
@@ -619,8 +622,7 @@ def test_heuristic_fixed_values():
                 for internal_caching in [True, False]:
                     heuristic: Heuristic = heuristic_class(
                         encoder.actions,
-                        encoder.fluent_types,
-                        encoder.objects,
+                        encoder.fluent_domains,
                         encoder.events,
                         encoder.goal,
                         internal_caching=internal_caching,
@@ -701,8 +703,7 @@ def test_heuristic_values(problem, data_regression):
                 for internal_caching in [True, False]:
                     heuristic: Heuristic = heuristic_class(
                         encoder.actions,
-                        encoder.fluent_types,
-                        encoder.objects,
+                        encoder.fluent_domains,
                         encoder.events,
                         encoder.goal,
                         internal_caching=internal_caching,
@@ -2487,8 +2488,7 @@ def test_hmax_explicit_partial_callable_can_raise():
         for heuristic_class in heuristic_classes:
             heuristic: Heuristic = heuristic_class(
                 encoder.actions,
-                encoder.fluent_types,
-                encoder.objects,
+                encoder.fluent_domains,
                 encoder.events,
                 encoder.goal,
                 internal_caching=True,

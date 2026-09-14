@@ -18,7 +18,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, IntEnum
 from fractions import Fraction
 
 from unified_planning.model import DeltaSimpleTemporalNetwork
@@ -35,6 +35,59 @@ class IfReturnType(Enum):
     INT = 2
     REAL = 3
     OBJECT = 4
+
+
+class FluentKind(IntEnum):
+    """What kind of value a fluent holds.
+
+    Mirrors `enum FluentKind` in `crates/rustamer-base/src/heuristics.rs`.
+    Unlike `IfReturnType` above, this is never swapped for a Rust-native
+    type: `FluentDomain` below is shared, backend-agnostic data -- `Encoder`
+    builds it once and hands it to whichever backend is active -- and its
+    own `kind`-identity checks (`__post_init__`, `_object_domain`) always
+    compare against *this* `FluentKind`. A per-backend swap (`IfReturnType`'s
+    pattern) would make those checks fail half the time, since a swapped-in
+    Rust value would never be identical to this module's own enum member.
+    The member *values* are therefore load-bearing: they are the tag
+    `FluentDomain` carries across the PyO3 boundary, so they must match the
+    discriminants `extract_fluent_kind` maps back to the Rust enum
+    (`crates/rustamer-base/src/heuristics.rs`). It is an `IntEnum` so that
+    PyO3 can extract the member itself as that tag, with no conversion on
+    the way out.
+    """
+
+    BOOL = 0
+    INT = 1
+    REAL = 2
+    OBJECT = 3
+
+
+@dataclass(eq=True, frozen=True)
+class FluentDomain:
+    """The set of values one fluent can hold, as the heuristics need it.
+
+    Replaces the `(fluent_types, objects)` pair the heuristics used to
+    receive -- a `list[str]` of type names plus a `dict[str, list[int]]` from
+    type name to objects. That pair was ambiguous: `Encoder` put builtin type
+    names (`"bool"`/`"int"`/`"real"`) and user-type names in the same string
+    namespace, so a `UserType("int")` -- which `unified_planning` allows --
+    was indistinguishable from a real `int`, and the two cores resolved the
+    collision in opposite directions. Nothing downstream ever needed the
+    *name*; it was only ever used as a 4-way kind tag and as the key that
+    resolves a fluent's objects. `Encoder.__init__` now decides both once,
+    where it still has the UP `Type` in hand, and the name never leaves it.
+
+    `objects` is the fluent's object domain, and is non-empty only for
+    `FluentKind.OBJECT` -- an object type with no objects is legal and stays
+    `()`, which is why the kind, not the emptiness, is what identifies an
+    object-typed fluent.
+    """
+
+    kind: FluentKind
+    objects: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        assert self.kind is FluentKind.OBJECT or len(self.objects) == 0
 
 
 @dataclass(eq=True, frozen=True)

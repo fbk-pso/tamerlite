@@ -36,8 +36,8 @@ pub use expressions::{
 };
 pub use expressions_utils::{evaluate, py_shift_expression, simplify, FluentValueTrait};
 pub use heuristics::{
-    CustomHeuristic, DeleteRelaxationHeuristic, DeleteRelaxationHeuristicConfig, HMaxExplicit,
-    HeuristicKind, HeuristicTrait,
+    extract_fluent_domains, CustomHeuristic, DeleteRelaxationHeuristic,
+    DeleteRelaxationHeuristicConfig, FluentDomain, HMaxExplicit, HeuristicKind, HeuristicTrait,
 };
 pub use interpreted_functions::{clear_interpreted_function_cache, IfReturnType};
 pub use multiqueue::{

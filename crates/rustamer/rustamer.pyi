@@ -9,6 +9,8 @@
 from collections.abc import Callable
 from fractions import Fraction
 
+from tamerlite.core.search_space import FluentDomain
+
 # An expression is a flat, post-order list of nodes (see `make_*_node` builders).
 Expression = list["ExpressionNode"]
 
@@ -123,8 +125,7 @@ class Heuristic:
     @staticmethod
     def hff(
         actions: list[Action],
-        fluent_types: list[str],
-        objects: dict[str, list[int]],
+        fluent_domains: list[FluentDomain],
         events: dict[Action, list[tuple[Timing, Event]]],
         goals: list[ExpressionNode],
         internal_caching: bool,
@@ -135,8 +136,7 @@ class Heuristic:
     @staticmethod
     def hadd(
         actions: list[Action],
-        fluent_types: list[str],
-        objects: dict[str, list[int]],
+        fluent_domains: list[FluentDomain],
         events: dict[Action, list[tuple[Timing, Event]]],
         goals: list[ExpressionNode],
         internal_caching: bool,
@@ -147,8 +147,7 @@ class Heuristic:
     @staticmethod
     def hmax(
         actions: list[Action],
-        fluent_types: list[str],
-        objects: dict[str, list[int]],
+        fluent_domains: list[FluentDomain],
         events: dict[Action, list[tuple[Timing, Event]]],
         goals: list[ExpressionNode],
         internal_caching: bool,
@@ -159,8 +158,7 @@ class Heuristic:
     @staticmethod
     def hmax_explicit(
         actions: list[Action],
-        fluent_types: list[str],
-        objects: dict[str, list[int]],
+        fluent_domains: list[FluentDomain],
         events: dict[Action, list[tuple[Timing, Event]]],
         goals: list[ExpressionNode],
         internal_caching: bool,

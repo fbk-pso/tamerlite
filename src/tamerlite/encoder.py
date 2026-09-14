@@ -49,7 +49,12 @@ from tamerlite.core import (
     Timing,
     get_fluents,
 )
-from tamerlite.core.search_space import ConstantNode, SearchSpaceABC
+from tamerlite.core.search_space import (
+    ConstantNode,
+    FluentDomain,
+    FluentKind,
+    SearchSpaceABC,
+)
 
 
 def has_interpreted_functions(kind: up.model.ProblemKind) -> bool:
@@ -292,7 +297,7 @@ class Encoder:
 
     def _encode(self, relevant_fluents: set[int] | None) -> None:
         """(Re)builds everything whose numbering depends on which fluents
-        exist: `_fluents`/`_fluent_ids`/`_fluent_types`, the `Converter` (a
+        exist: `_fluents`/`_fluent_ids`/`_fluent_domains`, the `Converter` (a
         fresh instance every call -- `DagWalker` memoizes conversions per
         `FNode`, so an instance that already saw the previous numbering
         can't be reused), `_actions_duration`, and (via `_build_events`)
@@ -323,7 +328,7 @@ class Encoder:
         )
 
     def _build_fluents(self, relevant_fluents: set[int] | None) -> None:
-        """Sets `_fluents`/`_fluent_ids`/`_fluent_types`. See `_encode` for what
+        """Sets `_fluents`/`_fluent_ids`/`_fluent_domains`. See `_encode` for what
         `relevant_fluents` means.
 
         Skips a full rescan on pass 2, when nothing renumbering could touch
@@ -337,34 +342,47 @@ class Encoder:
             # Pass 1 (or a full, uncompacted encode): only place that ever needs to
             # scan `self._problem_initial_values`/infer each fluent's type from its
             # UP `FNode`.
-            fluent_types = {}
+            #
+            # Resolving each fluent's kind *and* its object domain here, while
+            # the UP `Type` is still in hand, is what keeps the type name out
+            # of everything downstream -- see `FluentDomain`. The heuristics
+            # used to be handed the name and re-derive both from it, which
+            # they cannot do unambiguously: `UserType("int")` is legal in UP
+            # and collides with the builtin name.
+            fluent_domains = {}
             for f in self._problem_initial_values:
                 name = self._convert_fluent(f)
+                d: FluentDomain
                 if f.type.is_bool_type():
-                    t = "bool"
+                    d = FluentDomain(FluentKind.BOOL)
                 elif f.type.is_int_type():
-                    t = "int"
+                    d = FluentDomain(FluentKind.INT)
                 elif f.type.is_real_type():
-                    t = "real"
+                    d = FluentDomain(FluentKind.REAL)
                 elif f.type.is_user_type():
-                    t = cast(_UserType, f.type).name
+                    d = FluentDomain(
+                        FluentKind.OBJECT,
+                        tuple(self._objects[cast(_UserType, f.type).name]),
+                    )
                 else:
                     raise NotImplementedError
-                fluent_types[name] = t
-            self._fluents: list[str] = sorted(fluent_types.keys())
+                fluent_domains[name] = d
+            self._fluents: list[str] = sorted(fluent_domains.keys())
             self._fluent_ids = {f: i for i, f in enumerate(self._fluents)}
-            self._fluent_types = [fluent_types[f] for f in self._fluents]
+            self._fluent_domains = [fluent_domains[f] for f in self._fluents]
         else:
             # Pass 2: filter by pass-1 index rather than converting indices to
             # names first -- cheaper (int-set membership, no intermediate
             # `set[str]`) and skips the name lookup entirely. `self._fluents`
             # stays sorted since it's a subsequence of a sorted list.
-            old_fluent_types = dict(zip(self._fluents, self._fluent_types, strict=True))
+            old_fluent_domains = dict(
+                zip(self._fluents, self._fluent_domains, strict=True)
+            )
             self._fluents = [
                 f for i, f in enumerate(self._fluents) if i in relevant_fluents
             ]
             self._fluent_ids = {f: i for i, f in enumerate(self._fluents)}
-            self._fluent_types = [old_fluent_types[f] for f in self._fluents]
+            self._fluent_domains = [old_fluent_domains[f] for f in self._fluents]
 
     def _build_actions_duration(self, relevant_fluents: set[int] | None) -> None:
         """Sets `_actions_duration`/`_is_temporal`. See `_encode` for what
@@ -522,8 +540,7 @@ class Encoder:
         events = {a: e for a, e in self.events.items() if a in self.applicable_actions}
         heuristic = HMax(
             self.actions,
-            self.fluent_types,
-            self.objects,
+            self.fluent_domains,
             events,
             self.goal,
             internal_caching=False,
@@ -1218,12 +1235,8 @@ class Encoder:
         return self._fluent_ids
 
     @property
-    def fluent_types(self) -> list[str]:
-        return self._fluent_types
-
-    @property
-    def objects(self) -> dict[str, list[int]]:
-        return self._objects
+    def fluent_domains(self) -> list[FluentDomain]:
+        return self._fluent_domains
 
     @property
     def object_ids(self) -> dict[str, int]:
