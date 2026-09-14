@@ -215,7 +215,15 @@ unless `DISABLE_RUSTAMER=1`. Every other name above keeps the "identical
 interface across both backends" invariant this file otherwise documents as
 load-bearing; treat any new call site for these two as needing the same
 Rust-unavailability guard `TamerLite._solve_ground_problem` uses, until a
-`crates/rustamer-base` implementation lands.
+`crates/rustamer-base` implementation lands. `NumericNovelty` classifies an
+`==` subgoal as numeric-vs-object the same way the heuristics below do --
+statically, from `FluentDomain`, via the same
+`search_space.is_object_typed_operand` (below) rather than a second,
+runtime-probe-based classifier; its one added wrinkle is an
+interpreted-function operand, resolved from the node's declared
+`IfReturnType` (a name swapped per-backend elsewhere in this codebase, unlike
+`FluentDomain`/`FluentKind` -- sound here only because novbfs refuses to run
+under the Rust backend; a Rust port would need to revisit it).
 
 Rust implementation lives in [crates/rustamer-base/src/](crates/rustamer-base/src/) (core library) and [crates/rustamer/src/](crates/rustamer/src/) (PyO3 bindings).
 
@@ -226,8 +234,14 @@ compile down to the same `"=="` / `ExpressionNode::Equals` node -- there is no
 separate operator kind for the two. `DeleteRelaxationHeuristic._is_numeric_leaf_expression`
 (`src/tamerlite/core/heuristics.py`) / `is_numeric_leaf_expression`
 (`crates/rustamer-base/src/heuristics.rs`) therefore decide per-operand, via
-`_is_object_typed_operand`/`is_object_typed`: an operand is object-typed if it's
-a literal object, or a fluent whose `FluentDomain` is the object variant.
+`search_space.is_object_typed_operand`/`is_object_typed`: an operand is
+object-typed if it's a literal object, or a fluent whose `FluentDomain` is
+the object variant. `is_object_typed_operand` (`src/tamerlite/core/search_space.py`)
+is a free function, not a method on `DeleteRelaxationHeuristic` -- it's shared
+verbatim with `NumericNovelty` (`src/tamerlite/core/novelty.py`, see above),
+which is also why it additionally classifies an interpreted-function operand
+(from its declared `return_type`), a case `DeleteRelaxationHeuristic` never
+reaches (`_simplify_leaf` bails out on `has_interpreted_function` first).
 This replaced an earlier version that only checked for a literal `ObjectNode`
 operand -- a fluent compared to *another* fluent of the same object type
 (`loc_a == loc_b`) has no such literal, so it was misclassified as numeric,

@@ -53,11 +53,12 @@ Implementation notes:
   structurally-comparable tuple, so no separate id-remapping table is
   needed (see `_leaf_index` below).
 - A subgoal's propositional-vs-numeric classification is structural for
-  ``<=``/``<`` (always numeric -- only `int`/`Fraction` support ordering);
-  ``==`` needs a one-time runtime probe against the initial state, since it
-  can compare numbers *or* objects and tamerlite's postfix `Expression`
-  doesn't carry fluent types at the leaf level. A ``not(...)`` leaf is
-  always treated as propositional-only.
+  ``<=``/``<`` (always numeric -- only `int`/`Fraction` support ordering).
+  ``==`` covers both numeric and object equality, so it is classified
+  statically from each operand's `FluentDomain` via
+  `tamerlite.core.search_space.is_object_typed_operand`: numeric iff neither
+  operand is object-typed.
+  A ``not(...)`` leaf is always treated as propositional-only.
 - The distance feature (`_sdist_and_sat`) is computed once per state, in one
   place, alongside satisfaction (avoiding a second, redundant evaluation of
   both operands just to get a boolean already implicit in the distance), in
@@ -80,12 +81,22 @@ from tamerlite.core.search_space import (
     Action,
     Event,
     Expression,
+    FluentDomain,
     OperatorNode,
     State,
     Timing,
     evaluate,
     extract_sub_expression,
+    is_object_typed_operand,
 )
+
+# `is_object_typed_operand`'s `IfReturnType` comparison (`search_space.py`)
+# uses that module's own `IfReturnType`, not the name `tamerlite.core.__init__`
+# swaps for a Rust-native type when the Rust backend is active (unlike
+# `FluentDomain`/`FluentKind`). That's sound here only because novbfs refuses to run
+# unless `core.use_rustamer` is false (see `TamerLite._solve_ground_problem`'s
+# novbfs dispatch branch), where the two are the same object. A Rust port of
+# novbfs would need to revisit this.
 
 
 def _iter_subgoal_leaves(exp: Expression) -> Iterator[Expression]:
@@ -129,9 +140,9 @@ class NumericNovelty:
     """Partitioned numeric novelty over the subgoals of `events`/`goals`.
 
     Construct once per search (subgoal catalogue only, no state needed), call
-    `start(initial_state, initial_h)` once to fix the partition count and
-    resolve `==` ambiguity, then call `eval(...)` once per generated state,
-    in generation order, passing its parent. Not thread-safe / not reusable
+    `start(initial_state, initial_h)` once to fix the partition count, then
+    call `eval(...)` once per generated state, in generation order, passing
+    its parent. Not thread-safe / not reusable
     across searches without calling `start` again -- construct a fresh
     instance per search call, including per anytime cold-restart iteration
     (see `TamerLite._anytime_solutions`).
@@ -141,14 +152,13 @@ class NumericNovelty:
         self,
         events: dict[Action, list[tuple[Timing, Event]]],
         goals: Expression,
+        fluent_domains: list[FluentDomain],
     ):
         self._leaves: list[Expression] = []
         self._leaf_index: dict[Expression, int] = {}
-        # (leaf_id, lhs, rhs, kind) for "<="/"<" (resolved eagerly, always
-        # numeric) and "==" (resolved lazily in `start`, since only a state
-        # probe can tell numeric equality from object equality).
+        # (leaf_id, lhs, rhs, kind) for "<="/"<" (always numeric) and "=="
+        # (numeric iff neither operand is object-typed).
         self._numeric_leaves: dict[int, tuple[Expression, Expression, str]] = {}
-        self._pending_eq: list[tuple[int, Expression, Expression]] = []
 
         def add_leaf(exp: Expression) -> None:
             if exp in self._leaf_index:
@@ -162,9 +172,13 @@ class NumericNovelty:
                 rhs = extract_sub_expression(exp, root.operands[1])
                 self._numeric_leaves[idx] = (lhs, rhs, root.kind)
             elif isinstance(root, OperatorNode) and root.kind == "==":
-                lhs = extract_sub_expression(exp, root.operands[0])
-                rhs = extract_sub_expression(exp, root.operands[1])
-                self._pending_eq.append((idx, lhs, rhs))
+                op1, op2 = root.operands
+                if not is_object_typed_operand(
+                    exp[op1], fluent_domains
+                ) and not is_object_typed_operand(exp[op2], fluent_domains):
+                    lhs = extract_sub_expression(exp, op1)
+                    rhs = extract_sub_expression(exp, op2)
+                    self._numeric_leaves[idx] = (lhs, rhs, "==")
 
         for event_list in events.values():
             for _, event in event_list:
@@ -179,21 +193,11 @@ class NumericNovelty:
 
     def start(self, initial_state: State, initial_h: float) -> int:
         """(Re)initializes partition bookkeeping from the initial state's
-        h^add value and resolves every pending `==` leaf's numeric-vs-object
-        classification against it. Must be called exactly once, before any
-        `eval()` call. Returns the root's (clamped) partition id; the caller
-        is responsible for seeding the tables with an explicit `eval()` call
-        on the initial state and then pushing the root with novelty
-        hard-coded to 1, regardless of that call's return value (see
-        `novbfs_search`)."""
-        for idx, lhs, rhs in self._pending_eq:
-            lv = evaluate(lhs, initial_state)
-            rv = evaluate(rhs, initial_state)
-            # `==` leaves are always either both-numeric or both-object-typed
-            # so `lv`/`rv` can never actually be `bool` here.
-            if isinstance(lv, (int, Fraction)) and isinstance(rv, (int, Fraction)):
-                self._numeric_leaves[idx] = (lhs, rhs, "==")
-        self._pending_eq = []
+        h^add value. Must be called exactly once, before any `eval()` call.
+        Returns the root's (clamped) partition id; the caller is responsible
+        for seeding the tables with an explicit `eval()` call on the initial
+        state and then pushing the root with novelty hard-coded to 1,
+        regardless of that call's return value (see `novbfs_search`)."""
         self._partitions = {}
         self._max_partition = max(1, math.floor(initial_h))
         return self.partition_of(initial_h)
