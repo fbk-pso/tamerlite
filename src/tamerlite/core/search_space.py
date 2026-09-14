@@ -283,6 +283,35 @@ def clear_interpreted_function_cache() -> None:
     leaving it uncleared here doesn't risk unbounded memory."""
 
 
+def is_object_typed_operand(
+    e: ExpressionNode, fluent_domains: list[FluentDomain]
+) -> bool:
+    """Whether an `==` operand is object-typed rather than numeric.
+
+    `"=="` covers both numeric equality and user-type (object) equality --
+    `Converter.walk_equals` emits the same operator kind for both, so the
+    operands' *types* are the only thing that tells them apart. An
+    operand is object-typed if it's a literal object, a fluent whose
+    `FluentDomain` says so, or an interpreted-function call whose declared
+    `return_type` is `IfReturnType.OBJECT`.
+
+    Args:
+        e: One operand of an `==` leaf.
+        fluent_domains: `Encoder.fluent_domains`, indexed by fluent id.
+
+    Returns:
+        bool: True if `e` is object-typed, False if numeric.
+    """
+
+    if isinstance(e, ObjectNode):
+        return True
+    if isinstance(e, FluentNode):
+        return fluent_domains[e.fluent.idx].kind is FluentKind.OBJECT
+    if isinstance(e, InterpretedFunctionNode):
+        return e.return_type == IfReturnType.OBJECT
+    return False
+
+
 # Invariant: within one `Event`'s `effects`, no two `Effect`s target the same
 # `fluent`. `Encoder._convert_effects` establishes this by folding every UP
 # effect on a given fluent -- increase, decrease, and assign alike -- into a
