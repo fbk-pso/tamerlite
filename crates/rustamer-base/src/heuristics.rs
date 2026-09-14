@@ -1316,7 +1316,7 @@ fn repetitions(
 ) -> PyResult<Option<f64>> {
     let mut v = *weights.last().unwrap();
     for (f, w) in fluents.iter().zip(weights) {
-        let f_value = rational_to_f64(&get_rational_from_expression_node(state.get_value(*f))?);
+        let f_value = expression_node_to_f64(state.get_value(*f))?;
         v += *w * f_value;
     }
 
