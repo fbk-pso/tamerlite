@@ -58,6 +58,8 @@ def _fresh_novelty_test_imports():
     # force a fresh set of class objects, not to pick a backend.
     from tamerlite.core.novelty import NumericNovelty
     from tamerlite.core.search_space import (
+        FluentDomain,
+        FluentKind,
         FluentNode,
         MultiSet,
         ObjectNode,
@@ -68,7 +70,15 @@ def _fresh_novelty_test_imports():
     def state(assignments, g=0):
         return State(list(assignments), None, {}, MultiSet(), g, [])
 
-    return NumericNovelty, FluentNode, OperatorNode, ObjectNode, state
+    return (
+        NumericNovelty,
+        FluentNode,
+        OperatorNode,
+        ObjectNode,
+        FluentDomain,
+        FluentKind,
+        state,
+    )
 
 
 class TestNumericNovelty:
@@ -82,9 +92,15 @@ class TestNumericNovelty:
         states are novelty 1, each for a different reason -- this pins the
         *reason* (via the internal tables), not just the return value, which
         is uninformatively 1 throughout."""
-        NumericNovelty, FluentNode, OperatorNode, _, _state = (
-            _fresh_novelty_test_imports()
-        )
+        (
+            NumericNovelty,
+            FluentNode,
+            OperatorNode,
+            _,
+            FluentDomain,
+            FluentKind,
+            _state,
+        ) = _fresh_novelty_test_imports()
 
         F_AT_LOC1, F_LOADED, F_FUEL = 0, 1, 2
         at_loc1 = _leaf(FluentNode(F_AT_LOC1))
@@ -97,8 +113,13 @@ class TestNumericNovelty:
             OperatorNode("<=", (2, 3)),
             OperatorNode("and", (0, 1, 4)),
         )
+        fluent_domains = [
+            FluentDomain(FluentKind.BOOL),
+            FluentDomain(FluentKind.BOOL),
+            FluentDomain(FluentKind.REAL),
+        ]
 
-        novelty = NumericNovelty({}, goal)
+        novelty = NumericNovelty({}, goal, fluent_domains)
         fuel_id = novelty._leaf_index[fuel_leq]
         at_loc1_id = novelty._leaf_index[at_loc1]
 
@@ -140,16 +161,23 @@ class TestNumericNovelty:
         appeared -- the first state where both are simultaneously true is
         novel only because the *pair* `(p, q)` has never been jointly true
         before."""
-        NumericNovelty, FluentNode, OperatorNode, _, _state = (
-            _fresh_novelty_test_imports()
-        )
+        (
+            NumericNovelty,
+            FluentNode,
+            OperatorNode,
+            _,
+            FluentDomain,
+            FluentKind,
+            _state,
+        ) = _fresh_novelty_test_imports()
 
         F_P, F_Q = 0, 1
         p = _leaf(FluentNode(F_P))
         q = _leaf(FluentNode(F_Q))
         goal = _leaf(FluentNode(F_P), FluentNode(F_Q), OperatorNode("and", (0, 1)))
+        fluent_domains = [FluentDomain(FluentKind.BOOL), FluentDomain(FluentKind.BOOL)]
 
-        novelty = NumericNovelty({}, goal)
+        novelty = NumericNovelty({}, goal, fluent_domains)
         p_id = novelty._leaf_index[p]
         q_id = novelty._leaf_index[q]
 
@@ -175,18 +203,32 @@ class TestNumericNovelty:
         novelty.eval(s4, partition, s3, partition)
         assert novelty.eval(s5, partition, s4, partition) == 3
 
-    def test_equality_leaf_classified_by_operand_type(self):
-        """`==` between two numeric operands gets a distance feature;
-        `==` between two object-typed operands does not (falls back to
-        propositional-only) -- resolved once, in `start()`, against the
-        initial state (see module docstring)."""
-        NumericNovelty, FluentNode, OperatorNode, ObjectNode, _state = (
-            _fresh_novelty_test_imports()
-        )
+    def test_equality_leaf_classified_by_fluent_domain(self):
+        """`==` between two numeric operands gets a distance feature; `==`
+        between two object-typed operands does not (falls back to
+        propositional-only) -- classified statically from each operand's
+        `FluentDomain` at construction time, via
+        `search_space.is_object_typed_operand` -- the same classifier
+        `DeleteRelaxationHeuristic` uses (see module docstring), not a
+        runtime probe. Covers a literal object operand
+        (`fluent == object`) and a fluent-vs-fluent object equality
+        (`fluent1 == fluent2`, no literal `ObjectNode` anywhere)."""
+        (
+            NumericNovelty,
+            FluentNode,
+            OperatorNode,
+            ObjectNode,
+            FluentDomain,
+            FluentKind,
+            _,
+        ) = _fresh_novelty_test_imports()
 
-        F_NUM, F_OBJ = 0, 1
+        F_NUM, F_OBJ, F_OBJ2 = 0, 1, 2
         numeric_eq = _leaf(FluentNode(F_NUM), 3, OperatorNode("==", (0, 1)))
         object_eq = _leaf(FluentNode(F_OBJ), ObjectNode(0), OperatorNode("==", (0, 1)))
+        fluent_vs_fluent_eq = _leaf(
+            FluentNode(F_OBJ), FluentNode(F_OBJ2), OperatorNode("==", (0, 1))
+        )
         goal = _leaf(
             FluentNode(F_NUM),
             3,
@@ -194,17 +236,25 @@ class TestNumericNovelty:
             FluentNode(F_OBJ),
             ObjectNode(0),
             OperatorNode("==", (3, 4)),
-            OperatorNode("and", (2, 5)),
+            FluentNode(F_OBJ),
+            FluentNode(F_OBJ2),
+            OperatorNode("==", (6, 7)),
+            OperatorNode("and", (2, 5, 8)),
         )
+        fluent_domains = [
+            FluentDomain(FluentKind.INT),
+            FluentDomain(FluentKind.OBJECT, (0, 1)),
+            FluentDomain(FluentKind.OBJECT, (0, 1)),
+        ]
 
-        novelty = NumericNovelty({}, goal)
+        novelty = NumericNovelty({}, goal, fluent_domains)
         numeric_eq_id = novelty._leaf_index[numeric_eq]
         object_eq_id = novelty._leaf_index[object_eq]
+        fluent_vs_fluent_eq_id = novelty._leaf_index[fluent_vs_fluent_eq]
 
-        s0 = _state([0, ObjectNode(1)])
-        novelty.start(s0, 0.0)
         assert numeric_eq_id in novelty._numeric_leaves
         assert object_eq_id not in novelty._numeric_leaves
+        assert fluent_vs_fluent_eq_id not in novelty._numeric_leaves
 
 
 NOVBFS_SEARCHES = ["novbfs_hg", "novbfs_lg"]

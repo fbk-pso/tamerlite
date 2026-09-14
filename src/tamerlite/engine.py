@@ -950,6 +950,7 @@ class TamerLite(
                             if a in set(encoder.considered_actions)
                         },
                         encoder.goal,
+                        encoder.fluent_domains,
                     )
                     search_name = self._params.search
                     search = cast(
