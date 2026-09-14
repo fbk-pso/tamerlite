@@ -42,7 +42,6 @@ from unified_planning.model import FNode, InterpretedFunction, ProblemKind, Star
 from unified_planning.model.state import State
 from unified_planning.plans import ActionInstance, PlanKind
 
-from tamerlite import core
 from tamerlite.converter import interpreted_function_scope, new_if_cache
 from tamerlite.core import (
     HFF,
@@ -51,6 +50,7 @@ from tamerlite.core import (
     HAdd,
     HMax,
     HMaxExplicit,
+    NumericNovelty,
     astar_search,
     astar_search_memory_bounded,
     bfs_search,
@@ -60,13 +60,12 @@ from tamerlite.core import (
     gbfs_search_memory_bounded,
     get_fluent_value,
     multiqueue_search,
+    novbfs_search,
     search_space,
     wastar_search,
     wastar_search_memory_bounded,
 )
 from tamerlite.core.heuristics import Heuristic
-from tamerlite.core.novelty import NumericNovelty
-from tamerlite.core.search import novbfs_search
 from tamerlite.encoder import Encoder
 
 logger = logging.getLogger(__name__)
@@ -907,15 +906,6 @@ class TamerLite(
                     and encoder.search_space.is_temporal
                 )
                 if self._params.search in ("novbfs_hg", "novbfs_lg"):
-                    # Numeric-novelty search -- pure-Python core only for now
-                    # (`src/tamerlite/core/novelty.py`,
-                    # `src/tamerlite/core/search.py::novbfs_search`).
-                    if core.use_rustamer:
-                        raise NotImplementedError(
-                            f"search={self._params.search!r} only exists in "
-                            "the pure-Python core for now; set "
-                            "DISABLE_RUSTAMER=1."
-                        )
                     if self._params.incomplete_memory_bounded_search:
                         raise NotImplementedError(
                             f"search={self._params.search!r} has no "

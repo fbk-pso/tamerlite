@@ -90,14 +90,6 @@ from tamerlite.core.search_space import (
     is_object_typed_operand,
 )
 
-# `is_object_typed_operand`'s `IfReturnType` comparison (`search_space.py`)
-# uses that module's own `IfReturnType`, not the name `tamerlite.core.__init__`
-# swaps for a Rust-native type when the Rust backend is active (unlike
-# `FluentDomain`/`FluentKind`). That's sound here only because novbfs refuses to run
-# unless `core.use_rustamer` is false (see `TamerLite._solve_ground_problem`'s
-# novbfs dispatch branch), where the two are the same object. A Rust port of
-# novbfs would need to revisit this.
-
 
 def _iter_subgoal_leaves(exp: Expression) -> Iterator[Expression]:
     """Flatten `exp` through nested `and`/`or` down to its leaf
@@ -141,11 +133,20 @@ class NumericNovelty:
 
     Construct once per search (subgoal catalogue only, no state needed), call
     `start(initial_state, initial_h)` once to fix the partition count, then
-    call `eval(...)` once per generated state, in generation order, passing
-    its parent. Not thread-safe / not reusable
-    across searches without calling `start` again -- construct a fresh
-    instance per search call, including per anytime cold-restart iteration
-    (see `TamerLite._anytime_solutions`).
+    call `begin_expansion()` once per expanded (popped) state followed by
+    `eval(...)` once per surviving successor, in generation order, passing
+    its parent. Not thread-safe / not reusable across searches without
+    calling `start` again -- construct a fresh instance per search call,
+    including per anytime cold-restart iteration (see
+    `TamerLite._anytime_solutions`).
+
+    A parent's own features (psi truth, sdist) are a pure function of
+    `(leaf, parent_state)`: every child of one expansion shares the same
+    parent, so `eval` fills `_parent_prop_true`/`_parent_numeric` lazily on
+    first use per expansion instead of recomputing them from scratch for
+    every child, as a naive per-call `evaluate(leaf, parent)` would.
+    `begin_expansion` drops the cache; not calling it before a new parent's
+    children would silently reuse a stale parent's features.
     """
 
     def __init__(
@@ -190,6 +191,11 @@ class NumericNovelty:
 
         self._partitions: dict[int, _PartitionTables] = {}
         self._max_partition = 1
+        # Lazy per-leaf caches of the current expansion's parent state's
+        # features -- reset by `begin_expansion`/`start`, filled on first
+        # use by `eval`. See the class docstring.
+        self._parent_prop_true: dict[int, bool] = {}
+        self._parent_numeric: dict[int, tuple[Fraction, bool]] = {}
 
     def start(self, initial_state: State, initial_h: float) -> int:
         """(Re)initializes partition bookkeeping from the initial state's
@@ -200,12 +206,22 @@ class NumericNovelty:
         regardless of that call's return value (see `novbfs_search`)."""
         self._partitions = {}
         self._max_partition = max(1, math.floor(initial_h))
+        self._parent_prop_true = {}
+        self._parent_numeric = {}
         return self.partition_of(initial_h)
 
     def partition_of(self, h_value: float) -> int:
         """The partition function: `floor(h_value)`, clamped at the top to
         `max_partition`."""
         return min(math.floor(h_value), self._max_partition)
+
+    def begin_expansion(self) -> None:
+        """Resets the lazy parent-feature cache. Must be called once per
+        expansion, before the first `eval()` call for that expansion's
+        children -- not enforced here (the sole caller, `novbfs_search`,
+        gets this right by construction)."""
+        self._parent_prop_true = {}
+        self._parent_numeric = {}
 
     def _get_partition(self, partition: int) -> _PartitionTables:
         tables = self._partitions.get(partition)
@@ -283,7 +299,10 @@ class NumericNovelty:
                         newly_satisfied.append(leaf_id)
                 else:
                     assert parent is not None
-                    p_true = bool(evaluate(leaf, parent))
+                    p_true = self._parent_prop_true.get(leaf_id)
+                    if p_true is None:
+                        p_true = bool(evaluate(leaf, parent))
+                        self._parent_prop_true[leaf_id] = p_true
                     if s_true and not p_true:
                         newly_satisfied.append(leaf_id)
                     elif s_true:
@@ -301,7 +320,11 @@ class NumericNovelty:
                     numeric_improved.append(leaf_id)
             else:
                 assert parent is not None
-                pdist, parent_sat = self._sdist_and_sat(leaf_id, parent)
+                cached = self._parent_numeric.get(leaf_id)
+                if cached is None:
+                    cached = self._sdist_and_sat(leaf_id, parent)
+                    self._parent_numeric[leaf_id] = cached
+                pdist, parent_sat = cached
                 if curr_sat:
                     currently_satisfied.append(leaf_id)
                 else:

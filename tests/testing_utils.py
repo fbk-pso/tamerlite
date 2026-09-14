@@ -22,6 +22,7 @@ import random
 import types
 from fractions import Fraction
 
+from unified_planning.engines import PlanGenerationResult
 from unified_planning.model import Problem
 
 import tamerlite
@@ -84,6 +85,22 @@ def reload_package(package):
 def reload_tamerlite(disable_rustamer: bool):
     os.environ["DISABLE_RUSTAMER"] = str(disable_rustamer)
     reload_package(tamerlite)
+
+
+def check_metrics_equality(results: list[PlanGenerationResult]):
+    """Asserts `expanded_states`/`goal_depth` agree across every result in
+    `results` -- used to cross-check the pure-Python and Rust cores solve
+    identically (`test_engine.py`'s search-algorithm/heuristic matrix,
+    `test_novbfs.py`'s novbfs cross-backend test)."""
+    for i in range(len(results) - 1):
+        res1: PlanGenerationResult = results[i]
+        res2: PlanGenerationResult = results[i + 1]
+        assert res1.metrics is not None and res2.metrics is not None
+        assert len(res1.metrics) == len(res2.metrics)
+        assert int(res1.metrics["expanded_states"]) == int(
+            res2.metrics["expanded_states"]
+        )
+        assert int(res1.metrics["goal_depth"]) == int(res2.metrics["goal_depth"])
 
 
 def compile_problem(problem: Problem):
