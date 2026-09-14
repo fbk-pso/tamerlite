@@ -40,6 +40,7 @@ fn rustamer(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<rustamer_base::SearchSpace>()?;
     m.add_class::<rustamer_base::State>()?;
     m.add_class::<Heuristic>()?;
+    m.add_class::<rustamer_base::NumericNovelty>()?;
 
     m.add_function(wrap_pyfunction!(rustamer_base::make_operator_node, &m)?)?;
     m.add_function(wrap_pyfunction!(
@@ -68,6 +69,7 @@ fn rustamer(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gbfs_search, &m)?)?;
     m.add_function(wrap_pyfunction!(gbfs_search_memory_bounded, &m)?)?;
     m.add_function(wrap_pyfunction!(ehc_search, &m)?)?;
+    m.add_function(wrap_pyfunction!(novbfs_search, &m)?)?;
     m.add_function(wrap_pyfunction!(rustamer_base::evaluate, &m)?)?;
     m.add_function(wrap_pyfunction!(rustamer_base::simplify, &m)?)?;
     m.add_function(wrap_pyfunction!(rustamer_base::py_get_fluents, &m)?)?;

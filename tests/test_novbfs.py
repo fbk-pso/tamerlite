@@ -15,18 +15,24 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 """Tests for the numeric-novelty search (`search="novbfs_hg"`/`"novbfs_lg"`,
-`tamerlite.core.novelty.NumericNovelty` + `tamerlite.core.search.novbfs_search`).
+`tamerlite.core.novelty.NumericNovelty` + `tamerlite.core.search.novbfs_search`
+in the pure-Python core; `crates/rustamer-base/src/novelty.rs` +
+`search.rs::novbfs_search` in the Rust core).
 
-`novbfs_hg`/`novbfs_lg` only exist in the pure-Python core for now (see
-`TamerLite._solve_ground_problem`'s novbfs dispatch branch) -- every
-end-to-end test here forces `DISABLE_RUSTAMER=1` via `reload_tamerlite`
-(`test_engine.py`'s helper), same convention as the rest of the suite.
+Most end-to-end tests here force `DISABLE_RUSTAMER=1` via `reload_tamerlite`
+(`testing_utils`'s helper) purely to keep a single, fixed backend for tests
+that aren't about backend parity itself; `test_novbfs_cross_backend_parity`
+and `test_novbfs_metrics_regression` are the exception -- they loop both
+backends and assert identical `expanded_states`/`goal_depth`
+(`testing_utils.check_metrics_equality`), same convention as
+`test_engine.py`'s search-algorithm matrix.
 """
 
 import warnings
 from collections.abc import Callable
 
 import pytest
+from unified_planning.engines import PlanGenerationResult
 from unified_planning.engines import PlanGenerationResultStatus as ResultStatus
 from unified_planning.shortcuts import OneshotPlanner, PlanValidator
 
@@ -34,6 +40,7 @@ import problems_generator
 import testing_utils
 
 reload_tamerlite = testing_utils.reload_tamerlite
+check_metrics_equality = testing_utils.check_metrics_equality
 
 
 def _leaf(*nodes):
@@ -131,20 +138,30 @@ class TestNumericNovelty:
         assert tables0.best_sdist[fuel_id] == 4 - 10
         assert tables0.psi_seen == set()  # neither bool ever true yet
 
+        # Each state below is a *linear* chain -- child of exactly the
+        # previous one, no siblings -- so `begin_expansion()` (which resets
+        # the parent-feature cache `eval` fills lazily per expansion; see
+        # `NumericNovelty`'s class docstring) must be called before every
+        # one of these `eval()` calls, exactly as `novbfs_search` calls it
+        # once per popped state before scoring that state's children.
+
         # s1 (child of s0): fuel=8 -- unsatisfied but strictly closer.
         s1 = _state([False, False, 8], g=1)
+        novelty.begin_expansion()
         assert novelty.eval(s1, root_partition, s0, root_partition) == 1
         assert tables0.best_sdist[fuel_id] == 8 - 10
 
         # s2 (child of s1): at_loc1 becomes true; fuel unchanged (8, tied
         # with s1 -- must NOT count as an improvement, strict `>` only).
         s2 = _state([True, False, 8], g=2)
+        novelty.begin_expansion()
         assert novelty.eval(s2, root_partition, s1, root_partition) == 1
         assert at_loc1_id in tables0.psi_seen
         assert tables0.best_sdist[fuel_id] == 8 - 10  # unchanged
 
         # s3 (child of s2): fuel=12 -- now satisfied for the first time.
         s3 = _state([True, False, 12], g=3)
+        novelty.begin_expansion()
         assert novelty.eval(s3, root_partition, s2, root_partition) == 1
         assert fuel_id in tables0.psi_seen  # newly-achieved psi, not delta
         assert tables0.best_sdist[fuel_id] == 8 - 10  # B2 untouched by this call
@@ -152,6 +169,7 @@ class TestNumericNovelty:
         # s4 (child of s3): nothing changes at all -- nothing left to be
         # novel about in this partition.
         s4 = _state([True, False, 12], g=4)
+        novelty.begin_expansion()
         assert novelty.eval(s4, root_partition, s3, root_partition) == 3
 
     def test_novelty_2_is_a_pure_pair_of_already_seen_features(self):
@@ -185,23 +203,69 @@ class TestNumericNovelty:
         partition = novelty.start(s0, 0.0)
         assert novelty.eval(s0, partition, None, None) == 3  # nothing true yet
 
+        # Linear chain, one child per state -- see the previous test's note
+        # on `begin_expansion()`.
         s1 = _state([True, False], g=1)  # p: F -> T (first time)
+        novelty.begin_expansion()
         assert novelty.eval(s1, partition, s0, partition) == 1
 
         s2 = _state([False, True], g=2)  # p: T -> F; q: F -> T (first time)
+        novelty.begin_expansion()
         assert novelty.eval(s2, partition, s1, partition) == 1
 
         s3 = _state([True, True], g=3)  # p: F -> T again; q stays T
         tables = novelty._get_partition(partition)
         assert (min(p_id, q_id), max(p_id, q_id)) not in tables.psi_pair_seen
+        novelty.begin_expansion()
         assert novelty.eval(s3, partition, s2, partition) == 2
         assert (min(p_id, q_id), max(p_id, q_id)) in tables.psi_pair_seen
 
         # And now that the pair has been seen, repeating it is not novel.
         s4 = _state([False, False], g=4)
         s5 = _state([True, True], g=5)
+        novelty.begin_expansion()
         novelty.eval(s4, partition, s3, partition)
+        novelty.begin_expansion()
         assert novelty.eval(s5, partition, s4, partition) == 3
+
+    def test_begin_expansion_prevents_stale_parent_features(self):
+        """A regression guard for `begin_expansion()`'s cache reset: two
+        consecutive `eval()` calls with *different* actual parents
+        (`parent_a` has `p` true, `parent_b` has `p` false) must each read
+        *that* call's own parent's features. If `begin_expansion()` ever
+        stopped resetting the lazy parent-feature cache (see
+        `NumericNovelty`'s class docstring), the second call below would
+        silently reuse `parent_a`'s cached (stale) `p_true=True` instead of
+        `parent_b`'s actual `p_true=False`, and wrongly miss `p` becoming
+        newly satisfied -- returning 3 instead of 1."""
+        (
+            NumericNovelty,
+            FluentNode,
+            _,
+            _,
+            FluentDomain,
+            FluentKind,
+            _state,
+        ) = _fresh_novelty_test_imports()
+
+        F_P = 0
+        goal = _leaf(FluentNode(F_P))
+        fluent_domains = [FluentDomain(FluentKind.BOOL)]
+
+        novelty = NumericNovelty({}, goal, fluent_domains)
+        partition = novelty.start(_state([True]), 0.0)
+        parent_a = _state([True])
+        parent_b = _state([False])
+
+        # First call: parent_a (p=True) -- cache fills p_true=True.
+        novelty.begin_expansion()
+        child_x = _state([True], g=1)
+        assert novelty.eval(child_x, partition, parent_a, partition) == 3
+
+        # Second call: a genuinely different parent, parent_b (p=False).
+        novelty.begin_expansion()
+        child_y = _state([True], g=1)
+        assert novelty.eval(child_y, partition, parent_b, partition) == 1
 
     def test_equality_leaf_classified_by_fluent_domain(self):
         """`==` between two numeric operands gets a distance feature; `==`
@@ -289,22 +353,28 @@ def test_novbfs_solves_and_validates(make_problem, search_name):
 
 
 @pytest.mark.parametrize("search_name", NOVBFS_SEARCHES)
-def test_novbfs_requires_python_core(search_name):
-    reload_tamerlite(False)
-    from tamerlite import core
-    from tamerlite.engine import SearchParams
+@pytest.mark.parametrize(
+    "make_problem", [p for _, p in NOVBFS_PROBLEMS], ids=[n for n, _ in NOVBFS_PROBLEMS]
+)
+def test_novbfs_cross_backend_parity(make_problem, search_name):
+    """Both cores must expand exactly the same states -- see
+    `testing_utils.check_metrics_equality`, the same check every other
+    search in `test_engine.py` is held to."""
+    problem = make_problem()
+    results = []
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.engine import SearchParams
 
-    if not core.use_rustamer:
-        pytest.skip("rustamer extension is not installed in this environment")
-
-    problem = problems_generator.get_problem_numeric()
-    with (
-        OneshotPlanner(
+        with OneshotPlanner(
             name="tamerlite", params={"search": SearchParams(search=search_name)}
-        ) as planner,
-        pytest.raises(NotImplementedError),
-    ):
-        planner.solve(problem, timeout=10)
+        ) as planner:
+            res: PlanGenerationResult = planner.solve(problem, timeout=60)
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+            results.append(res)
+            with PlanValidator(problem_kind=problem.kind) as validator:
+                assert validator.validate(problem, res.plan)
+    check_metrics_equality(results)
 
 
 def test_novbfs_ignores_configured_heuristic_with_warning():
@@ -366,20 +436,26 @@ def test_novbfs_rejects_memory_bounded():
 )
 def test_novbfs_metrics_regression(make_problem, search_name, data_regression):
     """Pins `expanded_states`/`goal_depth` for a couple of fixed small
-    problems -- there is no cross-backend check to catch drift here (unlike
-    every other search), since the Rust core has no `novbfs` implementation
-    yet. Also validates the plan itself (`test_novbfs_solves_and_validates`
+    problems, on *both* backends against the same pinned YAML -- the primary
+    check that the Rust core's `novbfs` mirrors the pure-Python one exactly.
+    Also validates the plan itself (`test_novbfs_cross_backend_parity`
     doesn't share this problem set): a regression that preserves the metrics
     but silently breaks the plan would otherwise slip through."""
-    reload_tamerlite(True)
-    from tamerlite.engine import SearchParams
-
     problem = make_problem()
-    with OneshotPlanner(
-        name="tamerlite", params={"search": SearchParams(search=search_name)}
-    ) as planner:
-        res = planner.solve(problem, timeout=60)
-        assert res.status == ResultStatus.SOLVED_SATISFICING
-        with PlanValidator(problem_kind=problem.kind) as validator:
-            assert validator.validate(problem, res.plan)
-    data_regression.check(dict(res.metrics))
+    metrics = None
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.engine import SearchParams
+
+        with OneshotPlanner(
+            name="tamerlite", params={"search": SearchParams(search=search_name)}
+        ) as planner:
+            res = planner.solve(problem, timeout=60)
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+            with PlanValidator(problem_kind=problem.kind) as validator:
+                assert validator.validate(problem, res.plan)
+        if metrics is None:
+            metrics = dict(res.metrics)
+        else:
+            assert dict(res.metrics) == metrics
+    data_regression.check(metrics)

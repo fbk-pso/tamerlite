@@ -31,6 +31,7 @@ use pyo3::exceptions::PyTimeoutError;
 use pyo3::prelude::*;
 
 use super::heuristics::*;
+use super::novelty::NumericNovelty;
 use super::search_space::*;
 use super::search_state::*;
 use super::structures::Action;
@@ -631,5 +632,232 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         expanded_states
     );
     metrics.insert("expanded_states", expanded_states.to_string());
+    Ok((None, metrics))
+}
+
+/// Open-list entry for `novbfs_search`: the numeric-novelty tie-break chain
+/// `(novelty, h^add, ±g)` plus an `idx` insertion-order tie-break for
+/// determinism, matching every other search's `PrioritizedItem` -- except
+/// deliberately **without** a `todo_len` tie-break (`PrioritizedItem` has
+/// one; the Python core's `NovBFSItem` doesn't, and adding one here would
+/// silently change what counts as a tie relative to it).
+struct NovBFSItem {
+    novelty: u8,
+    h: f64,
+    g_key: f64,
+    idx: usize,
+    state: Rc<State>,
+    partition: u64,
+}
+
+impl PartialEq for NovBFSItem {
+    fn eq(&self, _other: &Self) -> bool {
+        false
+    }
+}
+
+impl Eq for NovBFSItem {}
+
+impl PartialOrd for NovBFSItem {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for NovBFSItem {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // `BinaryHeap` is a max-heap; every comparison is inverted (a
+        // *smaller* key sorts as `Greater`) so `pop()` returns the item
+        // with the lexicographically smallest `(novelty, h, g_key, idx)`
+        // tuple first -- same convention as `PrioritizedItem` above.
+        if self.novelty != other.novelty {
+            return if self.novelty < other.novelty {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Less
+            };
+        }
+        if self.h != other.h {
+            return if self.h < other.h {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Less
+            };
+        }
+        if self.g_key != other.g_key {
+            return if self.g_key < other.g_key {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Less
+            };
+        }
+        if self.idx < other.idx {
+            std::cmp::Ordering::Greater
+        } else {
+            std::cmp::Ordering::Less
+        }
+    }
+}
+
+/// A single open list ordered lexicographically on `(novelty, h^add, ±g)`
+/// -- numeric novelty first, `h^add` only as a tie-breaker, plan cost `g`
+/// last. `prefer_higher_g=true` is `novbfs_hg` (cost-*maximizing* final
+/// tie-break, to dive into longer committed plans and find *a* solution
+/// fast); `prefer_higher_g=false` is `novbfs_lg` (cost-*minimizing*).
+/// `heuristic` must be an h^add instance -- see
+/// `TamerLite._solve_ground_problem`'s novbfs dispatch branch, which always
+/// builds one internally regardless of the configured heuristic.
+///
+/// `novelty` must not have had `start()` called yet -- this function calls
+/// it once, on the initial state, and expects a fresh instance per search
+/// call (including per anytime cold-restart iteration, which tamerlite
+/// already implements generically at the Python `engine.py` level, so no
+/// restart logic needs to live here).
+///
+/// Dedup is the standard tamerlite "generate-once" strategy shared with
+/// every other search here (`WeakEqState`/`visited_states`, closed at
+/// generation time), not g-based reopening: a state re-reached later via a
+/// strictly cheaper path is simply dropped rather than re-queued and
+/// re-scored against the novelty tables.
+#[allow(clippy::too_many_arguments)]
+pub fn novbfs_search<H: HeuristicTrait, S: SearchSpaceTrait>(
+    ss: &S,
+    heuristic: &H,
+    novelty: &mut NumericNovelty,
+    prefer_higher_g: bool,
+    timeout: Option<f32>,
+    early_termination: bool,
+    weak_equality: bool,
+) -> PyResult<SearchResult> {
+    info!(
+        "novbfs_search: prefer_higher_g={} timeout={:?} early_termination={} weak_equality={}",
+        prefer_higher_g, timeout, early_termination, weak_equality
+    );
+    let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
+    let start = SystemTime::now();
+    let init = Rc::new(ss.initial_state(None)?);
+    let mut expanded_states = 0;
+    let mut generated_states: usize = 1;
+    if early_termination && ss.goal_reached(&init, None)? {
+        metrics.insert("expanded_states".to_string(), expanded_states.to_string());
+        metrics.insert("goal_depth".to_string(), init.g.to_string());
+        return Ok((Some(extract_path(&init)), metrics));
+    }
+
+    let dedup = !ss.is_temporal() || weak_equality;
+    // State and WeakEqState contain interior mutability only for heuristic
+    // caches. The mutable fields are ignored by Hash/Eq, so using them as HashSet keys is
+    // safe.
+    #[allow(clippy::mutable_key_type)]
+    let mut visited_states = FxHashSet::with_hasher(FxBuildHasher);
+    if dedup {
+        visited_states.insert(WeakEqState {
+            state: Rc::clone(&init),
+        });
+    }
+
+    let init_h = match heuristic.eval(&init, ss)? {
+        Some(v) => v,
+        None => {
+            metrics.insert("expanded_states".to_string(), 0.to_string());
+            return Ok((None, metrics));
+        }
+    };
+    let init_partition = novelty.start(init_h);
+    // Seeds the tables (return discarded); the root's *stored* novelty is
+    // hard-coded to 1 below regardless.
+    novelty.eval(&init, init_partition, None, None)?;
+
+    let g_key = |g: f64| -> f64 {
+        if prefer_higher_g {
+            -g
+        } else {
+            g
+        }
+    };
+
+    let mut open: BinaryHeap<NovBFSItem> = BinaryHeap::new();
+    open.push(NovBFSItem {
+        novelty: 1,
+        h: init_h,
+        g_key: g_key(init.g),
+        idx: 0,
+        state: init,
+        partition: init_partition,
+    });
+
+    while let Some(current) = open.pop() {
+        if let Some(t) = timeout {
+            if start.elapsed().unwrap().as_secs_f32() > t {
+                return Err(PyTimeoutError::new_err("Timeout"));
+            }
+        }
+        let state = current.state;
+        let state_partition = current.partition;
+        expanded_states += 1;
+        if expanded_states % 10_000 == 0 {
+            debug!(
+                "novbfs_search: expanded={} generated={} open={}",
+                expanded_states,
+                generated_states,
+                open.len()
+            );
+        }
+        if !early_termination && ss.goal_reached(&state, None)? {
+            info!(
+                "novbfs_search: goal found — expanded={} depth={}",
+                expanded_states, state.g
+            );
+            metrics.insert("expanded_states".to_string(), expanded_states.to_string());
+            metrics.insert("goal_depth".to_string(), state.g.to_string());
+            return Ok((Some(extract_path(&state)), metrics));
+        }
+
+        let successors_iter = ss
+            .get_successor_states_iter(&state)
+            .filter_map(|rs| match rs {
+                Ok(s) => {
+                    let s = Rc::new(s);
+                    let keep = !dedup
+                        || visited_states.insert(WeakEqState {
+                            state: Rc::clone(&s),
+                        });
+                    keep.then_some(Ok(s))
+                }
+                Err(e) => Some(Err(e)),
+            });
+
+        novelty.begin_expansion();
+        for rs in heuristic.eval_gen(successors_iter, ss)? {
+            let (s, h) = rs?;
+            if early_termination && ss.goal_reached(&s, None)? {
+                info!(
+                    "novbfs_search: goal found — expanded={} depth={}",
+                    expanded_states, s.g
+                );
+                metrics.insert("expanded_states".to_string(), expanded_states.to_string());
+                metrics.insert("goal_depth".to_string(), s.g.to_string());
+                return Ok((Some(extract_path(&s)), metrics));
+            }
+            if let Some(h) = h {
+                let partition = novelty.partition_of(h);
+                let novelty = novelty.eval(&s, partition, Some(&state), Some(state_partition))?;
+                open.push(NovBFSItem {
+                    novelty,
+                    h,
+                    g_key: g_key(s.g),
+                    idx: generated_states,
+                    state: s,
+                    partition,
+                });
+            }
+            generated_states += 1;
+        }
+    }
+    info!(
+        "novbfs_search: no solution found — expanded={}",
+        expanded_states
+    );
+    metrics.insert("expanded_states".to_string(), expanded_states.to_string());
     Ok((None, metrics))
 }
