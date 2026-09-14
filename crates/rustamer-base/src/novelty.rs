@@ -26,10 +26,10 @@
 //! leaves are catalogued in whatever order `events`' `FxHashMap` iterates,
 //! not Python's dict-insertion order.
 //!
-//! `Sdist` keeps the distance feature exact (`BigInt`/`BigRational`, never
-//! `f64`) to match Python's exact `Fraction` arithmetic.
+//! The distance feature (`compute_sdist`) is kept as an exact `BigRational`,
+//! never `f64`, to match Python's exact `Fraction` arithmetic.
 
-use num::{BigInt, Signed, Zero};
+use num::{Signed, Zero};
 use num_rational::BigRational;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
@@ -37,10 +37,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::borrow::Cow;
 use std::cmp::Ordering;
 
-use super::expressions::{ExpressionNode, PyExpressionNode};
-use super::expressions_utils::{
-    as_num_ref, internal_evaluate, num_cmp, num_is_zero, split_expression, FluentValueTrait, NumRef,
-};
+use super::expressions::{get_rational_from_expression_node, ExpressionNode, PyExpressionNode};
+use super::expressions_utils::{internal_evaluate, split_expression, FluentValueTrait};
 use super::heuristics::{
     extract_fluent_domains, extract_sub_expression, is_object_typed, FluentDomain,
 };
@@ -141,68 +139,9 @@ enum NumKind {
     Eq,
 }
 
-/// The distance feature for a numeric leaf, exact (never `f64`) -- see the
-/// module docstring. `Int` is used whenever both operands are exact
-/// integers (the common case for resource-counter fluents), promoting to
-/// `Rational` only when an operand actually is one, exactly mirroring
-/// `internal_evaluate`'s `Minus`/`fold_numeric` promotion rule so this
-/// never disagrees with how the rest of the crate does arithmetic.
-#[derive(Clone, Debug)]
-enum Sdist {
-    Int(BigInt),
-    Rational(BigRational),
-}
-
-impl Sdist {
-    /// `a - b`.
-    fn sub(a: NumRef, b: NumRef) -> Sdist {
-        match (a, b) {
-            (NumRef::Int(x), NumRef::Int(y)) => Sdist::Int(x - y),
-            (NumRef::Int(x), NumRef::Rational(y)) => {
-                Sdist::Rational(BigRational::from_integer(x.clone()) - y)
-            }
-            (NumRef::Rational(x), NumRef::Int(y)) => {
-                Sdist::Rational(x - BigRational::from_integer(y.clone()))
-            }
-            (NumRef::Rational(x), NumRef::Rational(y)) => Sdist::Rational(x - y),
-        }
-    }
-
-    fn as_num_ref(&self) -> NumRef<'_> {
-        match self {
-            Sdist::Int(v) => NumRef::Int(v),
-            Sdist::Rational(v) => NumRef::Rational(v),
-        }
-    }
-
-    fn is_zero(&self) -> bool {
-        num_is_zero(self.as_num_ref())
-    }
-
-    fn is_negative(&self) -> bool {
-        match self {
-            Sdist::Int(v) => v.is_negative(),
-            Sdist::Rational(v) => v.is_negative(),
-        }
-    }
-
-    fn is_positive(&self) -> bool {
-        match self {
-            Sdist::Int(v) => v.is_positive(),
-            Sdist::Rational(v) => v.is_positive(),
-        }
-    }
-
-    fn cmp(&self, other: &Sdist) -> Ordering {
-        num_cmp(self.as_num_ref(), other.as_num_ref())
-    }
-
-    fn neg_abs(&self) -> Sdist {
-        match self {
-            Sdist::Int(v) => Sdist::Int(-v.abs()),
-            Sdist::Rational(v) => Sdist::Rational(-v.abs()),
-        }
-    }
+/// `a - b`, promoted to an exact `BigRational` (see the module docstring).
+fn num_diff(a: &ExpressionNode, b: &ExpressionNode) -> PyResult<BigRational> {
+    Ok(get_rational_from_expression_node(a)? - get_rational_from_expression_node(b)?)
 }
 
 /// The distance feature paired with satisfaction, in the "improves = larger
@@ -215,14 +154,14 @@ fn compute_sdist(
     rhs: &Operand,
     kind: NumKind,
     state: &State,
-) -> PyResult<(Sdist, bool)> {
+) -> PyResult<(BigRational, bool)> {
     let lhs_val = lhs.eval(state)?;
     let rhs_val = rhs.eval(state)?;
-    let diff = Sdist::sub(as_num_ref(&rhs_val)?, as_num_ref(&lhs_val)?);
+    let diff = num_diff(&rhs_val, &lhs_val)?;
     Ok(match kind {
         NumKind::Eq => {
             let sat = diff.is_zero();
-            (diff.neg_abs(), sat)
+            (-diff.abs(), sat)
         }
         NumKind::Le => {
             let sat = !diff.is_negative();
@@ -305,7 +244,7 @@ struct PartitionTables {
     /// subgoal (leaf id) satisfied at least once in this partition.
     psi_seen: FxHashSet<u32>,
     /// best (max) sdist ever seen for a numeric subgoal in this partition.
-    best_sdist: FxHashMap<u32, Sdist>,
+    best_sdist: FxHashMap<u32, BigRational>,
     /// unordered pairs of subgoals jointly satisfied at least once, packed
     /// `(min << 32) | max`.
     psi_pair_seen: FxHashSet<u64>,
@@ -314,7 +253,7 @@ struct PartitionTables {
     /// (directed -- shared between Pass C1b and C2, which never race on the
     /// same key since `newly_satisfied`/`persisting_satisfied` are
     /// disjoint).
-    best_sdist_with_psi: FxHashMap<u64, Sdist>,
+    best_sdist_with_psi: FxHashMap<u64, BigRational>,
 }
 
 fn pack_directed(a: u32, b: u32) -> u64 {
@@ -344,7 +283,7 @@ struct LeafClassification {
     /// `numeric_unsatisfied`, which are rebuilt fresh (and written before
     /// any read) every `eval` call -- so this never needs clearing between
     /// calls, only a valid initial fill at construction.
-    sdist_cache: Vec<Sdist>,
+    sdist_cache: Vec<BigRational>,
 }
 
 impl LeafClassification {
@@ -355,7 +294,7 @@ impl LeafClassification {
             persisting_satisfied: Vec::new(),
             numeric_improved: Vec::new(),
             numeric_unsatisfied: Vec::new(),
-            sdist_cache: vec![Sdist::Int(BigInt::zero()); n_leaves],
+            sdist_cache: vec![BigRational::zero(); n_leaves],
         }
     }
 
@@ -391,7 +330,7 @@ pub struct NumericNovelty {
     /// landing in a different partition than its parent, never touches
     /// these at all).
     parent_prop_true: Vec<Option<bool>>,
-    parent_numeric: Vec<Option<(Sdist, bool)>>,
+    parent_numeric: Vec<Option<(BigRational, bool)>>,
 }
 
 #[pymethods]
