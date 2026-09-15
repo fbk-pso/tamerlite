@@ -188,12 +188,15 @@ pub fn split_expression(exp: &[ExpressionNode]) -> PyResult<Vec<Vec<ExpressionNo
 /// A borrowed view of a numeric `ExpressionNode`'s value. Where
 /// `get_rational_from_expression_node` always hands back an owned
 /// `BigRational` (cloning either the `BigInt` or the `BigRational` behind
-/// the node, since ownership is what its other callers -- which store the
-/// value or feed it to `rational_to_f64` -- actually need), a comparison or
-/// a zero-check needs no ownership at all. Kept local to this module: it's
-/// only useful to callers happy to `match` on which variant they got, which
-/// `get_rational_from_expression_node`'s callers outside `internal_evaluate`
-/// are not.
+/// the node, for the callers that genuinely need to store or mutate the
+/// result -- `search_space.rs`'s duration-bound computation is the
+/// remaining one), a comparison or a zero-check needs no ownership at all.
+/// (A caller that only needs the value once, e.g. to convert it to `f64`,
+/// has a cheaper option than either of these: `expression_node_to_f64`,
+/// `expressions.rs`, reads straight through without ever constructing an
+/// owned `BigRational`.) Kept local to this module: it's only useful to
+/// callers happy to `match` on which variant they got, which
+/// `get_rational_from_expression_node`'s remaining owning callers are not.
 #[derive(Clone, Copy)]
 enum NumRef<'a> {
     Int(&'a BigInt),

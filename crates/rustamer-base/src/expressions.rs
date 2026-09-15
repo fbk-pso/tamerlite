@@ -21,7 +21,7 @@ use pyo3::{exceptions::PyValueError, prelude::*};
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use crate::interpreted_functions::{register_interpreted_function, IfReturnType};
-use crate::utils::big_rational_to_py_fraction;
+use crate::utils::{big_rational_to_py_fraction, integer_to_f64, rational_to_f64};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ExpressionNode {
@@ -87,13 +87,29 @@ impl ExpressionManager {
     }
 }
 
-pub fn get_rational_from_expression_node(exp: &ExpressionNode) -> PyResult<BigRational> {
+/// Reads an owned `BigRational` out of `exp`.
+/// Only use this when the caller actually needs to *own* the result (store
+/// it, mutate it, return it).
+pub(crate) fn get_rational_from_expression_node(exp: &ExpressionNode) -> PyResult<BigRational> {
     if let ExpressionNode::Int(v) = exp {
-        Ok(BigRational::from_integer(*v.clone()))
+        Ok(BigRational::from_integer((**v).clone()))
     } else if let ExpressionNode::Rational(v) = exp {
-        Ok(*v.clone())
+        Ok((**v).clone())
     } else {
         Err(PyValueError::new_err("Expected a number!"))
+    }
+}
+
+/// Reads `exp`'s numeric value straight into `f64`, without ever
+/// constructing an owned `BigRational`/`BigInt` -- `integer_to_f64`/
+/// `rational_to_f64` (`utils.rs`) already take a borrow. For a caller that
+/// only needs the value once (not ownership), this is strictly cheaper
+/// than `rational_to_f64(&get_rational_from_expression_node(exp)?)`.
+pub(crate) fn expression_node_to_f64(exp: &ExpressionNode) -> PyResult<f64> {
+    match exp {
+        ExpressionNode::Int(v) => Ok(integer_to_f64(v)),
+        ExpressionNode::Rational(v) => Ok(rational_to_f64(v)),
+        _ => Err(PyValueError::new_err("Expected a number!")),
     }
 }
 

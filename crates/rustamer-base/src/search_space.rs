@@ -592,12 +592,8 @@ impl SearchSpace {
             let mut ub: f64 = 0.0;
             if let Some(duration) = duration {
                 let d = duration;
-                lb = -rational_to_f64(&get_rational_from_expression_node(&internal_evaluate(
-                    &d.0, state,
-                )?)?);
-                ub = rational_to_f64(&get_rational_from_expression_node(&internal_evaluate(
-                    &d.1, state,
-                )?)?);
+                lb = -expression_node_to_f64(&internal_evaluate(&d.0, state)?)?;
+                ub = expression_node_to_f64(&internal_evaluate(&d.1, state)?)?;
                 if d.2 {
                     lb -= self.epsilon;
                 }
