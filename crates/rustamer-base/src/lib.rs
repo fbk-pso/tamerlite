@@ -48,4 +48,4 @@ pub use search::{
 };
 pub use search_space::{py_get_fluents, SearchSpace, SearchSpaceTrait};
 pub use search_state::State;
-pub use structures::{Action, Effect, Event, Timing};
+pub use structures::{Action, Effect, Event, Fluent, Object, Timing};

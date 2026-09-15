@@ -18,6 +18,7 @@
 use super::expressions::*;
 use super::interpreted_functions::*;
 use super::search_state::*;
+use super::structures::Fluent;
 use super::utils::*;
 use num::{BigInt, Zero};
 use num_rational::BigRational;
@@ -340,7 +341,7 @@ fn num_div(a: NumRef, b: NumRef) -> PyResult<ExpressionNode> {
 #[pyo3(signature = (exp, assignments, evaluate_interpreted_functions=false))]
 pub fn simplify(
     exp: Vec<PyExpressionNode>,
-    assignments: FxHashMap<usize, PyExpressionNode>,
+    assignments: FxHashMap<Fluent, PyExpressionNode>,
     evaluate_interpreted_functions: bool,
 ) -> PyResult<Vec<PyExpressionNode>> {
     // This function simplifies the given expression using the given assignments.
@@ -653,7 +654,7 @@ pub fn evaluate(exp: Vec<PyExpressionNode>, state: &State) -> PyResult<PyExpress
 }
 
 pub trait FluentValueTrait {
-    fn get_value(&self, fluent: usize) -> &ExpressionNode;
+    fn get_value(&self, fluent: Fluent) -> &ExpressionNode;
 }
 
 pub fn internal_evaluate(
