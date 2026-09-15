@@ -62,6 +62,32 @@ class FluentKind(IntEnum):
     OBJECT = 3
 
 
+@dataclass(order=True, frozen=True, repr=False)
+class Fluent:
+    """A fluent's identity."""
+
+    idx: int
+
+    def __hash__(self) -> int:
+        return self.idx
+
+    def __repr__(self) -> str:
+        return str(self.idx)
+
+
+@dataclass(order=True, frozen=True, repr=False)
+class Object:
+    """An object's identity."""
+
+    idx: int
+
+    def __hash__(self) -> int:
+        return self.idx
+
+    def __repr__(self) -> str:
+        return str(self.idx)
+
+
 @dataclass(eq=True, frozen=True)
 class FluentDomain:
     """The set of values one fluent can hold, as the heuristics need it.
@@ -84,7 +110,7 @@ class FluentDomain:
     """
 
     kind: FluentKind
-    objects: tuple[int, ...] = ()
+    objects: tuple[Object, ...] = ()
 
     def __post_init__(self) -> None:
         assert self.kind is FluentKind.OBJECT or len(self.objects) == 0
@@ -98,12 +124,12 @@ class OperatorNode:
 
 @dataclass(eq=True, frozen=True)
 class FluentNode:
-    fluent: int
+    fluent: Fluent
 
 
 @dataclass(eq=True, frozen=True)
 class ObjectNode:
-    object: int
+    object: Object
 
 
 @dataclass(eq=True, frozen=True)
@@ -164,11 +190,11 @@ def make_rational_constant_node(numerator: int, denominator: int) -> ExpressionN
     return Fraction(numerator=numerator, denominator=denominator)
 
 
-def make_object_node(oid: int) -> ExpressionNode:
-    return ObjectNode(oid)
+def make_object_node(obj: Object) -> ExpressionNode:
+    return ObjectNode(obj)
 
 
-def make_fluent_node(fluent: int) -> ExpressionNode:
+def make_fluent_node(fluent: Fluent) -> ExpressionNode:
     return FluentNode(fluent)
 
 
@@ -201,7 +227,7 @@ def split_expression(exp: Expression) -> tuple[Expression, ...]:
     return tuple(res)
 
 
-def get_fluents(exp: Expression) -> Iterator[int]:
+def get_fluents(exp: Expression) -> Iterator[Fluent]:
     for e in exp:
         if isinstance(e, FluentNode):
             yield e.fluent
@@ -223,7 +249,7 @@ def clear_interpreted_function_cache() -> None:
 
 @dataclass(eq=True, frozen=True)
 class Effect:
-    fluent: int
+    fluent: Fluent
     value: Expression
 
 
@@ -309,8 +335,8 @@ class State:
         else:
             return False
 
-    def get_value(self, fluent: int) -> ConstantNode:
-        return self.assignments[fluent]
+    def get_value(self, fluent: Fluent) -> ConstantNode:
+        return self.assignments[fluent.idx]
 
     def clone(self):
         assignments = list(self.assignments)
@@ -325,7 +351,7 @@ class MutexChecker:
     def __init__(
         self,
         event_fluents: list[
-            list[tuple[set[int], set[int], set[int], set[int], set[int]]]
+            list[tuple[set[Fluent], set[Fluent], set[Fluent], set[Fluent], set[Fluent]]]
         ],
     ):
         self._event_fluents = event_fluents
@@ -353,7 +379,7 @@ class PrecedenceChecker:
     def __init__(
         self,
         event_fluents: list[
-            list[tuple[set[int], set[int], set[int], set[int], set[int]]]
+            list[tuple[set[Fluent], set[Fluent], set[Fluent], set[Fluent], set[Fluent]]]
         ],
     ):
         self._event_fluents = event_fluents
@@ -378,7 +404,7 @@ class PrecedenceChecker:
         return res
 
 
-def get_fluent_value(fluent: int, state: State) -> ConstantNode:
+def get_fluent_value(fluent: Fluent, state: State) -> ConstantNode:
     return state.get_value(fluent)
 
 
@@ -450,7 +476,7 @@ def evaluate(exp: Expression, state: State) -> ConstantNode:
 
 def simplify(
     exp: Expression,
-    assignments: dict[int, ConstantNode],
+    assignments: dict[Fluent, ConstantNode],
     evaluate_interpreted_functions: bool = False,
 ) -> Expression:
     """This function simplifies the given expression using the given assignments.
@@ -676,7 +702,7 @@ class SearchSpace(SearchSpaceABC):
         events: dict[Action, list[tuple[Timing, Event]]],
         actions: list[Action],
         compression_safe_actions: list[bool] | None,
-        action_objects: list[list[int]] | None,
+        action_objects: list[list[Object]] | None,
         obj_to_prev_actions_map: list[set[Action]] | None,
         initial_state: list[ConstantNode] | None = None,
         goal: Expression | None = None,
@@ -717,7 +743,7 @@ class SearchSpace(SearchSpaceABC):
         self._counter = 0
 
         event_fluents: list[
-            list[tuple[set[int], set[int], set[int], set[int], set[int]]]
+            list[tuple[set[Fluent], set[Fluent], set[Fluent], set[Fluent], set[Fluent]]]
         ] = [[] for _ in actions]
         for a, le in self._events.items():
             duration = self._actions_duration[a.idx]
@@ -874,9 +900,8 @@ class SearchSpace(SearchSpaceABC):
             new_state.active_conditions.add(c)
         # apply effects
         for eff in e.effects:
-            f = eff.fluent
             v = evaluate(eff.value, state)
-            new_state.assignments[f] = v
+            new_state.assignments[eff.fluent.idx] = v
         # check active conditions
         for c in new_state.active_conditions:
             if not evaluate(c, new_state):
@@ -927,7 +952,7 @@ class SearchSpace(SearchSpaceABC):
             and self._obj_to_prev_actions_map is not None
         ):
             for obj in self._action_objects[action.idx]:
-                prev_actions = self._obj_to_prev_actions_map[obj]
+                prev_actions = self._obj_to_prev_actions_map[obj.idx]
                 if not prev_actions or action in prev_actions:
                     continue
 

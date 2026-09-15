@@ -23,6 +23,8 @@ from unified_planning.model import Problem
 
 from tamerlite.core import (
     Expression,
+    Fluent,
+    Object,
     make_bool_constant_node,
     make_fluent_node,
     make_int_constant_node,
@@ -82,7 +84,7 @@ def construct_numeric_exp_rec(offset=0, depth=0) -> tuple:
             ),
         )
     elif kind == "fluent":
-        return (make_fluent_node(1),)
+        return (make_fluent_node(Fluent(1)),)
 
     num_operands = 2
     if kind in ["+", "*"]:
@@ -107,7 +109,7 @@ def construct_exp_rec(offset=0, depth=0) -> tuple:
     if kind == "bool":
         return (make_bool_constant_node(bool(random.randint(0, 1))),)
     elif kind == "fluent":
-        return (make_fluent_node(0),)
+        return (make_fluent_node(Fluent(0)),)
 
     num_operands = 2
     if kind == "not":
@@ -177,11 +179,11 @@ def parse_expression_rec(node):
 
         if fname == "FluentNode":
             kwargs = {kw.arg: _const_value(kw.value) for kw in node.keywords}
-            return make_fluent_node(kwargs["fluent"])
+            return make_fluent_node(Fluent(kwargs["fluent"]))
 
         if fname == "ObjectNode":
             kwargs = {kw.arg: _const_value(kw.value) for kw in node.keywords}
-            return make_object_node(kwargs["object"])
+            return make_object_node(Object(kwargs["object"]))
 
         if fname == "OperatorNode":
             kwargs = {kw.arg: kw.value for kw in node.keywords}
@@ -249,7 +251,7 @@ def _canonical_evaluated_value(v):
     if t is Fraction:
         return ("real", v.numerator, v.denominator)
     if t.__name__ == "ObjectNode":
-        return ("object", v.object)
+        return ("object", v.object.idx)
     raise AssertionError(f"evaluate() returned an unexpected type {t!r}: {v!r}")
 
 
