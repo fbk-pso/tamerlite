@@ -560,12 +560,6 @@ class Encoder:
         actions_affecting_fluent: dict[Fluent, set[int]] = {}
         action_to_dependency_fluents: dict[int, set[Fluent]] = {}
         for ra in reachable_actions:
-            # `ra` comes from `heuristic.reachable_actions`, which is not
-            # guaranteed to be the same object -- nor, under the Rust
-            # backend, hash/eq-equal to the same object -- as the canonical
-            # `Action` instance keying `events`/`self.events`. Re-fetch the
-            # canonical instance by index (a plain list lookup) before using
-            # it as a dict key.
             a = self._actions[ra.idx]
             action_to_dependency_fluents[a.idx] = self._action_read_fluents(a)
 
