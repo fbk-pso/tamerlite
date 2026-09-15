@@ -257,10 +257,6 @@ UNINFORMED_SEARCH_RISK: dict[str, set[str]] = {
     "if_reals_condition_effect_pizza": {"blind"},
 }
 
-# Problems where `hmax_explicit` legitimately diverges between backends -- see
-# the `PERFORMANCE_PRUNES` entry below and `test_heuristic_values`.
-HMAX_EXPLICIT_BACKEND_DIVERGENT = ("if_object_effect", "if_object_argument_and_return")
-
 # (problem_name(s), predicate, reason). Every entry is a performance prune, not
 # a correctness exclusion: on the heaviest instances these combinations run for
 # minutes under an unbounded (timeout=None) search and/or exhaust available
@@ -389,23 +385,6 @@ PERFORMANCE_PRUNES: list[
         lambda c: c.heuristic == "hmax_explicit",
         "hmax_explicit never terminates on this problem's unbounded "
         "monotonic interpreted-function effect",
-    ),
-    # Not a performance prune like everything above -- a known, documented
-    # heuristic-precision divergence. `hmax_explicit` cross-products an
-    # effect's argument fluents' already-reachable values on the Rust side,
-    # while Python's classifier over-approximates any non-constant object
-    # effect to "every object of the type"; the two backends can legitimately
-    # reach different (both admissible) values on these two problems' non-
-    # constant object effects. `test_heuristic_values` pins both values under
-    # backend-specific keys instead of asserting them equal; the generic
-    # `test_heuristics`/`test_search_algorithms`, which only compare recorded
-    # metrics across backends, have no such escape hatch, so the combination
-    # is pruned here instead of forced to (dis)agree.
-    (
-        HMAX_EXPLICIT_BACKEND_DIVERGENT,
-        lambda c: c.heuristic == "hmax_explicit",
-        "hmax_explicit legitimately diverges between backends on this "
-        "problem's non-constant object effect",
     ),
 ]
 
@@ -586,7 +565,7 @@ def test_heuristic_fixed_values():
         ),
     ]
     for problem, values, path in problems:
-        for disable_rustamer in [False]:
+        for disable_rustamer in [True, False]:
             reload_tamerlite(disable_rustamer)
             from tamerlite.core import HFF, HAdd, HMax, HMaxExplicit
 
@@ -642,12 +621,7 @@ def test_heuristic_values(problem, data_regression):
     """Regression-pins the heuristic values every heuristic (and its
     `_no_numbers`/`_inadmissible` variants where applicable) computes on
     generated states of every problem in `PROBLEMS`, asserting the two
-    backends agree exactly -- except `hmax_explicit` on
-    `HMAX_EXPLICIT_BACKEND_DIVERGENT`, which is deliberately excluded from
-    that cross-check (see the `PERFORMANCE_PRUNES` entry for why) and instead
-    recorded under backend-specific keys so the divergence stays pinned
-    rather than silently accepted or forced to agree by weakening either
-    implementation."""
+    backends agree exactly."""
 
     values: dict[str, list[int | None]] = {}
     for disable_rustamer in [True, False]:
@@ -681,15 +655,8 @@ def test_heuristic_values(problem, data_regression):
             (HMaxExplicit, "hmax_explicit"),
         ]
         for heuristic_class, heuristic_name in heuristic_classes:
-            # `hmax_explicit` legitimately diverges between backends on these
-            # problems (see `HMAX_EXPLICIT_BACKEND_DIVERGENT`); pin both
-            # values under backend-specific keys instead of skipping.
-            backend_divergent = (
-                heuristic_name == "hmax_explicit"
-                and problem.name in HMAX_EXPLICIT_BACKEND_DIVERGENT
-            )
             reason = prune_reason(problem, "wastar", heuristic_name, True, True)
-            if reason is not None and not backend_divergent:
+            if reason is not None:
                 continue
 
             inadmissible_numeric_heuristic_flags = [False]
@@ -718,9 +685,7 @@ def test_heuristic_values(problem, data_regression):
                         computed_values.append(h_val)
 
                     values_key = heuristic_name
-                    if backend_divergent:
-                        values_key += "_python" if disable_rustamer else "_rust"
-                    elif inadmissible_numeric_heuristic:
+                    if inadmissible_numeric_heuristic:
                         values_key += "_inadmissible"
                     if values_key not in values:
                         values[values_key] = computed_values
@@ -2429,14 +2394,24 @@ def test_hmax_explicit_partial_callable_can_raise():
     combinations that never jointly occur in any real reachable state. A
     *partial* callable (one that's only defined for some inputs) can
     therefore be called out-of-domain and raise, purely as an artifact of the
-    over-approximation -- documented in `TODO.txt` as an open question, not a
-    bug to silently swallow. hff/hadd/hmax, by contrast, evaluate an IF
-    effect as an opaque `complex_numeric_effect` and never call the callable
-    during heuristic computation at all, so they must NOT raise here."""
+    cross-product -- documented in `TODO.txt` as an open question, not a bug
+    to silently swallow. hff/hadd/hmax, by contrast, evaluate an IF effect as
+    an opaque `complex_numeric_effect` and never call the callable during
+    heuristic computation at all, so they must NOT raise here.
+
+    The out-of-domain call is only reachable once `allowed` actually varies
+    *and* the goal sits beyond the round in which it varies -- with only
+    `move`/two locations (as an earlier version of this problem had),
+    `allowed` never leaves `{True}` and the goal is reached at depth 1 before
+    any widened value is ever used, so neither backend calls the callable at
+    all. `block` widens `allowed` to `{True, False}`; the third location
+    pushes the goal one round further out so `move`'s effect gets
+    re-evaluated against the widened set."""
 
     Loc = UserType("Loc")
     l1 = Object("l1", Loc)
     l2 = Object("l2", Loc)
+    l3 = Object("l3", Loc)
 
     def partial_next(loc, allowed):
         # Only defined when `allowed` is `True` -- `hmax_explicit`'s
@@ -2444,7 +2419,7 @@ def test_hmax_explicit_partial_callable_can_raise():
         # call this with `allowed=False` regardless.
         if not allowed:
             raise ValueError("next_loc is undefined when not allowed")
-        return l2 if loc == l1 else l1
+        return {l1: l2, l2: l3, l3: l3}[loc]
 
     IF_partial_next = InterpretedFunction(
         "partial_next", Loc, OrderedDict(loc=Loc, allowed=BoolType()), partial_next
@@ -2455,20 +2430,24 @@ def test_hmax_explicit_partial_callable_can_raise():
     move = InstantaneousAction("move")
     move.add_precondition(allowed)
     move.add_effect(at, IF_partial_next(at, allowed))
+    block = InstantaneousAction("block")
+    block.add_effect(allowed, False)
 
     problem = Problem("if_hmax_explicit_partial_callable")
     problem.add_fluent(at)
     problem.add_fluent(allowed)
     problem.add_object(l1)
     problem.add_object(l2)
+    problem.add_object(l3)
     problem.add_action(move)
+    problem.add_action(block)
     problem.set_initial_value(at, l1)
     problem.set_initial_value(allowed, True)
-    problem.add_goal(Equals(at, l2))
+    problem.add_goal(Equals(at, l3))
 
     for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
-        from tamerlite.core import HFF, HAdd, HMax
+        from tamerlite.core import HFF, HAdd, HMax, HMaxExplicit
 
         lifted_problem, ground_problem, map_back_action_instance = (
             testing_utils.compile_problem(problem)
@@ -2497,6 +2476,22 @@ def test_hmax_explicit_partial_callable_can_raise():
             )
             # Must not raise: the IF effect is opaque to these heuristics.
             heuristic.eval(init_state, ss)
+
+        # Must raise: `hmax_explicit` calls the callable on the cross-product
+        # of `at`'s and `allowed`'s reachable values, including
+        # `(l1, False)`, which `partial_next` doesn't support.
+        assert encoder.goal is not None
+        hmax_explicit: Heuristic = HMaxExplicit(
+            encoder.actions,
+            encoder.fluent_domains,
+            encoder.events,
+            encoder.goal,
+            internal_caching=True,
+            cache_value_in_state=False,
+            inadmissible_numeric_heuristic_variant=False,
+        )
+        with pytest.raises(ValueError, match="next_loc is undefined"):
+            hmax_explicit.eval(init_state, ss)
 
 
 def test_interpreted_functions_compression_safe_actions_reached():
