@@ -30,9 +30,6 @@ use super::heuristics::*;
 use super::search::*;
 use super::search_space::*;
 use super::search_state::*;
-use super::Action;
-
-pub type SearchResult = (Option<Vec<Action>>, FxHashMap<String, String>);
 
 #[derive(Debug, Clone)]
 pub struct StateContainer {
@@ -155,8 +152,8 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
     let mut expanded_states = 0;
     let mut generated_states = 1;
     if early_termination && ss.goal_reached(&init, None)? {
-        metrics.insert("expanded_states".to_string(), expanded_states.to_string());
-        metrics.insert("goal_depth".to_string(), init.g.to_string());
+        metrics.insert("expanded_states", expanded_states.to_string());
+        metrics.insert("goal_depth", init.g.to_string());
         return Ok((Some(extract_path(&init)), metrics));
     }
 
@@ -222,8 +219,8 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
                     "multiqueue_search: goal found — expanded={} depth={}",
                     expanded_states, state.g
                 );
-                metrics.insert("expanded_states".to_string(), expanded_states.to_string());
-                metrics.insert("goal_depth".to_string(), state.g.to_string());
+                metrics.insert("expanded_states", expanded_states.to_string());
+                metrics.insert("goal_depth", state.g.to_string());
                 return Ok((Some(extract_path(state)), metrics));
             }
 
@@ -236,8 +233,8 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
                         "multiqueue_search: goal found — expanded={} depth={}",
                         expanded_states, s.g
                     );
-                    metrics.insert("expanded_states".to_string(), expanded_states.to_string());
-                    metrics.insert("goal_depth".to_string(), s.g.to_string());
+                    metrics.insert("expanded_states", expanded_states.to_string());
+                    metrics.insert("goal_depth", s.g.to_string());
                     return Ok((Some(extract_path(&s)), metrics));
                 }
                 let s = Rc::new(s);
@@ -277,6 +274,6 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
         "multiqueue_search: no solution found — expanded={}",
         expanded_states
     );
-    metrics.insert("expanded_states".to_string(), expanded_states.to_string());
+    metrics.insert("expanded_states", expanded_states.to_string());
     Ok((None, metrics))
 }

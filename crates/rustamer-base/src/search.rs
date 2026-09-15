@@ -36,7 +36,7 @@ use super::search_state::*;
 use super::structures::Action;
 use super::utils::PersistentList;
 
-pub type SearchResult = (Option<Vec<Action>>, FxHashMap<String, String>);
+pub type SearchResult = (Option<Vec<Action>>, FxHashMap<&'static str, String>);
 
 trait HasTodoLen {
     fn todo_len(&self) -> usize;
@@ -198,8 +198,8 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     let mut expanded_states = 0;
     let mut generated_states = 1;
     if early_termination && ss.goal_reached(&init, None)? {
-        metrics.insert("expanded_states".to_string(), expanded_states.to_string());
-        metrics.insert("goal_depth".to_string(), init.g.to_string());
+        metrics.insert("expanded_states", expanded_states.to_string());
+        metrics.insert("goal_depth", init.g.to_string());
         return Ok((Some(extract_path(&init)), metrics));
     }
 
@@ -218,7 +218,7 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     let init_h = match heuristic.eval(&init, ss)? {
         Some(v) => v,
         None => {
-            metrics.insert("expanded_states".to_string(), 0.to_string());
+            metrics.insert("expanded_states", 0.to_string());
             return Ok((None, metrics));
         }
     };
@@ -249,8 +249,8 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
                 "wastar_search: goal found — expanded={} depth={}",
                 expanded_states, state.g
             );
-            metrics.insert("expanded_states".to_string(), expanded_states.to_string());
-            metrics.insert("goal_depth".to_string(), state.g.to_string());
+            metrics.insert("expanded_states", expanded_states.to_string());
+            metrics.insert("goal_depth", state.g.to_string());
             return Ok((Some(extract_path(&state)), metrics));
         } else {
             let successors_iter = ss
@@ -274,8 +274,8 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
                         "wastar_search: goal found — expanded={} depth={}",
                         expanded_states, s.g
                     );
-                    metrics.insert("expanded_states".to_string(), expanded_states.to_string());
-                    metrics.insert("goal_depth".to_string(), s.g.to_string());
+                    metrics.insert("expanded_states", expanded_states.to_string());
+                    metrics.insert("goal_depth", s.g.to_string());
                     return Ok((Some(extract_path(&s)), metrics));
                 }
                 if let Some(v) = h {
@@ -294,7 +294,7 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         "wastar_search: no solution found — expanded={}",
         expanded_states
     );
-    metrics.insert("expanded_states".to_string(), expanded_states.to_string());
+    metrics.insert("expanded_states", expanded_states.to_string());
     Ok((None, metrics))
 }
 
@@ -316,8 +316,8 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
     let mut expanded_states = 0;
     let mut generated_states = 1;
     if early_termination && ss.goal_reached(&init, None)? {
-        metrics.insert("expanded_states".to_string(), expanded_states.to_string());
-        metrics.insert("goal_depth".to_string(), init.g.to_string());
+        metrics.insert("expanded_states", expanded_states.to_string());
+        metrics.insert("goal_depth", init.g.to_string());
         return Ok((Some(extract_path(&init)), metrics));
     }
 
@@ -337,7 +337,7 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
     let init_h = match heuristic.eval(&init, ss)? {
         Some(v) => v,
         None => {
-            metrics.insert("expanded_states".to_string(), 0.to_string());
+            metrics.insert("expanded_states", 0.to_string());
             return Ok((None, metrics));
         }
     };
@@ -370,8 +370,8 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
                 "wastar_search_memory_bounded: goal found — expanded={} depth={}",
                 expanded_states, state.g
             );
-            metrics.insert("expanded_states".to_string(), expanded_states.to_string());
-            metrics.insert("goal_depth".to_string(), state.g.to_string());
+            metrics.insert("expanded_states", expanded_states.to_string());
+            metrics.insert("goal_depth", state.g.to_string());
             return Ok((Some(extract_path(&state)), metrics));
         } else {
             let successors_iter = ss
@@ -395,8 +395,8 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
                         "wastar_search_memory_bounded: goal found — expanded={} depth={}",
                         expanded_states, s.g
                     );
-                    metrics.insert("expanded_states".to_string(), expanded_states.to_string());
-                    metrics.insert("goal_depth".to_string(), s.g.to_string());
+                    metrics.insert("expanded_states", expanded_states.to_string());
+                    metrics.insert("goal_depth", s.g.to_string());
                     return Ok((Some(extract_path(&s)), metrics));
                 }
                 if let Some(v) = h {
@@ -415,7 +415,7 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
         "wastar_search_memory_bounded: no solution found — expanded={}",
         expanded_states
     );
-    metrics.insert("expanded_states".to_string(), expanded_states.to_string());
+    metrics.insert("expanded_states", expanded_states.to_string());
     Ok((None, metrics))
 }
 
@@ -454,8 +454,8 @@ fn basic_search<S: SearchSpaceTrait>(
     let mut generated_states = 1;
 
     if early_termination && ss.goal_reached(&init, None)? {
-        metrics.insert("expanded_states".to_string(), expanded_states.to_string());
-        metrics.insert("goal_depth".to_string(), init.g.to_string());
+        metrics.insert("expanded_states", expanded_states.to_string());
+        metrics.insert("goal_depth", init.g.to_string());
         return Ok((Some(extract_path(&init)), metrics));
     }
     open.push_back(init);
@@ -489,8 +489,8 @@ fn basic_search<S: SearchSpaceTrait>(
                 "{}: goal found — expanded={} depth={}",
                 name, expanded_states, state.g
             );
-            metrics.insert("expanded_states".to_string(), expanded_states.to_string());
-            metrics.insert("goal_depth".to_string(), state.g.to_string());
+            metrics.insert("expanded_states", expanded_states.to_string());
+            metrics.insert("goal_depth", state.g.to_string());
             return Ok((Some(extract_path(&state)), metrics));
         } else {
             for rs in ss.get_successor_states_iter(&state) {
@@ -500,8 +500,8 @@ fn basic_search<S: SearchSpaceTrait>(
                         "{}: goal found — expanded={} depth={}",
                         name, expanded_states, s.g
                     );
-                    metrics.insert("expanded_states".to_string(), expanded_states.to_string());
-                    metrics.insert("goal_depth".to_string(), s.g.to_string());
+                    metrics.insert("expanded_states", expanded_states.to_string());
+                    metrics.insert("goal_depth", s.g.to_string());
                     return Ok((Some(extract_path(&s)), metrics));
                 }
                 open.push_back(s);
@@ -510,7 +510,7 @@ fn basic_search<S: SearchSpaceTrait>(
         }
     }
     info!("{}: no solution found — expanded={}", name, expanded_states);
-    metrics.insert("expanded_states".to_string(), expanded_states.to_string());
+    metrics.insert("expanded_states", expanded_states.to_string());
     Ok((None, metrics))
 }
 
@@ -532,15 +532,15 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     let mut generated_states = 1;
 
     if early_termination && ss.goal_reached(&init, None)? {
-        metrics.insert("expanded_states".to_string(), expanded_states.to_string());
-        metrics.insert("goal_depth".to_string(), init.g.to_string());
+        metrics.insert("expanded_states", expanded_states.to_string());
+        metrics.insert("goal_depth", init.g.to_string());
         return Ok((Some(extract_path(&init)), metrics));
     }
 
     let mut best_h = match heuristic.eval(&init, ss)? {
         Some(v) => v,
         None => {
-            metrics.insert("expanded_states".to_string(), 0.to_string());
+            metrics.insert("expanded_states", 0.to_string());
             return Ok((None, metrics));
         }
     };
@@ -567,8 +567,8 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
                 "ehc_search: goal found — expanded={} depth={}",
                 expanded_states, state.g
             );
-            metrics.insert("expanded_states".to_string(), expanded_states.to_string());
-            metrics.insert("goal_depth".to_string(), state.g.to_string());
+            metrics.insert("expanded_states", expanded_states.to_string());
+            metrics.insert("goal_depth", state.g.to_string());
             return Ok((Some(extract_path(&state)), metrics));
         } else {
             if dedup {
@@ -601,8 +601,8 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
                         "ehc_search: goal found — expanded={} depth={}",
                         expanded_states, s.g
                     );
-                    metrics.insert("expanded_states".to_string(), expanded_states.to_string());
-                    metrics.insert("goal_depth".to_string(), s.g.to_string());
+                    metrics.insert("expanded_states", expanded_states.to_string());
+                    metrics.insert("goal_depth", s.g.to_string());
                     return Ok((Some(extract_path(&s)), metrics));
                 }
                 if let Some(v) = h {
@@ -630,6 +630,6 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         "ehc_search: no solution found — expanded={}",
         expanded_states
     );
-    metrics.insert("expanded_states".to_string(), expanded_states.to_string());
+    metrics.insert("expanded_states", expanded_states.to_string());
     Ok((None, metrics))
 }
