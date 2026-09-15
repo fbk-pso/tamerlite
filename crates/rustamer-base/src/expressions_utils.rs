@@ -124,37 +124,37 @@ pub fn split_expression(exp: &[ExpressionNode]) -> PyResult<Vec<Vec<ExpressionNo
                 match e {
                     ExpressionNode::And(v) => {
                         let operands = v.iter().map(|&j| j - last).collect();
-                        new_exp.push(make_operator("and".to_string(), operands)?);
+                        new_exp.push(make_operator("and", operands)?);
                     }
                     ExpressionNode::Or(v) => {
                         let operands = v.iter().map(|&j| j - last).collect();
-                        new_exp.push(make_operator("or".to_string(), operands)?);
+                        new_exp.push(make_operator("or", operands)?);
                     }
                     ExpressionNode::Plus(v) => {
                         let operands = v.iter().map(|&j| j - last).collect();
-                        new_exp.push(make_operator("+".to_string(), operands)?);
+                        new_exp.push(make_operator("+", operands)?);
                     }
                     ExpressionNode::Times(v) => {
                         let operands = v.iter().map(|&j| j - last).collect();
-                        new_exp.push(make_operator("*".to_string(), operands)?);
+                        new_exp.push(make_operator("*", operands)?);
                     }
                     ExpressionNode::Equals(i1, i2) => {
-                        new_exp.push(make_operator("==".to_string(), vec![i1 - last, i2 - last])?);
+                        new_exp.push(make_operator("==", vec![i1 - last, i2 - last])?);
                     }
                     ExpressionNode::LE(i1, i2) => {
-                        new_exp.push(make_operator("<=".to_string(), vec![i1 - last, i2 - last])?);
+                        new_exp.push(make_operator("<=", vec![i1 - last, i2 - last])?);
                     }
                     ExpressionNode::LT(i1, i2) => {
-                        new_exp.push(make_operator("<".to_string(), vec![i1 - last, i2 - last])?);
+                        new_exp.push(make_operator("<", vec![i1 - last, i2 - last])?);
                     }
                     ExpressionNode::Minus(i1, i2) => {
-                        new_exp.push(make_operator("-".to_string(), vec![i1 - last, i2 - last])?);
+                        new_exp.push(make_operator("-", vec![i1 - last, i2 - last])?);
                     }
                     ExpressionNode::Div(i1, i2) => {
-                        new_exp.push(make_operator("/".to_string(), vec![i1 - last, i2 - last])?);
+                        new_exp.push(make_operator("/", vec![i1 - last, i2 - last])?);
                     }
                     ExpressionNode::Not(i) => {
-                        new_exp.push(make_operator("not".to_string(), vec![i - last])?);
+                        new_exp.push(make_operator("not", vec![i - last])?);
                     }
                     ExpressionNode::InterpretedFunction {
                         func_id,
