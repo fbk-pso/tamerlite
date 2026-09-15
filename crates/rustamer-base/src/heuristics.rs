@@ -1494,7 +1494,7 @@ impl DeleteRelaxationHeuristic {
                                     } else {
                                         effects.push(expression_manager.put(&vec![
                                             ExpressionNode::Fluent(eff.fluent),
-                                            make_operator("not".to_string(), vec![0])?,
+                                            make_operator("not", vec![0])?,
                                         ]));
                                     }
                                 } else {
@@ -1504,7 +1504,7 @@ impl DeleteRelaxationHeuristic {
                                     );
                                     effects.push(expression_manager.put(&vec![
                                         ExpressionNode::Fluent(eff.fluent),
-                                        make_operator("not".to_string(), vec![0])?,
+                                        make_operator("not", vec![0])?,
                                     ]));
                                 }
                             } else {
@@ -1514,7 +1514,7 @@ impl DeleteRelaxationHeuristic {
                                 );
                                 effects.push(expression_manager.put(&vec![
                                     ExpressionNode::Fluent(eff.fluent),
-                                    make_operator("not".to_string(), vec![0])?,
+                                    make_operator("not", vec![0])?,
                                 ]));
                             }
                         }
@@ -1539,14 +1539,14 @@ impl DeleteRelaxationHeuristic {
                                 effects.push(expression_manager.put(&vec![
                                     ExpressionNode::Fluent(eff.fluent),
                                     eff.value[0].clone(),
-                                    make_operator("==".to_string(), vec![0, 1])?,
+                                    make_operator("==", vec![0, 1])?,
                                 ]));
                             } else {
                                 for o in objs.iter() {
                                     effects.push(expression_manager.put(&vec![
                                         ExpressionNode::Fluent(eff.fluent),
                                         ExpressionNode::Object(*o),
-                                        make_operator("==".to_string(), vec![0, 1])?,
+                                        make_operator("==", vec![0, 1])?,
                                     ]));
                                 }
                             }
@@ -1802,17 +1802,14 @@ impl DeleteRelaxationHeuristic {
                     if *value {
                         vec![ExpressionNode::Fluent(f)]
                     } else {
-                        vec![
-                            ExpressionNode::Fluent(f),
-                            make_operator("not".to_string(), vec![0])?,
-                        ]
+                        vec![ExpressionNode::Fluent(f), make_operator("not", vec![0])?]
                     }
                 }
                 _ => {
                     vec![
                         ExpressionNode::Fluent(f),
                         v.clone(),
-                        make_operator("==".to_string(), vec![0, 1])?,
+                        make_operator("==", vec![0, 1])?,
                     ]
                 }
             };

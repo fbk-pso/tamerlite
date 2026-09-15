@@ -171,8 +171,8 @@ impl PyExpressionNode {
     }
 }
 
-pub fn make_operator(kind: String, operands: Vec<usize>) -> PyResult<ExpressionNode> {
-    match kind.as_str() {
+pub fn make_operator(kind: &str, operands: Vec<usize>) -> PyResult<ExpressionNode> {
+    match kind {
         "and" => Ok(ExpressionNode::And(operands)),
         "or" => Ok(ExpressionNode::Or(operands)),
         "not" => Ok(ExpressionNode::Not(operands[0])),
@@ -183,14 +183,12 @@ pub fn make_operator(kind: String, operands: Vec<usize>) -> PyResult<ExpressionN
         "-" => Ok(ExpressionNode::Minus(operands[0], operands[1])),
         "*" => Ok(ExpressionNode::Times(operands)),
         "/" => Ok(ExpressionNode::Div(operands[0], operands[1])),
-        &_ => Err(PyValueError::new_err(
-            "Unknown operator: ".to_owned() + kind.as_str(),
-        )),
+        _ => Err(PyValueError::new_err(format!("Unknown operator: {kind}"))),
     }
 }
 
 #[pyfunction]
-pub fn make_operator_node(kind: String, operands: Vec<usize>) -> PyResult<PyExpressionNode> {
+pub fn make_operator_node(kind: &str, operands: Vec<usize>) -> PyResult<PyExpressionNode> {
     Ok(PyExpressionNode {
         v: make_operator(kind, operands)?,
     })
