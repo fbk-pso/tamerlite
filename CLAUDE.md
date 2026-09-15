@@ -151,9 +151,31 @@ Adjust `--space-limit` (MB) down for a single test file/case, and prefer targeti
 
 [src/tamerlite/core/__init__.py](src/tamerlite/core/__init__.py) is the dispatch point. The exposed interface is identical between backends:
 
-- **Search algorithms**: `wastar_search`, `astar_search`, `gbfs_search`, `bfs_search`, `dfs_search`, `ehc_search`, `multiqueue_search` (and `*_memory_bounded` variants).
+- **Search algorithms**: `wastar_search`, `astar_search`, `gbfs_search`, `bfs_search`, `dfs_search`, `ehc_search`, `multiqueue_search`, `novbfs_search` (and `*_memory_bounded` variants for every one but `novbfs_search`, which has none in either core).
 - **Heuristics**: `HFF`, `HAdd`, `HMax`, `HMaxExplicit`, `CustomHeuristic`.
-- **Data structures**: `SearchSpace`, `State`, `Action`, `Event`, `Effect`, `Timing`, `Expression`.
+- **Data structures**: `SearchSpace`, `State`, `Action`, `Event`, `Effect`, `Timing`, `Expression`, `NumericNovelty`.
+
+**`novbfs_search`/`NumericNovelty`** (partitioned numeric-novelty search,
+`search="novbfs_hg"`/`"novbfs_lg"`) is mirrored between
+[novelty.py](src/tamerlite/core/novelty.py)/[search.py](src/tamerlite/core/search.py)
+and [novelty.rs](crates/rustamer-base/src/novelty.rs)/[search.rs](crates/rustamer-base/src/search.rs),
+same invariant as the object-equality rewrite below: the returned novelty
+class and hence `expanded_states`/`goal_depth` must agree exactly
+(`tests/test_novbfs.py::test_novbfs_cross_backend_parity`, plus
+`test_novbfs_metrics_regression`'s pinned YAMLs, run on both backends).
+Unlike most of this file's cross-backend invariants, the two cores' internal
+leaf **numbering** does *not* need to match -- `novelty.rs`'s module
+docstring works through why the algorithm's outcome is invariant to leaf-id
+permutation. Both cores additionally cache a parent state's own features
+(satisfied? how close?) once per *expansion* rather than recomputing per
+child -- `NumericNovelty.begin_expansion()`, called once per popped state
+before scoring its successors; a state's own `eval()` call still runs once
+per generated child, in generation order, matching every other search's
+dedup/heuristic-evaluation contract. `NumericNovelty` classifies an `"=="`
+subgoal as numeric-vs-object the same way the heuristics below do --
+statically, from `FluentDomain`, via the same
+`search_space.is_object_typed_operand`/`is_object_typed` (below) rather than
+a second, runtime-probe-based classifier.
 
 Rust implementation lives in [crates/rustamer-base/src/](crates/rustamer-base/src/) (core library) and [crates/rustamer/src/](crates/rustamer/src/) (PyO3 bindings).
 
@@ -164,8 +186,17 @@ compile down to the same `"=="` / `ExpressionNode::Equals` node -- there is no
 separate operator kind for the two. `DeleteRelaxationHeuristic._is_numeric_leaf_expression`
 (`src/tamerlite/core/heuristics.py`) / `is_numeric_leaf_expression`
 (`crates/rustamer-base/src/heuristics.rs`) therefore decide per-operand, via
-`_is_object_typed_operand`/`is_object_typed`: an operand is object-typed if it's
-a literal object, or a fluent whose `FluentDomain` is the object variant.
+`search_space.is_object_typed_operand`/`is_object_typed`: an operand is
+object-typed if it's a literal object, or a fluent whose `FluentDomain` is
+the object variant. `is_object_typed_operand` (`src/tamerlite/core/search_space.py`)
+is a free function, not a method on `DeleteRelaxationHeuristic` -- it's shared
+verbatim with `NumericNovelty` (`src/tamerlite/core/novelty.py`, see above),
+which is also why it additionally classifies an interpreted-function operand
+(from its declared `return_type`), a case `DeleteRelaxationHeuristic` never
+reaches (`_simplify_leaf` bails out on `has_interpreted_function` first).
+`is_object_typed` (`crates/rustamer-base/src/heuristics.rs`) is `pub(crate)`
+for the identical reason: `novelty.rs` reuses it verbatim, including its own
+`InterpretedFunction` arm that `is_numeric_leaf_expression` never exercises.
 This replaced an earlier version that only checked for a literal `ObjectNode`
 operand -- a fluent compared to *another* fluent of the same object type
 (`loc_a == loc_b`) has no such literal, so it was misclassified as numeric,
