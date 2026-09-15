@@ -15,12 +15,78 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 
+use std::fmt;
+
 use num::rational::BigRational;
 
 use pyo3::prelude::*;
 
 use super::expressions::{ExpressionNode, PyExpressionNode};
 use super::utils::{big_rational_to_py_fraction, get_big_rational};
+
+/// A fluent's identity.
+#[pyclass(frozen, eq, hash, from_py_object)]
+#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord)]
+pub struct Fluent {
+    pub idx: usize,
+}
+
+#[pymethods]
+impl Fluent {
+    #[new]
+    pub fn new(idx: usize) -> Self {
+        Fluent { idx }
+    }
+
+    #[getter]
+    pub fn idx(&self) -> usize {
+        self.idx
+    }
+
+    fn __repr__(&self) -> String {
+        format!("{:?}", self)
+    }
+}
+
+/// Prints as the bare index, not the derive-`Debug` shape (`Fluent { idx: 3
+/// }`), so `ExpressionNode`'s derived `Debug` keeps emitting `Fluent(3)`
+/// exactly as it did when the payload was a bare `usize`.
+impl fmt::Debug for Fluent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.idx)
+    }
+}
+
+/// An object's identity.
+#[pyclass(frozen, eq, hash, from_py_object)]
+#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord)]
+pub struct Object {
+    pub idx: usize,
+}
+
+#[pymethods]
+impl Object {
+    #[new]
+    pub fn new(idx: usize) -> Self {
+        Object { idx }
+    }
+
+    #[getter]
+    pub fn idx(&self) -> usize {
+        self.idx
+    }
+
+    fn __repr__(&self) -> String {
+        format!("{:?}", self)
+    }
+}
+
+/// See `Fluent`'s `Debug` impl -- same repr contract, for `ExpressionNode::Object`.
+impl fmt::Debug for Object {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.idx)
+    }
+}
 
 /// Invariant: within one `Event`'s `effects`, no two `Effect`s target the
 /// same `fluent`. `Encoder._convert_effects` establishes this
@@ -30,14 +96,14 @@ use super::utils::{big_rational_to_py_fraction, get_big_rational};
 #[pyclass(frozen, from_py_object)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Effect {
-    pub fluent: usize,
+    pub fluent: Fluent,
     pub value: Vec<ExpressionNode>,
 }
 
 #[pymethods]
 impl Effect {
     #[new]
-    fn new(fluent: usize, value: Vec<PyExpressionNode>) -> Self {
+    fn new(fluent: Fluent, value: Vec<PyExpressionNode>) -> Self {
         Effect {
             fluent,
             value: value.into_iter().map(|e| e.v).collect(),
@@ -45,7 +111,7 @@ impl Effect {
     }
 
     #[getter]
-    fn fluent(&self) -> usize {
+    fn fluent(&self) -> Fluent {
         self.fluent
     }
 

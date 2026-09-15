@@ -20,15 +20,15 @@ from fractions import Fraction
 from typing import Any, cast
 
 import unified_planning as up
+from unified_planning.model import Fluent as UPFluent
 from unified_planning.model import (
-    Fluent,
     FNode,
     InterpretedFunction,
-    Object,
     Problem,
     TimepointKind,
     Type,
 )
+from unified_planning.model import Object as UPObject
 from unified_planning.model.types import _UserType
 from unified_planning.model.walkers import ExpressionQuantifiersRemover, Nnf
 from unified_planning.plans import (
@@ -44,7 +44,9 @@ from tamerlite.core import (
     Effect,
     Event,
     Expression,
+    Fluent,
     HMax,
+    Object,
     SearchSpace,
     Timing,
     get_fluents,
@@ -67,7 +69,7 @@ def has_interpreted_functions(kind: up.model.ProblemKind) -> bool:
     )
 
 
-def extract_objects(exp: FNode) -> Iterable[Object]:
+def extract_objects(exp: FNode) -> Iterable[UPObject]:
     stack: list[FNode] = [exp]
     while len(stack) > 0:
         exp = stack.pop()
@@ -77,7 +79,7 @@ def extract_objects(exp: FNode) -> Iterable[Object]:
             stack.extend(exp.args)
 
 
-def extract_fluents(exp: FNode) -> Iterable[Fluent]:
+def extract_fluents(exp: FNode) -> Iterable[UPFluent]:
     stack: list[FNode] = [exp]
     while len(stack) > 0:
         exp = stack.pop()
@@ -98,9 +100,9 @@ def extract_and_arguments(expressions: list[FNode]) -> Iterable[FNode]:
 
 
 # Value recorded for a fluent appearing in a goal conjunct: the raw constant
-# (bool/int/Fraction/Object), or a `(value, False)` pair marking a negated
+# (bool/int/Fraction/UPObject), or a `(value, False)` pair marking a negated
 # fluent-equals-constant comparison.
-ConstantValue = bool | int | Fraction | Object
+ConstantValue = bool | int | Fraction | UPObject
 GoalFluentValue = ConstantValue | tuple[ConstantValue, bool]
 
 
@@ -158,8 +160,10 @@ class Encoder:
         # passes below) reads it while building its own `HMax` heuristic.
         self._objects_by_id = sorted(problem.all_objects, key=lambda o: o.name)
         self._object_names: list[str] = [o.name for o in self._objects_by_id]
-        self._object_ids = {name: i for i, name in enumerate(self._object_names)}
-        self._objects: dict[str, list[int]] = {}
+        self._object_ids = {
+            name: Object(i) for i, name in enumerate(self._object_names)
+        }
+        self._objects: dict[str, list[Object]] = {}
         for ut in problem.user_types:
             self._objects[cast(_UserType, ut).name] = [
                 self._object_ids[o.name] for o in problem.objects(ut)
@@ -295,7 +299,7 @@ class Encoder:
                         problem.epsilon,
                     )
 
-    def _encode(self, relevant_fluents: set[int] | None) -> None:
+    def _encode(self, relevant_fluents: set[Fluent] | None) -> None:
         """(Re)builds everything whose numbering depends on which fluents
         exist: `_fluents`/`_fluent_ids`/`_fluent_domains`, the `Converter` (a
         fresh instance every call -- `DagWalker` memoizes conversions per
@@ -327,7 +331,7 @@ class Encoder:
             self.considered_actions if relevant_fluents is not None else None
         )
 
-    def _build_fluents(self, relevant_fluents: set[int] | None) -> None:
+    def _build_fluents(self, relevant_fluents: set[Fluent] | None) -> None:
         """Sets `_fluents`/`_fluent_ids`/`_fluent_domains`. See `_encode` for what
         `relevant_fluents` means.
 
@@ -368,23 +372,23 @@ class Encoder:
                     raise NotImplementedError
                 fluent_domains[name] = d
             self._fluents: list[str] = sorted(fluent_domains.keys())
-            self._fluent_ids = {f: i for i, f in enumerate(self._fluents)}
+            self._fluent_ids = {f: Fluent(i) for i, f in enumerate(self._fluents)}
             self._fluent_domains = [fluent_domains[f] for f in self._fluents]
         else:
             # Pass 2: filter by pass-1 index rather than converting indices to
-            # names first -- cheaper (int-set membership, no intermediate
+            # names first -- cheaper (Fluent-set membership, no intermediate
             # `set[str]`) and skips the name lookup entirely. `self._fluents`
             # stays sorted since it's a subsequence of a sorted list.
             old_fluent_domains = dict(
                 zip(self._fluents, self._fluent_domains, strict=True)
             )
             self._fluents = [
-                f for i, f in enumerate(self._fluents) if i in relevant_fluents
+                f for i, f in enumerate(self._fluents) if Fluent(i) in relevant_fluents
             ]
-            self._fluent_ids = {f: i for i, f in enumerate(self._fluents)}
+            self._fluent_ids = {f: Fluent(i) for i, f in enumerate(self._fluents)}
             self._fluent_domains = [old_fluent_domains[f] for f in self._fluents]
 
-    def _build_actions_duration(self, relevant_fluents: set[int] | None) -> None:
+    def _build_actions_duration(self, relevant_fluents: set[Fluent] | None) -> None:
         """Sets `_actions_duration`/`_is_temporal`. See `_encode` for what
         `relevant_fluents` means.
 
@@ -412,12 +416,14 @@ class Encoder:
         to be considered.
         """
         if relevant_fluents is not None and not any(
-            # `next(iter(...), None) is not None` (not a bare truthiness
-            # check) because `get_fluents` returns a plain `list[int]` on the
-            # Rust backend but an `Iterator[int]` on the Python one, and
-            # fluent id `0` is falsy -- a bare `bool(...)`/`any(...)` over the
-            # ids themselves would misreport "no fluent read" whenever the
-            # only fluent read happens to be id 0.
+            # `next(iter(...), None) is not None`, not a bare
+            # `bool(get_fluents(...))`/bare `any(...)` over the fluents
+            # themselves: `get_fluents` returns a plain `list[Fluent]` on the
+            # Rust backend but an `Iterator[Fluent]` on the Python one, and an
+            # `Iterator` has no `__bool__` at all, so that shape has to hold
+            # regardless of whether `Fluent(0)` itself is truthy (it is --
+            # unlike the raw `int` id `0` this replaced, a `Fluent` is a
+            # regular object with no `__bool__`/`__len__` override).
             entry is not None
             and (
                 next(iter(get_fluents(entry[0])), None) is not None
@@ -473,7 +479,7 @@ class Encoder:
         # narrowing the wider ExpressionNode element type to ConstantNode is safe.
         return cast(list[ConstantNode], initial_state)
 
-    def _action_read_fluents(self, action: Action) -> set[int]:
+    def _action_read_fluents(self, action: Action) -> set[Fluent]:
         """The fluents an action reads outside of its own effect values: its
         event conditions and its duration bounds.
 
@@ -493,7 +499,7 @@ class Encoder:
         them keyed by the fluent the effect writes, to close over "an
         effect's RHS matters only if its target matters".
         """
-        fluents: set[int] = set()
+        fluents: set[Fluent] = set()
         for _, e in self.events[action]:
             fluents.update(get_fluents(e.conditions))
             for c in e.end_conditions:
@@ -551,8 +557,8 @@ class Encoder:
             self._search_space.initial_state()
         )
 
-        actions_affecting_fluent: dict[int, set[int]] = {}
-        action_to_dependency_fluents: dict[int, set[int]] = {}
+        actions_affecting_fluent: dict[Fluent, set[int]] = {}
+        action_to_dependency_fluents: dict[int, set[Fluent]] = {}
         for ra in reachable_actions:
             # `ra` comes from `heuristic.reachable_actions`, which is not
             # guaranteed to be the same object -- nor, under the Rust
@@ -577,7 +583,7 @@ class Encoder:
         checked_fluents = [False] * len(self._fluents)
         stack = list(get_fluents(self.goal))
         for f in stack:
-            checked_fluents[f] = True
+            checked_fluents[f.idx] = True
 
         relevant_actions: set[int] = set()
         while len(stack) > 0 and len(relevant_actions) < len(
@@ -587,13 +593,13 @@ class Encoder:
             relevant_actions.update(actions_affecting_fluent.get(f, set()))
             for action_idx in actions_affecting_fluent.get(f, set()):
                 for f in action_to_dependency_fluents[action_idx]:
-                    if not checked_fluents[f]:
-                        checked_fluents[f] = True
+                    if not checked_fluents[f.idx]:
+                        checked_fluents[f.idx] = True
                         stack.append(f)
 
         return [a for a in self._actions if a.idx in relevant_actions]
 
-    def _compute_relevant_fluents(self, actions: list[Action]) -> set[int]:
+    def _compute_relevant_fluents(self, actions: list[Action]) -> set[Fluent]:
         """Fluents that can affect search outcome: the least fixpoint of a
         backward slice from what search actually reads, over `actions`.
 
@@ -626,10 +632,10 @@ class Encoder:
         fact -- dedup and the heuristics both just operate on the
         (potentially already-compacted) state.
         """
-        relevant_fluents: set[int] = set(get_fluents(self.goal))  # type: ignore[arg-type]
+        relevant_fluents: set[Fluent] = set(get_fluents(self.goal))  # type: ignore[arg-type]
         # Adjacency for the closure: fluent -> fluents read by the RHS of any
         # effect that writes it.
-        written_from: dict[int, set[int]] = {}
+        written_from: dict[Fluent, set[Fluent]] = {}
         for a in actions:
             relevant_fluents.update(self._action_read_fluents(a))
             for _, e in self.events[a]:
@@ -649,7 +655,7 @@ class Encoder:
 
     def _compute_obj_to_prev_actions_map(
         self,
-    ) -> tuple[list[list[int]], list[set[Action]]]:
+    ) -> tuple[list[list[Object]], list[set[Action]]]:
         """
         This method produces two outputs:
             1. A list of lists of object ids, where each inner list corresponds
@@ -659,7 +665,7 @@ class Encoder:
                 object has no such constraint).
 
         Returns:
-            Tuple[List[List[int]], List[Set[Action]]]:
+            Tuple[List[List[Object]], List[Set[Action]]]:
                 - List of object id lists for each action.
                 - List, indexed by object id, of the set of actions.
         """
@@ -670,8 +676,8 @@ class Encoder:
             for i, obj in enumerate(group):
                 prev_equivalent_object[obj] = None if i == 0 else group[i - 1]
 
-        obj_to_actions_map: dict[Object, set[Action]] = {}
-        action_objects: list[list[int]] = [[] for _ in range(len(self.actions))]
+        obj_to_actions_map: dict[UPObject, set[Action]] = {}
+        action_objects: list[list[Object]] = [[] for _ in range(len(self.actions))]
         for action in self._problem.actions:
             ai = self._map_back_action_instance(action())
             assert ai is not None
@@ -689,18 +695,18 @@ class Encoder:
         ]
         for obj, prev_obj in prev_equivalent_object.items():
             if prev_obj is not None and prev_obj in obj_to_actions_map:
-                obj_to_prev_actions_map[self._object_ids[obj.name]] = (
+                obj_to_prev_actions_map[self._object_ids[obj.name].idx] = (
                     obj_to_actions_map[prev_obj]
                 )
 
         return action_objects, obj_to_prev_actions_map
 
-    def _compute_equivalent_objects(self) -> list[list[Object]]:
+    def _compute_equivalent_objects(self) -> list[list[UPObject]]:
         """
         Compute groups of equivalent objects in the problem.
 
         Returns:
-            List[List[Object]]: A list of equivalence classes, where each inner
+            List[List[UPObject]]: A list of equivalence classes, where each inner
             list contains objects that are equivalent to each other.
         """
 
@@ -714,7 +720,7 @@ class Encoder:
         )
         obj_to_init_assignments = self._compute_obj_to_init_assignments_map()
 
-        objects: dict[Type, list[Object]] = {}
+        objects: dict[Type, list[UPObject]] = {}
         for obj in self._problem.all_objects:
             if obj.type not in objects:
                 objects[obj.type] = []
@@ -800,24 +806,24 @@ class Encoder:
                     if cost is not None:
                         yield cost
 
-    def _extract_domain_objects(self) -> set[Object]:
+    def _extract_domain_objects(self) -> set[UPObject]:
         """
         Extract all objects that appear in the problem's domain.
 
         Returns:
-            Set[Object]: A set of all objects that appear in the domain.
+            Set[UPObject]: A set of all objects that appear in the domain.
         """
 
         return set(self._lifted_problem.domain_constants)
 
-    def _extract_interpreted_function_tainted_objects(self) -> set[Object]:
+    def _extract_interpreted_function_tainted_objects(self) -> set[UPObject]:
         """
         Extract objects that an interpreted function (IF) call could observe
         or produce, and which must therefore be excluded from equivalence.
 
         An IF is opaque: we can't reason about its behavior, only require its
         inputs be swap-invariant. Numeric/boolean values are swap-invariant by
-        construction. Object-typed arguments or return values are not and they
+        construction. UPObject-typed arguments or return values are not and they
         can change under the swap, and the IF is free to react to that
         difference however it wants. So for every IF call reachable from the
         lifted problem, every object compatible with an object-typed parameter
@@ -825,7 +831,7 @@ class Encoder:
         could actually be substituted in) is tainted.
 
         Returns:
-            Set[Object]: A set of objects that must be treated as
+            Set[UPObject]: A set of objects that must be treated as
             non-equivalent because of an interpreted function.
         """
 
@@ -854,7 +860,7 @@ class Encoder:
         for exp in expressions:
             ifun_calls.update(extractor.get(exp))
 
-        tainted_objects: set[Object] = set()
+        tainted_objects: set[UPObject] = set()
         for call in ifun_calls:
             ifun = call.interpreted_function()
             for param in ifun.signature:
@@ -866,7 +872,7 @@ class Encoder:
 
     def _compute_obj_to_init_assignments_map(
         self,
-    ) -> dict[Object, list[tuple[FNode, FNode]]]:
+    ) -> dict[UPObject, list[tuple[FNode, FNode]]]:
         """
         Build a mapping from each object to the initial-value assignments it
         participates in, either as a fluent argument or as the assigned value.
@@ -878,12 +884,12 @@ class Encoder:
         conservatively excluded from equivalence altogether.
 
         Returns:
-            Dict[Object, List[Tuple[FNode, FNode]]]: Mapping from objects to
+            Dict[UPObject, List[Tuple[FNode, FNode]]]: Mapping from objects to
             the list of (fluent expression, value expression) assignments they
             appear in.
         """
 
-        obj_to_assignments: dict[Object, list[tuple[FNode, FNode]]] = {}
+        obj_to_assignments: dict[UPObject, list[tuple[FNode, FNode]]] = {}
         for fluent_exp, value_exp in self._lifted_problem.initial_values.items():
             objs = {arg.object() for arg in fluent_exp.args if arg.is_object_exp()}
             if value_exp.is_object_exp():
@@ -895,8 +901,8 @@ class Encoder:
     def _extract_goal_obj_to_fluent_map(
         self,
     ) -> tuple[
-        dict[Object, set[tuple[Fluent, tuple[Object, ...], GoalFluentValue]]],
-        set[Object],
+        dict[UPObject, set[tuple[UPFluent, tuple[UPObject, ...], GoalFluentValue]]],
+        set[UPObject],
     ]:
         """
         Build a mapping from objects to goal fluents they appear in.
@@ -914,8 +920,8 @@ class Encoder:
         conjuncts elsewhere in the goal.
 
         Returns:
-            Tuple[Dict[Object, Set[Tuple[Fluent, Tuple[Object, ...], GoalFluentValue]]],
-            Set[Object]]:
+            Tuple[Dict[UPObject, Set[Tuple[UPFluent, Tuple[UPObject, ...],
+            GoalFluentValue]]], Set[UPObject]]:
                 - A dictionary mapping each object to the set of associated
                   recognized-conjunct entries.
                 - The set of objects appearing in some unrecognized conjunct,
@@ -923,7 +929,7 @@ class Encoder:
         """
 
         obj_to_fluent_map: dict[
-            Object, set[tuple[Fluent, tuple[Object, ...], GoalFluentValue]]
+            UPObject, set[tuple[UPFluent, tuple[UPObject, ...], GoalFluentValue]]
         ] = {obj: set() for obj in self._problem.all_objects}
 
         def extract_fluent_equals_constant_exp(
@@ -957,7 +963,7 @@ class Encoder:
 
                 return True
 
-        tainted_objects: set[Object] = set()
+        tainted_objects: set[UPObject] = set()
         stack: list[FNode] = list(self._problem.goals)
         while len(stack) > 0:
             exp = stack.pop()
@@ -994,12 +1000,12 @@ class Encoder:
 
     def _are_equivalent_objects(
         self,
-        obj1: Object,
-        obj2: Object,
+        obj1: UPObject,
+        obj2: UPObject,
         goal_obj_to_fluent_map: dict[
-            Object, set[tuple[Fluent, tuple[Object, ...], GoalFluentValue]]
+            UPObject, set[tuple[UPFluent, tuple[UPObject, ...], GoalFluentValue]]
         ],
-        obj_to_init_assignments: dict[Object, list[tuple[FNode, FNode]]],
+        obj_to_init_assignments: dict[UPObject, list[tuple[FNode, FNode]]],
     ) -> bool:
         """
         Determine whether two objects are equivalent in the problem, i.e.
@@ -1008,10 +1014,11 @@ class Encoder:
         unchanged.
 
         Args:
-            obj1 (Object): The first object to compare.
-            obj2 (Object): The second object to compare.
+            obj1 (UPObject): The first object to compare.
+            obj2 (UPObject): The second object to compare.
             goal_obj_to_fluent_map
-                (Dict[Object, Set[Tuple[Fluent, Tuple[Object, ...], GoalFluentValue]]]):
+                (Dict[UPObject, Set[Tuple[UPFluent, Tuple[UPObject, ...],
+                GoalFluentValue]]]):
                 Mapping from objects to the recognized goal fluents they
                 appear in (as an argument or as the compared value). Objects
                 appearing in an unrecognized goal conjunct are excluded from
@@ -1019,7 +1026,7 @@ class Encoder:
                 `_extract_goal_obj_to_fluent_map`), so this map can be trusted
                 to precisely and completely describe every goal constraint
                 that could possibly distinguish obj1/obj2.
-            obj_to_init_assignments (Dict[Object, List[Tuple[FNode, FNode]]]):
+            obj_to_init_assignments (Dict[UPObject, List[Tuple[FNode, FNode]]]):
                 Mapping from objects to the initial-value assignments
                 (explicit or default) they appear in (as an argument or as
                 the value).
@@ -1028,11 +1035,11 @@ class Encoder:
             bool: True if the objects are equivalent; False otherwise.
         """
 
-        def transpose(x: Object) -> Object:
+        def transpose(x: UPObject) -> UPObject:
             return obj2 if x == obj1 else obj1 if x == obj2 else x
 
         def transpose_constant(c: ConstantValue) -> ConstantValue:
-            return transpose(c) if isinstance(c, Object) else c
+            return transpose(c) if isinstance(c, UPObject) else c
 
         def transpose_value(v: GoalFluentValue) -> GoalFluentValue:
             if isinstance(v, tuple):
@@ -1101,9 +1108,9 @@ class Encoder:
 
         return actions
 
-    def _extract_conditions(self) -> tuple[dict[Fluent, set[bool]], set[Fluent]]:
-        fluent_to_conditions: dict[Fluent, set[bool]] = {}
-        complex_condition_fluents: set[Fluent] = set()
+    def _extract_conditions(self) -> tuple[dict[UPFluent, set[bool]], set[UPFluent]]:
+        fluent_to_conditions: dict[UPFluent, set[bool]] = {}
+        complex_condition_fluents: set[UPFluent] = set()
         for action in self._problem.actions:
             action_conditions: list[list[FNode]]
             if isinstance(action, up.model.DurativeAction):
@@ -1162,8 +1169,8 @@ class Encoder:
     def _effects_interfere_with_conditions(
         self,
         action: "up.model.DurativeAction",
-        fluent_to_conditions: dict[Fluent, set[bool]],
-        complex_condition_fluents: set[Fluent],
+        fluent_to_conditions: dict[UPFluent, set[bool]],
+        complex_condition_fluents: set[UPFluent],
     ) -> bool:
         for timing, effects in action.effects.items():
             if timing.timepoint.kind == TimepointKind.START and timing.delay == 0:
@@ -1231,7 +1238,7 @@ class Encoder:
         return self._fluents
 
     @property
-    def fluent_ids(self) -> dict[str, int]:
+    def fluent_ids(self) -> dict[str, Fluent]:
         """`str(fluent) -> id`, over exactly the fluents in `fluents` -- so a
         lookup raises `KeyError` both for a fluent the problem never defined and
         for one compaction dropped as irrelevant (see `fluents`)."""
@@ -1242,7 +1249,7 @@ class Encoder:
         return self._fluent_domains
 
     @property
-    def object_ids(self) -> dict[str, int]:
+    def object_ids(self) -> dict[str, Object]:
         return self._object_ids
 
     @property
@@ -1390,8 +1397,8 @@ class Encoder:
             dec_effects,
             assign_effects,
         ) in fluent_to_effects.items():
-            fluent_id = self.fluent_ids.get(self._convert_fluent(fluent))
-            if fluent_id is None:
+            tl_fluent = self.fluent_ids.get(self._convert_fluent(fluent))
+            if tl_fluent is None:
                 # Compaction dropped this fluent as irrelevant -- nothing
                 # reads it, so the effect that would write it can't matter
                 # either (see `_encode`/`_compute_relevant_fluents`).
@@ -1443,7 +1450,7 @@ class Encoder:
                     value = em.Minus(fluent, em.Plus(dec_effects))
 
             converted_value = self._convert_expression(value)
-            converted_effects.append(Effect(fluent_id, converted_value))
+            converted_effects.append(Effect(tl_fluent, converted_value))
 
         return converted_effects
 

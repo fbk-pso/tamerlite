@@ -117,7 +117,7 @@ pub enum FluentDomain {
     Bool,
     Int,
     Real,
-    Objects(Vec<usize>),
+    Objects(Vec<Object>),
 }
 
 /// Wire tag for `FluentDomain`'s kind. Not a `#[pyclass]`: `FluentDomain`
@@ -220,9 +220,9 @@ struct Operator {
     action: Action,
     conditions: HeuristicExpression,
     effects: Vec<Expression>,
-    constant_increase_effects: FxHashMap<usize, f64>,
-    constant_assign_effects: FxHashMap<usize, f64>,
-    complex_numeric_effects: FxHashMap<usize, Expression>,
+    constant_increase_effects: FxHashMap<Fluent, f64>,
+    constant_assign_effects: FxHashMap<Fluent, f64>,
+    complex_numeric_effects: FxHashMap<Fluent, Expression>,
     cost: f64,
 }
 
@@ -270,7 +270,7 @@ struct OperatorHmax {
     conditions: Vec<Vec<ExpressionNode>>,
     condition_expressions: Vec<Expression>,
     effects: Vec<Effect>,
-    effect_fluents: Vec<Vec<usize>>,
+    effect_fluents: Vec<Vec<Fluent>>,
     cost: f64,
 }
 
@@ -816,7 +816,7 @@ fn simplify_object_equality(
     let objs2 = object_domain(f2, fluent_domains)?;
 
     let mut nodes: Vec<HeuristicExpressionNode> = Vec::new();
-    let push_conjunct = |o1: usize, o2: usize, expression_manager: &mut ExpressionManager| {
+    let push_conjunct = |o1: Object, o2: Object, expression_manager: &mut ExpressionManager| {
         let leaf1 = expression_manager.put(&vec![
             ExpressionNode::Fluent(f1),
             ExpressionNode::Object(o1),
@@ -831,7 +831,7 @@ fn simplify_object_equality(
     };
 
     if positive {
-        let objs2_set: FxHashSet<usize> = objs2.iter().copied().collect();
+        let objs2_set: FxHashSet<Object> = objs2.iter().copied().collect();
         for &o in objs1.iter() {
             if !objs2_set.contains(&o) {
                 continue;
@@ -899,9 +899,9 @@ fn simplify_object_equality(
 fn update_numeric_effects(
     effect: &Effect,
     expression_manager: &mut ExpressionManager,
-    constant_increase_effects: &mut FxHashMap<usize, f64>,
-    constant_assign_effects: &mut FxHashMap<usize, f64>,
-    complex_numeric_effects: &mut FxHashMap<usize, Expression>,
+    constant_increase_effects: &mut FxHashMap<Fluent, f64>,
+    constant_assign_effects: &mut FxHashMap<Fluent, f64>,
+    complex_numeric_effects: &mut FxHashMap<Fluent, Expression>,
 ) {
     if effect.value.len() == 1 {
         let v = match &effect.value[0] {
@@ -943,8 +943,8 @@ fn update_numeric_effects(
 /// # Returns
 ///
 /// Returns the fluent's object domain, or `None` if it is not object-typed.
-fn object_domain(fluent: usize, fluent_domains: &[FluentDomain]) -> Option<&[usize]> {
-    match fluent_domains.get(fluent)? {
+fn object_domain(fluent: Fluent, fluent_domains: &[FluentDomain]) -> Option<&[Object]> {
+    match fluent_domains.get(fluent.idx)? {
         FluentDomain::Objects(objs) => Some(objs),
         _ => None,
     }
@@ -1027,7 +1027,7 @@ fn is_numeric_leaf_expression(expr: &[ExpressionNode], fluent_domains: &[FluentD
 fn update_numeric_conditions(
     numeric_condition: &Expression,
     expression_manager: &ExpressionManager,
-    simple_numeric_conds: &mut FxHashMap<Expression, (Vec<usize>, Vec<f64>)>,
+    simple_numeric_conds: &mut FxHashMap<Expression, (Vec<Fluent>, Vec<f64>)>,
     lt_simple_numeric_conds: &mut FxHashSet<Expression>,
     complex_numeric_conds: &mut FxHashSet<Expression>,
     disable_numeric_reasoning: bool,
@@ -1072,7 +1072,7 @@ fn update_numeric_conditions(
 fn extract_fluents_weights_simple_numeric_condition(
     expr: &Expression,
     expression_manager: &ExpressionManager,
-) -> Option<(Vec<usize>, Vec<f64>, bool)> {
+) -> Option<(Vec<Fluent>, Vec<f64>, bool)> {
     let expr = expression_manager.force_get(expr);
     let root_node = expr.last()?;
     let (op1, op2) = match root_node {
@@ -1116,9 +1116,9 @@ fn extract_fluents_weights_simple_numeric_condition(
 ///
 /// # Returns
 ///
-/// Returns `Some(FxHashMap<Option<usize>, f64>)` mapping fluents to coefficients,
+/// Returns `Some(FxHashMap<Option<Fluent>, f64>)` mapping fluents to coefficients,
 /// with `None` representing the constant term. Returns `None` if the expression is non-linear.
-fn to_linear_polynomial(expr: &Vec<ExpressionNode>) -> Option<FxHashMap<Option<usize>, f64>> {
+fn to_linear_polynomial(expr: &Vec<ExpressionNode>) -> Option<FxHashMap<Option<Fluent>, f64>> {
     let zero = integer_to_rational(BigInt::from(0));
     let one = integer_to_rational(BigInt::from(1));
     let mut res = Vec::new();
@@ -1199,17 +1199,17 @@ fn to_linear_polynomial(expr: &Vec<ExpressionNode>) -> Option<FxHashMap<Option<u
         .unwrap()
         .into_iter()
         .map(|(f, v)| (f, rational_to_f64(&v)))
-        .collect::<FxHashMap<Option<usize>, f64>>()
+        .collect::<FxHashMap<Option<Fluent>, f64>>()
         .into()
 }
 
-fn constant_polynomial(v: BigRational) -> FxHashMap<Option<usize>, BigRational> {
+fn constant_polynomial(v: BigRational) -> FxHashMap<Option<Fluent>, BigRational> {
     let mut p = FxHashMap::with_hasher(FxBuildHasher);
     p.insert(None, v);
     p
 }
 
-fn is_constant_polynomial(polynomial: &FxHashMap<Option<usize>, BigRational>) -> bool {
+fn is_constant_polynomial(polynomial: &FxHashMap<Option<Fluent>, BigRational>) -> bool {
     polynomial.len() == 1 && polynomial.contains_key(&None)
 }
 
@@ -1223,7 +1223,7 @@ fn is_constant_polynomial(polynomial: &FxHashMap<Option<usize>, BigRational>) ->
 ///
 /// * `polynomial` - A mutable reference to a polynomial represented as a map of
 ///   fluents to coefficients.
-fn simplify_polynomial(polynomial: &mut FxHashMap<Option<usize>, BigRational>) {
+fn simplify_polynomial(polynomial: &mut FxHashMap<Option<Fluent>, BigRational>) {
     polynomial.retain(|key, value| !value.is_zero() || key.is_none());
 }
 
@@ -1252,7 +1252,7 @@ fn simplify_polynomial(polynomial: &mut FxHashMap<Option<usize>, BigRational>) {
 /// Returns `true` if the operator achieves the condition, otherwise `false`.
 fn achieves(
     operator: &Operator,
-    fluents: &[usize],
+    fluents: &[Fluent],
     weights: &Vec<f64>,
     max_net_effect: &mut f64,
     inadmissible_numeric_heuristic_variant: bool,
@@ -1309,7 +1309,7 @@ fn achieves(
 /// effect applies, or `Ok(None)` if the condition cannot be satisfied.
 fn repetitions(
     operator: &Operator,
-    fluents: &Vec<usize>,
+    fluents: &Vec<Fluent>,
     weights: &Vec<f64>,
     state: &State,
     inadmissible_numeric_heuristic_variant: bool,
@@ -1415,7 +1415,7 @@ pub struct DeleteRelaxationHeuristic {
     operators: Vec<Operator>,
     precondition_of: FxHashMap<Expression, Vec<OperatorID>>,
     empty_pre_operators: FxHashSet<OperatorID>,
-    simple_numeric_conds: FxHashMap<Expression, (Vec<usize>, Vec<f64>)>,
+    simple_numeric_conds: FxHashMap<Expression, (Vec<Fluent>, Vec<f64>)>,
     complex_numeric_conds: FxHashSet<Expression>,
     if_conds: FxHashSet<Expression>,
     achieved_simple_numeric_conds: Vec<Vec<Expression>>,
@@ -1461,18 +1461,18 @@ impl DeleteRelaxationHeuristic {
                 continue;
             };
             let mut a_extra_fluents: Vec<Expression> = Vec::new();
-            let f_cond = num_fluents + le.len() - 1;
+            let f_cond = Fluent::new(num_fluents + le.len() - 1);
             let mut cond = ExpressionNode::Fluent(f_cond);
             extra_goals.push(cond.clone());
             for (_, e) in le.iter() {
                 let mut effects: Vec<Expression> = Vec::new();
-                let mut constant_increase_effects: FxHashMap<usize, f64> =
+                let mut constant_increase_effects: FxHashMap<Fluent, f64> =
                     FxHashMap::with_hasher(FxBuildHasher);
-                let mut constant_assign_effects: FxHashMap<usize, f64> =
+                let mut constant_assign_effects: FxHashMap<Fluent, f64> =
                     FxHashMap::with_hasher(FxBuildHasher);
-                let mut complex_numeric_effects: FxHashMap<usize, Expression> =
+                let mut complex_numeric_effects: FxHashMap<Fluent, Expression> =
                     FxHashMap::with_hasher(FxBuildHasher);
-                let f = num_fluents;
+                let f = Fluent::new(num_fluents);
                 num_fluents += 1;
                 a_extra_fluents.push(expression_manager.put(&vec![ExpressionNode::Fluent(f)]));
                 effects.push(expression_manager.put(&vec![ExpressionNode::Fluent(f)]));
@@ -1482,7 +1482,7 @@ impl DeleteRelaxationHeuristic {
                     // there, the final `else` silently absorbed any type name
                     // it did not recognise, which is how a `UserType("int")`
                     // used to reach the numeric branch.
-                    match &fluent_domains[eff.fluent] {
+                    match &fluent_domains[eff.fluent.idx] {
                         FluentDomain::Bool => {
                             if eff.value.len() == 1 {
                                 if let ExpressionNode::Bool(value) = eff.value[0] {
@@ -1596,7 +1596,7 @@ impl DeleteRelaxationHeuristic {
 
         let mut precondition_of: FxHashMap<Expression, Vec<OperatorID>> =
             FxHashMap::with_hasher(FxBuildHasher);
-        let mut simple_numeric_conds: FxHashMap<Expression, (Vec<usize>, Vec<f64>)> =
+        let mut simple_numeric_conds: FxHashMap<Expression, (Vec<Fluent>, Vec<f64>)> =
             FxHashMap::with_hasher(FxBuildHasher);
         let mut lt_simple_numeric_conds: FxHashSet<Expression> =
             FxHashSet::with_hasher(FxBuildHasher);
@@ -1797,6 +1797,7 @@ impl DeleteRelaxationHeuristic {
         );
 
         for (f, v) in state.assignments.iter().enumerate() {
+            let f = Fluent::new(f);
             let k = match v {
                 ExpressionNode::Bool(value) => {
                     if *value {
@@ -2204,12 +2205,12 @@ impl ValueSet {
 }
 
 struct FluentAssignments<'a> {
-    fluents: &'a [usize],
+    fluents: &'a [Fluent],
     values: &'a [&'a ExpressionNode],
 }
 
 impl FluentValueTrait for FluentAssignments<'_> {
-    fn get_value(&self, fluent: usize) -> &ExpressionNode {
+    fn get_value(&self, fluent: Fluent) -> &ExpressionNode {
         let pos = self
             .fluents
             .iter()
@@ -2222,8 +2223,8 @@ impl FluentValueTrait for FluentAssignments<'_> {
 /// Fluent ids referenced by `exp`, deduplicated in first-occurrence order.
 /// Dedup also shrinks the cross-product: an expression referencing the same
 /// fluent twice (e.g. `x + x`) is a single cross-product dimension, not two.
-fn dedup_fluents(exp: &[ExpressionNode]) -> Vec<usize> {
-    let mut seen: FxHashSet<usize> = FxHashSet::with_hasher(FxBuildHasher);
+fn dedup_fluents(exp: &[ExpressionNode]) -> Vec<Fluent> {
+    let mut seen: FxHashSet<Fluent> = FxHashSet::with_hasher(FxBuildHasher);
     let mut out = Vec::new();
     for node in exp {
         if let ExpressionNode::Fluent(f) = node {
@@ -2242,7 +2243,7 @@ fn dedup_fluents(exp: &[ExpressionNode]) -> Vec<usize> {
 /// `Ok(false)` to stop early, propagated as `Ok(false)`; a completed
 /// enumeration returns `Ok(true)`.
 fn for_each_combination<'a>(
-    fluents: &[usize],
+    fluents: &[Fluent],
     assignments: &'a [ValueSet],
     ranges: &[(usize, usize)],
     cur: &mut Vec<&'a ExpressionNode>,
@@ -2254,10 +2255,10 @@ fn for_each_combination<'a>(
     }
     let mut idx: Vec<usize> = ranges.iter().map(|&(lo, _)| lo).collect();
     cur.clear();
-    cur.resize(k, &assignments[fluents[0]].values[idx[0]]);
+    cur.resize(k, &assignments[fluents[0].idx].values[idx[0]]);
     loop {
         for i in 0..k {
-            cur[i] = &assignments[fluents[i]].values[idx[i]];
+            cur[i] = &assignments[fluents[i].idx].values[idx[i]];
         }
         if !body(cur)? {
             return Ok(false);
@@ -2296,7 +2297,7 @@ fn for_each_combination<'a>(
 /// happens, and anything else (including empty) before.
 fn for_each_new_value(
     exp: &[ExpressionNode],
-    fluents: &[usize],
+    fluents: &[Fluent],
     assignments: &[ValueSet],
     old_sizes: &mut Vec<usize>,
     scratch: &mut Vec<ExpressionNode>,
@@ -2316,7 +2317,7 @@ fn for_each_new_value(
         return visit(value);
     }
 
-    let new_sizes: Vec<usize> = fluents.iter().map(|&f| assignments[f].len()).collect();
+    let new_sizes: Vec<usize> = fluents.iter().map(|&f| assignments[f.idx].len()).collect();
     if old_sizes.len() != k {
         old_sizes.clear();
         old_sizes.resize(k, 0);
@@ -2361,12 +2362,12 @@ pub struct HMaxExplicit {
     events: FxHashMap<Action, Vec<(Timing, Event)>>,
     goals: Vec<Vec<ExpressionNode>>,
     goal_expressions: Vec<Expression>,
-    expr_fluents: FxHashMap<Expression, Vec<usize>>,
+    expr_fluents: FxHashMap<Expression, Vec<Fluent>>,
     extra_fluents: FxHashMap<Action, Vec<Vec<ExpressionNode>>>,
     num_fluents: usize,
     operators: Vec<OperatorHmax>,
-    operator_conditions_fluents: Vec<FxHashSet<usize>>,
-    operator_effects_fluents: Vec<FxHashSet<usize>>,
+    operator_conditions_fluents: Vec<FxHashSet<Fluent>>,
+    operator_effects_fluents: Vec<FxHashSet<Fluent>>,
     internal_caching: HeuristicCache,
 }
 
@@ -2386,13 +2387,13 @@ impl HMaxExplicit {
 
         for (a, le) in events.iter() {
             let mut a_extra_fluents = Vec::new();
-            let f_cond = num_fluents + le.len() - 1;
+            let f_cond = Fluent::new(num_fluents + le.len() - 1);
             let mut cond: Vec<ExpressionNode> = vec![ExpressionNode::Fluent(f_cond)];
             extra_goals.push(cond.clone());
             for (_, e) in le.iter() {
                 let mut effects = Vec::new();
                 let mut conditions = Vec::new();
-                let f = num_fluents;
+                let f = Fluent::new(num_fluents);
                 num_fluents += 1;
                 a_extra_fluents.push(vec![ExpressionNode::Fluent(f)]);
                 effects.push(Effect {
@@ -2413,7 +2414,7 @@ impl HMaxExplicit {
                         .iter()
                         .map(|cond| expression_manager.put(cond))
                         .collect();
-                    let effect_fluents: Vec<Vec<usize>> =
+                    let effect_fluents: Vec<Vec<Fluent>> =
                         effects.iter().map(|e| dedup_fluents(&e.value)).collect();
                     operators.push(OperatorHmax {
                         action: *a,
@@ -2436,7 +2437,7 @@ impl HMaxExplicit {
             .map(|cond| expression_manager.put(cond))
             .collect();
 
-        let mut expr_fluents: FxHashMap<Expression, Vec<usize>> =
+        let mut expr_fluents: FxHashMap<Expression, Vec<Fluent>> =
             FxHashMap::with_hasher(FxBuildHasher);
         for (cond, &id) in goals.iter().zip(goal_expressions.iter()) {
             expr_fluents
@@ -2610,7 +2611,7 @@ impl HMaxExplicit {
 
             for (i, f) in self.extra_fluents[action].iter().enumerate() {
                 if let ExpressionNode::Fluent(f) = &f[0] {
-                    assignments[*f].insert(ExpressionNode::Bool(i == idx));
+                    assignments[f.idx].insert(ExpressionNode::Bool(i == idx));
                 }
             }
         }
@@ -2649,18 +2650,21 @@ impl HMaxExplicit {
                 return Ok(Some(depth as f64));
             }
 
-            let mut new_assignments: FxHashMap<usize, FxHashSet<ExpressionNode>> =
+            let mut new_assignments: FxHashMap<Fluent, FxHashSet<ExpressionNode>> =
                 FxHashMap::with_hasher(FxBuildHasher);
             for (i, operator) in self.operators.iter().enumerate() {
                 if applied_operators[i] {
                     // operator already applied
-                    if !self.operator_effects_fluents[i].iter().any(|&f| changed[f]) {
+                    if !self.operator_effects_fluents[i]
+                        .iter()
+                        .any(|&f| changed[f.idx])
+                    {
                         // no changes in the effect fluents
                         continue;
                     }
                 } else if !self.operator_conditions_fluents[i]
                     .iter()
-                    .any(|&f| changed[f])
+                    .any(|&f| changed[f.idx])
                 {
                     // operator never applied, but no changes in the condition fluents
                     continue;
@@ -2709,9 +2713,9 @@ impl HMaxExplicit {
             changed_list.clear();
             for (fluent, new_vv) in new_assignments {
                 for v in new_vv {
-                    if assignments[fluent].insert(v) && !changed[fluent] {
-                        changed[fluent] = true;
-                        changed_list.push(fluent);
+                    if assignments[fluent.idx].insert(v) && !changed[fluent.idx] {
+                        changed[fluent.idx] = true;
+                        changed_list.push(fluent.idx);
                     }
                 }
             }
