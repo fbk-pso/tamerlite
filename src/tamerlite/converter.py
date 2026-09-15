@@ -21,12 +21,16 @@ from contextlib import contextmanager
 from typing import Any
 
 from cachetools import LRUCache
-from unified_planning.model import Fluent, FNode, InterpretedFunction, Object, Problem
+from unified_planning.model import Fluent as UPFluent
+from unified_planning.model import FNode, InterpretedFunction, Problem
+from unified_planning.model import Object as UPObject
 from unified_planning.model.walkers import DagWalker
 
 from tamerlite.core import (
     Expression,
+    Fluent,
     IfReturnType,
+    Object,
     clear_interpreted_function_cache,
     make_bool_constant_node,
     make_fluent_node,
@@ -120,12 +124,12 @@ class Converter(DagWalker):
     def __init__(
         self,
         problem: Problem,
-        fluent_ids: dict[str, int],
-        object_ids: dict[str, int],
-        objects_by_id: list[Object],
+        fluent_ids: dict[str, Fluent],
+        object_ids: dict[str, Object],
+        objects_by_id: list[UPObject],
         if_cache: MutableMapping[tuple[InterpretedFunction, tuple], Any] | None = None,
         if_wrappers: dict[InterpretedFunction, Callable] | None = None,
-        static_fluents: set[Fluent] | None = None,
+        static_fluents: set[UPFluent] | None = None,
     ):
         DagWalker.__init__(self)
         self._fluent_ids = fluent_ids
@@ -365,7 +369,7 @@ class Converter(DagWalker):
         def wrapper(*call_args):
             if any(object_params):
                 real_args = tuple(
-                    objects_by_id[a.object] if is_obj else a
+                    objects_by_id[a.object.idx] if is_obj else a
                     for a, is_obj in zip(call_args, object_params, strict=True)
                 )
             else:

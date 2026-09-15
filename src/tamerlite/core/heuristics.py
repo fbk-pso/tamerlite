@@ -32,10 +32,12 @@ from tamerlite.core.search_space import (
     Event,
     Expression,
     ExpressionNode,
+    Fluent,
     FluentDomain,
     FluentKind,
     FluentNode,
     InterpretedFunctionNode,
+    Object,
     ObjectNode,
     SearchSpaceABC,
     State,
@@ -72,10 +74,10 @@ class Operator:
     id: int
     action: Action = field(compare=False)
     conditions: HeuristicExpression = field(compare=False)
-    effects: tuple[tuple[int, bool | ObjectNode], ...] = field(compare=False)
-    constant_increase_effects: dict[int, int | Fraction] = field(compare=False)
-    constant_assign_effects: dict[int, int | Fraction] = field(compare=False)
-    complex_numeric_effects: dict[int, Expression] = field(compare=False)
+    effects: tuple[tuple[Fluent, bool | ObjectNode], ...] = field(compare=False)
+    constant_increase_effects: dict[Fluent, int | Fraction] = field(compare=False)
+    constant_assign_effects: dict[Fluent, int | Fraction] = field(compare=False)
+    complex_numeric_effects: dict[Fluent, Expression] = field(compare=False)
     cost: float = field(compare=False)
 
 
@@ -83,7 +85,7 @@ class Operator:
 class OperatorHmax:
     action: Action
     conditions: tuple[Expression, ...]
-    effects: tuple[tuple[int, Expression | ConstantNode], ...]
+    effects: tuple[tuple[Fluent, Expression | ConstantNode], ...]
     cost: float
 
 
@@ -170,7 +172,7 @@ class DeleteRelaxationHeuristic(Heuristic):
         self._actions = actions
         self._events = events
         self._operators: list[Operator] = []
-        self._extra_fluents: dict[Action, list[int]] = {}
+        self._extra_fluents: dict[Action, list[Fluent]] = {}
         self._num_fluents = len(fluent_domains)
         # Every bookkeeping fluent allocated below is a plain bool flag.
         # Giving them domains up front keeps `_object_domain` a *total*
@@ -191,19 +193,19 @@ class DeleteRelaxationHeuristic(Heuristic):
                 continue
             le = events[a]
             self._extra_fluents[a] = []
-            f_cond = self._num_fluents + len(le) - 1
+            f_cond = Fluent(self._num_fluents + len(le) - 1)
             cond = FluentNode(f_cond)
             for _, e in le:
-                effects: list[tuple[int, bool | ObjectNode]] = []
-                constant_increase_effects: dict[int, int | Fraction] = {}
-                constant_assign_effects: dict[int, int | Fraction] = {}
-                complex_numeric_effects: dict[int, Expression] = {}
-                f = self._num_fluents
+                effects: list[tuple[Fluent, bool | ObjectNode]] = []
+                constant_increase_effects: dict[Fluent, int | Fraction] = {}
+                constant_assign_effects: dict[Fluent, int | Fraction] = {}
+                complex_numeric_effects: dict[Fluent, Expression] = {}
+                f = Fluent(self._num_fluents)
                 self._num_fluents += 1
                 self._extra_fluents[a].append(f)
                 effects.append((f, True))
                 for eff in e.effects:
-                    domain = self._fluent_domains[eff.fluent]
+                    domain = self._fluent_domains[eff.fluent.idx]
                     if domain.kind is FluentKind.BOOL:
                         if len(eff.value) == 1 and isinstance(eff.value[0], bool):
                             effects.append((eff.fluent, eff.value[0]))
@@ -260,7 +262,9 @@ class DeleteRelaxationHeuristic(Heuristic):
         self._extra_goals = self._convert_to_heuristic_expression(extra_goals)
 
         self._precondition_of: dict[Expression, list[Operator]] = {}
-        self._simple_numeric_conds: dict[Expression, tuple[list[int], list[float]]] = {}
+        self._simple_numeric_conds: dict[
+            Expression, tuple[list[Fluent], list[float]]
+        ] = {}
         self._lt_simple_numeric_conds: set[Expression] = set()
         self._complex_numeric_conds: set[Expression] = set()
         self._if_conds: set[Expression] = set()
@@ -719,9 +723,9 @@ class DeleteRelaxationHeuristic(Heuristic):
     def _update_numeric_effects(
         self,
         effect: Effect,
-        constant_increase_effects: dict[int, int | Fraction],
-        constant_assign_effects: dict[int, int | Fraction],
-        complex_numeric_effects: dict[int, Expression],
+        constant_increase_effects: dict[Fluent, int | Fraction],
+        constant_assign_effects: dict[Fluent, int | Fraction],
+        complex_numeric_effects: dict[Fluent, Expression],
     ):
         """Processes a numeric effect and categorizes it into one of three
         types:
@@ -759,7 +763,7 @@ class DeleteRelaxationHeuristic(Heuristic):
         else:
             complex_numeric_effects[effect.fluent] = effect.value
 
-    def _object_domain(self, node: FluentNode) -> tuple[int, ...] | None:
+    def _object_domain(self, node: FluentNode) -> tuple[Object, ...] | None:
         """The objects a fluent can hold, or `None` if it isn't object-typed.
 
         Single oracle for both questions the object-equality handling asks:
@@ -779,7 +783,7 @@ class DeleteRelaxationHeuristic(Heuristic):
             The fluent's object domain, or `None` if it is not object-typed.
         """
 
-        domain = self._fluent_domains[node.fluent]
+        domain = self._fluent_domains[node.fluent.idx]
         return domain.objects if domain.kind is FluentKind.OBJECT else None
 
     def _is_object_typed_operand(self, e: ExpressionNode) -> bool:
@@ -868,7 +872,7 @@ class DeleteRelaxationHeuristic(Heuristic):
 
     def _extract_fluents_weights_simple_numeric_condition(
         self, node: LeafNode
-    ) -> tuple[list[int], list[float], bool] | None:
+    ) -> tuple[list[Fluent], list[float], bool] | None:
         """Extracts fluents and weights from a simple numeric condition.
 
         This method attempts to interpret a numeric condition of the form
@@ -899,13 +903,13 @@ class DeleteRelaxationHeuristic(Heuristic):
             return None
 
         k = float(polynomial.pop(None, 0))
-        fluents: list[int] = [f for f in polynomial if f is not None]
+        fluents: list[Fluent] = [f for f in polynomial if f is not None]
         weights: list[float] = [float(polynomial[f]) for f in fluents] + [k]
         return fluents, weights, exp[-1].kind == "<"
 
     def _to_linear_polynomial(
         self, exp: Expression
-    ) -> dict[int | None, int | Fraction]:
+    ) -> dict[Fluent | None, int | Fraction]:
         """Converts an expression into a linear polynomial representation.
 
         This method attempts to represent a numeric expression as a linear
@@ -932,13 +936,13 @@ class DeleteRelaxationHeuristic(Heuristic):
                 operations.
         """
 
-        def is_constant(polynomial: dict[int | None, int | Fraction]):
+        def is_constant(polynomial: dict[Fluent | None, int | Fraction]):
             return len(polynomial) == 1 and None in polynomial
 
-        def simplify(polynomial: dict[int | None, int | Fraction]):
+        def simplify(polynomial: dict[Fluent | None, int | Fraction]):
             return {k: v for k, v in polynomial.items() if v != 0 or k is None}
 
-        res: list[dict[int | None, int | Fraction]] = []
+        res: list[dict[Fluent | None, int | Fraction]] = []
         for node in exp:
             if isinstance(node, (int, Fraction)):
                 res.append({None: node})
@@ -1067,7 +1071,8 @@ class DeleteRelaxationHeuristic(Heuristic):
         """
 
         costs: dict[Expression, float] = {}
-        for f, v in enumerate(state.assignments):
+        for idx, v in enumerate(state.assignments):
+            f = Fluent(idx)
             if v is True:
                 k: Expression = (FluentNode(f),)
             elif v is False:
@@ -1490,16 +1495,16 @@ class HMaxExplicit(Heuristic):
         self._actions = actions
         self._events = events
         self._operators: list[OperatorHmax] = []
-        self._extra_fluents: dict[Action, list[int]] = {}
+        self._extra_fluents: dict[Action, list[Fluent]] = {}
         self._num_fluents = len(fluent_domains)
 
         for a, le in events.items():
             self._extra_fluents[a] = []
-            f_cond = self._num_fluents + len(le) - 1
+            f_cond = Fluent(self._num_fluents + len(le) - 1)
             cond = (FluentNode(f_cond),)
             for _, e in le:
-                effects: list[tuple[int, Expression | ConstantNode]] = []
-                f = self._num_fluents
+                effects: list[tuple[Fluent, Expression | ConstantNode]] = []
+                f = Fluent(self._num_fluents)
                 self._num_fluents += 1
                 self._extra_fluents[a].append(f)
                 effects.append((f, True))
@@ -1527,7 +1532,7 @@ class HMaxExplicit(Heuristic):
         )
         self._goals = split_expression(goals)
 
-        self._operator_conditions_fluents: list[set[int]] = []
+        self._operator_conditions_fluents: list[set[Fluent]] = []
         for operator in self._operators:
             self._operator_conditions_fluents.append(set())
             for c in operator.conditions:
@@ -1535,7 +1540,7 @@ class HMaxExplicit(Heuristic):
                     if isinstance(expr_node, FluentNode):
                         self._operator_conditions_fluents[-1].add(expr_node.fluent)
 
-        self._operator_effects_fluents: list[set[int]] = []
+        self._operator_effects_fluents: list[set[Fluent]] = []
         for operator in self._operators:
             self._operator_effects_fluents.append(set())
             for _fluent, effect in operator.effects:
@@ -1556,8 +1561,8 @@ class HMaxExplicit(Heuristic):
         # evaluations rather than copied -- `_eval_core` only reads it and rebinds
         # a fresh `set` before any in-place update, so an accidental mutation
         # here would silently corrupt every later evaluation.
-        self._initial_assignments_changes: frozenset[int] = frozenset(
-            range(self._num_fluents)
+        self._initial_assignments_changes: frozenset[Fluent] = frozenset(
+            Fluent(i) for i in range(self._num_fluents)
         )
 
     @property
@@ -1567,8 +1572,8 @@ class HMaxExplicit(Heuristic):
     def _extract_fluents(
         self,
         exp: Expression,
-        cache_extract_fluents: dict[int, set[int]],
-    ) -> set[int]:
+        cache_extract_fluents: dict[int, set[Fluent]],
+    ) -> set[Fluent]:
         if id(exp) not in cache_extract_fluents:
             cache_extract_fluents[id(exp)] = {
                 expression_node.fluent
@@ -1581,17 +1586,17 @@ class HMaxExplicit(Heuristic):
         self,
         exp: Expression | ConstantNode,
         assignments: list[set[ConstantNode]],
-        cache_extract_fluents: dict[int, set[int]],
-        exp_fluents: set[int] | None = None,
+        cache_extract_fluents: dict[int, set[Fluent]],
+        exp_fluents: set[Fluent] | None = None,
     ) -> Iterator[ConstantNode]:
         if isinstance(exp, tuple):
             if exp_fluents is None:
                 exp_fluents = self._extract_fluents(exp, cache_extract_fluents)
-            values = (assignments[f] for f in exp_fluents)
+            values = (assignments[f.idx] for f in exp_fluents)
             state_assignments: list[ConstantNode | None] = [None] * len(assignments)
             for assignments_values in itertools.product(*values):
                 for f, v in zip(exp_fluents, assignments_values, strict=True):
-                    state_assignments[f] = v
+                    state_assignments[f.idx] = v
                 state = State(state_assignments, None, None, None, None, None)  # type: ignore
                 yield evaluate(exp, state)
         else:
@@ -1601,9 +1606,9 @@ class HMaxExplicit(Heuristic):
         self,
         exp: Expression,
         assignments: list[set[ConstantNode]],
-        assignments_changes: AbstractSet[int],
+        assignments_changes: AbstractSet[Fluent],
         cache_can_be_true: dict[int, bool],
-        cache_extract_fluents: dict[int, set[int]],
+        cache_extract_fluents: dict[int, set[Fluent]],
     ) -> bool:
         exp_fluents = None
         id_exp = id(exp)
@@ -1630,9 +1635,9 @@ class HMaxExplicit(Heuristic):
         self,
         expressions: tuple[Expression, ...],
         assignments: list[set[ConstantNode]],
-        assignments_changes: AbstractSet[int],
+        assignments_changes: AbstractSet[Fluent],
         cache_can_be_true: dict[int, bool],
-        cache_extract_fluents: dict[int, set[int]],
+        cache_extract_fluents: dict[int, set[Fluent]],
     ) -> bool:
         for exp in expressions:
             if not self._exp_can_be_true(
@@ -1672,13 +1677,13 @@ class HMaxExplicit(Heuristic):
             idx = len(self._extra_fluents[action]) - 1 if j is None else j - 1
 
             for i, f in enumerate(self._extra_fluents[action]):
-                assignments[f] = {i == idx}
+                assignments[f.idx] = {i == idx}
 
         cache_can_be_true: dict[int, bool] = {}
-        cache_extract_fluents: dict[int, set[int]] = {}
+        cache_extract_fluents: dict[int, set[Fluent]] = {}
         applied_operators = [False] * len(self._operators)
 
-        assignments_changes: AbstractSet[int] = self._initial_assignments_changes
+        assignments_changes: AbstractSet[Fluent] = self._initial_assignments_changes
         depth = 0
         while len(assignments_changes) > 0:
             if self._can_be_true(
@@ -1691,7 +1696,7 @@ class HMaxExplicit(Heuristic):
                 # goal satisfied
                 return float(depth)
 
-            new_assignments: dict[int, set[ConstantNode]] = defaultdict(set)
+            new_assignments: dict[Fluent, set[ConstantNode]] = defaultdict(set)
             for i, operator in enumerate(self._operators):
                 if applied_operators[i]:
                     # operator already applied
@@ -1729,11 +1734,11 @@ class HMaxExplicit(Heuristic):
                     new_assignments[fluent].update(possible_values)
 
             # update assignments
-            next_assignments_changes: set[int] = set()
+            next_assignments_changes: set[Fluent] = set()
             for fluent, vv in new_assignments.items():
-                prev_len = len(assignments[fluent])
-                assignments[fluent].update(vv)
-                if len(assignments[fluent]) > prev_len:
+                prev_len = len(assignments[fluent.idx])
+                assignments[fluent.idx].update(vv)
+                if len(assignments[fluent.idx]) > prev_len:
                     next_assignments_changes.add(fluent)
             assignments_changes = next_assignments_changes
 

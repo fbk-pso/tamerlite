@@ -21,6 +21,7 @@ use pyo3::{exceptions::PyValueError, prelude::*};
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use crate::interpreted_functions::{register_interpreted_function, IfReturnType};
+use crate::structures::{Fluent, Object};
 use crate::utils::{big_rational_to_py_fraction, integer_to_f64, rational_to_f64};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -28,8 +29,8 @@ pub enum ExpressionNode {
     Bool(bool),
     Int(Box<BigInt>),
     Rational(Box<BigRational>),
-    Fluent(usize),
-    Object(usize),
+    Fluent(Fluent),
+    Object(Object),
     And(Vec<usize>),
     Or(Vec<usize>),
     Not(usize),
@@ -122,7 +123,7 @@ pub struct PyExpressionNode {
 #[pymethods]
 impl PyExpressionNode {
     #[getter]
-    fn fluent(&self) -> Option<usize> {
+    fn fluent(&self) -> Option<Fluent> {
         if let ExpressionNode::Fluent(v) = self.v {
             Some(v)
         } else {
@@ -131,7 +132,7 @@ impl PyExpressionNode {
     }
 
     #[getter]
-    fn object(&self) -> Option<usize> {
+    fn object(&self) -> Option<Object> {
         if let ExpressionNode::Object(v) = self.v {
             Some(v)
         } else {
@@ -216,14 +217,14 @@ pub fn make_rational_constant_node(numerator: i32, denominator: i32) -> PyExpres
 }
 
 #[pyfunction]
-pub fn make_object_node(oid: usize) -> PyExpressionNode {
+pub fn make_object_node(obj: Object) -> PyExpressionNode {
     PyExpressionNode {
-        v: ExpressionNode::Object(oid),
+        v: ExpressionNode::Object(obj),
     }
 }
 
 #[pyfunction]
-pub fn make_fluent_node(fluent: usize) -> PyExpressionNode {
+pub fn make_fluent_node(fluent: Fluent) -> PyExpressionNode {
     PyExpressionNode {
         v: ExpressionNode::Fluent(fluent),
     }
