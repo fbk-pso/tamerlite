@@ -1455,11 +1455,16 @@ class HMaxExplicit(Heuristic):
     set of values reachable so far, and re-evaluates conditions/effects against
     the cross-product of those sets on every fixpoint round.
 
+    Effects are kept as-is: a single-node constant is unwrapped,
+    anything else (a bare `FluentNode` such as `x := y`, an arithmetic
+    expression, an interpreted-function call) keeps the whole `Expression` and
+    is cross-producted against its fluents' reachable values at eval time.
+
     This makes it interpreted-function-safe for free: an interpreted-function
     call is just another node `evaluate()` knows how to invoke, and the
     generic fluent-collecting scans (`_extract_fluents`,
     `_operator_conditions_fluents`/`_operator_effects_fluents`) already find
-    an interpreted function's argument fluents.
+    an interpreted function's argument fluents in both conditions and effects.
 
     One real caveat: unlike `DeleteRelaxationHeuristic`, which only ever
     evaluates an interpreted-function condition against the real, concrete
@@ -1487,11 +1492,6 @@ class HMaxExplicit(Heuristic):
         self._operators: list[OperatorHmax] = []
         self._extra_fluents: dict[Action, list[int]] = {}
         self._num_fluents = len(fluent_domains)
-        # See `DeleteRelaxationHeuristic.__init__` for why the bookkeeping
-        # fluents allocated below get domains of their own.
-        self._fluent_domains = fluent_domains + [
-            FluentDomain(FluentKind.BOOL) for le in events.values() for _ in le
-        ]
 
         for a, le in events.items():
             self._extra_fluents[a] = []
@@ -1504,34 +1504,15 @@ class HMaxExplicit(Heuristic):
                 self._extra_fluents[a].append(f)
                 effects.append((f, True))
                 for eff in e.effects:
-                    domain = self._fluent_domains[eff.fluent]
-                    if domain.kind is FluentKind.BOOL:
-                        if len(eff.value) == 1 and isinstance(eff.value[0], bool):
-                            effects.append((eff.fluent, eff.value[0]))
-                        else:
-                            effects.append((eff.fluent, True))
-                            effects.append((eff.fluent, False))
-                    elif (
-                        domain.kind is FluentKind.INT or domain.kind is FluentKind.REAL
-                    ):
-                        if len(eff.value) == 1 and isinstance(
-                            eff.value[0], (int, Fraction)
-                        ):
-                            effects.append((eff.fluent, eff.value[0]))
-                        else:
-                            # A single-node value that isn't a plain numeric
-                            # constant -- e.g. a bare `FluentNode` (`x := y`) --
-                            # must keep the whole `Expression`
-                            effects.append((eff.fluent, eff.value))
+                    if len(eff.value) == 1 and isinstance(eff.value[0], ConstantNode):
+                        effects.append((eff.fluent, eff.value[0]))
                     else:
-                        assert domain.kind is FluentKind.OBJECT
-                        if len(eff.value) == 1 and isinstance(eff.value[0], ObjectNode):
-                            # eff.value[0] is an object
-                            effects.append((eff.fluent, eff.value[0]))
-                        else:
-                            effects.extend(
-                                (eff.fluent, ObjectNode(obj)) for obj in domain.objects
-                            )
+                        # Anything else -- a bare `FluentNode` (`x := y`), an
+                        # arithmetic expression, an interpreted-function call --
+                        # keeps the whole `Expression`, so `_possible_values`
+                        # cross-products its fluents' reachable values instead
+                        # of over-approximating by `FluentKind`.
+                        effects.append((eff.fluent, eff.value))
                 conditions: list[tuple[ExpressionNode, ...]] = [cond]
                 for c in get_event_conditions(e):
                     if len(c) > 0 and c != (True,):

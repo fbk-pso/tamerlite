@@ -18,11 +18,7 @@ hmax:
 - 1
 - 1
 - 0
-hmax_explicit_python:
-- 1
-- 1
-- 0
-hmax_explicit_rust:
+hmax_explicit:
 - 2
 - 1
 - 0
