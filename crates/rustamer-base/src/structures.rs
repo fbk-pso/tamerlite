@@ -160,7 +160,8 @@ impl Timing {
     }
 }
 
-#[pyclass(from_py_object)]
+/// An action's identity.
+#[pyclass(frozen, eq, hash, from_py_object)]
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Action {
     pub idx: usize,
