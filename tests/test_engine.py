@@ -1882,9 +1882,9 @@ def test_temporal_no_start_event():
         assert len(scheduled) == 1
         start, scheduled_action, duration = scheduled[0]
         # `scheduled_action` is reconstructed by `build_plan`, so it may not
-        # be `noop` itself (the Rust backend's pyo3 `Action` doesn't wire up
-        # value equality); compare by `idx` instead.
-        assert scheduled_action.idx == noop.idx
+        # be `noop` itself -- but both backends' `Action` hash/eq by value,
+        # so this is a real equality check, not merely an index comparison.
+        assert scheduled_action == noop
         assert start == 0
         assert duration == Fraction(2)
 
