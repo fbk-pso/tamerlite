@@ -66,15 +66,19 @@ impl PartialOrd for PrioritizedItem {
 
 impl Ord for PrioritizedItem {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        if self.heuristic < other.heuristic {
-            std::cmp::Ordering::Greater
-        } else if self.heuristic > other.heuristic {
-            std::cmp::Ordering::Less
-        } else if self.state_container.state.todo.len() < other.state_container.state.todo.len() {
-            std::cmp::Ordering::Greater
-        } else {
-            std::cmp::Ordering::Less
-        }
+        // `BinaryHeap` is a max-heap; comparing `other` against `self` (not
+        // `self` against `other`) inverts every field so `pop()` returns
+        // the item with the lexicographically smallest
+        // `(heuristic, todo_len)` pair first. `f64` isn't `Ord`, hence
+        // `total_cmp` in place of a plain tuple comparison.
+        other.heuristic.total_cmp(&self.heuristic).then_with(|| {
+            other
+                .state_container
+                .state
+                .todo
+                .len()
+                .cmp(&self.state_container.state.todo.len())
+        })
     }
 }
 
