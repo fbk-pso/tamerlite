@@ -77,19 +77,16 @@ impl<T: HasTodoLen> PartialOrd for PrioritizedItem<T> {
 
 impl<T: HasTodoLen> Ord for PrioritizedItem<T> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        if self.heuristic < other.heuristic {
-            std::cmp::Ordering::Greater
-        } else if self.heuristic > other.heuristic {
-            std::cmp::Ordering::Less
-        } else if self.state.todo_len() < other.state.todo_len() {
-            std::cmp::Ordering::Greater
-        } else if self.state.todo_len() > other.state.todo_len() {
-            std::cmp::Ordering::Less
-        } else if self.idx < other.idx {
-            std::cmp::Ordering::Greater
-        } else {
-            std::cmp::Ordering::Less
-        }
+        // `BinaryHeap` is a max-heap; comparing `other` against `self` (not
+        // `self` against `other`) inverts every field so `pop()` returns
+        // the item with the lexicographically smallest
+        // `(heuristic, todo_len, idx)` tuple first. `f64` isn't `Ord`,
+        // hence `total_cmp` in place of a plain tuple comparison.
+        other
+            .heuristic
+            .total_cmp(&self.heuristic)
+            .then_with(|| other.state.todo_len().cmp(&self.state.todo_len()))
+            .then_with(|| other.idx.cmp(&self.idx))
     }
 }
 
@@ -667,44 +664,19 @@ impl PartialOrd for NovBFSItem {
 
 impl Ord for NovBFSItem {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // `BinaryHeap` is a max-heap; every comparison is inverted (a
-        // *smaller* key sorts as `Greater`) so `pop()` returns the item
-        // with the lexicographically smallest
+        // `BinaryHeap` is a max-heap; comparing `other` against `self` (not
+        // `self` against `other`) inverts every field so `pop()` returns
+        // the item with the lexicographically smallest
         // `(novelty, h, g_key, todo_len, idx)` tuple first -- same
-        // convention as `PrioritizedItem` above.
-        if self.novelty != other.novelty {
-            return if self.novelty < other.novelty {
-                std::cmp::Ordering::Greater
-            } else {
-                std::cmp::Ordering::Less
-            };
-        }
-        if self.h != other.h {
-            return if self.h < other.h {
-                std::cmp::Ordering::Greater
-            } else {
-                std::cmp::Ordering::Less
-            };
-        }
-        if self.g_key != other.g_key {
-            return if self.g_key < other.g_key {
-                std::cmp::Ordering::Greater
-            } else {
-                std::cmp::Ordering::Less
-            };
-        }
-        if self.state.todo_len() != other.state.todo_len() {
-            return if self.state.todo_len() < other.state.todo_len() {
-                std::cmp::Ordering::Greater
-            } else {
-                std::cmp::Ordering::Less
-            };
-        }
-        if self.idx < other.idx {
-            std::cmp::Ordering::Greater
-        } else {
-            std::cmp::Ordering::Less
-        }
+        // convention as `PrioritizedItem` above. `f64` isn't `Ord`, hence
+        // `total_cmp` in place of a plain tuple comparison.
+        other
+            .novelty
+            .cmp(&self.novelty)
+            .then_with(|| other.h.total_cmp(&self.h))
+            .then_with(|| other.g_key.total_cmp(&self.g_key))
+            .then_with(|| other.state.todo_len().cmp(&self.state.todo_len()))
+            .then_with(|| other.idx.cmp(&self.idx))
     }
 }
 
