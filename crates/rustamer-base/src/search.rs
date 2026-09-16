@@ -636,11 +636,12 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
 }
 
 /// Open-list entry for `novbfs_search`: the numeric-novelty tie-break chain
-/// `(novelty, h^add, ±g)` plus an `idx` insertion-order tie-break for
-/// determinism, matching every other search's `PrioritizedItem` -- except
-/// deliberately **without** a `todo_len` tie-break (`PrioritizedItem` has
-/// one; the Python core's `NovBFSItem` doesn't, and adding one here would
-/// silently change what counts as a tie relative to it).
+/// `(novelty, h^add, ±g)`, then `todo_len` (fewer durative actions in
+/// flight first, matching every other search's `PrioritizedItem`), then an
+/// `idx` insertion-order tie-break for determinism. `todo_len` is inert on
+/// classical problems -- `State::todo` is only ever populated on the
+/// temporal path -- so it only breaks otherwise-real ties among temporal
+/// states.
 struct NovBFSItem {
     novelty: u8,
     h: f64,
@@ -668,8 +669,9 @@ impl Ord for NovBFSItem {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // `BinaryHeap` is a max-heap; every comparison is inverted (a
         // *smaller* key sorts as `Greater`) so `pop()` returns the item
-        // with the lexicographically smallest `(novelty, h, g_key, idx)`
-        // tuple first -- same convention as `PrioritizedItem` above.
+        // with the lexicographically smallest
+        // `(novelty, h, g_key, todo_len, idx)` tuple first -- same
+        // convention as `PrioritizedItem` above.
         if self.novelty != other.novelty {
             return if self.novelty < other.novelty {
                 std::cmp::Ordering::Greater
@@ -691,6 +693,13 @@ impl Ord for NovBFSItem {
                 std::cmp::Ordering::Less
             };
         }
+        if self.state.todo_len() != other.state.todo_len() {
+            return if self.state.todo_len() < other.state.todo_len() {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Less
+            };
+        }
         if self.idx < other.idx {
             std::cmp::Ordering::Greater
         } else {
@@ -699,9 +708,13 @@ impl Ord for NovBFSItem {
     }
 }
 
-/// A single open list ordered lexicographically on `(novelty, h^add, ±g)`
-/// -- numeric novelty first, `h^add` only as a tie-breaker, plan cost `g`
-/// last. `prefer_higher_g=true` is `novbfs_hg` (cost-*maximizing* final
+/// A single open list ordered lexicographically on
+/// `(novelty, h^add, ±g, todo_len)` -- numeric novelty first, `h^add` only
+/// as a tie-breaker, plan cost `g` next, and the count of durative actions
+/// in flight (fewer first) as a final tie-break before insertion order --
+/// see `NovBFSItem`. That last key is a no-op on classical
+/// problems, where `State::todo` is always empty.
+/// `prefer_higher_g=true` is `novbfs_hg` (cost-*maximizing* final
 /// tie-break, to dive into longer committed plans and find *a* solution
 /// fast); `prefer_higher_g=false` is `novbfs_lg` (cost-*minimizing*).
 /// `heuristic` must be an h^add instance -- see
