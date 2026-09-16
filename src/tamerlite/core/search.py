@@ -528,8 +528,12 @@ def ehc_search(
 @dataclass
 class NovBFSItem:
     """Open-list entry for `novbfs_search`: the numeric-novelty tie-break
-    chain `(novelty, h^add, +-g)` plus an `idx` insertion-order tie-break for
-    determinism, matching every other search's `PrioritizedItem`."""
+    chain `(novelty, h^add, +-g)`, then `len(state.todo)` (fewer durative
+    actions in flight first, matching every other search's
+    `PrioritizedItem`), then an `idx` insertion-order tie-break for
+    determinism. `todo_len` is inert on classical problems -- `state.todo` is
+    only ever populated on the temporal path -- so it only breaks otherwise-
+    real ties among temporal states."""
 
     novelty: int  # 1 (most novel) .. 3 (not novel)
     h: float  # h^add
@@ -539,10 +543,17 @@ class NovBFSItem:
     partition: int  # this state's novelty partition, needed by its children
 
     def __lt__(self, other):
-        return (self.novelty, self.h, self.g_key, self.idx) < (
+        return (
+            self.novelty,
+            self.h,
+            self.g_key,
+            len(self.state.todo),
+            self.idx,
+        ) < (
             other.novelty,
             other.h,
             other.g_key,
+            len(other.state.todo),
             other.idx,
         )
 
@@ -560,8 +571,12 @@ def novbfs_search(
     weak_equality: bool = False,
 ) -> tuple[list[Action] | None, dict[str, str]]:
     """A single open list ordered lexicographically on
-    `(novelty, h^add, +-g)` -- numeric novelty first, `h^add` only as a
-    tie-breaker, plan cost `g` last. `prefer_higher_g=True` is `novbfs_hg`
+    `(novelty, h^add, +-g, len(state.todo))` -- numeric novelty first,
+    `h^add` only as a tie-breaker, plan cost `g` next, and the count of
+    durative actions in flight (fewer first) as a final tie-break before
+    insertion order -- see `NovBFSItem`. That last key is a no-op on
+    classical problems, where `state.todo` is always empty.
+    `prefer_higher_g=True` is `novbfs_hg`
     (cost-*maximizing* final tie-break, to dive into longer committed plans
     and find *a* solution fast); `prefer_higher_g=False` is `novbfs_lg`
     (cost-*minimizing*). `heuristic` must be an h^add instance -- see
