@@ -202,16 +202,16 @@ pub fn make_bool_constant_node(v: bool) -> PyExpressionNode {
 }
 
 #[pyfunction]
-pub fn make_int_constant_node(v: i32) -> PyExpressionNode {
+pub fn make_int_constant_node(v: BigInt) -> PyExpressionNode {
     PyExpressionNode {
-        v: ExpressionNode::Int(Box::new(super::utils::mk_integer(v))),
+        v: ExpressionNode::Int(Box::new(v)),
     }
 }
 
 #[pyfunction]
-pub fn make_rational_constant_node(numerator: i32, denominator: i32) -> PyExpressionNode {
+pub fn make_rational_constant_node(numerator: BigInt, denominator: BigInt) -> PyExpressionNode {
     PyExpressionNode {
-        v: ExpressionNode::Rational(Box::new(super::utils::mk_rational(numerator, denominator))),
+        v: ExpressionNode::Rational(Box::new(BigRational::new(numerator, denominator))),
     }
 }
 

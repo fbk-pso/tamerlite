@@ -28,7 +28,7 @@ use pyo3::{
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use crate::expressions::{ExpressionNode, PyExpressionNode};
-use crate::utils::{big_rational_to_py_fraction, get_big_rational_bigint, get_fraction_type};
+use crate::utils::{big_rational_to_py_fraction, get_big_rational, get_fraction_type};
 
 #[pyclass(eq, eq_int, frozen, hash, from_py_object)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -134,7 +134,7 @@ fn interpreted_function_result(
         }
         IfReturnType::Real => {
             let fraction = get_fraction_type(py)?.bind(py).call1((result,))?;
-            let v = get_big_rational_bigint(&fraction)?;
+            let v = get_big_rational(&fraction)?;
             Ok(ExpressionNode::Rational(Box::new(v)))
         }
         IfReturnType::Object => {

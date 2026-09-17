@@ -1255,6 +1255,96 @@ def test_evaluate_fixed_cases():
             )
 
 
+def test_numeric_constants_above_i32_range():
+    """Cross-backend differential test: pins that both backends accept
+    Python ints/`Fraction`s above `2**31` (and rationals with an
+    out-of-range numerator/denominator) across the numeric-conversion
+    boundary -- constant nodes (`converter.py`'s `walk_int_constant`/
+    `walk_real_constant`), a `Timing` delay (`encoder.py`'s durative-action
+    events), and `SearchSpace`'s `deadline`/`epsilon` options."""
+
+    HUGE = 2**80
+    BIG = 2**40
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.core import (
+            SearchSpace,
+            Timing,
+            evaluate,
+            make_fluent_node,
+            make_int_constant_node,
+            make_operator_node,
+            make_rational_constant_node,
+        )
+
+        backend = "python" if disable_rustamer else "rust"
+
+        # Constant nodes + arithmetic over them, mirroring
+        # `converter.py::walk_int_constant`/`walk_real_constant`.
+        op = testing_utils._op_tree
+        huge_int = make_int_constant_node(HUGE)
+        huge_rational = make_rational_constant_node(HUGE + 1, BIG)
+        cases: list[tuple[str, object, tuple]] = [
+            ("huge_int_literal", huge_int, ("ok", "int", HUGE)),
+            (
+                "huge_rational_literal",
+                huge_rational,
+                ("ok", "real", HUGE + 1, BIG),
+            ),
+            (
+                "huge_int_plus_huge_int",
+                op("+", huge_int, huge_int),
+                ("ok", "int", 2 * HUGE),
+            ),
+            (
+                "huge_rational_times_int",
+                op("*", huge_rational, make_int_constant_node(BIG)),
+                ("ok", "int", HUGE + 1),
+            ),
+        ]
+        search_space = SearchSpace([], {}, [], None, None, None)
+        state = search_space.initial_state([])
+        for name, tree, expected in cases:
+            exp = testing_utils._flatten_expression_tree(tree, make_operator_node)
+            got = testing_utils._evaluate_outcome(evaluate, exp, state)
+            assert got == expected, (
+                f"case {name!r} on {backend} backend: expected {expected}, got {got}"
+            )
+
+        # An out-of-range constant read back through a fluent (initial_state).
+        (F0,) = range(1)
+        seeded_state = search_space.initial_state(
+            cast("list[ConstantNode]", [make_int_constant_node(HUGE)])
+        )
+        fluent_exp = (make_fluent_node(F0),)
+        assert testing_utils._evaluate_outcome(evaluate, fluent_exp, seeded_state) == (
+            "ok",
+            "int",
+            HUGE,
+        ), f"fluent readback failed on {backend} backend"
+
+        # A `Timing` delay above `i32` (`structures.rs::Timing::new`'s
+        # `get_big_rational`).
+        timing = Timing(True, Fraction(HUGE, 3))
+        assert Fraction(timing.delay) == Fraction(HUGE, 3), (
+            f"Timing delay round-trip failed on {backend} backend"
+        )
+
+        # `SearchSpace`'s `deadline`/`epsilon` options
+        # (`search_space.rs::SearchSpace::new`'s `get_option_big_rational`).
+        SearchSpace(
+            [],
+            {},
+            [],
+            None,
+            None,
+            None,
+            deadline=Fraction(BIG),
+            epsilon=Fraction(1, BIG),
+        )
+
+
 def test_evaluate_interpreted_function_normalization():
     """Cross-backend differential test for interpreted-function calls
     through `evaluate()`, covering every `IfReturnType`: a `REAL` return
