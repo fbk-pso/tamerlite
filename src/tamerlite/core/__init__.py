@@ -86,7 +86,9 @@ if not use_rustamer:
         Effect,
         Event,
         Expression,
+        Fluent,
         IfReturnType,
+        Object,
         SearchSpace,
         State,
         Timing,
@@ -128,12 +130,14 @@ else:
         rustamer_lib.dfs_search,
     )
     multiqueue_search = rustamer_lib.multiqueue_search
-    SearchSpace, Timing, Effect, Event, Action = (
+    SearchSpace, Timing, Effect, Event, Action, Fluent, Object = (
         rustamer_lib.SearchSpace,
         rustamer_lib.Timing,
         rustamer_lib.Effect,
         rustamer_lib.Event,
         rustamer_lib.Action,
+        rustamer_lib.Fluent,
+        rustamer_lib.Object,
     )
     Expression = list[rustamer_lib.ExpressionNode]
     State = rustamer_lib.State
@@ -191,7 +195,7 @@ else:
         else:
             raise NotImplementedError("Unreachable code")
 
-    def get_fluent_value(fluent: int, state: "_StateT") -> ConstantNode:
+    def get_fluent_value(fluent: Fluent, state: "_StateT") -> ConstantNode:
         return _unwrap_value(state.get_value(fluent))
 
     def evaluate(exp: "_ExpressionT", state: "_StateT") -> ConstantNode:

@@ -89,7 +89,7 @@ class StateWrapper(State):
 
     def get_value(self, fluent: FNode) -> FNode:
         try:
-            fluent_id = self.encoder.fluent_ids[str(fluent)]
+            tl_fluent = self.encoder.fluent_ids[str(fluent)]
         except KeyError:
             # Either an unknown fluent, or one `relevant_equality` dropped
             # from the encoding as irrelevant -- a custom heuristic reading
@@ -98,7 +98,7 @@ class StateWrapper(State):
             raise UPStateMissingFluentError(
                 f"The state {self.state} does not have a value for the fluent {fluent}"
             ) from None
-        v = get_fluent_value(fluent_id, self.state)
+        v = get_fluent_value(tl_fluent, self.state)
         if fluent.type.is_bool_type():
             return self.em.Bool(cast(bool, v))
         elif fluent.type.is_int_type():
@@ -109,9 +109,9 @@ class StateWrapper(State):
             # `Fraction`.
             return self.em.Real(Fraction(cast("int | Fraction", v)))
         elif fluent.type.is_user_type():
-            oid = cast(search_space.ObjectNode, v).object
+            obj = cast(search_space.ObjectNode, v).object
             return self.em.ObjectExp(
-                self.problem.object(self.encoder.object_names[oid])
+                self.problem.object(self.encoder.object_names[obj.idx])
             )
         else:
             raise NotImplementedError(f"Unknown value type for expression {fluent}")
