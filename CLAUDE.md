@@ -229,6 +229,30 @@ a second, runtime-probe-based classifier.
 
 Rust implementation lives in [crates/rustamer-base/src/](crates/rustamer-base/src/) (core library) and [crates/rustamer/src/](crates/rustamer/src/) (PyO3 bindings).
 
+**`wastar_search`, `wastar_search_memory_bounded` and `novbfs_search` share one
+priority-search driver per core** -- `_priority_search` (`search.py`) /
+`priority_search` (`search.rs`) -- rather than three hand-mirrored copies of
+the same loop. Named generically rather than "best-first": `wastar_search`
+(parameterized by `weight`) already generalizes classical best-first
+search/GBFS (`weight=1`) and A* (`weight=0.5`), and `novbfs_search`'s
+priority isn't a best-first evaluation function at all, so "best-first"
+would misname the thing the driver is meant to generalize over. Each of the
+three is a thin wrapper supplying the open list, the dedup store, and
+open-list-item construction (plus, for `novbfs_search`, the
+`NumericNovelty.begin_expansion` hook); the Rust side expresses this via
+small traits (`StatePayload`/`OpenList`/`DedupStore`/`SearchStrategy`), the
+idiom `multiqueue.rs`'s `MQSwitchPolicy` already uses. This makes the
+cross-backend parity invariant above structural rather than something each
+edit has to re-preserve by hand across six copies -- but two pre-existing,
+deliberately-*un*unified quirks are worth knowing before touching the driver:
+an `early_termination` successor's goal check sits *before* dedup in Python
+and *after* dedup+heuristic-eval in Rust (a pre-existing cross-language
+divergence, consistent across all three searches in each language); and
+`ehc_search`/`multiqueue_search` are excluded on purpose (`ehc` closes at
+*expansion* time and restarts on improvement; multiqueue has its own queue
+type and switch-policy abstraction) -- don't fold either into the shared
+driver.
+
 **`"=="` covers both numeric and object equality; classification comes from
 `FluentDomain`, not from the operands' shape and not from a type name.** UP's
 `EQUALS` covers both numeric equality and user-type (object) equality, and both

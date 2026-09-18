@@ -19,6 +19,7 @@ use log::{debug, info};
 use min_max_heap::MinMaxHeap;
 use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
 use std::rc::Rc;
 use std::time::SystemTime;
 use std::{collections::BinaryHeap, vec::Vec};
@@ -39,43 +40,238 @@ use super::utils::PersistentList;
 
 pub type SearchResult = (Option<Vec<Action>>, FxHashMap<&'static str, String>);
 
-trait HasTodoLen {
-    fn todo_len(&self) -> usize;
+/// Mirrors `heuristics.rs`'s `EvalGenItem`/`EvalGenOwnedItem`, generalized
+/// over the payload type `StatePayload::eval_gen` bridges between.
+type EvalItem<P> = PyResult<(P, Option<f64>)>;
+
+/// A payload an open-list item carries: `Rc<State>` (`wastar_search`,
+/// `novbfs_search`) or an owned `State` (`wastar_search_memory_bounded`,
+/// which needs ownership to store items inline in a bounded array rather
+/// than behind a refcount). Bridges `HeuristicTrait`'s `eval_gen` /
+/// `eval_gen_owned` split, which exists for the same reason.
+///
+/// `'static`: required for `eval_gen`'s boxed return type below to be well
+/// formed for a generic `Self` -- both impls satisfy it trivially (`State`
+/// is a `#[pyclass]`, hence already `'static`; `Rc<State>: 'static` follows).
+trait StatePayload: Sized + 'static {
+    fn wrap(s: State) -> Self;
+    fn as_state(&self) -> &State;
+
+    /// Evaluates `heuristic` over `states` via whichever of
+    /// `HeuristicTrait::eval_gen`/`eval_gen_owned` matches this payload.
+    fn eval_gen<'a, H, S, I>(
+        heuristic: &'a H,
+        states: I,
+        ss: &'a S,
+    ) -> PyResult<Box<dyn Iterator<Item = EvalItem<Self>> + 'a>>
+    where
+        H: HeuristicTrait,
+        S: SearchSpaceTrait,
+        I: Iterator<Item = PyResult<Self>> + 'a;
 }
 
-impl HasTodoLen for State {
-    fn todo_len(&self) -> usize {
-        self.todo.len()
+impl StatePayload for Rc<State> {
+    fn wrap(s: State) -> Self {
+        Rc::new(s)
+    }
+
+    fn as_state(&self) -> &State {
+        self.as_ref()
+    }
+
+    fn eval_gen<'a, H, S, I>(
+        heuristic: &'a H,
+        states: I,
+        ss: &'a S,
+    ) -> PyResult<Box<dyn Iterator<Item = EvalItem<Self>> + 'a>>
+    where
+        H: HeuristicTrait,
+        S: SearchSpaceTrait,
+        I: Iterator<Item = PyResult<Self>> + 'a,
+    {
+        heuristic.eval_gen(states, ss)
     }
 }
 
-impl HasTodoLen for Rc<State> {
-    fn todo_len(&self) -> usize {
-        self.todo.len()
+impl StatePayload for State {
+    fn wrap(s: State) -> Self {
+        s
+    }
+
+    fn as_state(&self) -> &State {
+        self
+    }
+
+    fn eval_gen<'a, H, S, I>(
+        heuristic: &'a H,
+        states: I,
+        ss: &'a S,
+    ) -> PyResult<Box<dyn Iterator<Item = EvalItem<Self>> + 'a>>
+    where
+        H: HeuristicTrait,
+        S: SearchSpaceTrait,
+        I: Iterator<Item = PyResult<Self>> + 'a,
+    {
+        heuristic.eval_gen_owned(states, ss)
     }
 }
 
-struct PrioritizedItem<T: HasTodoLen> {
+/// The open list `priority_search` drains: `BinaryHeap` (unbounded) or
+/// `BoundedPriorityQueue` (memory-bounded). Named distinctly from both
+/// types' inherent `push`/`pop`/`len` so a trait call can never silently
+/// resolve to the wrong one (inherent methods shadow trait methods of the
+/// same name, so an accidental name match here would risk infinite
+/// recursion the day an inherent method is refactored away).
+trait OpenList<T> {
+    fn push_item(&mut self, item: T);
+    fn pop_item(&mut self) -> Option<T>;
+    fn size(&self) -> usize;
+}
+
+impl<T: Ord> OpenList<T> for BinaryHeap<T> {
+    fn push_item(&mut self, item: T) {
+        self.push(item);
+    }
+
+    fn pop_item(&mut self) -> Option<T> {
+        self.pop()
+    }
+
+    fn size(&self) -> usize {
+        self.len()
+    }
+}
+
+impl<T: Ord> OpenList<T> for BoundedPriorityQueue<T> {
+    fn push_item(&mut self, item: T) {
+        // Accepted/rejected return value intentionally discarded.
+        self.push(item);
+    }
+
+    fn pop_item(&mut self) -> Option<T> {
+        self.pop()
+    }
+
+    fn size(&self) -> usize {
+        self.len()
+    }
+}
+
+/// The visited-state dedup store: a `FxHashSet<WeakEqState>`
+/// (`wastar_search`, `novbfs_search`) or a lossy `BloomFilter`
+/// (`wastar_search_memory_bounded`, keyed on `assignments` only.
+/// `insert_new` mirrors `HashSet::insert`'s "newly inserted"
+/// polarity regardless of backing store; a disabled store (non-temporal
+/// dedup gate off) must always report "new" without recording anything.
+trait DedupStore<P> {
+    fn insert_new(&mut self, p: &P) -> bool;
+}
+
+struct HashSetDedup {
+    enabled: bool,
+    // `State::heuristic_cache` is a `Mutex`, which is what trips this lint on
+    // `Rc<State>` -- but `WeakEqState`'s `Hash`/`PartialEq` impls only ever
+    // read `assignments`/`todo`, never `heuristic_cache`, so mutating the
+    // cache after insertion can't change a key's hash/eq out from under the
+    // set.
+    #[allow(clippy::mutable_key_type)]
+    seen: FxHashSet<WeakEqState>,
+}
+
+impl HashSetDedup {
+    fn new<S: SearchSpaceTrait>(ss: &S, weak_equality: bool) -> Self {
+        Self {
+            enabled: !ss.is_temporal() || weak_equality,
+            seen: FxHashSet::with_hasher(FxBuildHasher),
+        }
+    }
+}
+
+impl DedupStore<Rc<State>> for HashSetDedup {
+    fn insert_new(&mut self, s: &Rc<State>) -> bool {
+        if !self.enabled {
+            return true;
+        }
+        self.seen.insert(WeakEqState {
+            state: Rc::clone(s),
+        })
+    }
+}
+
+struct BloomDedup {
+    filter: Option<BloomFilter<RandomState>>,
+}
+
+impl BloomDedup {
+    fn new<S: SearchSpaceTrait>(ss: &S, weak_equality: bool) -> Self {
+        const BLOOM_ITEMS: usize = 20_000_000;
+        const BLOOM_FP_RATE: f64 = 1e-4;
+        let filter = (!ss.is_temporal() || weak_equality).then(|| {
+            BloomFilter::with_false_pos(BLOOM_FP_RATE)
+                .hasher(RandomState::default())
+                .expected_items(BLOOM_ITEMS)
+        });
+        Self { filter }
+    }
+}
+
+impl DedupStore<State> for BloomDedup {
+    fn insert_new(&mut self, s: &State) -> bool {
+        match &mut self.filter {
+            None => true,
+            // `BloomFilter::insert` returns "may have been previously
+            // present" -- the opposite polarity of `HashSet::insert`.
+            Some(filter) => !filter.insert(&s.assignments),
+        }
+    }
+}
+
+/// Per-search open-list-item construction plus the optional per-expansion
+/// hook (`novbfs_search`'s `NumericNovelty::begin_expansion`).
+trait SearchStrategy {
+    type Payload: StatePayload;
+    type Item: Ord;
+
+    /// Associated fn, not a method: taking `&self` here would hold the
+    /// strategy borrowed for the whole expansion (the successor iterator
+    /// borrows its `&State` argument for that same lifetime), conflicting
+    /// with the `&mut self` hooks below.
+    fn state_of(item: &Self::Item) -> &Self::Payload;
+
+    fn root(&mut self, s: Self::Payload, h: f64) -> PyResult<Self::Item>;
+
+    fn begin_expansion(&mut self) {}
+
+    fn child(
+        &mut self,
+        parent: &Self::Item,
+        s: Self::Payload,
+        h: f64,
+        idx: usize,
+    ) -> PyResult<Self::Item>;
+}
+
+struct PrioritizedItem<T: StatePayload> {
     heuristic: f64,
     state: T,
     idx: usize,
 }
 
-impl<T: HasTodoLen> PartialEq for PrioritizedItem<T> {
+impl<T: StatePayload> PartialEq for PrioritizedItem<T> {
     fn eq(&self, _other: &Self) -> bool {
         false
     }
 }
 
-impl<T: HasTodoLen> Eq for PrioritizedItem<T> {}
+impl<T: StatePayload> Eq for PrioritizedItem<T> {}
 
-impl<T: HasTodoLen> PartialOrd for PrioritizedItem<T> {
+impl<T: StatePayload> PartialOrd for PrioritizedItem<T> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<T: HasTodoLen> Ord for PrioritizedItem<T> {
+impl<T: StatePayload> Ord for PrioritizedItem<T> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // `BinaryHeap` is a max-heap; comparing `other` against `self` (not
         // `self` against `other`) inverts every field so `pop()` returns
@@ -85,8 +281,57 @@ impl<T: HasTodoLen> Ord for PrioritizedItem<T> {
         other
             .heuristic
             .total_cmp(&self.heuristic)
-            .then_with(|| other.state.todo_len().cmp(&self.state.todo_len()))
+            .then_with(|| {
+                other
+                    .state
+                    .as_state()
+                    .todo
+                    .len()
+                    .cmp(&self.state.as_state().todo.len())
+            })
             .then_with(|| other.idx.cmp(&self.idx))
+    }
+}
+
+/// `weight`-parameterized strategy shared by `wastar_search` (`P = Rc<State>`)
+/// and `wastar_search_memory_bounded` (`P = State`).
+struct WAStarStrategy<P> {
+    weight: f64,
+    _payload: PhantomData<P>,
+}
+
+impl<P> WAStarStrategy<P> {
+    fn new(weight: f64) -> Self {
+        Self {
+            weight,
+            _payload: PhantomData,
+        }
+    }
+}
+
+impl<P: StatePayload> SearchStrategy for WAStarStrategy<P> {
+    type Payload = P;
+    type Item = PrioritizedItem<P>;
+
+    fn state_of(item: &Self::Item) -> &P {
+        &item.state
+    }
+
+    fn root(&mut self, s: P, h: f64) -> PyResult<Self::Item> {
+        Ok(PrioritizedItem {
+            heuristic: h,
+            state: s,
+            idx: 0,
+        })
+    }
+
+    fn child(&mut self, _parent: &Self::Item, s: P, h: f64, idx: usize) -> PyResult<Self::Item> {
+        let f = self.weight * h + (1.0 - self.weight) * s.as_state().g;
+        Ok(PrioritizedItem {
+            heuristic: f,
+            state: s,
+            idx,
+        })
     }
 }
 
@@ -178,6 +423,133 @@ pub fn extract_path(state: &State) -> Vec<Action> {
         .collect()
 }
 
+/// Shared skeleton for every priority-queue-based search in this module
+/// (`wastar_search`, `wastar_search_memory_bounded`, `novbfs_search`).
+/// What it actually shares across all three: the
+/// metrics map, the `while` loop with its timeout check,
+/// `expanded_states`/`generated_states` bookkeeping, the goal checks on
+/// both the popped state and each early-terminated successor, and the
+/// "generate once, never reopen" dedup contract. What varies between
+/// callers is threaded through as parameters: `name` (log prefix), `open`/
+/// `dedup` (the queue and dedup-store implementations), and `strategy`
+/// (open-list-item construction plus the optional per-expansion hook
+/// `novbfs_search` uses for `NumericNovelty::begin_expansion`).
+///
+/// `strategy`, `open` and `dedup` are three separate `&mut` parameters on
+/// purpose: the successor closure below captures `dedup` for the whole
+/// expansion, while `strategy`/`open` are mutated inside the loop that
+/// consumes it. Bundling them into one `&mut` context struct would rely on
+/// disjoint-closure-capture to keep the borrows independent, which breaks
+/// the moment a helper method touches more than one field at once.
+#[allow(clippy::too_many_arguments)]
+fn priority_search<H, S, St, O, D>(
+    ss: &S,
+    heuristic: &H,
+    timeout: Option<f32>,
+    early_termination: bool,
+    name: &str,
+    strategy: &mut St,
+    open: &mut O,
+    dedup: &mut D,
+) -> PyResult<SearchResult>
+where
+    H: HeuristicTrait,
+    S: SearchSpaceTrait,
+    St: SearchStrategy,
+    O: OpenList<St::Item>,
+    D: DedupStore<St::Payload>,
+{
+    let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
+    let start = SystemTime::now();
+    let init = <St::Payload as StatePayload>::wrap(ss.initial_state(None)?);
+    let mut expanded_states: usize = 0;
+    let mut generated_states: usize = 1;
+
+    // Seed the dedup store; return discarded, the root is never re-checked.
+    dedup.insert_new(&init);
+
+    if early_termination && ss.goal_reached(init.as_state(), None)? {
+        metrics.insert("expanded_states", expanded_states.to_string());
+        metrics.insert("goal_depth", init.as_state().g.to_string());
+        return Ok((Some(extract_path(init.as_state())), metrics));
+    }
+
+    let init_h = match heuristic.eval(init.as_state(), ss)? {
+        Some(v) => v,
+        None => {
+            metrics.insert("expanded_states", 0.to_string());
+            return Ok((None, metrics));
+        }
+    };
+    open.push_item(strategy.root(init, init_h)?);
+
+    while let Some(current) = open.pop_item() {
+        if let Some(t) = timeout {
+            if start.elapsed().unwrap().as_secs_f32() > t {
+                return Err(PyTimeoutError::new_err("Timeout"));
+            }
+        }
+        expanded_states += 1;
+        if expanded_states.is_multiple_of(10_000) {
+            debug!(
+                "{}: expanded={} generated={} open={}",
+                name,
+                expanded_states,
+                generated_states,
+                open.size()
+            );
+        }
+
+        // Borrow, never move: `current` must stay whole for
+        // `strategy.child` below.
+        let state = St::state_of(&current).as_state();
+        if !early_termination && ss.goal_reached(state, None)? {
+            info!(
+                "{}: goal found — expanded={} depth={}",
+                name, expanded_states, state.g
+            );
+            metrics.insert("expanded_states", expanded_states.to_string());
+            metrics.insert("goal_depth", state.g.to_string());
+            return Ok((Some(extract_path(state)), metrics));
+        }
+
+        let successors_iter = ss
+            .get_successor_states_iter(state)
+            .filter_map(|rs| match rs {
+                Ok(s) => {
+                    let s = <St::Payload as StatePayload>::wrap(s);
+                    dedup.insert_new(&s).then_some(Ok(s))
+                }
+                Err(e) => Some(Err(e)),
+            });
+
+        strategy.begin_expansion();
+
+        for rs in <St::Payload as StatePayload>::eval_gen(heuristic, successors_iter, ss)? {
+            let (s, h) = rs?;
+            if early_termination && ss.goal_reached(s.as_state(), None)? {
+                info!(
+                    "{}: goal found — expanded={} depth={}",
+                    name,
+                    expanded_states,
+                    s.as_state().g
+                );
+                metrics.insert("expanded_states", expanded_states.to_string());
+                metrics.insert("goal_depth", s.as_state().g.to_string());
+                return Ok((Some(extract_path(s.as_state())), metrics));
+            }
+            if let Some(v) = h {
+                let item = strategy.child(&current, s, v, generated_states)?;
+                open.push_item(item);
+            }
+            generated_states += 1;
+        }
+    }
+    info!("{}: no solution found — expanded={}", name, expanded_states);
+    metrics.insert("expanded_states", expanded_states.to_string());
+    Ok((None, metrics))
+}
+
 pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     ss: &S,
     heuristic: &H,
@@ -190,110 +562,19 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         "wastar_search: weight={} timeout={:?} early_termination={} weak_equality={}",
         weight, timeout, early_termination, weak_equality
     );
-    let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
-    let start = SystemTime::now();
-    let init = Rc::new(ss.initial_state(None)?);
-    let mut expanded_states = 0;
-    let mut generated_states = 1;
-    if early_termination && ss.goal_reached(&init, None)? {
-        metrics.insert("expanded_states", expanded_states.to_string());
-        metrics.insert("goal_depth", init.g.to_string());
-        return Ok((Some(extract_path(&init)), metrics));
-    }
-
-    let dedup = !ss.is_temporal() || weak_equality;
-    // State and WeakEqState contain interior mutability only for heuristic
-    // caches. The mutable fields are ignored by Hash/Eq, so using them as HashSet keys is
-    // safe.
-    #[allow(clippy::mutable_key_type)]
-    let mut visited_states = FxHashSet::with_hasher(FxBuildHasher);
-    if dedup {
-        visited_states.insert(WeakEqState {
-            state: Rc::clone(&init),
-        });
-    }
-
-    let init_h = match heuristic.eval(&init, ss)? {
-        Some(v) => v,
-        None => {
-            metrics.insert("expanded_states", 0.to_string());
-            return Ok((None, metrics));
-        }
-    };
-    let mut open = BinaryHeap::new();
-    open.push(PrioritizedItem {
-        heuristic: init_h,
-        state: init,
-        idx: 0,
-    });
-    while let Some(current) = open.pop() {
-        if let Some(t) = timeout {
-            if start.elapsed().unwrap().as_secs_f32() > t {
-                return Err(PyTimeoutError::new_err("Timeout"));
-            }
-        }
-        let state = current.state;
-        expanded_states += 1;
-        if expanded_states % 10_000 == 0 {
-            debug!(
-                "wastar_search: expanded={} generated={} open={}",
-                expanded_states,
-                generated_states,
-                open.len()
-            );
-        }
-        if !early_termination && ss.goal_reached(&state, None)? {
-            info!(
-                "wastar_search: goal found — expanded={} depth={}",
-                expanded_states, state.g
-            );
-            metrics.insert("expanded_states", expanded_states.to_string());
-            metrics.insert("goal_depth", state.g.to_string());
-            return Ok((Some(extract_path(&state)), metrics));
-        } else {
-            let successors_iter = ss
-                .get_successor_states_iter(&state)
-                .filter_map(|rs| match rs {
-                    Ok(s) => {
-                        let s = Rc::new(s);
-                        let keep = !dedup
-                            || visited_states.insert(WeakEqState {
-                                state: Rc::clone(&s),
-                            });
-                        keep.then_some(Ok(s))
-                    }
-                    Err(e) => Some(Err(e)),
-                });
-
-            for rs in heuristic.eval_gen(successors_iter, ss)? {
-                let (s, h) = rs?;
-                if early_termination && ss.goal_reached(&s, None)? {
-                    info!(
-                        "wastar_search: goal found — expanded={} depth={}",
-                        expanded_states, s.g
-                    );
-                    metrics.insert("expanded_states", expanded_states.to_string());
-                    metrics.insert("goal_depth", s.g.to_string());
-                    return Ok((Some(extract_path(&s)), metrics));
-                }
-                if let Some(v) = h {
-                    let f = weight * v + (1.0 - weight) * s.g;
-                    open.push(PrioritizedItem {
-                        heuristic: f,
-                        state: s,
-                        idx: generated_states,
-                    });
-                }
-                generated_states += 1;
-            }
-        }
-    }
-    info!(
-        "wastar_search: no solution found — expanded={}",
-        expanded_states
-    );
-    metrics.insert("expanded_states", expanded_states.to_string());
-    Ok((None, metrics))
+    let mut strategy = WAStarStrategy::<Rc<State>>::new(weight);
+    let mut open: BinaryHeap<PrioritizedItem<Rc<State>>> = BinaryHeap::new();
+    let mut dedup = HashSetDedup::new(ss, weak_equality);
+    priority_search(
+        ss,
+        heuristic,
+        timeout,
+        early_termination,
+        "wastar_search",
+        &mut strategy,
+        &mut open,
+        &mut dedup,
+    )
 }
 
 pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
@@ -308,113 +589,21 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
         "wastar_search_memory_bounded: weight={} timeout={:?} early_termination={} weak_equality={}",
         weight, timeout, early_termination, weak_equality
     );
-    let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
-    let start = SystemTime::now();
-    let init = ss.initial_state(None)?;
-    let mut expanded_states = 0;
-    let mut generated_states = 1;
-    if early_termination && ss.goal_reached(&init, None)? {
-        metrics.insert("expanded_states", expanded_states.to_string());
-        metrics.insert("goal_depth", init.g.to_string());
-        return Ok((Some(extract_path(&init)), metrics));
-    }
-
-    let mut visited_states: Option<BloomFilter<RandomState>> = if !ss.is_temporal() || weak_equality
-    {
-        const BLOOM_ITEMS: usize = 20_000_000;
-        const BLOOM_FP_RATE: f64 = 1e-4;
-        let mut visited_states = BloomFilter::with_false_pos(BLOOM_FP_RATE)
-            .hasher(RandomState::default())
-            .expected_items(BLOOM_ITEMS);
-        visited_states.insert(&init.assignments);
-        Some(visited_states)
-    } else {
-        None
-    };
-
-    let init_h = match heuristic.eval(&init, ss)? {
-        Some(v) => v,
-        None => {
-            metrics.insert("expanded_states", 0.to_string());
-            return Ok((None, metrics));
-        }
-    };
-
     const QUEUE_BOUND: usize = 400_000;
-    let mut open = BoundedPriorityQueue::with_bound(QUEUE_BOUND);
-    open.push(PrioritizedItem {
-        heuristic: init_h,
-        state: init,
-        idx: 0,
-    });
-    while let Some(current) = open.pop() {
-        if let Some(t) = timeout {
-            if start.elapsed().unwrap().as_secs_f32() > t {
-                return Err(PyTimeoutError::new_err("Timeout"));
-            }
-        }
-        let state = current.state;
-        expanded_states += 1;
-        if expanded_states % 10_000 == 0 {
-            debug!(
-                "wastar_search_memory_bounded: expanded={} generated={} open={}",
-                expanded_states,
-                generated_states,
-                open.len()
-            );
-        }
-        if !early_termination && ss.goal_reached(&state, None)? {
-            info!(
-                "wastar_search_memory_bounded: goal found — expanded={} depth={}",
-                expanded_states, state.g
-            );
-            metrics.insert("expanded_states", expanded_states.to_string());
-            metrics.insert("goal_depth", state.g.to_string());
-            return Ok((Some(extract_path(&state)), metrics));
-        } else {
-            let successors_iter = ss
-                .get_successor_states_iter(&state)
-                .filter_map(|rs| match rs {
-                    Ok(s) => {
-                        let keep = if let Some(ref mut visited) = visited_states {
-                            !visited.insert(&s.assignments)
-                        } else {
-                            true
-                        };
-                        keep.then_some(Ok(s))
-                    }
-                    Err(e) => Some(Err(e)),
-                });
-
-            for rs in heuristic.eval_gen_owned(successors_iter, ss)? {
-                let (s, h) = rs?;
-                if early_termination && ss.goal_reached(&s, None)? {
-                    info!(
-                        "wastar_search_memory_bounded: goal found — expanded={} depth={}",
-                        expanded_states, s.g
-                    );
-                    metrics.insert("expanded_states", expanded_states.to_string());
-                    metrics.insert("goal_depth", s.g.to_string());
-                    return Ok((Some(extract_path(&s)), metrics));
-                }
-                if let Some(v) = h {
-                    let f = weight * v + (1.0 - weight) * s.g;
-                    open.push(PrioritizedItem {
-                        heuristic: f,
-                        state: s,
-                        idx: generated_states,
-                    });
-                }
-                generated_states += 1;
-            }
-        }
-    }
-    info!(
-        "wastar_search_memory_bounded: no solution found — expanded={}",
-        expanded_states
-    );
-    metrics.insert("expanded_states", expanded_states.to_string());
-    Ok((None, metrics))
+    let mut strategy = WAStarStrategy::<State>::new(weight);
+    let mut open: BoundedPriorityQueue<PrioritizedItem<State>> =
+        BoundedPriorityQueue::with_bound(QUEUE_BOUND);
+    let mut dedup = BloomDedup::new(ss, weak_equality);
+    priority_search(
+        ss,
+        heuristic,
+        timeout,
+        early_termination,
+        "wastar_search_memory_bounded",
+        &mut strategy,
+        &mut open,
+        &mut dedup,
+    )
 }
 
 pub fn bfs_search<S: SearchSpaceTrait>(
@@ -675,8 +864,76 @@ impl Ord for NovBFSItem {
             .cmp(&self.novelty)
             .then_with(|| other.h.total_cmp(&self.h))
             .then_with(|| other.g_key.total_cmp(&self.g_key))
-            .then_with(|| other.state.todo_len().cmp(&self.state.todo_len()))
+            .then_with(|| other.state.todo.len().cmp(&self.state.todo.len()))
             .then_with(|| other.idx.cmp(&self.idx))
+    }
+}
+
+/// Strategy for `novbfs_search`: numeric-novelty scoring via `NumericNovelty`,
+/// plus the `prefer_higher_g` cost-tie-break sign flip.
+struct NovBFSStrategy<'a> {
+    novelty: &'a mut NumericNovelty,
+    prefer_higher_g: bool,
+}
+
+impl NovBFSStrategy<'_> {
+    fn g_key(&self, g: f64) -> f64 {
+        if self.prefer_higher_g {
+            -g
+        } else {
+            g
+        }
+    }
+}
+
+impl SearchStrategy for NovBFSStrategy<'_> {
+    type Payload = Rc<State>;
+    type Item = NovBFSItem;
+
+    fn state_of(item: &Self::Item) -> &Rc<State> {
+        &item.state
+    }
+
+    fn root(&mut self, s: Rc<State>, h: f64) -> PyResult<Self::Item> {
+        let partition = self.novelty.start(h);
+        // Seeds the tables (return discarded); the root's *stored* novelty
+        // is hard-coded to 1 below regardless.
+        self.novelty.eval(&s, partition, None, None)?;
+        let g_key = self.g_key(s.g);
+        Ok(NovBFSItem {
+            novelty: 1,
+            h,
+            g_key,
+            idx: 0,
+            state: s,
+            partition,
+        })
+    }
+
+    fn begin_expansion(&mut self) {
+        self.novelty.begin_expansion();
+    }
+
+    fn child(
+        &mut self,
+        parent: &Self::Item,
+        s: Rc<State>,
+        h: f64,
+        idx: usize,
+    ) -> PyResult<Self::Item> {
+        let partition = self.novelty.partition_of(h);
+        let novelty =
+            self.novelty
+                .eval(&s, partition, Some(&parent.state), Some(parent.partition))?;
+        let g_key = self.g_key(s.g);
+        Ok(NovBFSItem {
+            novelty,
+            h,
+            g_key,
+            idx,
+            state: s,
+            partition,
+        })
     }
 }
 
@@ -718,131 +975,20 @@ pub fn novbfs_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         "novbfs_search: prefer_higher_g={} timeout={:?} early_termination={} weak_equality={}",
         prefer_higher_g, timeout, early_termination, weak_equality
     );
-    let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
-    let start = SystemTime::now();
-    let init = Rc::new(ss.initial_state(None)?);
-    let mut expanded_states = 0;
-    let mut generated_states: usize = 1;
-    if early_termination && ss.goal_reached(&init, None)? {
-        metrics.insert("expanded_states", expanded_states.to_string());
-        metrics.insert("goal_depth", init.g.to_string());
-        return Ok((Some(extract_path(&init)), metrics));
-    }
-
-    let dedup = !ss.is_temporal() || weak_equality;
-    // State and WeakEqState contain interior mutability only for heuristic
-    // caches. The mutable fields are ignored by Hash/Eq, so using them as HashSet keys is
-    // safe.
-    #[allow(clippy::mutable_key_type)]
-    let mut visited_states = FxHashSet::with_hasher(FxBuildHasher);
-    if dedup {
-        visited_states.insert(WeakEqState {
-            state: Rc::clone(&init),
-        });
-    }
-
-    let init_h = match heuristic.eval(&init, ss)? {
-        Some(v) => v,
-        None => {
-            metrics.insert("expanded_states", 0.to_string());
-            return Ok((None, metrics));
-        }
+    let mut strategy = NovBFSStrategy {
+        novelty,
+        prefer_higher_g,
     };
-    let init_partition = novelty.start(init_h);
-    // Seeds the tables (return discarded); the root's *stored* novelty is
-    // hard-coded to 1 below regardless.
-    novelty.eval(&init, init_partition, None, None)?;
-
-    let g_key = |g: f64| -> f64 {
-        if prefer_higher_g {
-            -g
-        } else {
-            g
-        }
-    };
-
     let mut open: BinaryHeap<NovBFSItem> = BinaryHeap::new();
-    open.push(NovBFSItem {
-        novelty: 1,
-        h: init_h,
-        g_key: g_key(init.g),
-        idx: 0,
-        state: init,
-        partition: init_partition,
-    });
-
-    while let Some(current) = open.pop() {
-        if let Some(t) = timeout {
-            if start.elapsed().unwrap().as_secs_f32() > t {
-                return Err(PyTimeoutError::new_err("Timeout"));
-            }
-        }
-        let state = current.state;
-        let state_partition = current.partition;
-        expanded_states += 1;
-        if expanded_states % 10_000 == 0 {
-            debug!(
-                "novbfs_search: expanded={} generated={} open={}",
-                expanded_states,
-                generated_states,
-                open.len()
-            );
-        }
-        if !early_termination && ss.goal_reached(&state, None)? {
-            info!(
-                "novbfs_search: goal found — expanded={} depth={}",
-                expanded_states, state.g
-            );
-            metrics.insert("expanded_states", expanded_states.to_string());
-            metrics.insert("goal_depth", state.g.to_string());
-            return Ok((Some(extract_path(&state)), metrics));
-        }
-
-        let successors_iter = ss
-            .get_successor_states_iter(&state)
-            .filter_map(|rs| match rs {
-                Ok(s) => {
-                    let s = Rc::new(s);
-                    let keep = !dedup
-                        || visited_states.insert(WeakEqState {
-                            state: Rc::clone(&s),
-                        });
-                    keep.then_some(Ok(s))
-                }
-                Err(e) => Some(Err(e)),
-            });
-
-        novelty.begin_expansion();
-        for rs in heuristic.eval_gen(successors_iter, ss)? {
-            let (s, h) = rs?;
-            if early_termination && ss.goal_reached(&s, None)? {
-                info!(
-                    "novbfs_search: goal found — expanded={} depth={}",
-                    expanded_states, s.g
-                );
-                metrics.insert("expanded_states", expanded_states.to_string());
-                metrics.insert("goal_depth", s.g.to_string());
-                return Ok((Some(extract_path(&s)), metrics));
-            }
-            if let Some(h) = h {
-                let partition = novelty.partition_of(h);
-                let novelty = novelty.eval(&s, partition, Some(&state), Some(state_partition))?;
-                open.push(NovBFSItem {
-                    novelty,
-                    h,
-                    g_key: g_key(s.g),
-                    idx: generated_states,
-                    state: s,
-                    partition,
-                });
-            }
-            generated_states += 1;
-        }
-    }
-    info!(
-        "novbfs_search: no solution found — expanded={}",
-        expanded_states
-    );
-    metrics.insert("expanded_states", expanded_states.to_string());
-    Ok((None, metrics))
+    let mut dedup = HashSetDedup::new(ss, weak_equality);
+    priority_search(
+        ss,
+        heuristic,
+        timeout,
+        early_termination,
+        "novbfs_search",
+        &mut strategy,
+        &mut open,
+        &mut dedup,
+    )
 }
