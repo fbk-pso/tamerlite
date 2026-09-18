@@ -648,7 +648,7 @@ pub fn simplify(
 #[pyfunction]
 pub fn evaluate(exp: Vec<PyExpressionNode>, state: &State) -> PyResult<PyExpressionNode> {
     Ok(PyExpressionNode {
-        v: internal_evaluate(&exp.into_iter().map(|e| e.v).collect(), state)?,
+        v: internal_evaluate(&exp.into_iter().map(|e| e.v).collect::<Vec<_>>(), state)?,
     })
 }
 
@@ -657,10 +657,24 @@ pub trait FluentValueTrait {
 }
 
 pub fn internal_evaluate(
-    exp: &Vec<ExpressionNode>,
+    exp: &[ExpressionNode],
     fluent_values: &impl FluentValueTrait,
 ) -> PyResult<ExpressionNode> {
-    let mut res: Vec<ExpressionNode> = Vec::with_capacity(exp.len() - 1);
+    let mut res: Vec<ExpressionNode> = Vec::with_capacity(exp.len().saturating_sub(1));
+    internal_evaluate_into(exp, fluent_values, &mut res)
+}
+
+/// Same as `internal_evaluate`, but writes the postfix-evaluation scratch
+/// stack into caller-provided `res` (cleared first) instead of allocating a
+/// fresh `Vec` every call. Lets a hot caller that evaluates many differently-
+/// assigned instances of the same expression shape in a tight loop reuse one
+/// buffer's capacity across calls instead of paying an allocation per evaluation.
+pub fn internal_evaluate_into(
+    exp: &[ExpressionNode],
+    fluent_values: &impl FluentValueTrait,
+    res: &mut Vec<ExpressionNode>,
+) -> PyResult<ExpressionNode> {
+    res.clear();
     for e in exp {
         let value = match &e {
             ExpressionNode::And(v) => {
@@ -700,11 +714,11 @@ pub fn internal_evaluate(
                 let val = num_cmp(as_num_ref(&res[*p1])?, as_num_ref(&res[*p2])?).is_lt();
                 ExpressionNode::Bool(val)
             }
-            ExpressionNode::Plus(v) => fold_numeric(&res, v, |a, b| *a += b, |a, b| *a += b)?,
+            ExpressionNode::Plus(v) => fold_numeric(res, v, |a, b| *a += b, |a, b| *a += b)?,
             ExpressionNode::Minus(p1, p2) => {
-                fold_numeric(&res, &[*p1, *p2], |a, b| *a -= b, |a, b| *a -= b)?
+                fold_numeric(res, &[*p1, *p2], |a, b| *a -= b, |a, b| *a -= b)?
             }
-            ExpressionNode::Times(v) => fold_numeric(&res, v, |a, b| *a *= b, |a, b| *a *= b)?,
+            ExpressionNode::Times(v) => fold_numeric(res, v, |a, b| *a *= b, |a, b| *a *= b)?,
             ExpressionNode::Div(p1, p2) => num_div(as_num_ref(&res[*p1])?, as_num_ref(&res[*p2])?)?,
             ExpressionNode::Fluent(s) => fluent_values.get_value(*s).clone(),
             ExpressionNode::InterpretedFunction {

@@ -450,7 +450,7 @@ impl SearchSpace {
         Ok(None)
     }
 
-    fn is_sat(&self, conditions: &Vec<ExpressionNode>, state: &State) -> PyResult<bool> {
+    fn is_sat(&self, conditions: &[ExpressionNode], state: &State) -> PyResult<bool> {
         let sat = match internal_evaluate(conditions, state)? {
             ExpressionNode::Bool(v) => v,
             _ => {

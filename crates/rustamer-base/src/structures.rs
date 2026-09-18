@@ -22,6 +22,11 @@ use pyo3::prelude::*;
 use super::expressions::{ExpressionNode, PyExpressionNode};
 use super::utils::{big_rational_to_py_fraction, get_big_rational};
 
+/// Invariant: within one `Event`'s `effects`, no two `Effect`s target the
+/// same `fluent`. `Encoder._convert_effects` establishes this
+/// by folding every UP effect on a given fluent -- increase, decrease, and
+/// assign alike -- into a single `Effect` before an `Event` ever exists, so
+/// a well-formed `Event` never violates it.
 #[pyclass(frozen, from_py_object)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Effect {

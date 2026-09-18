@@ -16,7 +16,6 @@
 //
 
 use im::Vector;
-use itertools::Itertools;
 use num::{BigInt, BigRational, Zero};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
@@ -271,6 +270,7 @@ struct OperatorHmax {
     conditions: Vec<Vec<ExpressionNode>>,
     condition_expressions: Vec<Expression>,
     effects: Vec<Effect>,
+    effect_fluents: Vec<Vec<usize>>,
     cost: f64,
 }
 
@@ -2178,22 +2178,181 @@ impl DeleteRelaxationHeuristic {
     }
 }
 
+/// Per-fluent reachable-value tracking for `HMaxExplicit`: `values` is
+/// insertion-ordered (so "every value added after size `n`" is the slice
+/// `values[n..]`, which is what the semi-naive delta enumeration below walks).
+#[derive(Clone, Debug, Default)]
+struct ValueSet {
+    values: Vec<ExpressionNode>,
+    set: FxHashSet<ExpressionNode>,
+}
+
+impl ValueSet {
+    fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    /// Inserts `v`, returning whether it was new.
+    fn insert(&mut self, v: ExpressionNode) -> bool {
+        if self.set.insert(v.clone()) {
+            self.values.push(v);
+            true
+        } else {
+            false
+        }
+    }
+}
+
 pub struct FluentAssignments<'a> {
-    pub assignments: FxHashMap<usize, &'a ExpressionNode>,
+    fluents: &'a [usize],
+    values: &'a [&'a ExpressionNode],
 }
 
 impl FluentValueTrait for FluentAssignments<'_> {
     fn get_value(&self, fluent: usize) -> &ExpressionNode {
-        self.assignments.get(&fluent).unwrap()
+        let pos = self
+            .fluents
+            .iter()
+            .position(|&f| f == fluent)
+            .expect("fluent must be one of this expression's own fluents");
+        self.values[pos]
     }
 }
 
-impl<'a> FluentAssignments<'a> {
-    pub fn new(fluents: &[usize], values: Vec<&'a ExpressionNode>) -> Self {
-        let assignments: FxHashMap<usize, &ExpressionNode> =
-            fluents.iter().cloned().zip(values).collect();
-        FluentAssignments { assignments }
+/// Fluent ids referenced by `exp`, deduplicated in first-occurrence order.
+/// Dedup also shrinks the cross-product: an expression referencing the same
+/// fluent twice (e.g. `x + x`) is a single cross-product dimension, not two.
+fn dedup_fluents(exp: &[ExpressionNode]) -> Vec<usize> {
+    let mut seen: FxHashSet<usize> = FxHashSet::with_hasher(FxBuildHasher);
+    let mut out = Vec::new();
+    for node in exp {
+        if let ExpressionNode::Fluent(f) = node {
+            if seen.insert(*f) {
+                out.push(*f);
+            }
+        }
     }
+    out
+}
+
+/// Enumerates the cartesian product of `assignments[fluents[i]].values[lo..hi]`
+/// for each `(lo, hi)` in `ranges` (parallel to `fluents`), filling `cur`
+/// with one reference per position and invoking `body` for each combination.
+/// Any range with `lo >= hi` makes the whole product empty. `body` returns
+/// `Ok(false)` to stop early, propagated as `Ok(false)`; a completed
+/// enumeration returns `Ok(true)`.
+fn for_each_combination<'a>(
+    fluents: &[usize],
+    assignments: &'a [ValueSet],
+    ranges: &[(usize, usize)],
+    cur: &mut Vec<&'a ExpressionNode>,
+    mut body: impl FnMut(&[&'a ExpressionNode]) -> PyResult<bool>,
+) -> PyResult<bool> {
+    let k = fluents.len();
+    if ranges.iter().any(|&(lo, hi)| lo >= hi) {
+        return Ok(true);
+    }
+    let mut idx: Vec<usize> = ranges.iter().map(|&(lo, _)| lo).collect();
+    cur.clear();
+    cur.resize(k, &assignments[fluents[0]].values[idx[0]]);
+    loop {
+        for i in 0..k {
+            cur[i] = &assignments[fluents[i]].values[idx[i]];
+        }
+        if !body(cur)? {
+            return Ok(false);
+        }
+        // Mixed-radix increment, rightmost position first.
+        let mut pos = k;
+        loop {
+            if pos == 0 {
+                return Ok(true);
+            }
+            pos -= 1;
+            idx[pos] += 1;
+            if idx[pos] < ranges[pos].1 {
+                break;
+            }
+            idx[pos] = ranges[pos].0;
+        }
+    }
+}
+
+/// Semi-naive delta enumeration: evaluates `exp` on every combination of its
+/// (already deduplicated) `fluents`' reachable values that includes at
+/// least one value added since `old_sizes` was last updated by this same
+/// function, then updates `old_sizes` to the current sizes. Reachable-value
+/// sets only ever grow and a combination is consumed either as a set
+/// (effects) or as an existence check (`exp_can_be_true`), so which round
+/// first sees a given combination doesn't matter, only that it's seen
+/// exactly once.
+///
+/// `old_sizes` is intentionally left stale when `visit` stops the
+/// enumeration early: the only caller that does that (`exp_can_be_true`,
+/// via a `true` result) never re-checks that expression again this eval.
+///
+/// A nullary expression (no fluents) has exactly one possible value,
+/// computed once ever: `old_sizes` conventionally holds `[1]` after that
+/// happens, and anything else (including empty) before.
+fn for_each_new_value(
+    exp: &[ExpressionNode],
+    fluents: &[usize],
+    assignments: &[ValueSet],
+    old_sizes: &mut Vec<usize>,
+    scratch: &mut Vec<ExpressionNode>,
+    mut visit: impl FnMut(ExpressionNode) -> PyResult<bool>,
+) -> PyResult<bool> {
+    let k = fluents.len();
+    if k == 0 {
+        if old_sizes.first() == Some(&1) {
+            return Ok(true);
+        }
+        let empty = FluentAssignments {
+            fluents: &[],
+            values: &[],
+        };
+        let value = internal_evaluate_into(exp, &empty, scratch)?;
+        *old_sizes = vec![1];
+        return visit(value);
+    }
+
+    let new_sizes: Vec<usize> = fluents.iter().map(|&f| assignments[f].len()).collect();
+    if old_sizes.len() != k {
+        old_sizes.clear();
+        old_sizes.resize(k, 0);
+    }
+    if *old_sizes == new_sizes {
+        return Ok(true);
+    }
+
+    let mut cur: Vec<&ExpressionNode> = Vec::new();
+    for j in 0..k {
+        let ranges: Vec<(usize, usize)> = (0..k)
+            .map(|i| {
+                if i < j {
+                    (0, old_sizes[i])
+                } else if i == j {
+                    (old_sizes[i], new_sizes[i])
+                } else {
+                    (0, new_sizes[i])
+                }
+            })
+            .collect();
+        let completed =
+            for_each_combination(fluents, assignments, &ranges, &mut cur, |cur_slice| {
+                let fa = FluentAssignments {
+                    fluents,
+                    values: cur_slice,
+                };
+                let value = internal_evaluate_into(exp, &fa, scratch)?;
+                visit(value)
+            })?;
+        if !completed {
+            return Ok(false);
+        }
+    }
+    *old_sizes = new_sizes;
+    Ok(true)
 }
 
 #[derive(Clone, Debug)]
@@ -2202,16 +2361,13 @@ pub struct HMaxExplicit {
     events: FxHashMap<Action, Vec<(Timing, Event)>>,
     goals: Vec<Vec<ExpressionNode>>,
     goal_expressions: Vec<Expression>,
+    expr_fluents: FxHashMap<Expression, Vec<usize>>,
     extra_fluents: FxHashMap<Action, Vec<Vec<ExpressionNode>>>,
     num_fluents: usize,
     operators: Vec<OperatorHmax>,
     operator_conditions_fluents: Vec<FxHashSet<usize>>,
     operator_effects_fluents: Vec<FxHashSet<usize>>,
     internal_caching: HeuristicCache,
-    /// `_eval` seeds `assignments_changes` with this every call: every
-    /// fluent, including the extra ones (index >= `fluent_types.len()`)
-    /// that encode event progress.
-    initial_assignments_changes: FxHashSet<usize>,
 }
 
 impl HMaxExplicit {
@@ -2257,11 +2413,14 @@ impl HMaxExplicit {
                         .iter()
                         .map(|cond| expression_manager.put(cond))
                         .collect();
+                    let effect_fluents: Vec<Vec<usize>> =
+                        effects.iter().map(|e| dedup_fluents(&e.value)).collect();
                     operators.push(OperatorHmax {
                         action: *a,
                         conditions,
                         condition_expressions,
                         effects,
+                        effect_fluents,
                         cost: 1.0,
                     });
                 }
@@ -2276,6 +2435,25 @@ impl HMaxExplicit {
             .iter()
             .map(|cond| expression_manager.put(cond))
             .collect();
+
+        let mut expr_fluents: FxHashMap<Expression, Vec<usize>> =
+            FxHashMap::with_hasher(FxBuildHasher);
+        for (cond, &id) in goals.iter().zip(goal_expressions.iter()) {
+            expr_fluents
+                .entry(id)
+                .or_insert_with(|| dedup_fluents(cond));
+        }
+        for operator in &operators {
+            for (cond, &id) in operator
+                .conditions
+                .iter()
+                .zip(operator.condition_expressions.iter())
+            {
+                expr_fluents
+                    .entry(id)
+                    .or_insert_with(|| dedup_fluents(cond));
+            }
+        }
 
         let mut operator_conditions_fluents = Vec::with_capacity(operators.len());
         for operator in &operators {
@@ -2309,113 +2487,82 @@ impl HMaxExplicit {
             None
         };
 
-        let initial_assignments_changes: FxHashSet<usize> = (0..num_fluents).collect();
-
         let res = HMaxExplicit {
             actions,
             events,
             goals,
             goal_expressions,
+            expr_fluents,
             extra_fluents,
             num_fluents,
             operators,
             operator_conditions_fluents,
             operator_effects_fluents,
             internal_caching: Arc::new(Mutex::new(internal_caching)),
-            initial_assignments_changes,
         };
         Ok(res)
     }
 
-    fn extract_fluents(&self, exp: &Vec<ExpressionNode>) -> Vec<usize> {
-        let mut exp_fluents = Vec::new();
-        for exp_node in exp {
-            if let ExpressionNode::Fluent(f) = exp_node {
-                exp_fluents.push(*f);
-            }
-        }
-
-        exp_fluents
-    }
-
-    /// Enumerates every value `exp` can take given the current, still-growing
-    /// reachable-value sets of its fluents. Unlike `DeleteRelaxationHeuristic`,
-    /// which only ever evaluates an interpreted-function condition against
-    /// the real, concrete search state, this cross-product can hand a
-    /// callable an argument combination that never jointly occurs in a
-    /// reachable state. A partial callable (e.g. a lookup table missing a
-    /// key) can therefore raise here in a way it wouldn't under
-    /// hff/hadd/hmax -- the same class of hazard as `internal_evaluate`'s
-    /// own `Div` raising a `ZeroDivisionError` on relaxed values, just with
-    /// arbitrary user code instead of a builtin operator -- so this (and
-    /// every caller up to `eval`) propagates `PyResult`.
-    fn possible_values<'a>(
-        &'a self,
-        exp: &'a Vec<ExpressionNode>,
-        assignments: &'a [FxHashSet<ExpressionNode>],
-        exp_fluents: &'a [usize],
-    ) -> impl Iterator<Item = PyResult<ExpressionNode>> + 'a {
-        let values: Vec<&FxHashSet<ExpressionNode>> =
-            exp_fluents.iter().map(|&f| &assignments[f]).collect();
-
-        values
-            .iter()
-            .map(|fluent_values| fluent_values.iter())
-            .multi_cartesian_product()
-            .map(move |state_values: Vec<&ExpressionNode>| {
-                let exp_assignments = FluentAssignments::new(exp_fluents, state_values);
-                internal_evaluate(exp, &exp_assignments)
-            })
-    }
-
+    /// Enumerates only the values `exp` can newly take (`for_each_new_value`)
+    /// and reports whether any of them is `true`, short-circuiting on the
+    /// first one. Unlike `DeleteRelaxationHeuristic`, which only ever
+    /// evaluates an interpreted-function condition against the real,
+    /// concrete search state, this cross-product can hand a callable an
+    /// argument combination that never jointly occurs in a reachable state.
+    /// A partial callable (e.g. a lookup table missing a key) can therefore
+    /// raise here in a way it wouldn't under hff/hadd/hmax -- the same class
+    /// of hazard as `internal_evaluate`'s own `Div` raising a
+    /// `ZeroDivisionError` on relaxed values, just with arbitrary user code
+    /// instead of a builtin operator -- so this (and every caller up to
+    /// `eval`) propagates `PyResult`.
     fn exp_can_be_true(
         &self,
-        exp: &Vec<ExpressionNode>,
+        exp: &[ExpressionNode],
         exp_id: Expression,
-        assignments: &[FxHashSet<ExpressionNode>],
-        assignments_changes: &FxHashSet<usize>,
+        assignments: &[ValueSet],
         cache_can_be_true: &mut FxHashMap<Expression, bool>,
+        old_sizes_by_expr: &mut FxHashMap<Expression, Vec<usize>>,
+        scratch: &mut Vec<ExpressionNode>,
     ) -> PyResult<bool> {
-        let exp_fluents;
-        if cache_can_be_true.contains_key(&exp_id) {
-            if cache_can_be_true[&exp_id] {
-                return Ok(true);
-            }
-
-            exp_fluents = self.extract_fluents(exp);
-            let exp_fluents_set: FxHashSet<usize> = exp_fluents.iter().copied().collect();
-            if exp_fluents_set.is_disjoint(assignments_changes) {
-                return Ok(false);
-            }
-        } else {
-            exp_fluents = self.extract_fluents(exp);
+        if cache_can_be_true.get(&exp_id) == Some(&true) {
+            return Ok(true);
         }
 
-        for value in self.possible_values(exp, assignments, &exp_fluents) {
-            if value? == ExpressionNode::Bool(true) {
-                cache_can_be_true.insert(exp_id, true);
-                return Ok(true);
+        let fluents = &self.expr_fluents[&exp_id];
+        let old_sizes = old_sizes_by_expr.entry(exp_id).or_default();
+        let mut found = false;
+        for_each_new_value(exp, fluents, assignments, old_sizes, scratch, |value| {
+            if value == ExpressionNode::Bool(true) {
+                found = true;
+                Ok(false)
+            } else {
+                Ok(true)
             }
+        })?;
+
+        if found {
+            cache_can_be_true.insert(exp_id, true);
         }
-        cache_can_be_true.insert(exp_id, false);
-        Ok(false)
+        Ok(found)
     }
 
     fn can_be_true(
         &self,
         expressions: &[Vec<ExpressionNode>],
         expression_ids: &[Expression],
-        assignments: &[FxHashSet<ExpressionNode>],
-        assignments_changes: &FxHashSet<usize>,
+        assignments: &[ValueSet],
         cache_can_be_true: &mut FxHashMap<Expression, bool>,
+        old_sizes_by_expr: &mut FxHashMap<Expression, Vec<usize>>,
+        scratch: &mut Vec<ExpressionNode>,
     ) -> PyResult<bool> {
         for (i, exp) in expressions.iter().enumerate() {
             if !self.exp_can_be_true(
                 exp,
                 expression_ids[i],
                 assignments,
-                assignments_changes,
                 cache_can_be_true,
+                old_sizes_by_expr,
+                scratch,
             )? {
                 return Ok(false);
             }
@@ -2448,11 +2595,10 @@ impl HMaxExplicit {
     }
 
     fn _eval(&self, state: &State) -> PyResult<Option<f64>> {
-        let mut assignments: Vec<FxHashSet<ExpressionNode>> =
-            vec![FxHashSet::with_hasher(FxBuildHasher); self.num_fluents];
+        let mut assignments: Vec<ValueSet> = vec![ValueSet::default(); self.num_fluents];
         // add state assignments to assignments
         for (f, v) in state.assignments.iter().enumerate() {
-            assignments[f] = FxHashSet::from_iter([v.clone()]);
+            assignments[f].insert(v.clone());
         }
         // add extra fluents to assignments
         for action in self.events.keys() {
@@ -2464,23 +2610,40 @@ impl HMaxExplicit {
 
             for (i, f) in self.extra_fluents[action].iter().enumerate() {
                 if let ExpressionNode::Fluent(f) = &f[0] {
-                    assignments[*f] = FxHashSet::from_iter([ExpressionNode::Bool(i == idx)]);
+                    assignments[*f].insert(ExpressionNode::Bool(i == idx));
                 }
             }
         }
 
         let mut cache_can_be_true: FxHashMap<Expression, bool> =
             FxHashMap::with_hasher(FxBuildHasher);
+        let mut old_sizes_by_expr: FxHashMap<Expression, Vec<usize>> =
+            FxHashMap::with_hasher(FxBuildHasher);
+        // Per-(operator, effect) delta progress -- effects aren't interned
+        // (only conditions/goals are), so they can't share
+        // `old_sizes_by_expr`'s dedup and get their own tracker. Lazily
+        // populated, not eagerly shaped from every operator up front.
+        let mut eff_old_sizes: FxHashMap<(usize, usize), Vec<usize>> =
+            FxHashMap::with_hasher(FxBuildHasher);
         let mut applied_operators = vec![false; self.operators.len()];
-        let mut assignments_changes: FxHashSet<usize> = self.initial_assignments_changes.clone();
+
+        // Dense "did this fluent's value set grow last round" tracking.
+        let mut changed: Vec<bool> = vec![true; self.num_fluents];
+        let mut changed_list: Vec<usize> = (0..self.num_fluents).collect();
+
+        // Scratch reused across the whole eval by every `internal_evaluate_into`
+        // call, instead of allocating a `Vec` per cross-product element.
+        let mut scratch: Vec<ExpressionNode> = Vec::new();
+
         let mut depth = 0;
-        while !assignments_changes.is_empty() {
+        while !changed_list.is_empty() {
             if self.can_be_true(
                 &self.goals,
                 &self.goal_expressions,
                 &assignments,
-                &assignments_changes,
                 &mut cache_can_be_true,
+                &mut old_sizes_by_expr,
+                &mut scratch,
             )? {
                 // goal satisfied
                 return Ok(Some(depth as f64));
@@ -2491,26 +2654,23 @@ impl HMaxExplicit {
             for (i, operator) in self.operators.iter().enumerate() {
                 if applied_operators[i] {
                     // operator already applied
-                    let eff_fluents: FxHashSet<usize> =
-                        self.operator_effects_fluents[i].iter().copied().collect();
-                    if assignments_changes.is_disjoint(&eff_fluents) {
+                    if !self.operator_effects_fluents[i].iter().any(|&f| changed[f]) {
                         // no changes in the effect fluents
                         continue;
                     }
-                } else if assignments_changes.is_disjoint(
-                    &self.operator_conditions_fluents[i]
-                        .iter()
-                        .copied()
-                        .collect(),
-                ) {
+                } else if !self.operator_conditions_fluents[i]
+                    .iter()
+                    .any(|&f| changed[f])
+                {
                     // operator never applied, but no changes in the condition fluents
                     continue;
                 } else if !self.can_be_true(
                     &operator.conditions,
                     &operator.condition_expressions,
                     &assignments,
-                    &assignments_changes,
                     &mut cache_can_be_true,
+                    &mut old_sizes_by_expr,
+                    &mut scratch,
                 )? {
                     // operator cannot be applied
                     continue;
@@ -2519,26 +2679,40 @@ impl HMaxExplicit {
                     applied_operators[i] = true;
                 }
 
-                for effect in &operator.effects {
-                    let exp_fluents = self.extract_fluents(&effect.value);
+                for (j, effect) in operator.effects.iter().enumerate() {
                     let fluent_new_assignments = new_assignments
                         .entry(effect.fluent)
                         .or_insert_with(|| FxHashSet::with_hasher(FxBuildHasher));
-                    for value in self.possible_values(&effect.value, &assignments, &exp_fluents) {
-                        fluent_new_assignments.insert(value?);
-                    }
+                    let old_sizes = eff_old_sizes.entry((i, j)).or_default();
+                    for_each_new_value(
+                        &effect.value,
+                        &operator.effect_fluents[j],
+                        &assignments,
+                        old_sizes,
+                        &mut scratch,
+                        |value| {
+                            fluent_new_assignments.insert(value);
+                            Ok(true)
+                        },
+                    )?;
                 }
             }
 
             // update assignments
-            assignments_changes.clear();
+            // Reset only what `changed_list` actually marked last round --
+            // not the whole dense array -- so this stays O(fluents changed
+            // last round), rather than O(num_fluents) every round regardless
+            // of how few fluents are actually still churning.
+            for &f in changed_list.iter() {
+                changed[f] = false;
+            }
+            changed_list.clear();
             for (fluent, new_vv) in new_assignments {
-                let prev_len = assignments[fluent].len();
                 for v in new_vv {
-                    assignments[fluent].insert(v);
-                }
-                if assignments[fluent].len() > prev_len {
-                    assignments_changes.insert(fluent);
+                    if assignments[fluent].insert(v) && !changed[fluent] {
+                        changed[fluent] = true;
+                        changed_list.push(fluent);
+                    }
                 }
             }
 
