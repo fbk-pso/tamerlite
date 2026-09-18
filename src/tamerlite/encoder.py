@@ -1500,7 +1500,7 @@ class Encoder:
                     if not restrict:
                         is_applicable = (
                             is_applicable
-                            and not self._simplifier.simplify(em.And(lc)).is_false()
+                            and not self._normalize_expression(em.And(lc)).is_false()
                         )
                 if not restrict and is_applicable:
                     applicable_actions.add(self.get_action(a.name))
@@ -1609,7 +1609,7 @@ class Encoder:
                 ]
                 if (
                     not restrict
-                    and not self._simplifier.simplify(
+                    and not self._normalize_expression(
                         em.And(a.preconditions)
                     ).is_false()
                 ):

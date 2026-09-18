@@ -818,6 +818,60 @@ def get_problem_temporal_no_start_event() -> Problem:
     return problem
 
 
+def get_problem_quantified_false_precondition() -> Problem:
+    """A problem whose single action's precondition is quantified, and whose
+    grounder leaves most groundings' `Exists` statically unsatisfiable.
+
+    `move_via(l_from, l_to)` requires a midpoint `mid` connected to both ends
+    via the static `connected` fluent -- `Exists(mid, connected(l_from, mid)
+    and connected(mid, l_to))`. `connected` only forms the chain `l1 -> l2 ->
+    l3 -> l4`, so only the two-hop groundings `(l1, l3)` and `(l2, l4)` have a
+    real midpoint; the other 10 of 12 groundings' precondition reduces to the
+    constant `false` once quantifiers are removed -- but `Simplifier` alone
+    (UP's `walk_exists`/`walk_forall`) can never fold a surviving quantified
+    variable to a bool constant, so a caller that simplifies without first
+    removing quantifiers reports all 12 groundings applicable instead of 2
+    (see `Encoder._build_events`'s applicability check, which must route
+    through `Encoder._normalize_expression` -- quantifier removal + simplify
+    -- rather than `Encoder._simplifier.simplify` alone).
+    """
+    Location = UserType("Location")
+    connected = Fluent("connected", BoolType(), l1=Location, l2=Location)
+    at = Fluent("at", BoolType(), l=Location)
+
+    move_via = InstantaneousAction("move_via", l_from=Location, l_to=Location)
+    l_from = move_via.parameter("l_from")
+    l_to = move_via.parameter("l_to")
+    mid = Variable("mid", Location)
+    move_via.add_precondition(at(l_from))
+    move_via.add_precondition(Not(Equals(l_from, l_to)))
+    move_via.add_precondition(
+        Exists(And(connected(l_from, mid), connected(mid, l_to)), mid)
+    )
+    move_via.add_effect(at(l_from), False)
+    move_via.add_effect(at(l_to), True)
+
+    problem = Problem("quantified_false_precondition")
+    problem.add_fluent(connected, default_initial_value=False)
+    problem.add_fluent(at, default_initial_value=False)
+    problem.add_action(move_via)
+
+    l1 = Object("l1", Location)
+    l2 = Object("l2", Location)
+    l3 = Object("l3", Location)
+    l4 = Object("l4", Location)
+    problem.add_objects([l1, l2, l3, l4])
+
+    problem.set_initial_value(at(l1), True)
+    problem.set_initial_value(connected(l1, l2), True)
+    problem.set_initial_value(connected(l2, l3), True)
+    problem.set_initial_value(connected(l3, l4), True)
+
+    problem.add_goal(at(l3))
+
+    return problem
+
+
 def get_problem_temporal_condition_before_start() -> Problem:
     """A malformed temporal problem the encoder must reject.
 

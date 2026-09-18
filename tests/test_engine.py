@@ -1907,6 +1907,61 @@ def test_temporal_no_start_event():
             assert isinstance(res.plan, TimeTriggeredPlan)
 
 
+def test_applicable_actions_quantified_precondition():
+    """The applicability filter in `Encoder._build_events` must remove
+    quantifiers before simplifying, not simplify the raw precondition.
+
+    `unified_planning`'s `Simplifier` can never fold a surviving quantified
+    variable to a bool constant (`walk_exists`/`walk_forall` just rebuild the
+    quantifier), so simplifying a quantified precondition without first
+    removing quantifiers can never detect it as statically false -- even
+    though the very same expression, once quantifiers are removed, *does*
+    collapse to `false` (and is exactly what the converted event condition
+    ends up being).
+
+    `get_problem_quantified_false_precondition`'s `connected` chain
+    (`l1 -> l2 -> l3 -> l4`) gives `move_via` a real midpoint for exactly two
+    of its 12 groundings -- `(l1, l3)` via `l2`, and `(l2, l4)` via `l3` --
+    so only those two may end up in `applicable_actions`; the other 10's
+    `Exists` has no satisfying midpoint and reduces to `false` once
+    quantifiers are removed.
+    """
+    problem = problems_generator.get_problem_quantified_false_precondition()
+    applicable_names = {"move_via_l1_l3", "move_via_l2_l4"}
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.encoder import Encoder
+
+        lifted_problem, ground_problem, map_back_action_instance = (
+            testing_utils.compile_problem(problem)
+        )
+        assert {a.name for a in ground_problem.actions} == applicable_names | {
+            "move_via_l1_l2",
+            "move_via_l1_l4",
+            "move_via_l2_l1",
+            "move_via_l2_l3",
+            "move_via_l3_l1",
+            "move_via_l3_l2",
+            "move_via_l3_l4",
+            "move_via_l4_l1",
+            "move_via_l4_l2",
+            "move_via_l4_l3",
+        }
+
+        encoder = Encoder(
+            ground_problem,
+            lifted_problem,
+            map_back_action_instance,
+            symmetry_breaking=False,
+            compression_safe_actions=False,
+            relevance_analysis=False,
+        )
+
+        applicable = {encoder.get_action_name(a) for a in encoder.applicable_actions}
+        assert applicable == applicable_names
+
+
 def test_temporal_condition_before_start_is_rejected():
     """An event the ICE fold maps before the action's own start would sort
     ahead of the start event and defeat the invariant that event 0 is the
