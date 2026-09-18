@@ -25,7 +25,28 @@ use super::expressions::{ExpressionNode, PyExpressionNode};
 use super::utils::{big_rational_to_py_fraction, get_big_rational};
 
 /// A fluent's identity.
-#[pyclass(frozen, eq, hash, from_py_object)]
+///
+/// `__hash__` is written out rather than derived through `#[pyclass(hash)]`,
+/// and the reason is a cross-backend invariant, not taste. `#[pyclass(hash)]`
+/// generates `DefaultHasher` (SipHash) over the derived `Hash` impl, while the
+/// Python core's `Fluent.__hash__` (`src/tamerlite/core/search_space.py`)
+/// returns the bare index -- so a `set[Fluent]` built on the Python side would
+/// iterate in a *different order* depending on which backend is live. (Only
+/// sets are exposed: `dict` iteration is insertion-ordered.) Nothing reads such
+/// a set in an order-sensitive way today, but the whole repo leans on the two
+/// cores agreeing exactly, and this is the kind of divergence
+/// `check_metrics_equality` would not catch. Hashing the index on both sides
+/// keeps the orders identical. Same for `Object` and `Action` below.
+///
+/// `ord` is here for the mirror-image reason: the Python side is an
+/// `order=True` dataclass, so without it `sorted(fluents)` type-checks (mypy
+/// sees the Python class, via `core/__init__.pyi`) and raises only under the
+/// Rust backend.
+///
+/// The hand-written `__hash__` is *mandatory*, not an optimization: `eq`
+/// without `hash` and without this method would leave `object`'s identity hash
+/// in the slot -- equal values hashing differently, silently.
+#[pyclass(frozen, eq, ord, from_py_object)]
 #[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Fluent {
     pub idx: usize,
@@ -43,6 +64,10 @@ impl Fluent {
         self.idx
     }
 
+    fn __hash__(&self) -> u64 {
+        self.idx as u64
+    }
+
     fn __repr__(&self) -> String {
         format!("{:?}", self)
     }
@@ -57,8 +82,9 @@ impl fmt::Debug for Fluent {
     }
 }
 
-/// An object's identity.
-#[pyclass(frozen, eq, hash, from_py_object)]
+/// An object's identity. See `Fluent` above for why `__hash__` is hand-written
+/// and `ord` is declared.
+#[pyclass(frozen, eq, ord, from_py_object)]
 #[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Object {
     pub idx: usize,
@@ -74,6 +100,10 @@ impl Object {
     #[getter]
     pub fn idx(&self) -> usize {
         self.idx
+    }
+
+    fn __hash__(&self) -> u64 {
+        self.idx as u64
     }
 
     fn __repr__(&self) -> String {
@@ -160,8 +190,9 @@ impl Timing {
     }
 }
 
-/// An action's identity.
-#[pyclass(frozen, eq, hash, from_py_object)]
+/// An action's identity. See `Fluent` above for why `__hash__` is hand-written
+/// and `ord` is declared.
+#[pyclass(frozen, eq, ord, from_py_object)]
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Action {
     pub idx: usize,
@@ -177,6 +208,10 @@ impl Action {
     #[getter]
     pub fn idx(&self) -> usize {
         self.idx
+    }
+
+    fn __hash__(&self) -> u64 {
+        self.idx as u64
     }
 }
 

@@ -324,7 +324,7 @@ class Converter(DagWalker):
 
         `self._if_cache` (LRU-bounded, keyed on `(interpreted_function,
         real_args)`) is safe to share across Converters regardless of object
-        numbering -- `real_args` is already unwrapped to real `Object`s.
+        numbering -- `real_args` is already unwrapped to real UP objects.
 
         `self._if_wrappers` is NOT: the closure captures `_objects_by_id`/
         `_object_ids` from *this* Converter at build time, so sharing it
@@ -344,7 +344,7 @@ class Converter(DagWalker):
         return_type = interpreted_function.return_type
         # Object-typed parameters/return values are exposed to `evaluate` as
         # internal `ObjectNode`s, but the real callable expects/returns actual
-        # UP `Object`s -- translate both directions.
+        # UP objects (`UPObject`) -- translate both directions.
         object_params = tuple(
             p.type.is_user_type() for p in interpreted_function.signature
         )

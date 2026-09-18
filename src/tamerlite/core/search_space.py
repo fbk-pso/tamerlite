@@ -69,6 +69,15 @@ class Fluent:
     idx: int
 
     def __hash__(self) -> int:
+        # Hashing the bare index is a cross-backend invariant, not a
+        # micro-optimization: `struct Fluent` in
+        # `crates/rustamer-base/src/structures.rs` writes out the same
+        # `__hash__` by hand for exactly this reason, so that a `set[Fluent]`
+        # built on the Python side iterates in the same order whichever backend
+        # is live. (Only sets are exposed -- `dict` iteration is
+        # insertion-ordered.) Nothing reads such a set in an order-sensitive way
+        # today, but `check_metrics_equality` would not catch it if something
+        # started to.
         return self.idx
 
     def __repr__(self) -> str:
@@ -82,6 +91,7 @@ class Object:
     idx: int
 
     def __hash__(self) -> int:
+        # See `Fluent.__hash__` above -- same cross-backend invariant.
         return self.idx
 
     def __repr__(self) -> str:
@@ -272,7 +282,17 @@ class Timing:
 
 @dataclass(order=True, frozen=True)
 class Action:
+    """An action's identity."""
+
     idx: int
+
+    def __hash__(self) -> int:
+        # The bare index, not the dataclass default `hash((self.idx,))`, so a
+        # `set[Action]` iterates in the same order here as under the Rust
+        # backend -- see `Fluent.__hash__` above for the full reasoning, and
+        # `Action` in `crates/rustamer-base/src/structures.rs` for the other
+        # half of the pair.
+        return self.idx
 
 
 @dataclass(eq=True, frozen=True)
