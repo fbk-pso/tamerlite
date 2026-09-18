@@ -248,6 +248,28 @@ def get_problem_satellite() -> Problem:
     return problem
 
 
+def get_problem_driverlog_pfile1() -> Problem:
+    """
+    Driverlog IPC pfile1: two drivers, two trucks, two packages, and two
+    "connector" locations (p1-0, p1-2) that are each only reachable from a
+    different pair of the problem's three hub locations via the static
+    `path` fluent. All actions are compression-safe, so a fully-symmetry-
+    breaking, fully-compression-safe solve recompiles this problem with
+    `TimedToSequential` before building its second `Encoder`. Regression
+    fixture for a bug where that compilation pruned `path`/`link` as
+    unreferenced (their only reader was a grounding-time-simplified-away
+    static precondition), leaving nothing to distinguish p1-0 from p1-2 and
+    causing symmetry breaking to wrongly merge them -- see
+    `test_symmetry_breaking_compression_safe_prunes_witness_fluent`.
+    """
+    reader = PDDLReader()
+    problem_directory = pathlib.Path(__file__).resolve().parent / "pddl" / "Driverlog"
+    domain = problem_directory / "domain.pddl"
+    instance = problem_directory / "instance.pddl"
+    problem = reader.parse_problem(str(domain), str(instance))
+    return problem
+
+
 def get_problem_hierarchical_types() -> Problem:
     problem = Problem("hierarchical-types")
 
