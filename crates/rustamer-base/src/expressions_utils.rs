@@ -198,12 +198,12 @@ pub fn split_expression(exp: &[ExpressionNode]) -> PyResult<Vec<Vec<ExpressionNo
 /// callers happy to `match` on which variant they got, which
 /// `get_rational_from_expression_node`'s remaining owning callers are not.
 #[derive(Clone, Copy)]
-enum NumRef<'a> {
+pub(crate) enum NumRef<'a> {
     Int(&'a BigInt),
     Rational(&'a BigRational),
 }
 
-fn as_num_ref(exp: &ExpressionNode) -> PyResult<NumRef<'_>> {
+pub(crate) fn as_num_ref(exp: &ExpressionNode) -> PyResult<NumRef<'_>> {
     match exp {
         ExpressionNode::Int(v) => Ok(NumRef::Int(v)),
         ExpressionNode::Rational(v) => Ok(NumRef::Rational(v)),
@@ -211,7 +211,7 @@ fn as_num_ref(exp: &ExpressionNode) -> PyResult<NumRef<'_>> {
     }
 }
 
-fn num_is_zero(n: NumRef) -> bool {
+pub(crate) fn num_is_zero(n: NumRef) -> bool {
     match n {
         NumRef::Int(v) => v.is_zero(),
         NumRef::Rational(v) => v.is_zero(),
@@ -229,7 +229,7 @@ fn num_is_zero(n: NumRef) -> bool {
 /// Cross-multiplication is valid without a sign correction because every
 /// `BigRational` in this crate is built through `Ratio::new`/`from_integer`,
 /// whose `reduce()` forces a positive denominator.
-fn num_cmp(a: NumRef, b: NumRef) -> std::cmp::Ordering {
+pub(crate) fn num_cmp(a: NumRef, b: NumRef) -> std::cmp::Ordering {
     match (a, b) {
         (NumRef::Int(a), NumRef::Int(b)) => a.cmp(b),
         (NumRef::Rational(a), NumRef::Rational(b)) => {

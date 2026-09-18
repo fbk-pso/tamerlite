@@ -955,7 +955,17 @@ fn object_domain(fluent: usize, fluent_domains: &[FluentDomain]) -> Option<&[usi
 /// `Equals` covers both numeric equality and user-type (object) equality --
 /// there is no separate node kind for the two, so the operands' *types* are
 /// the only thing that tells them apart. An operand is object-typed if it's
-/// a literal object, or a fluent whose `FluentDomain` says so.
+/// a literal object, a fluent whose `FluentDomain` says so, or an
+/// interpreted-function call whose declared `return_type` is
+/// `IfReturnType::Object`.
+///
+/// `pub(crate)`, not just used by `is_numeric_leaf_expression` below:
+/// `novelty::NumericNovelty` (`novelty.rs`) reuses this verbatim for its own
+/// `==`-leaf classification, which is also the only caller that ever
+/// exercises the `InterpretedFunction` arm -- `simplify_leaf` bails out on
+/// `has_interpreted_function` before classifying anything, so this function
+/// never sees one when called from `is_numeric_leaf_expression`. Mirrors
+/// `is_object_typed_operand` (`src/tamerlite/core/search_space.py`) exactly.
 ///
 /// # Arguments
 ///
@@ -966,10 +976,13 @@ fn object_domain(fluent: usize, fluent_domains: &[FluentDomain]) -> Option<&[usi
 /// # Returns
 ///
 /// Returns `true` if `node` is object-typed, `false` if numeric.
-fn is_object_typed(node: &ExpressionNode, fluent_domains: &[FluentDomain]) -> bool {
+pub(crate) fn is_object_typed(node: &ExpressionNode, fluent_domains: &[FluentDomain]) -> bool {
     match node {
         ExpressionNode::Object(_) => true,
         ExpressionNode::Fluent(f) => object_domain(*f, fluent_domains).is_some(),
+        ExpressionNode::InterpretedFunction { return_type, .. } => {
+            *return_type == IfReturnType::Object
+        }
         _ => false,
     }
 }
@@ -1368,7 +1381,7 @@ fn repetitions(
 /// Returns a `Result` containing a `Vec<ExpressionNode>` representing the extracted
 /// sub-expression with all operand indices re-indexed relative to the start of
 /// the sub-expression, or an `ArithmeticError` if extraction fails.
-fn extract_sub_expression(
+pub(crate) fn extract_sub_expression(
     expr: &[ExpressionNode],
     idx: usize,
 ) -> Result<Vec<ExpressionNode>, ArithmeticError> {

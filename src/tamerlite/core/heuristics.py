@@ -35,13 +35,14 @@ from tamerlite.core.search_space import (
     FluentDomain,
     FluentKind,
     FluentNode,
-    InterpretedFunctionNode,
     ObjectNode,
     SearchSpaceABC,
     State,
     Timing,
     evaluate,
+    extract_sub_expression,
     has_interpreted_function,
+    is_object_typed_operand,
     shift_expression,
     split_expression,
 )
@@ -357,7 +358,7 @@ class DeleteRelaxationHeuristic(Heuristic):
         which case it's left as-is. Either way, no other rule is tried: this
         is what keeps `_simplify_object_equality` below from ever firing on a
         numeric `n1 == n2` leaf, since a bare `"=="` root can't otherwise be
-        told apart from object equality (see `_is_object_typed_operand`).
+        told apart from object equality (see `search_space.is_object_typed_operand`).
         - Otherwise, a `fluent != object` expression is rewritten into a
         disjunction of equalities.
         - Otherwise, an object-equality expression between two fluents
@@ -687,34 +688,9 @@ class DeleteRelaxationHeuristic(Heuristic):
                 else:
                     result.append(OrNode(len(e.operands)))
             else:
-                result.append(LeafNode(self._extract_sub_expression(exp, idx)))
+                result.append(LeafNode(extract_sub_expression(exp, idx)))
 
         return tuple(result)
-
-    def _extract_sub_expression(self, exp: Expression, idx: int) -> Expression:
-        """
-        Extract the sub-expression from a given expression rooted at a specified index.
-        All operands in the extracted sub-expression are re-indexed relative to the
-        start of the sub-expression.
-
-        Args:
-            exp (Expression): The full expression from which to extract the
-                sub-expression.
-            idx (int): The index of the root node of the sub-expression.
-
-        Returns:
-            Expression: A tuple representing the extracted sub-expression with operands
-                re-indexed relative to the sub-expression start.
-        """
-
-        # find the start index of the sub-expression
-        i = idx
-        node = exp[i]
-        while isinstance(node, (Op, InterpretedFunctionNode)) and node.operands:
-            i = node.operands[0]
-            node = exp[i]
-
-        return shift_expression(exp[i : idx + 1], -i)
 
     def _update_numeric_effects(
         self,
@@ -763,8 +739,8 @@ class DeleteRelaxationHeuristic(Heuristic):
         """The objects a fluent can hold, or `None` if it isn't object-typed.
 
         Single oracle for both questions the object-equality handling asks:
-        "is this operand object-typed?" (`_is_object_typed_operand`) and
-        "what does it range over?" (`_simplify_object_equality`,
+        "is this operand object-typed?" (`search_space.is_object_typed_operand`)
+        and "what does it range over?" (`_simplify_object_equality`,
         `_simplify_fluent_not_equals_object_expression`). Those two must
         agree exactly -- the numeric-first dispatch in `_simplify_leaf` only
         keeps the object rewrite off numeric leaves if the predicate that
@@ -781,28 +757,6 @@ class DeleteRelaxationHeuristic(Heuristic):
 
         domain = self._fluent_domains[node.fluent]
         return domain.objects if domain.kind is FluentKind.OBJECT else None
-
-    def _is_object_typed_operand(self, e: ExpressionNode) -> bool:
-        """Whether an `==` operand is object-typed rather than numeric.
-
-        `"=="` covers both numeric equality and user-type (object) equality
-        -- `Converter.walk_equals` emits the same operator kind for both, so
-        the operands' *types* are the only thing that tells them apart. An
-        operand is object-typed if it's a literal object, or a fluent whose
-        `FluentDomain` says so.
-
-        Args:
-            e: One operand of an `==` leaf.
-
-        Returns:
-            bool: True if `e` is object-typed, False if numeric.
-        """
-
-        if isinstance(e, ObjectNode):
-            return True
-        if isinstance(e, FluentNode):
-            return self._object_domain(e) is not None
-        return False
 
     def _is_numeric_leaf_expression(self, node: LeafNode) -> bool:
         """
@@ -828,9 +782,9 @@ class DeleteRelaxationHeuristic(Heuristic):
                     return True
 
                 op1, op2 = exp_node.operands
-                if not self._is_object_typed_operand(
-                    exp[op1]
-                ) and not self._is_object_typed_operand(exp[op2]):
+                if not is_object_typed_operand(
+                    exp[op1], self._fluent_domains
+                ) and not is_object_typed_operand(exp[op2], self._fluent_domains):
                     return True
 
         return False

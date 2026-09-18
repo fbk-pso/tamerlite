@@ -201,6 +201,32 @@ def split_expression(exp: Expression) -> tuple[Expression, ...]:
     return tuple(res)
 
 
+def extract_sub_expression(exp: Expression, idx: int) -> Expression:
+    """
+    Extract the sub-expression from a given expression rooted at a specified index.
+    All operands in the extracted sub-expression are re-indexed relative to the
+    start of the sub-expression.
+
+    Args:
+        exp (Expression): The full expression from which to extract the
+            sub-expression.
+        idx (int): The index of the root node of the sub-expression.
+
+    Returns:
+        Expression: A tuple representing the extracted sub-expression with operands
+            re-indexed relative to the sub-expression start.
+    """
+
+    # find the start index of the sub-expression
+    i = idx
+    node = exp[i]
+    while isinstance(node, (OperatorNode, InterpretedFunctionNode)) and node.operands:
+        i = node.operands[0]
+        node = exp[i]
+
+    return shift_expression(exp[i : idx + 1], -i)
+
+
 def get_fluents(exp: Expression) -> Iterator[int]:
     for e in exp:
         if isinstance(e, FluentNode):
@@ -219,6 +245,35 @@ def clear_interpreted_function_cache() -> None:
     encodings/problems and must NOT be cleared by this call. Its growth is
     bounded independently (an LRU cap, `Converter.IF_CACHE_CAPACITY`), so
     leaving it uncleared here doesn't risk unbounded memory."""
+
+
+def is_object_typed_operand(
+    e: ExpressionNode, fluent_domains: list[FluentDomain]
+) -> bool:
+    """Whether an `==` operand is object-typed rather than numeric.
+
+    `"=="` covers both numeric equality and user-type (object) equality --
+    `Converter.walk_equals` emits the same operator kind for both, so the
+    operands' *types* are the only thing that tells them apart. An
+    operand is object-typed if it's a literal object, a fluent whose
+    `FluentDomain` says so, or an interpreted-function call whose declared
+    `return_type` is `IfReturnType.OBJECT`.
+
+    Args:
+        e: One operand of an `==` leaf.
+        fluent_domains: `Encoder.fluent_domains`, indexed by fluent id.
+
+    Returns:
+        bool: True if `e` is object-typed, False if numeric.
+    """
+
+    if isinstance(e, ObjectNode):
+        return True
+    if isinstance(e, FluentNode):
+        return fluent_domains[e.fluent].kind is FluentKind.OBJECT
+    if isinstance(e, InterpretedFunctionNode):
+        return e.return_type == IfReturnType.OBJECT
+    return False
 
 
 @dataclass(eq=True, frozen=True)

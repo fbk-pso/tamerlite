@@ -50,6 +50,7 @@ from tamerlite.core import (
     HAdd,
     HMax,
     HMaxExplicit,
+    NumericNovelty,
     astar_search,
     astar_search_memory_bounded,
     bfs_search,
@@ -59,6 +60,7 @@ from tamerlite.core import (
     gbfs_search_memory_bounded,
     get_fluent_value,
     multiqueue_search,
+    novbfs_search,
     search_space,
     wastar_search,
     wastar_search_memory_bounded,
@@ -895,21 +897,77 @@ class TamerLite(
                         weak_equality=False,
                     )
             else:
-                h, w = self._get_heuristic(
-                    self._params,
-                    heuristic,
-                    encoder,
-                    self._params.inadmissible_numeric_heuristic_variant,
-                    self._params.internal_heuristic_cache,
-                )
-                search_name, search = self._get_search(
-                    self._params.search,
-                    h,
-                    w,
-                    self._params.incomplete_memory_bounded_search,
-                    self._params.weak_equality,
-                    encoder.search_space.is_temporal,
-                )
+                if self._params.search in ("novbfs_hg", "novbfs_lg"):
+                    if self._params.incomplete_memory_bounded_search:
+                        raise NotImplementedError(
+                            f"search={self._params.search!r} has no "
+                            "memory-bounded variant; "
+                            "incomplete_memory_bounded_search is not "
+                            "supported with it."
+                        )
+                    if (
+                        self._params.heuristic not in (None, "hadd")
+                        or self._params.weight is not None
+                        or heuristic is not None
+                    ):
+                        warnings.warn(
+                            "novbfs_hg/novbfs_lg always use an internal, "
+                            "unit-weighted hadd heuristic; the configured "
+                            "heuristic/weight (including any custom "
+                            "heuristic callable passed to solve()) is "
+                            "ignored.",
+                            stacklevel=2,
+                        )
+                    # `heuristic=None`: unlike every other search, novbfs
+                    # never falls back to a user-supplied heuristic callable
+                    # -- `HeuristicParams(heuristic="hadd")` above always
+                    # forces `_get_heuristic`'s "hadd" branch, so the
+                    # callable would never actually be read; passing `None`
+                    # here makes that visible instead of relying on it being
+                    # dead code at this call site.
+                    hadd, _ = self._get_heuristic(
+                        HeuristicParams(heuristic="hadd"),
+                        None,
+                        encoder,
+                        self._params.inadmissible_numeric_heuristic_variant,
+                        self._params.internal_heuristic_cache,
+                    )
+                    assert encoder.goal is not None
+                    novelty_tracker = NumericNovelty(
+                        {
+                            a: e
+                            for a, e in encoder.events.items()
+                            if a in set(encoder.considered_actions)
+                        },
+                        encoder.goal,
+                        encoder.fluent_domains,
+                    )
+                    search_name = self._params.search
+                    search = cast(
+                        _SearchCallable,
+                        partial(
+                            novbfs_search,
+                            heuristic=hadd,
+                            novelty=novelty_tracker,
+                            prefer_higher_g=(self._params.search == "novbfs_hg"),
+                        ),
+                    )
+                else:
+                    h, w = self._get_heuristic(
+                        self._params,
+                        heuristic,
+                        encoder,
+                        self._params.inadmissible_numeric_heuristic_variant,
+                        self._params.internal_heuristic_cache,
+                    )
+                    search_name, search = self._get_search(
+                        self._params.search,
+                        h,
+                        w,
+                        self._params.incomplete_memory_bounded_search,
+                        self._params.weak_equality,
+                        encoder.search_space.is_temporal,
+                    )
 
                 if self._params.weak_equality and search_name not in ("dfs", "bfs"):
                     start = time.monotonic()
