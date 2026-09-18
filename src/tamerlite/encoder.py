@@ -884,7 +884,7 @@ class Encoder:
         """
 
         obj_to_assignments: dict[Object, list[tuple[FNode, FNode]]] = {}
-        for fluent_exp, value_exp in self._problem_initial_values.items():
+        for fluent_exp, value_exp in self._lifted_problem.initial_values.items():
             objs = {arg.object() for arg in fluent_exp.args if arg.is_object_exp()}
             if value_exp.is_object_exp():
                 objs.add(value_exp.object())
@@ -1055,8 +1055,8 @@ class Encoder:
         # For each initial-value assignment (explicit or default) involving
         # obj1 or obj2 (as an argument or as the value), swap obj1 and obj2
         # throughout and verify that the resulting assignment still holds.
-        obj1_exp = self._problem.environment.expression_manager.ObjectExp(obj1)
-        obj2_exp = self._problem.environment.expression_manager.ObjectExp(obj2)
+        obj1_exp = self._lifted_problem.environment.expression_manager.ObjectExp(obj1)
+        obj2_exp = self._lifted_problem.environment.expression_manager.ObjectExp(obj2)
 
         def swap_exp(exp: FNode) -> FNode:
             if exp == obj1_exp:
@@ -1074,10 +1074,13 @@ class Encoder:
                 continue
             seen_fluent_exps.add(fluent_exp)
 
-            new_fluent_exp = self._problem.environment.expression_manager.FluentExp(
+            em = self._lifted_problem.environment.expression_manager
+            new_fluent_exp = em.FluentExp(
                 fluent_exp.fluent(), [swap_exp(arg) for arg in fluent_exp.args]
             )
-            if self._problem.initial_value(new_fluent_exp) != swap_exp(value_exp):
+            if self._lifted_problem.initial_value(new_fluent_exp) != swap_exp(
+                value_exp
+            ):
                 return False
 
         return True

@@ -34,6 +34,7 @@ import unified_planning.test.examples
 import up_test_cases.builtin
 from unified_planning.engines import PlanGenerationResult, ValidationResult
 from unified_planning.engines import PlanGenerationResultStatus as ResultStatus
+from unified_planning.engines.compilers.timed_to_sequential import TimedToSequential
 from unified_planning.exceptions import UPStateMissingFluentError
 from unified_planning.plans import TimeTriggeredPlan
 from unified_planning.shortcuts import *
@@ -2119,6 +2120,123 @@ def test_symmetry_breaking_goal_taint_is_per_object():
     assert len(observed_groups) >= 2
     for pkg_groups in observed_groups[:2]:
         assert {"p1", "p2", "p3"} in pkg_groups
+
+
+def test_symmetry_breaking_compression_safe_prunes_witness_fluent():
+    """
+    Regression test for a real-world solve regression on Driverlog pfile1
+    (`problems_generator.get_problem_driverlog_pfile1`): with
+    `symmetry_breaking=True` and `compression_safe_actions=True` together,
+    `TamerLite._solve_ground_problem` builds a second `Encoder` over the
+    problem after `TimedToSequential` has compiled it -- and that compiler
+    prunes any fluent left unreferenced by the compiled (instantaneous)
+    actions. `path`/`link` are static, so grounding already simplified their
+    conditions away everywhere they held, leaving them unreferenced and
+    therefore pruned -- taking with them the only facts that distinguish the
+    connector locations `p1-0` and `p1-2` (each is only linked to a
+    different pair of the problem's hub locations). `_are_equivalent_objects`
+    only ever inspects goal + initial state, so with those facts gone it
+    wrongly judged the two locations interchangeable; the resulting
+    ordering constraint then required an action on `p1-0` before any action
+    on `p1-2`, deadlocking every driver at its start location and making a
+    solvable problem report UNSOLVABLE.
+
+    First reproduces the bug directly (bypassing the fix) by handing
+    `_are_equivalent_objects` the pruned problem's own initial state instead
+    of `self._lifted_problem`'s, confirming this fixture actually exercises
+    the failure. Then checks the equivalence classes `Encoder` computes as
+    the engine really would, and finally solves end to end.
+    """
+
+    problem = problems_generator.get_problem_driverlog_pfile1()
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+
+    t2s_compiler = TimedToSequential()
+    t2s_compiler.skip_checks = True
+    compilation_res = t2s_compiler.compile(ground_problem)
+    ground_problem_actions = {a.name: a for a in ground_problem.actions}
+
+    def t2s_map_back_action_instance(ai):
+        action = ground_problem_actions.get(ai.action.name)
+        if action is not None:
+            return map_back_action_instance(action())
+        return None
+
+    compiled_problem = cast(Problem, compilation_res.problem)
+
+    # Confirm the fixture reproduces the bug: an `Encoder` that reads the
+    # *compiled* problem's own (pruned) initial state, as it did before the
+    # fix, must wrongly merge p1-0/p1-2.
+    orig_init_assignments = Encoder._compute_obj_to_init_assignments_map
+
+    def pre_fix_init_assignments(self):
+        obj_to_assignments: dict = {}
+        for fluent_exp, value_exp in self._problem_initial_values.items():
+            objs = {arg.object() for arg in fluent_exp.args if arg.is_object_exp()}
+            if value_exp.is_object_exp():
+                objs.add(value_exp.object())
+            for obj in objs:
+                obj_to_assignments.setdefault(obj, []).append((fluent_exp, value_exp))
+        return obj_to_assignments
+
+    Encoder._compute_obj_to_init_assignments_map = (  # type: ignore[method-assign]
+        pre_fix_init_assignments
+    )
+    try:
+        pre_fix_encoder = Encoder(
+            compiled_problem,
+            lifted_problem,
+            t2s_map_back_action_instance,
+            symmetry_breaking=False,
+            compression_safe_actions=False,
+            relevance_analysis=False,
+        )
+        pre_fix_groups = [
+            {obj.name for obj in group}
+            for group in pre_fix_encoder._compute_equivalent_objects()
+        ]
+    finally:
+        Encoder._compute_obj_to_init_assignments_map = orig_init_assignments  # type: ignore[method-assign]
+    assert {"p1-0", "p1-2"} in pre_fix_groups
+
+    # With the fix, the same compiled problem's equivalence classes must
+    # keep p1-0/p1-2 apart (package1/package2 are genuinely symmetric and
+    # should still be merged).
+    encoder = Encoder(
+        compiled_problem,
+        lifted_problem,
+        t2s_map_back_action_instance,
+        symmetry_breaking=False,
+        compression_safe_actions=False,
+        relevance_analysis=False,
+    )
+    groups = [
+        {obj.name for obj in group} for group in encoder._compute_equivalent_objects()
+    ]
+    assert {"p1-0", "p1-2"} not in groups
+    assert {"package1", "package2"} in groups
+
+    # End to end: the exact parameter combination that used to report
+    # UNSOLVABLE_INCOMPLETELY on this instance must solve.
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+
+        search = tamerlite.SearchParams(
+            search="wastar",
+            heuristic="hff",
+            weight=0.8,
+            weak_equality=True,
+            symmetry_breaking=True,
+            compression_safe_actions=True,
+        )
+        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+            planner: tamerlite.engine.TamerLite
+            res: PlanGenerationResult = planner.solve(problem, timeout=None)
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+            with PlanValidator(problem_kind=problem.kind) as v:
+                assert v.validate(problem, res.plan)
 
 
 # --- Interpreted-function tests --------------------------------------------
