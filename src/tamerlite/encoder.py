@@ -817,7 +817,7 @@ class Encoder:
 
         An IF is opaque: we can't reason about its behavior, only require its
         inputs be swap-invariant. Numeric/boolean values are swap-invariant by
-        construction. UPObject-typed arguments or return values are not and they
+        construction. Object-typed arguments or return values are not and they
         can change under the swap, and the IF is free to react to that
         difference however it wants. So for every IF call reachable from the
         lifted problem, every object compatible with an object-typed parameter

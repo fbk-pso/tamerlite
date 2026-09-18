@@ -154,6 +154,56 @@ Adjust `--space-limit` (MB) down for a single test file/case, and prefer targeti
 - **Search algorithms**: `wastar_search`, `astar_search`, `gbfs_search`, `bfs_search`, `dfs_search`, `ehc_search`, `multiqueue_search` (and `*_memory_bounded` variants).
 - **Heuristics**: `HFF`, `HAdd`, `HMax`, `HMaxExplicit`, `CustomHeuristic`.
 - **Data structures**: `SearchSpace`, `State`, `Action`, `Event`, `Effect`, `Timing`, `Expression`.
+- **Id types**: `Fluent`, `Object`, `Action` (see below).
+
+**The three id types are swapped per backend, and their `__hash__` is written
+out by hand on both sides on purpose.** A fluent id, an object id and an action
+index used to be bare `int`s, mutually substitutable and indistinguishable to a
+reader and to mypy alike -- a `dict[int, set[int]]` in `Encoder` could be
+action-to-fluents or fluent-to-actions with nothing in the type to say which.
+`Fluent`/`Object`/`Action` are frozen dataclasses in
+[src/tamerlite/core/search_space.py](src/tamerlite/core/search_space.py) and
+`#[pyclass]`es in
+[crates/rustamer-base/src/structures.rs](crates/rustamer-base/src/structures.rs);
+`core/__init__.py` binds each name to whichever backend is live, so unlike
+`FluentDomain` (shared, backend-agnostic data) these follow `IfReturnType`'s
+per-backend-swap pattern and the two classes never coexist.
+
+Two invariants hold them together, and both fail silently if broken:
+
+- **`__hash__` must be the bare index on both sides.** `#[pyclass(hash)]`
+  derives `__hash__` from `DefaultHasher` (SipHash) over the Rust `Hash` impl,
+  which would not match the Python dataclass -- and then a `set[Fluent]` built
+  on the Python side of `Encoder` would iterate in a *different order*
+  depending on which backend is live. (Only `set`/`frozenset` are exposed:
+  `dict` iteration is insertion-ordered, not hash-ordered.) Nothing reads such a
+  set in an order-sensitive way today -- the fixpoints in
+  `_compute_relevant_fluents`/`_compute_relevant_actions` are closures -- which
+  is exactly why this is dangerous: `check_metrics_equality` would stay green
+  while the two cores drifted. So the Rust side declares `eq, ord` but *not*
+  `hash`, and writes `fn __hash__(&self) -> u64 { self.idx as u64 }` explicitly.
+  The hand-written method is mandatory, not an optimization: `eq` without `hash`
+  and without it leaves `object`'s identity hash in the slot, i.e. equal values
+  hashing differently.
+- **`ord` on the pyclass and `order=True` on the dataclass must stay aligned.**
+  mypy resolves these names to the *Python* classes (via `core/__init__.pyi`),
+  so a missing `ord` lets `sorted(fluents)` type-check and raise only under the
+  Rust backend.
+
+`tests/test_engine.py::test_id_types_hash_and_order_agree_across_backends` pins
+both, per type, on both backends.
+
+**Known cost.** Wrapping the ids costs the pure-Python core roughly 5% against
+bare `int`s, and it is a deliberate trade for the runtime enforcement the
+`#[pyclass]` gives at the PyO3 boundary (a bare `int` handed to
+`make_fluent_node` raises `TypeError` there). The cost is *not* allocation --
+hoisting the per-evaluation `FluentNode` construction was measured and recovers
+~1% of it. It is hashing: the keys of `DeleteRelaxationHeuristic`'s
+`costs`/`precondition_of` are `Expression` tuples containing
+`FluentNode`/`ObjectNode`, so `hash()` on them now recurses into a Python-level
+`__hash__` instead of `int`'s C slot -- 3.85M calls on a mid-size logistics
+instance, 0.268s of cumulative time against 0.444s. Before optimizing anything
+here, profile first and check that number.
 
 Rust implementation lives in [crates/rustamer-base/src/](crates/rustamer-base/src/) (core library) and [crates/rustamer/src/](crates/rustamer/src/) (PyO3 bindings).
 

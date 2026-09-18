@@ -1257,6 +1257,60 @@ def test_evaluate_fixed_cases():
             )
 
 
+def _check_id_type_contract(id_type: Any, where: str) -> None:
+    """The per-type body of `test_id_types_hash_and_order_agree_across_backends`.
+
+    `id_type` is deliberately `Any`. The three id types are mutually unordered
+    *by design* -- that is the whole point of giving them distinct types -- so
+    iterating over them hands mypy a union on which `<` is correctly an error.
+    What this test pins is a runtime contract, so the type is widened here
+    rather than silenced with an ignore at each comparison.
+    """
+
+    assert hash(id_type(7)) == 7, where
+    assert id_type(3) == id_type(3), where
+    assert id_type(3) != id_type(4), where
+    assert id_type(1) < id_type(2), where
+    assert id_type(2) >= id_type(2), where
+    ordered = [x.idx for x in sorted({id_type(2), id_type(0), id_type(1)})]
+    assert ordered == [0, 1, 2], f"{where}: {ordered}"
+
+
+def test_id_types_hash_and_order_agree_across_backends():
+    """`Fluent`/`Object`/`Action` must hash to their bare index, and order by
+    it, on *both* backends.
+
+    Two hazards, neither of which any other test would catch.
+
+    **Hash.** `#[pyclass(hash)]` derives `__hash__` from `DefaultHasher`
+    (SipHash) over the Rust `Hash` impl, while the Python core returns the
+    index. A `set[Fluent]` built on the Python side of `Encoder` would then
+    iterate in a different order depending on which backend is live. Nothing
+    reads such a set in an order-sensitive way today -- the fixpoints in
+    `_compute_relevant_fluents`/`_compute_relevant_actions` are closures, and
+    `dict` iteration is insertion-ordered rather than hash-ordered, so only
+    `set`/`frozenset` are exposed at all -- which is exactly the problem:
+    `check_metrics_equality` would stay green while the two cores drifted
+    apart. Both sides therefore write `__hash__` out by hand
+    (`crates/rustamer-base/src/structures.rs`,
+    `src/tamerlite/core/search_space.py`), and this test is what stops
+    `#[pyclass(hash)]` from coming back.
+
+    **Order.** The Python side is an `order=True` dataclass; the Rust side
+    needs an explicit `ord`. Without it `sorted(fluents)` type-checks -- mypy
+    resolves these names to the Python classes, via `core/__init__.pyi` -- and
+    raises only under the Rust backend.
+    """
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.core import Action, Fluent, Object
+
+        backend = "python" if disable_rustamer else "rust"
+        for id_type in (Fluent, Object, Action):
+            _check_id_type_contract(id_type, f"{id_type.__name__}, {backend} backend")
+
+
 def test_numeric_constants_above_i32_range():
     """Cross-backend differential test: pins that both backends accept
     Python ints/`Fraction`s above `2**31` (and rationals with an
