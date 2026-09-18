@@ -19,8 +19,10 @@ import heapq
 import logging
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from fractions import Fraction
+from typing import Any, Generic, Protocol, TypeVar
 
 from bloom_filter2 import BloomFilter
 from min_max_heap import MinMaxHeap
@@ -120,6 +122,208 @@ def state_representation(state: State, weak_equality: bool) -> State | WeakEqSta
 
 def extract_path(state: State) -> list[Action]:
     return [a for a, _, _ in state.path]
+
+
+class _SearchItem(Protocol):
+    """Structural bound satisfied by `PrioritizedItem`/`NovBFSItem`: every
+    open-list item `_priority_search` handles carries the `State` it was
+    generated for and is totally ordered (required by `heapq`)."""
+
+    state: State
+
+    def __lt__(self, other: Any) -> bool: ...
+
+
+ItemT = TypeVar("ItemT", bound=_SearchItem)
+
+
+class _OpenList(Protocol[ItemT]):
+    def push(self, item: ItemT) -> None: ...
+    def pop(self) -> ItemT: ...
+    def __len__(self) -> int: ...
+
+
+class _PriorityQueue(Generic[ItemT]):
+    """A `heapq`-backed, unbounded open list."""
+
+    def __init__(self) -> None:
+        self._heap: list[ItemT] = []
+
+    def push(self, item: ItemT) -> None:
+        heapq.heappush(self._heap, item)
+
+    def pop(self) -> ItemT:
+        return heapq.heappop(self._heap)
+
+    def __len__(self) -> int:
+        return len(self._heap)
+
+
+class _BoundedPriorityQueue:
+    """Adapts `BoundedPriorityQueue` (the module-level, `MinMaxHeap`-backed
+    class this wraps -- not to be confused with this class itself) to
+    `_OpenList`. `push`'s accepted/rejected return value is intentionally
+    discarded. Only ever used with `PrioritizedItem` -- there is no
+    memory-bounded `novbfs_search`."""
+
+    def __init__(self, bound: int) -> None:
+        self._queue: BoundedPriorityQueue = BoundedPriorityQueue(bound)
+
+    def push(self, item: PrioritizedItem) -> None:
+        self._queue.push(item)
+
+    def pop(self) -> PrioritizedItem:
+        return self._queue.pop()
+
+    def __len__(self) -> int:
+        return len(self._queue)
+
+
+class _Dedup(Protocol):
+    def is_new(self, state: State) -> bool: ...
+
+
+class _SetDedup:
+    """Set-backed dedup keyed by `state_representation`, gated on
+    `not ss.is_temporal or weak_equality` -- a disabled instance treats
+    every state as new."""
+
+    def __init__(self, ss: SearchSpaceABC, weak_equality: bool) -> None:
+        self._weak_equality = weak_equality
+        self._enabled = not ss.is_temporal or weak_equality
+        self._seen: set[State | WeakEqState] = set()
+
+    def is_new(self, state: State) -> bool:
+        if not self._enabled:
+            return True
+        repr_ = state_representation(state, self._weak_equality)
+        if repr_ in self._seen:
+            return False
+        self._seen.add(repr_)
+        return True
+
+
+def _bloom_key(state: State) -> bytes:
+    key = []
+    for v in state.assignments:
+        if isinstance(v, bool):
+            key.append(f"{int(v)}")
+        elif isinstance(v, int):
+            key.append(f"{v}")
+        elif isinstance(v, Fraction):
+            key.append(f"{v.numerator}/{v.denominator}")
+        elif isinstance(v, ObjectNode):
+            key.append(f"{v.object}")
+    return "|".join(key).encode("utf-8")
+
+
+class _BloomDedup:
+    """Bloom-filter-backed dedup keyed on `state.assignments` only --
+    used only by `wastar_search_memory_bounded`. False positives make it
+    strictly more aggressive (and incomplete) than `_SetDedup`; the two are
+    not interchangeable."""
+
+    BLOOM_ITEMS = 20_000_000
+    BLOOM_FP_RATE = 1e-4
+
+    def __init__(self, ss: SearchSpaceABC, weak_equality: bool) -> None:
+        self._filter: BloomFilter | None = (
+            BloomFilter(max_elements=self.BLOOM_ITEMS, error_rate=self.BLOOM_FP_RATE)
+            if (not ss.is_temporal or weak_equality)
+            else None
+        )
+
+    def is_new(self, state: State) -> bool:
+        if self._filter is None:
+            return True
+        key = _bloom_key(state)
+        if key in self._filter:
+            return False
+        self._filter.add(key)
+        return True
+
+
+def _priority_search(
+    ss: SearchSpaceABC,
+    heuristic: Heuristic,
+    timeout: float | None,
+    early_termination: bool,
+    *,
+    name: str,
+    open: _OpenList[ItemT],
+    dedup: _Dedup,
+    make_root: Callable[[State, float], ItemT],
+    make_child: Callable[[ItemT, State, float, int], ItemT],
+    begin_expansion: Callable[[], None] | None = None,
+) -> tuple[list[Action] | None, dict[str, str]]:
+    """Shared skeleton for every priority-queue-based search in this module
+    (`wastar_search`, `wastar_search_memory_bounded`, `novbfs_search`)."""
+
+    st = time.monotonic()
+    init = ss.initial_state()
+    dedup.is_new(init)  # seed; return discarded, the root is never re-checked
+    expanded_states = 0
+    generated_states = 1
+    if early_termination and ss.goal_reached(init):
+        return extract_path(init), {
+            "expanded_states": str(expanded_states),
+            "goal_depth": str(init.g),
+        }
+
+    init_h = heuristic.eval(init, ss)
+    if init_h is None:
+        return None, {"expanded_states": str(0)}
+    open.push(make_root(init, init_h))
+
+    while len(open) > 0:
+        if timeout is not None and time.monotonic() - st > timeout:
+            raise TimeoutError
+        item = open.pop()
+        state = item.state
+        expanded_states += 1
+        if expanded_states % 10_000 == 0:
+            logger.debug(
+                "%s: expanded=%d generated=%d open=%d",
+                name,
+                expanded_states,
+                generated_states,
+                len(open),
+            )
+        if not early_termination and ss.goal_reached(state):
+            logger.info(
+                "%s: goal found — expanded=%d depth=%s", name, expanded_states, state.g
+            )
+            return extract_path(state), {
+                "expanded_states": str(expanded_states),
+                "goal_depth": str(state.g),
+            }
+
+        candidate_states = []
+        for succ_state in ss.get_successor_states(state):
+            if early_termination and ss.goal_reached(succ_state):
+                logger.info(
+                    "%s: goal found — expanded=%d depth=%s",
+                    name,
+                    expanded_states,
+                    succ_state.g,
+                )
+                return extract_path(succ_state), {
+                    "expanded_states": str(expanded_states),
+                    "goal_depth": str(succ_state.g),
+                }
+
+            if dedup.is_new(succ_state):
+                candidate_states.append(succ_state)
+
+        if begin_expansion is not None:
+            begin_expansion()
+        for succ_state, h in heuristic.eval_gen(candidate_states, ss):
+            if h is not None:
+                open.push(make_child(item, succ_state, h, generated_states))
+            generated_states += 1
+
+    logger.info("%s: no solution found — expanded=%d", name, expanded_states)
+    return None, {"expanded_states": str(expanded_states)}
 
 
 def bfs_search(
@@ -229,76 +433,19 @@ def wastar_search(
         early_termination,
         weak_equality,
     )
-    st = time.monotonic()
-    open: list[PrioritizedItem] = []
-    init = ss.initial_state()
-    if not ss.is_temporal or weak_equality:
-        visited_states = {state_representation(init, weak_equality)}
-    expanded_states = 0
-    generated_states = 1
-    if early_termination and ss.goal_reached(init):
-        return extract_path(init), {
-            "expanded_states": str(expanded_states),
-            "goal_depth": str(init.g),
-        }
-
-    init_h = heuristic.eval(init, ss)
-    if init_h is None:
-        return None, {"expanded_states": str(0)}
-    heapq.heappush(open, PrioritizedItem(init_h, init, 0))
-    while open:
-        if timeout is not None and time.monotonic() - st > timeout:
-            raise TimeoutError
-        item = heapq.heappop(open)
-        state = item.state
-        expanded_states += 1
-        if expanded_states % 10_000 == 0:
-            logger.debug(
-                "wastar_search: expanded=%d generated=%d open=%d",
-                expanded_states,
-                generated_states,
-                len(open),
-            )
-        if not early_termination and ss.goal_reached(state):
-            logger.info(
-                "wastar_search: goal found — expanded=%d depth=%s",
-                expanded_states,
-                state.g,
-            )
-            return extract_path(state), {
-                "expanded_states": str(expanded_states),
-                "goal_depth": str(state.g),
-            }
-
-        candidate_states = []
-        for succ_state in ss.get_successor_states(state):
-            if early_termination and ss.goal_reached(succ_state):
-                logger.info(
-                    "wastar_search: goal found — expanded=%d depth=%s",
-                    expanded_states,
-                    succ_state.g,
-                )
-                return extract_path(succ_state), {
-                    "expanded_states": str(expanded_states),
-                    "goal_depth": str(succ_state.g),
-                }
-
-            if not ss.is_temporal or weak_equality:
-                state_repr = state_representation(succ_state, weak_equality)
-                if state_repr not in visited_states:
-                    visited_states.add(state_repr)
-                    candidate_states.append(succ_state)
-            else:
-                candidate_states.append(succ_state)
-
-        for succ_state, h in heuristic.eval_gen(candidate_states, ss):
-            if h is not None:
-                f = (1 - weight) * succ_state.g + weight * h
-                heapq.heappush(open, PrioritizedItem(f, succ_state, generated_states))
-            generated_states += 1
-
-    logger.info("wastar_search: no solution found — expanded=%d", expanded_states)
-    return None, {"expanded_states": str(expanded_states)}
+    return _priority_search(
+        ss,
+        heuristic,
+        timeout,
+        early_termination,
+        name="wastar_search",
+        open=_PriorityQueue(),
+        dedup=_SetDedup(ss, weak_equality),
+        make_root=lambda init, h: PrioritizedItem(h, init, 0),
+        make_child=lambda _item, s, h, idx: PrioritizedItem(
+            (1 - weight) * s.g + weight * h, s, idx
+        ),
+    )
 
 
 def astar_search_memory_bounded(
@@ -341,97 +488,20 @@ def wastar_search_memory_bounded(
         early_termination,
         weak_equality,
     )
-    st = time.monotonic()
-    init = ss.initial_state()
-    expanded_states = 0
-    generated_states = 1
-    if early_termination and ss.goal_reached(init):
-        return extract_path(init), {
-            "expanded_states": str(expanded_states),
-            "goal_depth": str(init.g),
-        }
-
-    def bloom_key(state: State) -> bytes:
-        key = []
-        for v in state.assignments:
-            if isinstance(v, bool):
-                key.append(f"{int(v)}")
-            elif isinstance(v, int):
-                key.append(f"{v}")
-            elif isinstance(v, Fraction):
-                key.append(f"{v.numerator}/{v.denominator}")
-            elif isinstance(v, ObjectNode):
-                key.append(f"{v.object}")
-        return "|".join(key).encode("utf-8")
-
-    if not ss.is_temporal or weak_equality:
-        BLOOM_ITEMS = 20_000_000
-        BLOOM_FP_RATE = 1e-4
-        visited_states = BloomFilter(max_elements=BLOOM_ITEMS, error_rate=BLOOM_FP_RATE)
-        visited_states.add(bloom_key(init))
-
-    init_h = heuristic.eval(init, ss)
-    if init_h is None:
-        return None, {"expanded_states": str(0)}
-
     QUEUE_BOUND = 400_000
-    open = BoundedPriorityQueue(QUEUE_BOUND)
-    open.push(PrioritizedItem(init_h, init, generated_states))
-    while len(open) > 0:
-        if timeout is not None and time.monotonic() - st > timeout:
-            raise TimeoutError
-        item = open.pop()
-        state = item.state
-        expanded_states += 1
-        if expanded_states % 10_000 == 0:
-            logger.debug(
-                "wastar_search_memory_bounded: expanded=%d generated=%d open=%d",
-                expanded_states,
-                generated_states,
-                len(open),
-            )
-        if not early_termination and ss.goal_reached(state):
-            logger.info(
-                "wastar_search_memory_bounded: goal found — expanded=%d depth=%s",
-                expanded_states,
-                state.g,
-            )
-            return extract_path(state), {
-                "expanded_states": str(expanded_states),
-                "goal_depth": str(state.g),
-            }
-
-        candidate_states = []
-        for succ_state in ss.get_successor_states(state):
-            if early_termination and ss.goal_reached(succ_state):
-                logger.info(
-                    "wastar_search_memory_bounded: goal found — expanded=%d depth=%s",
-                    expanded_states,
-                    succ_state.g,
-                )
-                return extract_path(succ_state), {
-                    "expanded_states": str(expanded_states),
-                    "goal_depth": str(succ_state.g),
-                }
-
-            if not ss.is_temporal or weak_equality:
-                succ_state_key = bloom_key(succ_state)
-                if succ_state_key not in visited_states:
-                    visited_states.add(succ_state_key)
-                    candidate_states.append(succ_state)
-            else:
-                candidate_states.append(succ_state)
-
-        for succ_state, h in heuristic.eval_gen(candidate_states, ss):
-            if h is not None:
-                f = (1 - weight) * succ_state.g + weight * h
-                open.push(PrioritizedItem(f, succ_state, generated_states))
-            generated_states += 1
-
-    logger.info(
-        "wastar_search_memory_bounded: no solution found — expanded=%d", expanded_states
+    return _priority_search(
+        ss,
+        heuristic,
+        timeout,
+        early_termination,
+        name="wastar_search_memory_bounded",
+        open=_BoundedPriorityQueue(QUEUE_BOUND),
+        dedup=_BloomDedup(ss, weak_equality),
+        make_root=lambda init, h: PrioritizedItem(h, init, 0),
+        make_child=lambda _item, s, h, idx: PrioritizedItem(
+            (1 - weight) * s.g + weight * h, s, idx
+        ),
     )
-    return None, {"expanded_states": str(expanded_states)}
 
 
 def ehc_search(
@@ -609,93 +679,31 @@ def novbfs_search(
         early_termination,
         weak_equality,
     )
-    st = time.monotonic()
-    open: list[NovBFSItem] = []
-    init = ss.initial_state()
-    if not ss.is_temporal or weak_equality:
-        visited_states = {state_representation(init, weak_equality)}
-    expanded_states = 0
-    generated_states = 1
-    if early_termination and ss.goal_reached(init):
-        return extract_path(init), {
-            "expanded_states": str(expanded_states),
-            "goal_depth": str(init.g),
-        }
-
-    init_h = heuristic.eval(init, ss)
-    if init_h is None:
-        return None, {"expanded_states": str(0)}
-    init_partition = novelty.start(init, init_h)
-    # Seed the tables (return discarded); the root's *stored* novelty is
-    # hard-coded to 1 below regardless.
-    novelty.eval(init, init_partition, None, None)
 
     def g_key(g: int) -> float:
         return -g if prefer_higher_g else g
 
-    heapq.heappush(open, NovBFSItem(1, init_h, g_key(init.g), 0, init, init_partition))
-    while open:
-        if timeout is not None and time.monotonic() - st > timeout:
-            raise TimeoutError
-        item = heapq.heappop(open)
-        state = item.state
-        expanded_states += 1
-        if expanded_states % 10_000 == 0:
-            logger.debug(
-                "novbfs_search: expanded=%d generated=%d open=%d",
-                expanded_states,
-                generated_states,
-                len(open),
-            )
-        if not early_termination and ss.goal_reached(state):
-            logger.info(
-                "novbfs_search: goal found — expanded=%d depth=%s",
-                expanded_states,
-                state.g,
-            )
-            return extract_path(state), {
-                "expanded_states": str(expanded_states),
-                "goal_depth": str(state.g),
-            }
+    def make_root(init: State, init_h: float) -> NovBFSItem:
+        partition = novelty.start(init, init_h)
+        # Seed the tables (return discarded); the root's *stored* novelty is
+        # hard-coded to 1 below regardless.
+        novelty.eval(init, partition, None, None)
+        return NovBFSItem(1, init_h, g_key(init.g), 0, init, partition)
 
-        candidate_states = []
-        for succ_state in ss.get_successor_states(state):
-            if early_termination and ss.goal_reached(succ_state):
-                logger.info(
-                    "novbfs_search: goal found — expanded=%d depth=%s",
-                    expanded_states,
-                    succ_state.g,
-                )
-                return extract_path(succ_state), {
-                    "expanded_states": str(expanded_states),
-                    "goal_depth": str(succ_state.g),
-                }
+    def make_child(item: NovBFSItem, s: State, h: float, idx: int) -> NovBFSItem:
+        partition = novelty.partition_of(h)
+        nov = novelty.eval(s, partition, item.state, item.partition)
+        return NovBFSItem(nov, h, g_key(s.g), idx, s, partition)
 
-            if not ss.is_temporal or weak_equality:
-                state_repr = state_representation(succ_state, weak_equality)
-                if state_repr not in visited_states:
-                    visited_states.add(state_repr)
-                    candidate_states.append(succ_state)
-            else:
-                candidate_states.append(succ_state)
-
-        novelty.begin_expansion()
-        for succ_state, h in heuristic.eval_gen(candidate_states, ss):
-            if h is not None:
-                succ_partition = novelty.partition_of(h)
-                nov = novelty.eval(succ_state, succ_partition, state, item.partition)
-                heapq.heappush(
-                    open,
-                    NovBFSItem(
-                        nov,
-                        h,
-                        g_key(succ_state.g),
-                        generated_states,
-                        succ_state,
-                        succ_partition,
-                    ),
-                )
-            generated_states += 1
-
-    logger.info("novbfs_search: no solution found — expanded=%d", expanded_states)
-    return None, {"expanded_states": str(expanded_states)}
+    return _priority_search(
+        ss,
+        heuristic,
+        timeout,
+        early_termination,
+        name="novbfs_search",
+        open=_PriorityQueue(),
+        dedup=_SetDedup(ss, weak_equality),
+        make_root=make_root,
+        make_child=make_child,
+        begin_expansion=novelty.begin_expansion,
+    )
