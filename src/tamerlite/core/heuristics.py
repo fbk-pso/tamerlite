@@ -85,7 +85,7 @@ class OperatorHmax:
     conditions: tuple[Expression, ...]
     effects: tuple[tuple[int, Expression | ConstantNode], ...]
     cost: float
-    effect_fluents: tuple[tuple[int, ...], ...] = ()
+    effect_fluents: tuple[tuple[int, ...], ...]
 
 
 class HeuristicKind(Enum):

@@ -2203,7 +2203,7 @@ impl ValueSet {
     }
 }
 
-pub struct FluentAssignments<'a> {
+struct FluentAssignments<'a> {
     fluents: &'a [usize],
     values: &'a [&'a ExpressionNode],
 }
