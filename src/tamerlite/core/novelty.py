@@ -68,6 +68,14 @@ Implementation notes:
   cached value instead of recomputing and re-normalizing it per use.
 - Fluent values here are exact `Fraction`/`int`, so distance-improvement
   comparisons are exact rather than floating-point-precision sensitive.
+- A propositional leaf is satisfied iff it evaluates to the literal boolean
+  `True` -- ``evaluate(leaf, state) is True``, not truthiness (`bool(...)`).
+  This matches Rust's `is_true` (`matches!(v, ExpressionNode::Bool(true))`,
+  `crates/rustamer-base/src/novelty.rs`), which only ever treats
+  `Bool(true)` as satisfied. Not reachable from the encoder today -- every
+  propositional leaf here is boolean-valued -- but the two backends must
+  agree on `expanded_states`/`goal_depth` exactly, so this is stated
+  explicitly rather than left to happen to agree.
 """
 
 import itertools
@@ -132,13 +140,18 @@ class NumericNovelty:
     """Partitioned numeric novelty over the subgoals of `events`/`goals`.
 
     Construct once per search (subgoal catalogue only, no state needed), call
-    `start(initial_state, initial_h)` once to fix the partition count, then
-    call `begin_expansion()` once per expanded (popped) state followed by
+    `start(initial_h)` once to fix the partition count, then call
+    `begin_expansion()` once per expanded (popped) state followed by
     `eval(...)` once per surviving successor, in generation order, passing
-    its parent. Not thread-safe / not reusable across searches without
-    calling `start` again -- construct a fresh instance per search call,
-    including per anytime cold-restart iteration (see
-    `TamerLite._anytime_solutions`).
+    its parent. Not thread-safe. Reuse across multiple `novbfs_search` calls
+    on the same instance (e.g. `TamerLite._solve_ground_problem`'s
+    `weak_equality` retry, which calls the same bound `partial` -- hence the
+    same instance -- twice) is safe *because* `start` fully resets
+    `_partitions`/`_max_partition` and the parent-feature caches; it must be
+    called again, before any further `eval()`, whenever reused this way. A
+    fresh instance is still constructed per anytime cold-restart iteration
+    (see `TamerLite._anytime_solutions`), but that is `TamerLite` starting
+    over from scratch, not a requirement this class imposes.
 
     A parent's own features (psi truth, sdist) are a pure function of
     `(leaf, parent_state)`: every child of one expansion shares the same
@@ -197,13 +210,17 @@ class NumericNovelty:
         self._parent_prop_true: dict[int, bool] = {}
         self._parent_numeric: dict[int, tuple[Fraction, bool]] = {}
 
-    def start(self, initial_state: State, initial_h: float) -> int:
+    def start(self, initial_h: float) -> int:
         """(Re)initializes partition bookkeeping from the initial state's
         h^add value. Must be called exactly once, before any `eval()` call.
         Returns the root's (clamped) partition id; the caller is responsible
         for seeding the tables with an explicit `eval()` call on the initial
         state and then pushing the root with novelty hard-coded to 1,
         regardless of that call's return value (see `novbfs_search`)."""
+        assert initial_h >= 0, (
+            "initial_h must be non-negative (novbfs always uses h^add, which "
+            "never returns a negative value for a reachable state)"
+        )
         self._partitions = {}
         self._max_partition = max(1, math.floor(initial_h))
         self._parent_prop_true = {}
@@ -213,6 +230,10 @@ class NumericNovelty:
     def partition_of(self, h_value: float) -> int:
         """The partition function: `floor(h_value)`, clamped at the top to
         `max_partition`."""
+        assert h_value >= 0, (
+            "h_value must be non-negative (novbfs always uses h^add, which "
+            "never returns a negative value for a reachable state)"
+        )
         return min(math.floor(h_value), self._max_partition)
 
     def begin_expansion(self) -> None:
@@ -291,7 +312,10 @@ class NumericNovelty:
         # everything currently true/satisfied counts as newly added).
         for leaf_id, leaf in enumerate(self._leaves):
             if leaf_id not in self._numeric_leaves:
-                s_true = bool(evaluate(leaf, state))
+                # `is True`, not `bool(...)`: only a literal boolean true
+                # satisfies a propositional leaf (matches Rust's `is_true`;
+                # see the module docstring's implementation notes).
+                s_true = evaluate(leaf, state) is True
                 if s_true:
                     currently_satisfied.append(leaf_id)
                 if new_partition:
@@ -301,7 +325,7 @@ class NumericNovelty:
                     assert parent is not None
                     p_true = self._parent_prop_true.get(leaf_id)
                     if p_true is None:
-                        p_true = bool(evaluate(leaf, parent))
+                        p_true = evaluate(leaf, parent) is True
                         self._parent_prop_true[leaf_id] = p_true
                     if s_true and not p_true:
                         newly_satisfied.append(leaf_id)
@@ -356,7 +380,20 @@ class NumericNovelty:
         # future calls.
         #
         # C1: psi x psi -- a newly-added subgoal paired with any currently-
-        # true subgoal (including itself-as-numeric-satisfied).
+        # true subgoal (including itself-as-numeric-satisfied). On a fresh
+        # partition, `start_idx = ax + 1` is only correct because
+        # `newly_satisfied` and `currently_satisfied` are appended in
+        # lockstep above and are therefore element-identical (every subgoal
+        # currently true is also newly satisfied when nothing has been seen
+        # in this partition yet, and vice versa): skipping the prefix up to
+        # `ax` in `currently_satisfied` is skipping exactly the pairs
+        # `(newly_satisfied[0..ax], f)` already enumerated by earlier outer
+        # iterations, so each unordered pair is still visited exactly once.
+        # If a future edit ever appended to one list and not the other on
+        # the `new_partition` branch, this would silently stop visiting some
+        # pairs -- no error, just a different novelty class -- hence the
+        # assertion.
+        assert not new_partition or newly_satisfied == currently_satisfied
         for ax, f in enumerate(newly_satisfied):
             start_idx = ax + 1 if new_partition else 0
             for tid in itertools.islice(currently_satisfied, start_idx, None):
@@ -380,11 +417,15 @@ class NumericNovelty:
                     novelty = min(novelty, 2)
 
         # C2: psi (persisting, true before and after) x delta (improved but
-        # still genuinely unsatisfied numeric subgoal).
+        # still unsatisfied numeric subgoal). No extra "genuinely
+        # unsatisfied" filter here: every leaf in `numeric_improved` is
+        # already unsatisfied by construction (Pass A only appends to it
+        # under `not curr_sat`), exactly as in C1b above -- an explicit
+        # `sdist < 0` check here would additionally exclude a strict `<`
+        # leaf sitting exactly at `sdist == 0` (unsatisfied, since strict
+        # `<` requires `sdist > 0`), which C1b does process.
         for tid in numeric_improved:
             sdist = sdist_cache[tid]
-            if not sdist < 0:
-                continue
             for f in persisting_satisfied:
                 if f == tid:
                     continue

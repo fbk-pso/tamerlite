@@ -314,8 +314,13 @@ impl LeafClassification {
 /// Construct once per search (subgoal catalogue only, no state needed),
 /// call `start(initial_h)` once to fix the partition count, then call
 /// `begin_expansion()` once per popped/expanded state followed by `eval()`
-/// once per surviving successor, in generation order -- not thread-safe /
-/// not reusable across searches without calling `start` again.
+/// once per surviving successor, in generation order -- not thread-safe.
+/// Reuse across multiple `novbfs_search` calls on the same instance (e.g.
+/// the Python engine's `weak_equality` retry, which invokes the same bound
+/// `partial` -- hence the same instance -- twice) is safe *because* `start`
+/// fully resets `partitions`/`max_partition` and the parent-feature caches;
+/// it must be called again, before any further `eval()`, whenever reused
+/// this way.
 #[pyclass]
 pub struct NumericNovelty {
     leaves: Vec<LeafData>,
@@ -372,9 +377,10 @@ impl NumericNovelty {
     /// (Re)initializes partition bookkeeping from the initial state's
     /// h^add value and clears the parent-feature cache (so a following
     /// `eval` on the root sees "no parent" unconditionally, matching
-    /// calling `eval(init, p, None, None)` directly). Must be called
-    /// exactly once, before any `eval()` call. Returns the root's
-    /// (clamped) partition id.
+    /// calling `eval(init, p, None, None)` directly). Must be called before
+    /// any `eval()` call -- and again, before any further `eval()`, if this
+    /// instance is being reused for another `novbfs_search` call (see the
+    /// struct docstring). Returns the root's (clamped) partition id.
     pub fn start(&mut self, initial_h: f64) -> u64 {
         assert!(
             initial_h >= 0.0,
@@ -524,7 +530,20 @@ impl NumericNovelty {
         // Pass C: binary (size-2) novelty. Always runs, even if Pass B
         // already found novelty 1, so the pair tables stay current.
         //
-        // C1: psi x psi.
+        // C1: psi x psi. On a fresh partition, `start = ax + 1` is only
+        // correct because `newly_satisfied` and `currently_satisfied` are
+        // pushed in lockstep above and are therefore element-identical --
+        // skipping the prefix up to `ax` in `currently_satisfied` is
+        // skipping exactly the pairs already enumerated by earlier outer
+        // iterations, so each unordered pair is still visited exactly once.
+        // If a future edit ever pushed to one list and not the other on the
+        // `new_partition` branch, this would silently stop visiting some
+        // pairs -- no error, just a different novelty class -- hence the
+        // debug assertion (mirrors `novelty.py`'s `eval`).
+        debug_assert!(
+            !new_partition
+                || self.classification.newly_satisfied == self.classification.currently_satisfied
+        );
         for (ax, &f) in self.classification.newly_satisfied.iter().enumerate() {
             let start = if new_partition { ax + 1 } else { 0 };
             for &tid in self.classification.currently_satisfied.iter().skip(start) {
@@ -557,13 +576,16 @@ impl NumericNovelty {
             }
         }
 
-        // C2: psi (persisting) x delta (improved but still genuinely
-        // unsatisfied numeric subgoal).
+        // C2: psi (persisting) x delta (improved but still unsatisfied
+        // numeric subgoal). No extra "genuinely unsatisfied" filter here:
+        // every leaf in `numeric_improved` is already unsatisfied by
+        // construction (Pass A only pushes to it when `!curr_sat`), exactly
+        // as in C1b above -- an explicit `is_negative()` check here would
+        // additionally exclude a strict `<` leaf sitting exactly at
+        // `sdist == 0` (unsatisfied, since strict `<` requires
+        // `sdist > 0`), which C1b does process. Mirrored in `novelty.py`.
         for &tid in &self.classification.numeric_improved {
             let sdist = &self.classification.sdist_cache[tid as usize];
-            if !sdist.is_negative() {
-                continue;
-            }
             for &f in &self.classification.persisting_satisfied {
                 if f == tid {
                     continue;

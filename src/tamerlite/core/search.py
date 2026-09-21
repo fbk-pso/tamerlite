@@ -653,12 +653,16 @@ def novbfs_search(
     `TamerLite._solve_ground_problem`'s novbfs dispatch branch, which always
     builds one internally regardless of the configured heuristic.
 
-    `novelty` must not have had `start()` called yet -- this function calls
-    it once, on the initial state, and constructs a fresh instance per
-    search call (including per anytime cold-restart iteration, which
-    tamerlite already implements generically -- see
-    `TamerLite._anytime_solutions` -- so no restart logic needs to live
-    here).
+    This function calls `novelty.start()` once, on the initial state's h^add
+    value, before doing anything else -- safe to call even if `novelty` was
+    already used by a previous `novbfs_search` call on the same instance
+    (e.g. `TamerLite._solve_ground_problem`'s `weak_equality` retry, which
+    invokes the same bound `partial` twice), since `start()` fully resets
+    its partition tables and parent-feature caches; see `NumericNovelty`'s
+    class docstring. A fresh instance is still constructed per anytime
+    cold-restart iteration, which tamerlite already implements generically
+    -- see `TamerLite._anytime_solutions` -- but nothing here requires that
+    beyond `start()` being called again.
 
     Dedup is the standard tamerlite "generate-once" strategy shared with
     every other search here (`state_representation`/`visited_states`,
@@ -684,7 +688,7 @@ def novbfs_search(
         return -g if prefer_higher_g else g
 
     def make_root(init: State, init_h: float) -> NovBFSItem:
-        partition = novelty.start(init, init_h)
+        partition = novelty.start(init_h)
         # Seed the tables (return discarded); the root's *stored* novelty is
         # hard-coded to 1 below regardless.
         novelty.eval(init, partition, None, None)
