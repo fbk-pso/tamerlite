@@ -276,6 +276,8 @@ Because `tests/test_engine.py::check_metrics_equality` asserts identical `expand
 
 **Anytime** (`_get_solutions_with_params`): iteratively tightens the quality constraint and re-solves until UNSAT or timeout.
 
+**`internal_heuristic_cache` is an upper bound, not a switch.** The heuristic's internal cache key (`assignments` plus the per-action todo index, both cores) is exactly the equivalence relation the search dedups successors on before ever calling `eval_gen` (`State.__eq__`), and that dedup is unconditionally active on a non-temporal problem (`not ss.is_temporal or weak_equality` is true whenever `not ss.is_temporal` is) — so on a classical problem every cache lookup is a guaranteed miss, pure cost with no effect on `expanded_states`/the plan. Both branches of `_solve_ground_problem` (single-queue and multiqueue) therefore gate the flag with `self._params.internal_heuristic_cache and encoder.search_space.is_temporal` before constructing the heuristic(s): `SearchParams.internal_heuristic_cache=True` only actually enables the cache on a temporal problem, regardless of `weak_equality` or which search algorithm is selected. No warning is emitted — the default is `True`, so most classical solves would gate silently and a warning there would be noise.
+
 ### Configuration
 
 `SearchParams` (single queue) and `MultiqueueParams` (parallel queues) are frozen dataclasses passed via `params={"search": ...}` to the UP planner factory. Default: `wastar` + `hff` at weight `0.8`.

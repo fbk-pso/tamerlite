@@ -857,6 +857,10 @@ class TamerLite(
 
             if isinstance(self._params, MultiqueueParams):
                 search_name = "multiqueue"
+                internal_heuristic_cache = (
+                    self._params.internal_heuristic_cache
+                    and encoder.search_space.is_temporal
+                )
                 heuristics = []
                 for p in self._params.queues:
                     h, w = self._get_heuristic(
@@ -864,7 +868,7 @@ class TamerLite(
                         heuristic,
                         encoder,
                         self._params.inadmissible_numeric_heuristic_variant,
-                        self._params.internal_heuristic_cache,
+                        internal_heuristic_cache,
                     )
                     heuristics.append((h, w))
 
@@ -895,12 +899,16 @@ class TamerLite(
                         weak_equality=False,
                     )
             else:
+                internal_heuristic_cache = (
+                    self._params.internal_heuristic_cache
+                    and encoder.search_space.is_temporal
+                )
                 h, w = self._get_heuristic(
                     self._params,
                     heuristic,
                     encoder,
                     self._params.inadmissible_numeric_heuristic_variant,
-                    self._params.internal_heuristic_cache,
+                    internal_heuristic_cache,
                 )
                 search_name, search = self._get_search(
                     self._params.search,
