@@ -28,16 +28,19 @@ backends and assert identical `expanded_states`/`goal_depth`
 `test_engine.py`'s search-algorithm matrix.
 """
 
+import itertools
 import warnings
 from collections.abc import Callable
+from typing import cast
 
 import pytest
 from unified_planning.engines import PlanGenerationResult
 from unified_planning.engines import PlanGenerationResultStatus as ResultStatus
-from unified_planning.shortcuts import OneshotPlanner, PlanValidator
+from unified_planning.shortcuts import AnytimePlanner, OneshotPlanner, PlanValidator
 
 import problems_generator
 import testing_utils
+from tamerlite.core.search_space import ConstantNode
 
 reload_tamerlite = testing_utils.reload_tamerlite
 check_metrics_equality = testing_utils.check_metrics_equality
@@ -132,7 +135,7 @@ class TestNumericNovelty:
 
         # s0 (root): fuel=4, at_loc1=False, loaded=False.
         s0 = _state([False, False, 4])
-        root_partition = novelty.start(s0, 0.0)
+        root_partition = novelty.start(0.0)
         assert novelty.eval(s0, root_partition, None, None) == 1
         tables0 = novelty._get_partition(root_partition)
         assert tables0.best_sdist[fuel_id] == 4 - 10
@@ -200,7 +203,7 @@ class TestNumericNovelty:
         q_id = novelty._leaf_index[q]
 
         s0 = _state([False, False])
-        partition = novelty.start(s0, 0.0)
+        partition = novelty.start(0.0)
         assert novelty.eval(s0, partition, None, None) == 3  # nothing true yet
 
         # Linear chain, one child per state -- see the previous test's note
@@ -253,7 +256,7 @@ class TestNumericNovelty:
         fluent_domains = [FluentDomain(FluentKind.BOOL)]
 
         novelty = NumericNovelty({}, goal, fluent_domains)
-        partition = novelty.start(_state([True]), 0.0)
+        partition = novelty.start(0.0)
         parent_a = _state([True])
         parent_b = _state([False])
 
@@ -319,6 +322,126 @@ class TestNumericNovelty:
         assert numeric_eq_id in novelty._numeric_leaves
         assert object_eq_id not in novelty._numeric_leaves
         assert fluent_vs_fluent_eq_id not in novelty._numeric_leaves
+
+
+class TestNumericNoveltyBinaryPassesCrossBackend:
+    """Backend-agnostic unit tests for Pass C1b (psi x delta) and Pass C2
+    (persisting psi x delta) -- unlike `TestNumericNovelty` above, these
+    import through `tamerlite.core` (the backend switch) rather than
+    `tamerlite.core.novelty` directly, and assert only the returned novelty
+    *class*, never internal tables, so they run against the Rust
+    `NumericNovelty` too.
+
+    Motivation: measuring what disabling each pass changes across the full
+    end-to-end test set showed Pass C2 entirely inert (`expanded_states`/
+    `goal_depth`/novelty-class histogram all unchanged) and Pass C1b's only
+    visible effect an unasserted novelty-class histogram shift on one
+    problem -- neither pass had any test that would fail if it silently
+    broke. Both hand-traced chains below are constructed so the *only* pass
+    that can produce novelty 2 on the final state is the one named; every
+    other pass is independently shown silent at that point in the trace.
+
+    States are built the same way as `test_engine.py`'s cross-backend
+    `SearchSpace` construction (a bare `SearchSpace([], {}, [], None, None,
+    None)` plus `initial_state(...)`), since the Rust `State` has no
+    constructor of its own -- unlike `TestNumericNovelty` above, which
+    constructs Python `State` objects directly and is therefore stuck on
+    the Python core.
+    """
+
+    @staticmethod
+    def _make_novelty_and_states(disable_rustamer, chain):
+        """Builds a `NumericNovelty` over the fixed two-leaf catalogue
+        (`p`: a bool fluent; `n`: `10 <= fuel`, so `sdist = fuel - 10`) and
+        one `State` per `(p, fuel)` raw-value pair in `chain`, using
+        whichever backend `disable_rustamer` selects. `reload_tamerlite`
+        must run before any `make_*_node` call -- one node built against
+        the backend active before this call and mixed into a state/goal
+        built after it are different backends' incompatible node types, so
+        every builder is imported fresh here, after the reload, rather than
+        accepting already-built nodes from the caller."""
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.core import (
+            NumericNovelty,
+            SearchSpace,
+            make_bool_constant_node,
+            make_fluent_node,
+            make_int_constant_node,
+            make_operator_node,
+        )
+        from tamerlite.core.search_space import FluentDomain, FluentKind
+
+        goal = (
+            make_fluent_node(0),  # 0: p
+            make_int_constant_node(10),  # 1
+            make_fluent_node(1),  # 2: fuel
+            make_operator_node("<=", (1, 2)),  # 3: n = 10 <= fuel
+            make_operator_node("and", (0, 3)),  # 4: goal = p and n
+        )
+        fluent_domains = [FluentDomain(FluentKind.BOOL), FluentDomain(FluentKind.INT)]
+        novelty = NumericNovelty({}, goal, fluent_domains)
+
+        search_space = SearchSpace([], {}, [], None, None, None)
+        states = [
+            search_space.initial_state(
+                cast(
+                    "list[ConstantNode]",
+                    [make_bool_constant_node(p), make_int_constant_node(fuel)],
+                )
+            )
+            for p, fuel in chain
+        ]
+        return novelty, states
+
+    @staticmethod
+    def _run_chain(novelty, states):
+        """Feeds `states` through `novelty` as a linear chain (state `i` is
+        the child of state `i - 1`), one shared partition throughout,
+        `begin_expansion()` before every `eval()` call as `novbfs_search`
+        does -- returns the *last* state's novelty class."""
+        partition = novelty.start(0.0)
+        novelty.eval(states[0], partition, None, None)
+        result = None
+        for parent, child in itertools.pairwise(states):
+            novelty.begin_expansion()
+            result = novelty.eval(child, partition, parent, partition)
+        return result
+
+    @pytest.mark.parametrize("disable_rustamer", [True, False])
+    def test_pass_c1b_only(self, disable_rustamer):
+        """`p` becomes satisfied, is already in `psi_seen` by the final
+        state (B1 silent there); `n`'s sdist ties its immediate parent's
+        (B2 silent); `currently_satisfied == [p]` at the final state so C1
+        only ever sees `f == tid` (silent). Only C1b -- `p` newly
+        satisfied x `n` still unsatisfied, `sdist` improving from -10 to
+        -2 -- can produce novelty 2."""
+        chain = [
+            (False, 0),  # root
+            (True, 0),  # p: F -> T (first time)
+            (False, 8),  # p: T -> F; fuel sdist -10 -> -2 (new, via C1b later)
+            (True, 8),  # p: F -> T again (psi_seen already); fuel unchanged
+        ]
+        novelty, states = self._make_novelty_and_states(disable_rustamer, chain)
+        assert self._run_chain(novelty, states) == 2
+
+    @pytest.mark.parametrize("disable_rustamer", [True, False])
+    def test_pass_c2_only(self, disable_rustamer):
+        """`p` becomes satisfied and then persists; `n`'s best-ever sdist in
+        this partition (-1, set while `p` was still false) already beats
+        the final state's sdist (-2), so B2 is silent; `newly_satisfied` is
+        empty at the final state, so C1/C1b (both keyed off it) cannot fire
+        either. Only C2 -- `p` persisting-satisfied x `n` improved-over-its-
+        immediate-parent but still unsatisfied -- can produce novelty 2."""
+        chain = [
+            (False, 0),  # root
+            (False, 9),  # fuel sdist -10 -> -1 (new best)
+            (False, 12),  # fuel satisfied for the first time
+            (True, 12),  # p: F -> T (first time); fuel persists satisfied
+            (True, 5),  # fuel regresses to unsatisfied; p persists
+            (True, 8),  # fuel sdist -5 -> -2 (beats parent, not the -1 best)
+        ]
+        novelty, states = self._make_novelty_and_states(disable_rustamer, chain)
+        assert self._run_chain(novelty, states) == 2
 
 
 NOVBFS_SEARCHES = ["novbfs_hg", "novbfs_lg"]
@@ -416,23 +539,25 @@ def test_novbfs_ignores_custom_heuristic_callable_with_warning():
 
 
 def test_novbfs_rejects_memory_bounded():
+    """`SearchParams.__post_init__` rejects this combination at construction
+    time -- both `search` and `incomplete_memory_bounded_search` are known
+    there, so there's no need to wait until `_solve_ground_problem` has
+    compiled and grounded the problem to reject it."""
     reload_tamerlite(True)
     from tamerlite.engine import SearchParams
 
-    problem = problems_generator.get_problem_numeric()
-    params = SearchParams(search="novbfs_hg", incomplete_memory_bounded_search=True)
-    with (
-        OneshotPlanner(name="tamerlite", params={"search": params}) as planner,
-        pytest.raises(NotImplementedError),
-    ):
-        planner.solve(problem, timeout=10)
+    with pytest.raises(NotImplementedError):
+        SearchParams(search="novbfs_hg", incomplete_memory_bounded_search=True)
 
 
 @pytest.mark.parametrize("search_name", NOVBFS_SEARCHES)
 @pytest.mark.parametrize(
     "make_problem",
-    [problems_generator.get_problem_numeric, problems_generator.get_problem_flight],
-    ids=["numeric", "flight"],
+    [
+        problems_generator.get_problem_numeric,
+        lambda: problems_generator.get_problem_logistics(1, 1, 4, 2),
+    ],
+    ids=["numeric", "logistics"],
 )
 def test_novbfs_metrics_regression(make_problem, search_name, data_regression):
     """Pins `expanded_states`/`goal_depth` for a couple of fixed small
@@ -440,7 +565,16 @@ def test_novbfs_metrics_regression(make_problem, search_name, data_regression):
     check that the Rust core's `novbfs` mirrors the pure-Python one exactly.
     Also validates the plan itself (`test_novbfs_cross_backend_parity`
     doesn't share this problem set): a regression that preserves the metrics
-    but silently breaks the plan would otherwise slip through."""
+    but silently breaks the plan would otherwise slip through.
+
+    `logistics`: `fly_fast` has no
+    `connected` precondition (`problems_generator.get_problem_flight`), so
+    A->D is a single action and the pinned baseline was `expanded_states: 2`
+    / `goal_depth: 1` -- "pop the root, then pop the goal", reproduced by
+    almost any scoring function, so it could never detect drift in the
+    novelty measure itself. `logistics(1, 1, 4, 2)` is the problem
+    `TestNumericNoveltyBinaryPassesCrossBackend`'s motivation measured Pass
+    C1b as actually changing the novelty-class histogram on."""
     problem = make_problem()
     metrics = None
     for disable_rustamer in [True, False]:
@@ -459,3 +593,73 @@ def test_novbfs_metrics_regression(make_problem, search_name, data_regression):
         else:
             assert dict(res.metrics) == metrics
     data_regression.check(metrics)
+
+
+NOVBFS_ANYTIME_PROBLEMS = [
+    (
+        "flight_minimize_plan_length",
+        problems_generator.get_problem_flight_minimize_plan_length,
+    ),
+    (
+        "temporal_flight_minimize_makespan",
+        problems_generator.get_problem_temporal_flight_minimize_makespan,
+    ),
+]
+
+
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+@pytest.mark.parametrize("search_name", NOVBFS_SEARCHES)
+@pytest.mark.parametrize(
+    "make_problem",
+    [p for _, p in NOVBFS_ANYTIME_PROBLEMS],
+    ids=[n for n, _ in NOVBFS_ANYTIME_PROBLEMS],
+)
+def test_novbfs_anytime(make_problem, search_name, disable_rustamer):
+    """`novbfs_search`'s docstring documents that `TamerLite._anytime_solutions`
+    gives each cold-restart iteration a fresh `NumericNovelty` (and so a
+    fresh `start()`). Nothing else in the suite drives novbfs through
+    `AnytimePlanner` -- `test_engine.py::test_anytime_planner` hard-codes
+    `search_kind = "wastar"` and `_anytime_cases()` has no search axis, and
+    adding one there would multiply an already large problem x weak x
+    symmetry x backend matrix. Covers one classical and one temporal
+    metric-carrying problem instead, both search names, both backends.
+
+    Trimmed from `test_anytime_planner`'s assertions: both
+    `MinimizeSequentialPlanLength` and `MinimizeMakespan` are minimization
+    metrics, so the direction is hard-coded here rather than re-derived."""
+    reload_tamerlite(disable_rustamer)
+    from tamerlite.engine import SearchParams
+
+    problem = make_problem()
+    search = SearchParams(search=search_name, compression_safe_actions=False)
+    prev_metric_value = None
+    count = 0
+    with AnytimePlanner(name="tamerlite", params={"search": search}) as planner:
+        for res in planner.get_solutions(problem, timeout=60):
+            count += 1
+            assert res.status in {
+                ResultStatus.INTERMEDIATE,
+                ResultStatus.SOLVED_SATISFICING,
+                ResultStatus.SOLVED_OPTIMALLY,
+            }
+            with PlanValidator(problem_kind=problem.kind) as v:
+                val_res = v.validate(problem, res.plan)
+                assert val_res
+                assert (
+                    val_res.metric_evaluations is not None
+                    and len(val_res.metric_evaluations) == 1
+                )
+                metric_value = next(iter(val_res.metric_evaluations.values()))
+            if prev_metric_value is not None:
+                if res.status == ResultStatus.INTERMEDIATE:
+                    assert metric_value < prev_metric_value
+                else:
+                    assert metric_value <= prev_metric_value
+            prev_metric_value = metric_value
+            if count == 4:
+                break
+    # >= 2: at least one cold restart happened (the initial solve plus a
+    # tightened re-solve), so the "fresh NumericNovelty per cold restart"
+    # contract this test exists for is actually exercised, not just the
+    # first, single-instance solve.
+    assert count >= 2
