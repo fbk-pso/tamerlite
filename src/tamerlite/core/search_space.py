@@ -221,6 +221,11 @@ def clear_interpreted_function_cache() -> None:
     leaving it uncleared here doesn't risk unbounded memory."""
 
 
+# Invariant: within one `Event`'s `effects`, no two `Effect`s target the same
+# `fluent`. `Encoder._convert_effects` establishes this by folding every UP
+# effect on a given fluent -- increase, decrease, and assign alike -- into a
+# single `Effect` before an `Event` ever exists, so a well-formed `Event`
+# never violates it.
 @dataclass(eq=True, frozen=True)
 class Effect:
     fluent: int

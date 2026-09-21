@@ -19,7 +19,7 @@ import itertools
 import math
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from enum import Enum
@@ -85,6 +85,7 @@ class OperatorHmax:
     conditions: tuple[Expression, ...]
     effects: tuple[tuple[int, Expression | ConstantNode], ...]
     cost: float
+    effect_fluents: tuple[tuple[int, ...], ...]
 
 
 class HeuristicKind(Enum):
@@ -1450,10 +1451,132 @@ def HMax(
     )
 
 
+class _ValueSet:
+    """Per-fluent reachable-value tracking for `HMaxExplicit`: `values` is
+    insertion-ordered (so "every value added after size `n`" is the slice
+    `values[n:]`, which is what `_for_each_new_value`'s semi-naive delta
+    enumeration walks)."""
+
+    __slots__ = ("_seen", "values")
+
+    def __init__(self) -> None:
+        self.values: list[ConstantNode] = []
+        self._seen: set[ConstantNode] = set()
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+    def add(self, v: ConstantNode) -> None:
+        if v not in self._seen:
+            self._seen.add(v)
+            self.values.append(v)
+
+
+class _ScratchState:
+    """Minimal `evaluate()`-compatible stand-in for `State`: `evaluate` only
+    ever reaches a state through `get_fluent_value` -> `state.get_value`, so
+    a full `State` is pure overhead when all that's needed is one
+    reused, in-place-mutated assignments list per eval instead of a fresh
+    `State` per cross-product element."""
+
+    __slots__ = ("assignments",)
+
+    def __init__(self, assignments: list[ConstantNode | None]) -> None:
+        self.assignments = assignments
+
+    def get_value(self, fluent: int) -> ConstantNode:
+        return self.assignments[fluent]  # type: ignore[return-value]
+
+
+def _dedup_fluents(exp: Expression | ConstantNode) -> tuple[int, ...]:
+    """Fluent ids referenced by `exp`, deduplicated in first-occurrence
+    order; `()` for a bare constant (no fluents at all)."""
+
+    if not isinstance(exp, tuple):
+        return ()
+    seen: set[int] = set()
+    out: list[int] = []
+    for expression_node in exp:
+        if isinstance(expression_node, FluentNode):
+            f = expression_node.fluent
+            if f not in seen:
+                seen.add(f)
+                out.append(f)
+    return tuple(out)
+
+
+def _for_each_new_value(
+    exp: Expression | ConstantNode,
+    fluents: tuple[int, ...],
+    assignments: list[_ValueSet],
+    old_sizes: tuple[int, ...],
+    scratch: list[ConstantNode | None],
+    visit: Callable[[ConstantNode], bool],
+) -> tuple[int, ...]:
+    """Semi-naive delta enumeration: evaluates `exp` on every combination of
+    its (already deduplicated) `fluents`' reachable values that includes at
+    least one value added since `old_sizes` was last returned by this same
+    function for this `exp`'s call site, then returns the sizes to
+    remember as `old_sizes` next time. Reachable-value sets only ever grow
+    and a combination is consumed either as a set (effects) or as an existence check
+    (`_exp_can_be_true`), so which round first sees a given combination
+    doesn't matter, only that it's seen exactly once.
+
+    `old_sizes` is intentionally left stale (the caller discards this
+    function's return value) when `visit` stops the enumeration early by
+    returning `False`: the only caller that does that (`_exp_can_be_true`,
+    via a `True` value) never re-checks that expression again this eval.
+
+    A bare constant, or an `Expression` with no fluents at all, has exactly
+    one possible value, computed once ever: `old_sizes` conventionally holds
+    `(1,)` after that happens, and anything else before.
+    """
+    if not isinstance(exp, tuple):
+        # A bare constant effect value -- no expression to evaluate at all.
+        if old_sizes == (1,):
+            return old_sizes
+        visit(exp)
+        return (1,)
+
+    k = len(fluents)
+    if k == 0:
+        if old_sizes == (1,):
+            return old_sizes
+        state = _ScratchState(scratch)
+        visit(evaluate(exp, state))  # type: ignore[arg-type]
+        return (1,)
+
+    if len(old_sizes) != k:
+        old_sizes = (0,) * k
+    new_sizes = tuple(len(assignments[f]) for f in fluents)
+    if old_sizes == new_sizes:
+        return old_sizes
+
+    state = _ScratchState(scratch)
+    for j in range(k):
+        ranges = [
+            assignments[fluents[i]].values[: old_sizes[i]]
+            if i < j
+            else assignments[fluents[i]].values[old_sizes[i] : new_sizes[i]]
+            if i == j
+            else assignments[fluents[i]].values[: new_sizes[i]]
+            for i in range(k)
+        ]
+        for combo in itertools.product(*ranges):
+            for f, v in zip(fluents, combo, strict=True):
+                scratch[f] = v
+            if not visit(evaluate(exp, state)):  # type: ignore[arg-type]
+                return old_sizes
+    return new_sizes
+
+
 class HMaxExplicit(Heuristic):
     """An explicit-value-set variant of HMax: it tracks, per fluent, the growing
     set of values reachable so far, and re-evaluates conditions/effects against
-    the cross-product of those sets on every fixpoint round.
+    the cross-product of those sets on every fixpoint round -- restricted to
+    combinations involving a newly-reachable value (`_for_each_new_value`),
+    since every older combination was already accounted for the round it
+    first appeared.
 
     Effects are kept as-is: a single-node constant is unwrapped,
     anything else (a bare `FluentNode` such as `x := y`, an arithmetic
@@ -1462,7 +1585,7 @@ class HMaxExplicit(Heuristic):
 
     This makes it interpreted-function-safe for free: an interpreted-function
     call is just another node `evaluate()` knows how to invoke, and the
-    generic fluent-collecting scans (`_extract_fluents`,
+    generic fluent-collecting scans (`_dedup_fluents`,
     `_operator_conditions_fluents`/`_operator_effects_fluents`) already find
     an interpreted function's argument fluents in both conditions and effects.
 
@@ -1509,7 +1632,7 @@ class HMaxExplicit(Heuristic):
                     else:
                         # Anything else -- a bare `FluentNode` (`x := y`), an
                         # arithmetic expression, an interpreted-function call --
-                        # keeps the whole `Expression`, so `_possible_values`
+                        # keeps the whole `Expression`, so `_for_each_new_value`
                         # cross-products its fluents' reachable values instead
                         # of over-approximating by `FluentKind`.
                         effects.append((eff.fluent, eff.value))
@@ -1519,13 +1642,26 @@ class HMaxExplicit(Heuristic):
                         conditions.extend(split_expression(c))
                 cond = (FluentNode(f),)
                 if (False,) not in conditions:
+                    effect_fluents = tuple(
+                        _dedup_fluents(value) for _fluent, value in effects
+                    )
                     self._operators.append(
-                        OperatorHmax(a, tuple(conditions), tuple(effects), 1.0)
+                        OperatorHmax(
+                            a, tuple(conditions), tuple(effects), 1.0, effect_fluents
+                        )
                     )
         self._extra_goals: tuple[Expression, ...] = tuple(
             [(FluentNode(fe[-1]),) for fe in self._extra_fluents.values()]
         )
         self._goals = split_expression(goals)
+        self._all_goals: tuple[Expression, ...] = self._goals + self._extra_goals
+
+        self._expr_fluents: dict[Expression, tuple[int, ...]] = {}
+        for goal in self._all_goals:
+            self._expr_fluents.setdefault(goal, _dedup_fluents(goal))
+        for operator in self._operators:
+            for c in operator.conditions:
+                self._expr_fluents.setdefault(c, _dedup_fluents(c))
 
         self._operator_conditions_fluents: list[set[int]] = []
         for operator in self._operators:
@@ -1564,83 +1700,55 @@ class HMaxExplicit(Heuristic):
     def name(self) -> str:
         return "hmax_explicit"
 
-    def _extract_fluents(
-        self,
-        exp: Expression,
-        cache_extract_fluents: dict[int, set[int]],
-    ) -> set[int]:
-        if id(exp) not in cache_extract_fluents:
-            cache_extract_fluents[id(exp)] = {
-                expression_node.fluent
-                for expression_node in exp
-                if isinstance(expression_node, FluentNode)
-            }
-        return cache_extract_fluents[id(exp)]
-
-    def _possible_values(
-        self,
-        exp: Expression | ConstantNode,
-        assignments: list[set[ConstantNode]],
-        cache_extract_fluents: dict[int, set[int]],
-        exp_fluents: set[int] | None = None,
-    ) -> Iterator[ConstantNode]:
-        if isinstance(exp, tuple):
-            if exp_fluents is None:
-                exp_fluents = self._extract_fluents(exp, cache_extract_fluents)
-            values = (assignments[f] for f in exp_fluents)
-            state_assignments: list[ConstantNode | None] = [None] * len(assignments)
-            for assignments_values in itertools.product(*values):
-                for f, v in zip(exp_fluents, assignments_values, strict=True):
-                    state_assignments[f] = v
-                state = State(state_assignments, None, None, None, None, None)  # type: ignore
-                yield evaluate(exp, state)
-        else:
-            yield exp
-
     def _exp_can_be_true(
         self,
         exp: Expression,
-        assignments: list[set[ConstantNode]],
-        assignments_changes: AbstractSet[int],
-        cache_can_be_true: dict[int, bool],
-        cache_extract_fluents: dict[int, set[int]],
+        assignments: list[_ValueSet],
+        cache_can_be_true: dict[Expression, bool],
+        old_sizes_by_expr: dict[Expression, tuple[int, ...]],
+        scratch: list[ConstantNode | None],
     ) -> bool:
-        exp_fluents = None
-        id_exp = id(exp)
-        if id_exp in cache_can_be_true:
-            if cache_can_be_true[id_exp]:
-                return True
+        """Enumerates only the values `exp` can newly take
+        (`_for_each_new_value`) and reports whether any of them is `True`,
+        short-circuiting on the first one."""
+        if cache_can_be_true.get(exp) is True:
+            return True
 
-            exp_fluents = self._extract_fluents(exp, cache_extract_fluents)
-            if exp_fluents.isdisjoint(assignments_changes):
-                return False
+        fluents = self._expr_fluents[exp]
+        old_sizes = old_sizes_by_expr.get(exp, ())
+        found = False
 
-        possible_values = self._possible_values(
-            exp, assignments, cache_extract_fluents, exp_fluents
-        )
-        for value in possible_values:
+        def visit(value: ConstantNode) -> bool:
+            nonlocal found
             if value is True:
-                cache_can_be_true[id_exp] = True
-                return True
+                found = True
+                return False
+            return True
 
-        cache_can_be_true[id_exp] = False
-        return False
+        new_old_sizes = _for_each_new_value(
+            exp, fluents, assignments, old_sizes, scratch, visit
+        )
+        if found:
+            cache_can_be_true[exp] = True
+        else:
+            old_sizes_by_expr[exp] = new_old_sizes
+        return found
 
     def _can_be_true(
         self,
         expressions: tuple[Expression, ...],
-        assignments: list[set[ConstantNode]],
-        assignments_changes: AbstractSet[int],
-        cache_can_be_true: dict[int, bool],
-        cache_extract_fluents: dict[int, set[int]],
+        assignments: list[_ValueSet],
+        cache_can_be_true: dict[Expression, bool],
+        old_sizes_by_expr: dict[Expression, tuple[int, ...]],
+        scratch: list[ConstantNode | None],
     ) -> bool:
         for exp in expressions:
             if not self._exp_can_be_true(
                 exp,
                 assignments,
-                assignments_changes,
                 cache_can_be_true,
-                cache_extract_fluents,
+                old_sizes_by_expr,
+                scratch,
             ):
                 return False
         return True
@@ -1661,10 +1769,9 @@ class HMaxExplicit(Heuristic):
         return res
 
     def _eval_core(self, state: State) -> float | None:
-        assignments: list[set[ConstantNode]] = [{v} for v in state.assignments]
-        assignments += [
-            set() for _ in range(self._num_fluents - len(state.assignments))
-        ]
+        assignments: list[_ValueSet] = [_ValueSet() for _ in range(self._num_fluents)]
+        for f, v in enumerate(state.assignments):
+            assignments[f].add(v)
 
         # add extra fluents to assignments
         for action in self._events:
@@ -1672,21 +1779,31 @@ class HMaxExplicit(Heuristic):
             idx = len(self._extra_fluents[action]) - 1 if j is None else j - 1
 
             for i, f in enumerate(self._extra_fluents[action]):
-                assignments[f] = {i == idx}
+                assignments[f].add(i == idx)
 
-        cache_can_be_true: dict[int, bool] = {}
-        cache_extract_fluents: dict[int, set[int]] = {}
+        cache_can_be_true: dict[Expression, bool] = {}
+        old_sizes_by_expr: dict[Expression, tuple[int, ...]] = {}
+        # Per-(operator, effect) delta progress -- effects aren't looked up
+        # in `_expr_fluents`, so they can't share `old_sizes_by_expr`'s
+        # dedup and get their own tracker. Lazily populated, not eagerly
+        # shaped from every operator up front.
+        eff_old_sizes: dict[tuple[int, int], tuple[int, ...]] = {}
         applied_operators = [False] * len(self._operators)
+
+        # Reused across the whole eval by every `_for_each_new_value` call
+        # instead of allocating a fresh `[None] * num_fluents` list per
+        # cross-product element.
+        scratch: list[ConstantNode | None] = [None] * self._num_fluents
 
         assignments_changes: AbstractSet[int] = self._initial_assignments_changes
         depth = 0
         while len(assignments_changes) > 0:
             if self._can_be_true(
-                self._goals + self._extra_goals,
+                self._all_goals,
                 assignments,
-                assignments_changes,
                 cache_can_be_true,
-                cache_extract_fluents,
+                old_sizes_by_expr,
+                scratch,
             ):
                 # goal satisfied
                 return float(depth)
@@ -1710,9 +1827,9 @@ class HMaxExplicit(Heuristic):
                 elif not self._can_be_true(
                     operator.conditions,
                     assignments,
-                    assignments_changes,
                     cache_can_be_true,
-                    cache_extract_fluents,
+                    old_sizes_by_expr,
+                    scratch,
                 ):
                     # operator cannot be applied
                     continue
@@ -1721,19 +1838,33 @@ class HMaxExplicit(Heuristic):
                     # first time applied
                     applied_operators[i] = True
 
-                for effect in operator.effects:
-                    fluent, value = effect
-                    possible_values = self._possible_values(
-                        value, assignments, cache_extract_fluents
+                for j, (fluent, value) in enumerate(operator.effects):
+                    fluent_new_assignments = new_assignments[fluent]
+
+                    def _collect(
+                        v: ConstantNode,
+                        _sink: set[ConstantNode] = fluent_new_assignments,
+                    ) -> bool:
+                        _sink.add(v)
+                        return True
+
+                    eff_old_sizes[i, j] = _for_each_new_value(
+                        value,
+                        operator.effect_fluents[j],
+                        assignments,
+                        eff_old_sizes.get((i, j), ()),
+                        scratch,
+                        _collect,
                     )
-                    new_assignments[fluent].update(possible_values)
 
             # update assignments
             next_assignments_changes: set[int] = set()
             for fluent, vv in new_assignments.items():
-                prev_len = len(assignments[fluent])
-                assignments[fluent].update(vv)
-                if len(assignments[fluent]) > prev_len:
+                value_set = assignments[fluent]
+                prev_len = len(value_set)
+                for v in vv:
+                    value_set.add(v)
+                if len(value_set) > prev_len:
                     next_assignments_changes.add(fluent)
             assignments_changes = next_assignments_changes
 

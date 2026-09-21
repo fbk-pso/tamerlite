@@ -2653,7 +2653,8 @@ def test_hmax_explicit_partial_callable_can_raise():
     """`hmax_explicit` cross-products an effect's argument fluents'
     already-reachable values and evaluates the interpreted function on every
     combination (`heuristics.py`'s `HMaxExplicit` docstring;
-    `crates/rustamer-base/src/heuristics.rs::possible_values`) -- including
+    `crates/rustamer-base/src/heuristics.rs::for_each_new_value`/
+    `exp_can_be_true`) -- including
     combinations that never jointly occur in any real reachable state. A
     *partial* callable (one that's only defined for some inputs) can
     therefore be called out-of-domain and raise, purely as an artifact of the

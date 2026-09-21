@@ -207,9 +207,10 @@ struct IfCallKey {
 //
 // Errors are never cached (see the `?` before the insert below): a replayed
 // `PyErr` carries a stale traceback and could poison a callable that raises once
-// and later succeeds; the one path that expects errors (`HMaxExplicit::
-// possible_values` probing a partial callable) aborts the whole solve on the first
-// one anyway, so there's nothing to amortize.
+// and later succeeds; the one path that expects errors (`heuristics.rs`'s
+// `for_each_new_value`, reached via `exp_can_be_true`, probing a partial
+// callable) aborts the whole solve on the first one anyway, so there's nothing
+// to amortize.
 //
 // Capped at `IF_RESULTS_CAPACITY` via a real LRU: entries now persist across a
 // whole solve rather than one encoding, so an unbounded map could grow across an
