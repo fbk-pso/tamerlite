@@ -26,26 +26,13 @@ use super::utils::{big_rational_to_py_fraction, get_big_rational};
 
 /// A fluent's identity.
 ///
-/// `__hash__` is written out rather than derived through `#[pyclass(hash)]`,
-/// and the reason is a cross-backend invariant, not taste. `#[pyclass(hash)]`
-/// generates `DefaultHasher` (SipHash) over the derived `Hash` impl, while the
-/// Python core's `Fluent.__hash__` (`src/tamerlite/core/search_space.py`)
-/// returns the bare index -- so a `set[Fluent]` built on the Python side would
-/// iterate in a *different order* depending on which backend is live. (Only
-/// sets are exposed: `dict` iteration is insertion-ordered.) Nothing reads such
-/// a set in an order-sensitive way today, but the whole repo leans on the two
-/// cores agreeing exactly, and this is the kind of divergence
-/// `check_metrics_equality` would not catch. Hashing the index on both sides
-/// keeps the orders identical. Same for `Object` and `Action` below.
-///
-/// `ord` is here for the mirror-image reason: the Python side is an
-/// `order=True` dataclass, so without it `sorted(fluents)` type-checks (mypy
-/// sees the Python class, via `core/__init__.pyi`) and raises only under the
-/// Rust backend.
-///
-/// The hand-written `__hash__` is *mandatory*, not an optimization: `eq`
-/// without `hash` and without this method would leave `object`'s identity hash
-/// in the slot -- equal values hashing differently, silently.
+/// `__hash__` is hand-written (not `#[pyclass(hash)]`, which SipHashes the
+/// derived `Hash` impl) to match the Python side's `Fluent.__hash__`, which
+/// returns the bare index -- otherwise a `set[Fluent]` would iterate in a
+/// different order per backend, a divergence `check_metrics_equality` won't
+/// catch. `ord` matches the Python side's `order=True` for the same reason:
+/// without it, `sorted(fluents)` type-checks (mypy sees the Python class) but
+/// raises only under the Rust backend. Same for `Object` and `Action` below.
 #[pyclass(frozen, eq, ord, from_py_object)]
 #[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Fluent {
