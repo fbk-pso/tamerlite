@@ -1127,6 +1127,8 @@ def test_evaluate_fixed_cases():
     for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
         from tamerlite.core import (
+            Fluent,
+            Object,
             SearchSpace,
             evaluate,
             make_bool_constant_node,
@@ -1155,8 +1157,8 @@ def test_evaluate_fixed_cases():
                     make_int_constant_node(0),
                     make_rational_constant_node(3, 1),
                     make_rational_constant_node(7, 2),
-                    make_object_node(0),
-                    make_object_node(1),
+                    make_object_node(Object(0)),
+                    make_object_node(Object(1)),
                 ],
             )
         )
@@ -1170,17 +1172,17 @@ def test_evaluate_fixed_cases():
         r7_2 = make_rational_constant_node(7, 2)
         r1_2 = make_rational_constant_node(1, 2)
         r0_1 = make_rational_constant_node(0, 1)
-        obj_l1 = make_object_node(0)
-        f_bool_t = make_fluent_node(F_BOOL_T)
-        f_bool_f = make_fluent_node(F_BOOL_F)
-        f_int_3 = make_fluent_node(F_INT_3)
-        f_int_6 = make_fluent_node(F_INT_6)
-        f_int_neg2 = make_fluent_node(F_INT_NEG2)
-        f_int_0 = make_fluent_node(F_INT_0)
-        f_real_3 = make_fluent_node(F_REAL_3)
-        f_real_7_2 = make_fluent_node(F_REAL_7_2)
-        f_obj_l1 = make_fluent_node(F_OBJ_L1)
-        f_obj_l2 = make_fluent_node(F_OBJ_L2)
+        obj_l1 = make_object_node(Object(0))
+        f_bool_t = make_fluent_node(Fluent(F_BOOL_T))
+        f_bool_f = make_fluent_node(Fluent(F_BOOL_F))
+        f_int_3 = make_fluent_node(Fluent(F_INT_3))
+        f_int_6 = make_fluent_node(Fluent(F_INT_6))
+        f_int_neg2 = make_fluent_node(Fluent(F_INT_NEG2))
+        f_int_0 = make_fluent_node(Fluent(F_INT_0))
+        f_real_3 = make_fluent_node(Fluent(F_REAL_3))
+        f_real_7_2 = make_fluent_node(Fluent(F_REAL_7_2))
+        f_obj_l1 = make_fluent_node(Fluent(F_OBJ_L1))
+        f_obj_l2 = make_fluent_node(Fluent(F_OBJ_L2))
 
         op = testing_utils._op_tree
         cases: list[tuple[str, object, tuple]] = [
@@ -1256,6 +1258,60 @@ def test_evaluate_fixed_cases():
             )
 
 
+def _check_id_type_contract(id_type: Any, where: str) -> None:
+    """The per-type body of `test_id_types_hash_and_order_agree_across_backends`.
+
+    `id_type` is deliberately `Any`. The three id types are mutually unordered
+    *by design* -- that is the whole point of giving them distinct types -- so
+    iterating over them hands mypy a union on which `<` is correctly an error.
+    What this test pins is a runtime contract, so the type is widened here
+    rather than silenced with an ignore at each comparison.
+    """
+
+    assert hash(id_type(7)) == 7, where
+    assert id_type(3) == id_type(3), where
+    assert id_type(3) != id_type(4), where
+    assert id_type(1) < id_type(2), where
+    assert id_type(2) >= id_type(2), where
+    ordered = [x.idx for x in sorted({id_type(2), id_type(0), id_type(1)})]
+    assert ordered == [0, 1, 2], f"{where}: {ordered}"
+
+
+def test_id_types_hash_and_order_agree_across_backends():
+    """`Fluent`/`Object`/`Action` must hash to their bare index, and order by
+    it, on *both* backends.
+
+    Two hazards, neither of which any other test would catch.
+
+    **Hash.** `#[pyclass(hash)]` derives `__hash__` from `DefaultHasher`
+    (SipHash) over the Rust `Hash` impl, while the Python core returns the
+    index. A `set[Fluent]` built on the Python side of `Encoder` would then
+    iterate in a different order depending on which backend is live. Nothing
+    reads such a set in an order-sensitive way today -- the fixpoints in
+    `_compute_relevant_fluents`/`_compute_relevant_actions` are closures, and
+    `dict` iteration is insertion-ordered rather than hash-ordered, so only
+    `set`/`frozenset` are exposed at all -- which is exactly the problem:
+    `check_metrics_equality` would stay green while the two cores drifted
+    apart. Both sides therefore write `__hash__` out by hand
+    (`crates/rustamer-base/src/structures.rs`,
+    `src/tamerlite/core/search_space.py`), and this test is what stops
+    `#[pyclass(hash)]` from coming back.
+
+    **Order.** The Python side is an `order=True` dataclass; the Rust side
+    needs an explicit `ord`. Without it `sorted(fluents)` type-checks -- mypy
+    resolves these names to the Python classes, via `core/__init__.pyi` -- and
+    raises only under the Rust backend.
+    """
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.core import Action, Fluent, Object
+
+        backend = "python" if disable_rustamer else "rust"
+        for id_type in (Fluent, Object, Action):
+            _check_id_type_contract(id_type, f"{id_type.__name__}, {backend} backend")
+
+
 def test_numeric_constants_above_i32_range():
     """Cross-backend differential test: pins that both backends accept
     Python ints/`Fraction`s above `2**31` (and rationals with an
@@ -1270,6 +1326,7 @@ def test_numeric_constants_above_i32_range():
     for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
         from tamerlite.core import (
+            Fluent,
             SearchSpace,
             Timing,
             evaluate,
@@ -1314,7 +1371,7 @@ def test_numeric_constants_above_i32_range():
             )
 
         # An out-of-range constant read back through a fluent (initial_state).
-        (F0,) = range(1)
+        (F0,) = map(Fluent, range(1))
         seeded_state = search_space.initial_state(
             cast("list[ConstantNode]", [make_int_constant_node(HUGE)])
         )
@@ -1361,6 +1418,7 @@ def test_evaluate_interpreted_function_normalization():
         reload_tamerlite(disable_rustamer)
         from tamerlite.core import (
             IfReturnType,
+            Object,
             SearchSpace,
             evaluate,
             make_int_constant_node,
@@ -1381,7 +1439,7 @@ def test_evaluate_interpreted_function_normalization():
             return make_object_node(o.object)
 
         def is_first_object(o):
-            return o.object == 0
+            return o.object.idx == 0
 
         three = make_int_constant_node(3)
 
@@ -1403,7 +1461,7 @@ def test_evaluate_interpreted_function_normalization():
             2,
         )
 
-        obj0 = make_object_node(0)
+        obj0 = make_object_node(Object(0))
         obj_identity_node = make_interpreted_function_node(
             obj_identity, IfReturnType.OBJECT, (0,)
         )
@@ -1879,9 +1937,9 @@ def test_temporal_no_start_event():
         assert len(scheduled) == 1
         start, scheduled_action, duration = scheduled[0]
         # `scheduled_action` is reconstructed by `build_plan`, so it may not
-        # be `noop` itself (the Rust backend's pyo3 `Action` doesn't wire up
-        # value equality); compare by `idx` instead.
-        assert scheduled_action.idx == noop.idx
+        # be `noop` itself -- but both backends' `Action` hash/eq by value,
+        # so this is a real equality check, not merely an index comparison.
+        assert scheduled_action == noop
         assert start == 0
         assert duration == Fraction(2)
 
@@ -2318,6 +2376,7 @@ def test_converter_shares_interpreted_function_wrapper():
 
     reload_tamerlite(True)
     from tamerlite.converter import Converter
+    from tamerlite.core.search_space import Fluent as TLFluent
     from tamerlite.core.search_space import (
         InterpretedFunctionNode,
         MultiSet,
@@ -2325,6 +2384,7 @@ def test_converter_shares_interpreted_function_wrapper():
         State,
         evaluate,
     )
+    from tamerlite.core.search_space import Object as TLObject
 
     Loc = UserType("Loc")
     l1 = Object("l1", Loc)
@@ -2349,8 +2409,8 @@ def test_converter_shares_interpreted_function_wrapper():
 
     converter = Converter(
         problem,
-        fluent_ids={"at1": 0, "at2": 1},
-        object_ids={"l1": 0, "l2": 1},
+        fluent_ids={"at1": TLFluent(0), "at2": TLFluent(1)},
+        object_ids={"l1": TLObject(0), "l2": TLObject(1)},
         objects_by_id=[l1, l2],
     )
     converted1 = converter.convert(exp1)
@@ -2362,7 +2422,9 @@ def test_converter_shares_interpreted_function_wrapper():
     assert isinstance(node2, InterpretedFunctionNode)
     assert node1.function is node2.function
 
-    state = State([ObjectNode(0), ObjectNode(1)], None, {}, MultiSet(), 0, [])
+    state = State(
+        [ObjectNode(TLObject(0)), ObjectNode(TLObject(1))], None, {}, MultiSet(), 0, []
+    )
     assert evaluate(converted1, state) is True
     assert evaluate(converted2, state) is False
 
@@ -2379,7 +2441,9 @@ def test_converter_shares_if_cache_across_converters_with_different_object_table
 
     reload_tamerlite(True)
     from tamerlite.converter import Converter
+    from tamerlite.core.search_space import Fluent as TLFluent
     from tamerlite.core.search_space import MultiSet, ObjectNode, State, evaluate
+    from tamerlite.core.search_space import Object as TLObject
 
     Loc = UserType("Loc")
     l1 = Object("l1", Loc)
@@ -2404,15 +2468,15 @@ def test_converter_shares_if_cache_across_converters_with_different_object_table
     if_cache: dict = {}
     converter_a = Converter(
         problem,
-        fluent_ids={"at": 0},
-        object_ids={"l1": 0, "l2": 1},
+        fluent_ids={"at": TLFluent(0)},
+        object_ids={"l1": TLObject(0), "l2": TLObject(1)},
         objects_by_id=[l1, l2],
         if_cache=if_cache,
     )
     converter_b = Converter(
         problem,
-        fluent_ids={"at": 0},
-        object_ids={"l1": 1, "l2": 0},
+        fluent_ids={"at": TLFluent(0)},
+        object_ids={"l1": TLObject(1), "l2": TLObject(0)},
         objects_by_id=[l2, l1],
         if_cache=if_cache,
     )
@@ -2421,8 +2485,12 @@ def test_converter_shares_if_cache_across_converters_with_different_object_table
     converted_b = converter_b.convert(exp)
 
     # Same real object (l1), opposite internal ids under each converter.
-    state_a_l1 = State([ObjectNode(0)], None, {}, MultiSet(), 0, [])  # a: 0 -> l1
-    state_b_l1 = State([ObjectNode(1)], None, {}, MultiSet(), 0, [])  # b: 1 -> l1
+    state_a_l1 = State(
+        [ObjectNode(TLObject(0))], None, {}, MultiSet(), 0, []
+    )  # a: 0 -> l1
+    state_b_l1 = State(
+        [ObjectNode(TLObject(1))], None, {}, MultiSet(), 0, []
+    )  # b: 1 -> l1
 
     assert evaluate(converted_a, state_a_l1) is True
     assert evaluate(converted_b, state_b_l1) is True
@@ -2432,7 +2500,9 @@ def test_converter_shares_if_cache_across_converters_with_different_object_table
     assert calls == [l1]
 
     # A different real object (l2) must not collide with l1's cache entry.
-    state_a_l2 = State([ObjectNode(1)], None, {}, MultiSet(), 0, [])  # a: 1 -> l2
+    state_a_l2 = State(
+        [ObjectNode(TLObject(1))], None, {}, MultiSet(), 0, []
+    )  # a: 1 -> l2
     assert evaluate(converted_a, state_a_l2) is False
     assert calls == [l1, l2]
 
@@ -2448,7 +2518,9 @@ def test_interpreted_function_receives_real_argument_types():
 
     reload_tamerlite(True)
     from tamerlite.converter import Converter
+    from tamerlite.core.search_space import Fluent as TLFluent
     from tamerlite.core.search_space import MultiSet, ObjectNode, State, evaluate
+    from tamerlite.core.search_space import Object as TLObject
 
     Loc = UserType("Loc")
     l1 = Object("l1", Loc)
@@ -2483,13 +2555,25 @@ def test_interpreted_function_receives_real_argument_types():
     exp = IF_record(fi(), fr(), fb(), fo())
     converter = Converter(
         problem,
-        fluent_ids={"fi": 0, "fr": 1, "fb": 2, "fo": 3},
-        object_ids={"l1": 0},
+        fluent_ids={
+            "fi": TLFluent(0),
+            "fr": TLFluent(1),
+            "fb": TLFluent(2),
+            "fo": TLFluent(3),
+        },
+        object_ids={"l1": TLObject(0)},
         objects_by_id=[l1],
     )
     converted = converter.convert(exp)
 
-    state = State([3, Fraction(1, 2), True, ObjectNode(0)], None, {}, MultiSet(), 0, [])
+    state = State(
+        [3, Fraction(1, 2), True, ObjectNode(TLObject(0))],
+        None,
+        {},
+        MultiSet(),
+        0,
+        [],
+    )
     assert evaluate(converted, state) is True
     assert received["i"] == 3 and type(received["i"]) is int
     assert received["r"] == Fraction(1, 2) and isinstance(received["r"], Fraction)
@@ -3064,6 +3148,7 @@ def test_interpreted_function_cache_is_scoped_to_object_table():
         make_object_node,
         simplify,
     )
+    from tamerlite.core import Object as TLObject
 
     Loc = UserType("Loc")
     l1 = Object("l1", Loc)
@@ -3081,13 +3166,13 @@ def test_interpreted_function_cache_is_scoped_to_object_table():
     converter_a = Converter(
         problem,
         fluent_ids={},
-        object_ids={"l1": 0, "l2": 1},
+        object_ids={"l1": TLObject(0), "l2": TLObject(1)},
         objects_by_id=[l1, l2],
     )
     converter_b = Converter(
         problem,
         fluent_ids={},
-        object_ids={"l1": 1, "l2": 0},
+        object_ids={"l1": TLObject(1), "l2": TLObject(0)},
         objects_by_id=[l2, l1],
     )
 
@@ -3098,7 +3183,7 @@ def test_interpreted_function_cache_is_scoped_to_object_table():
 
     # oid 0 means l1 under converter_a and l2 under converter_b -- correct
     # results must diverge accordingly.
-    obj0 = make_object_node(0)
+    obj0 = make_object_node(TLObject(0))
 
     result_a = tuple(simplify((obj0, node_a), {}, evaluate_interpreted_functions=True))
     result_b = tuple(simplify((obj0, node_b), {}, evaluate_interpreted_functions=True))
@@ -3190,6 +3275,7 @@ def test_clear_interpreted_function_cache_resets_for_fresh_use():
         make_object_node,
         simplify,
     )
+    from tamerlite.core import Object as TLObject
 
     clear_interpreted_function_cache()
 
@@ -3209,13 +3295,13 @@ def test_clear_interpreted_function_cache_resets_for_fresh_use():
     converter_a = Converter(
         problem,
         fluent_ids={},
-        object_ids={"l1": 0, "l2": 1},
+        object_ids={"l1": TLObject(0), "l2": TLObject(1)},
         objects_by_id=[l1, l2],
     )
     converter_b = Converter(
         problem,
         fluent_ids={},
-        object_ids={"l1": 1, "l2": 0},
+        object_ids={"l1": TLObject(1), "l2": TLObject(0)},
         objects_by_id=[l2, l1],
     )
 
@@ -3223,7 +3309,7 @@ def test_clear_interpreted_function_cache_resets_for_fresh_use():
     wrapper_b = converter_b._get_interpreted_function_wrapper(IF_is_l1)
     node_a = make_interpreted_function_node(wrapper_a, IfReturnType.BOOL, (0,))
     node_b = make_interpreted_function_node(wrapper_b, IfReturnType.BOOL, (0,))
-    obj0 = make_object_node(0)
+    obj0 = make_object_node(TLObject(0))
 
     result_a = tuple(simplify((obj0, node_a), {}, evaluate_interpreted_functions=True))
     assert "true" in str(result_a[0])

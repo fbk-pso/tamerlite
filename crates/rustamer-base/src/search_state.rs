@@ -28,7 +28,7 @@ use super::expressions::*;
 use super::expressions_utils::*;
 use super::multiset::HashMultiSet;
 use super::stn::DeltaSTN;
-use super::structures::Action;
+use super::structures::{Action, Fluent};
 use super::utils::*;
 
 #[pyclass(frozen)]
@@ -61,18 +61,18 @@ impl State {
     }
 
     #[pyo3(name = "get_value")]
-    fn get_py_value(&self, fluent: usize) -> PyResult<PyExpressionNode> {
+    fn get_py_value(&self, fluent: Fluent) -> PyResult<PyExpressionNode> {
         let value = self
             .assignments
-            .get(fluent)
+            .get(fluent.idx)
             .ok_or_else(|| PyException::new_err("Fluent not found!"))?;
         Ok(PyExpressionNode { v: value.clone() })
     }
 }
 
 impl FluentValueTrait for State {
-    fn get_value(&self, fluent: usize) -> &ExpressionNode {
-        &self.assignments[fluent]
+    fn get_value(&self, fluent: Fluent) -> &ExpressionNode {
+        &self.assignments[fluent.idx]
     }
 }
 

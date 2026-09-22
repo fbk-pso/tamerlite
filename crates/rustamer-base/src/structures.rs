@@ -15,12 +15,95 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 
+use std::fmt;
+
 use num::rational::BigRational;
 
 use pyo3::prelude::*;
 
 use super::expressions::{ExpressionNode, PyExpressionNode};
 use super::utils::{big_rational_to_py_fraction, get_big_rational};
+
+/// A fluent's identity.
+///
+/// `__hash__` is hand-written (not `#[pyclass(hash)]`, which SipHashes the
+/// derived `Hash` impl) to match the Python side's `Fluent.__hash__`, which
+/// returns the bare index -- otherwise a `set[Fluent]` would iterate in a
+/// different order per backend, a divergence `check_metrics_equality` won't
+/// catch. `ord` matches the Python side's `order=True` for the same reason:
+/// without it, `sorted(fluents)` type-checks (mypy sees the Python class) but
+/// raises only under the Rust backend. Same for `Object` and `Action` below.
+#[pyclass(frozen, eq, ord, from_py_object)]
+#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord)]
+pub struct Fluent {
+    pub idx: usize,
+}
+
+#[pymethods]
+impl Fluent {
+    #[new]
+    pub fn new(idx: usize) -> Self {
+        Fluent { idx }
+    }
+
+    #[getter]
+    pub fn idx(&self) -> usize {
+        self.idx
+    }
+
+    fn __hash__(&self) -> u64 {
+        self.idx as u64
+    }
+
+    fn __repr__(&self) -> String {
+        format!("{:?}", self)
+    }
+}
+
+/// Prints as the bare index, not the derive-`Debug` shape (`Fluent { idx: 3
+/// }`), so `ExpressionNode`'s derived `Debug` keeps emitting `Fluent(3)`
+/// exactly as it did when the payload was a bare `usize`.
+impl fmt::Debug for Fluent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.idx)
+    }
+}
+
+/// An object's identity. See `Fluent` above for why `__hash__` is hand-written
+/// and `ord` is declared.
+#[pyclass(frozen, eq, ord, from_py_object)]
+#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord)]
+pub struct Object {
+    pub idx: usize,
+}
+
+#[pymethods]
+impl Object {
+    #[new]
+    pub fn new(idx: usize) -> Self {
+        Object { idx }
+    }
+
+    #[getter]
+    pub fn idx(&self) -> usize {
+        self.idx
+    }
+
+    fn __hash__(&self) -> u64 {
+        self.idx as u64
+    }
+
+    fn __repr__(&self) -> String {
+        format!("{:?}", self)
+    }
+}
+
+/// See `Fluent`'s `Debug` impl -- same repr contract, for `ExpressionNode::Object`.
+impl fmt::Debug for Object {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.idx)
+    }
+}
 
 /// Invariant: within one `Event`'s `effects`, no two `Effect`s target the
 /// same `fluent`. `Encoder._convert_effects` establishes this
@@ -30,14 +113,14 @@ use super::utils::{big_rational_to_py_fraction, get_big_rational};
 #[pyclass(frozen, from_py_object)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Effect {
-    pub fluent: usize,
+    pub fluent: Fluent,
     pub value: Vec<ExpressionNode>,
 }
 
 #[pymethods]
 impl Effect {
     #[new]
-    fn new(fluent: usize, value: Vec<PyExpressionNode>) -> Self {
+    fn new(fluent: Fluent, value: Vec<PyExpressionNode>) -> Self {
         Effect {
             fluent,
             value: value.into_iter().map(|e| e.v).collect(),
@@ -45,7 +128,7 @@ impl Effect {
     }
 
     #[getter]
-    fn fluent(&self) -> usize {
+    fn fluent(&self) -> Fluent {
         self.fluent
     }
 
@@ -94,7 +177,9 @@ impl Timing {
     }
 }
 
-#[pyclass(from_py_object)]
+/// An action's identity. See `Fluent` above for why `__hash__` is hand-written
+/// and `ord` is declared.
+#[pyclass(frozen, eq, ord, from_py_object)]
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Action {
     pub idx: usize,
@@ -110,6 +195,10 @@ impl Action {
     #[getter]
     pub fn idx(&self) -> usize {
         self.idx
+    }
+
+    fn __hash__(&self) -> u64 {
+        self.idx as u64
     }
 }
 

@@ -36,11 +36,11 @@ type MutexCache = Mutex<FxHashMap<((Action, usize), (Action, usize)), bool>>;
 type PrecedenceCache = Mutex<FxHashMap<((Action, usize), (Action, usize)), bool>>;
 type EventFluents = Vec<
     Vec<(
-        FxHashSet<usize>,
-        FxHashSet<usize>,
-        FxHashSet<usize>,
-        FxHashSet<usize>,
-        FxHashSet<usize>,
+        FxHashSet<Fluent>,
+        FxHashSet<Fluent>,
+        FxHashSet<Fluent>,
+        FxHashSet<Fluent>,
+        FxHashSet<Fluent>,
     )>,
 >;
 type DurationInterval = (Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool);
@@ -144,7 +144,7 @@ impl PrecedenceChecker {
 }
 
 #[pyfunction(name = "get_fluents")]
-pub fn py_get_fluents(expr: Vec<PyExpressionNode>) -> Vec<usize> {
+pub fn py_get_fluents(expr: Vec<PyExpressionNode>) -> Vec<Fluent> {
     expr.iter()
         .filter_map(|node| match node.v {
             ExpressionNode::Fluent(fluent) => Some(fluent),
@@ -153,7 +153,7 @@ pub fn py_get_fluents(expr: Vec<PyExpressionNode>) -> Vec<usize> {
         .collect()
 }
 
-fn get_fluents<'a>(expr: &'a [ExpressionNode]) -> impl Iterator<Item = usize> + 'a {
+fn get_fluents<'a>(expr: &'a [ExpressionNode]) -> impl Iterator<Item = Fluent> + 'a {
     expr.iter().filter_map(|node| match node {
         ExpressionNode::Fluent(fluent) => Some(*fluent),
         _ => None,
@@ -170,7 +170,7 @@ pub struct SearchSpace {
     event_fluents: EventFluents,
     mutex: MutexChecker,
     precedence: PrecedenceChecker,
-    action_objects: Option<Vec<Vec<usize>>>,
+    action_objects: Option<Vec<Vec<Object>>>,
     obj_to_prev_actions_map: Option<Vec<FxHashSet<Action>>>,
     initial_state: Option<Vec<ExpressionNode>>,
     goal: Option<Vec<ExpressionNode>>,
@@ -192,7 +192,7 @@ impl SearchSpace {
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         actions: Vec<Action>,
         compression_safe_actions: Option<Vec<bool>>,
-        action_objects: Option<Vec<Vec<usize>>>,
+        action_objects: Option<Vec<Vec<Object>>>,
         obj_to_prev_actions_map: Option<Vec<FxHashSet<Action>>>,
         initial_state: Option<Vec<PyExpressionNode>>,
         goal: Option<Vec<PyExpressionNode>>,
@@ -239,7 +239,7 @@ impl SearchSpace {
         for (a, le) in &events {
             let duration = &converted_actions_duration[a.idx];
             for (i, (_, e)) in le.iter().enumerate() {
-                let mut reads: FxHashSet<usize> = get_fluents(&e.conditions).collect();
+                let mut reads: FxHashSet<Fluent> = get_fluents(&e.conditions).collect();
                 reads.extend(e.effects.iter().flat_map(|eff| get_fluents(&eff.value)));
                 if i == 0 {
                     // The duration bounds are read when the action is opened,
@@ -253,14 +253,14 @@ impl SearchSpace {
                         reads.extend(get_fluents(upper));
                     }
                 }
-                let writes: FxHashSet<usize> = e.effects.iter().map(|eff| eff.fluent).collect();
-                let read_writes: FxHashSet<usize> = reads.union(&writes).copied().collect();
-                let start_cond_reads: FxHashSet<usize> = e
+                let writes: FxHashSet<Fluent> = e.effects.iter().map(|eff| eff.fluent).collect();
+                let read_writes: FxHashSet<Fluent> = reads.union(&writes).copied().collect();
+                let start_cond_reads: FxHashSet<Fluent> = e
                     .start_conditions
                     .iter()
                     .flat_map(|c| get_fluents(c))
                     .collect();
-                let end_cond_reads: FxHashSet<usize> = e
+                let end_cond_reads: FxHashSet<Fluent> = e
                     .end_conditions
                     .iter()
                     .flat_map(|c| get_fluents(c))
@@ -501,7 +501,7 @@ impl SearchSpace {
 
         // apply effects
         for eff in e.effects.iter() {
-            new_state.assignments[eff.fluent] = internal_evaluate(&eff.value, state)?;
+            new_state.assignments[eff.fluent.idx] = internal_evaluate(&eff.value, state)?;
         }
 
         // check active conditions
@@ -566,7 +566,7 @@ impl SearchSpace {
             (&self.action_objects, &self.obj_to_prev_actions_map)
         {
             for obj in &action_objects[action.idx] {
-                let prev_actions = &obj_to_prev_actions_map[*obj];
+                let prev_actions = &obj_to_prev_actions_map[obj.idx];
 
                 if prev_actions.is_empty() || prev_actions.contains(&action) {
                     continue;
