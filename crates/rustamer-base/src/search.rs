@@ -47,7 +47,8 @@ type EvalItem<P> = PyResult<(P, Option<f64>)>;
 
 /// A payload an open-list item carries: `Rc<State>` (`wastar_search`,
 /// `novbfs_search`) or an owned `State` (`wastar_search_memory_bounded`,
-/// which needs ownership to store items inline in a bounded array rather
+/// `novbfs_search_memory_bounded`, which need ownership to store items
+/// inline in a bounded array rather
 /// than behind a refcount). Bridges `HeuristicTrait`'s `eval_gen` /
 /// `eval_gen_owned` split, which exists for the same reason.
 ///
@@ -160,7 +161,8 @@ impl<T: Ord> OpenList<T> for BoundedPriorityQueue<T> {
 
 /// The visited-state dedup store: a `FxHashSet<WeakEqState>`
 /// (`wastar_search`, `novbfs_search`) or a lossy `BloomFilter`
-/// (`wastar_search_memory_bounded`), keyed on the same equivalence as
+/// (`wastar_search_memory_bounded`, `novbfs_search_memory_bounded`),
+/// keyed on the same equivalence as
 /// `WeakEqState` (`assignments` plus each `todo` action's event index).
 /// `insert_new` mirrors `HashSet::insert`'s "newly inserted"
 /// polarity regardless of backing store; a disabled store (non-temporal
@@ -241,7 +243,8 @@ impl DedupStore<State> for BloomDedup {
 }
 
 /// Per-search open-list-item construction plus the optional per-expansion
-/// hook (`novbfs_search`'s `NumericNovelty::begin_expansion`).
+/// hook (`novbfs_search`/`novbfs_search_memory_bounded`'s
+/// `NumericNovelty::begin_expansion`).
 trait SearchStrategy {
     type Payload: StatePayload;
     type Item: Ord;
@@ -349,6 +352,9 @@ impl<P: StatePayload> SearchStrategy for WAStarStrategy<P> {
     }
 }
 
+/// Open-list capacity shared by every `*_memory_bounded` search.
+const QUEUE_BOUND: usize = 400_000;
+
 pub struct BoundedPriorityQueue<T: Ord> {
     heap: MinMaxHeap<T>,
     bound: usize,
@@ -438,8 +444,9 @@ pub fn extract_path(state: &State) -> Vec<Action> {
 }
 
 /// Shared skeleton for every priority-queue-based search in this module
-/// (`wastar_search`, `wastar_search_memory_bounded`, `novbfs_search`).
-/// What it actually shares across all three: the
+/// (`wastar_search`, `wastar_search_memory_bounded`, `novbfs_search`,
+/// `novbfs_search_memory_bounded`).
+/// What it actually shares across all four: the
 /// metrics map, the `while` loop with its timeout check,
 /// `expanded_states`/`generated_states` bookkeeping, the goal checks on
 /// both the popped state and each early-terminated successor, and the
@@ -603,7 +610,6 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
         "wastar_search_memory_bounded: weight={} timeout={:?} early_termination={} weak_equality={}",
         weight, timeout, early_termination, weak_equality
     );
-    const QUEUE_BOUND: usize = 400_000;
     let mut strategy = WAStarStrategy::<State>::new(weight);
     let mut open: BoundedPriorityQueue<PrioritizedItem<State>> =
         BoundedPriorityQueue::with_bound(QUEUE_BOUND);
@@ -835,37 +841,38 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     Ok((None, metrics))
 }
 
-/// Open-list entry for `novbfs_search`: the numeric-novelty tie-break chain
+/// Open-list entry for `novbfs_search` (`P = Rc<State>`) and
+/// `novbfs_search_memory_bounded` (`P = State`): the numeric-novelty tie-break chain
 /// `(novelty, h^add, ±g)`, then `todo_len` (fewer durative actions in
 /// flight first, matching every other search's `PrioritizedItem`), then an
 /// `idx` insertion-order tie-break for determinism. `todo_len` is inert on
 /// classical problems -- `State::todo` is only ever populated on the
 /// temporal path -- so it only breaks otherwise-real ties among temporal
 /// states.
-struct NovBFSItem {
+struct NovBFSItem<P: StatePayload> {
     novelty: u8,
     h: f64,
     g_key: f64,
     idx: usize,
-    state: Rc<State>,
+    state: P,
     partition: u64,
 }
 
-impl PartialEq for NovBFSItem {
+impl<P: StatePayload> PartialEq for NovBFSItem<P> {
     fn eq(&self, _other: &Self) -> bool {
         false
     }
 }
 
-impl Eq for NovBFSItem {}
+impl<P: StatePayload> Eq for NovBFSItem<P> {}
 
-impl PartialOrd for NovBFSItem {
+impl<P: StatePayload> PartialOrd for NovBFSItem<P> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for NovBFSItem {
+impl<P: StatePayload> Ord for NovBFSItem<P> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // `BinaryHeap` is a max-heap; comparing `other` against `self` (not
         // `self` against `other`) inverts every field so `pop()` returns
@@ -878,19 +885,35 @@ impl Ord for NovBFSItem {
             .cmp(&self.novelty)
             .then_with(|| other.h.total_cmp(&self.h))
             .then_with(|| other.g_key.total_cmp(&self.g_key))
-            .then_with(|| other.state.todo.len().cmp(&self.state.todo.len()))
+            .then_with(|| {
+                other
+                    .state
+                    .as_state()
+                    .todo
+                    .len()
+                    .cmp(&self.state.as_state().todo.len())
+            })
             .then_with(|| other.idx.cmp(&self.idx))
     }
 }
 
 /// Strategy for `novbfs_search`: numeric-novelty scoring via `NumericNovelty`,
 /// plus the `prefer_higher_g` cost-tie-break sign flip.
-struct NovBFSStrategy<'a> {
+struct NovBFSStrategy<'a, P> {
     novelty: &'a mut NumericNovelty,
     prefer_higher_g: bool,
+    _payload: PhantomData<P>,
 }
 
-impl NovBFSStrategy<'_> {
+impl<'a, P> NovBFSStrategy<'a, P> {
+    fn new(novelty: &'a mut NumericNovelty, prefer_higher_g: bool) -> Self {
+        Self {
+            novelty,
+            prefer_higher_g,
+            _payload: PhantomData,
+        }
+    }
+
     fn g_key(&self, g: f64) -> f64 {
         if self.prefer_higher_g {
             -g
@@ -900,20 +923,20 @@ impl NovBFSStrategy<'_> {
     }
 }
 
-impl SearchStrategy for NovBFSStrategy<'_> {
-    type Payload = Rc<State>;
-    type Item = NovBFSItem;
+impl<P: StatePayload> SearchStrategy for NovBFSStrategy<'_, P> {
+    type Payload = P;
+    type Item = NovBFSItem<P>;
 
-    fn state_of(item: &Self::Item) -> &Rc<State> {
+    fn state_of(item: &Self::Item) -> &P {
         &item.state
     }
 
-    fn root(&mut self, s: Rc<State>, h: f64) -> PyResult<Self::Item> {
+    fn root(&mut self, s: P, h: f64) -> PyResult<Self::Item> {
         let partition = self.novelty.start(h);
         // Seeds the tables (return discarded); the root's *stored* novelty
         // is hard-coded to 1 below regardless.
-        self.novelty.eval(&s, partition, None, None)?;
-        let g_key = self.g_key(s.g);
+        self.novelty.eval(s.as_state(), partition, None, None)?;
+        let g_key = self.g_key(s.as_state().g);
         Ok(NovBFSItem {
             novelty: 1,
             h,
@@ -928,18 +951,15 @@ impl SearchStrategy for NovBFSStrategy<'_> {
         self.novelty.begin_expansion();
     }
 
-    fn child(
-        &mut self,
-        parent: &Self::Item,
-        s: Rc<State>,
-        h: f64,
-        idx: usize,
-    ) -> PyResult<Self::Item> {
+    fn child(&mut self, parent: &Self::Item, s: P, h: f64, idx: usize) -> PyResult<Self::Item> {
         let partition = self.novelty.partition_of(h);
-        let novelty =
-            self.novelty
-                .eval(&s, partition, Some(&parent.state), Some(parent.partition))?;
-        let g_key = self.g_key(s.g);
+        let novelty = self.novelty.eval(
+            s.as_state(),
+            partition,
+            Some(parent.state.as_state()),
+            Some(parent.partition),
+        )?;
+        let g_key = self.g_key(s.as_state().g);
         Ok(NovBFSItem {
             novelty,
             h,
@@ -989,11 +1009,8 @@ pub fn novbfs_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         "novbfs_search: prefer_higher_g={} timeout={:?} early_termination={} weak_equality={}",
         prefer_higher_g, timeout, early_termination, weak_equality
     );
-    let mut strategy = NovBFSStrategy {
-        novelty,
-        prefer_higher_g,
-    };
-    let mut open: BinaryHeap<NovBFSItem> = BinaryHeap::new();
+    let mut strategy = NovBFSStrategy::<Rc<State>>::new(novelty, prefer_higher_g);
+    let mut open: BinaryHeap<NovBFSItem<Rc<State>>> = BinaryHeap::new();
     let mut dedup = HashSetDedup::new(ss, weak_equality);
     priority_search(
         ss,
@@ -1001,6 +1018,43 @@ pub fn novbfs_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         timeout,
         early_termination,
         "novbfs_search",
+        &mut strategy,
+        &mut open,
+        &mut dedup,
+    )
+}
+
+/// Memory-bounded variant of `novbfs_search`: same open-list order and
+/// `novelty` preconditions, but the open list is a `BoundedPriorityQueue`
+/// (capacity `QUEUE_BOUND`, evicting the worst item once full) and dedup is
+/// a `BloomDedup`. Both make the search incomplete -- an evicted state is
+/// never regenerated, and a Bloom false positive drops a genuinely new one.
+/// While the bound is never hit and no false positive occurs, it expands
+/// exactly the same states as `novbfs_search`.
+#[allow(clippy::too_many_arguments)]
+pub fn novbfs_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
+    ss: &S,
+    heuristic: &H,
+    novelty: &mut NumericNovelty,
+    prefer_higher_g: bool,
+    timeout: Option<f32>,
+    early_termination: bool,
+    weak_equality: bool,
+) -> PyResult<SearchResult> {
+    info!(
+        "novbfs_search_memory_bounded: prefer_higher_g={} timeout={:?} early_termination={} weak_equality={}",
+        prefer_higher_g, timeout, early_termination, weak_equality
+    );
+    let mut strategy = NovBFSStrategy::<State>::new(novelty, prefer_higher_g);
+    let mut open: BoundedPriorityQueue<NovBFSItem<State>> =
+        BoundedPriorityQueue::with_bound(QUEUE_BOUND);
+    let mut dedup = BloomDedup::new(ss, weak_equality);
+    priority_search(
+        ss,
+        heuristic,
+        timeout,
+        early_termination,
+        "novbfs_search_memory_bounded",
         &mut strategy,
         &mut open,
         &mut dedup,

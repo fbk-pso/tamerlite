@@ -61,6 +61,7 @@ from tamerlite.core import (
     get_fluent_value,
     multiqueue_search,
     novbfs_search,
+    novbfs_search_memory_bounded,
     search_space,
     wastar_search,
     wastar_search_memory_bounded,
@@ -146,16 +147,6 @@ class SearchParams(HeuristicParams):
     compression_safe_actions: bool = True
     relevance_analysis: bool = True
     incomplete_memory_bounded_search: bool = False
-
-    def __post_init__(self) -> None:
-        if (
-            self.search in ("novbfs_hg", "novbfs_lg")
-            and self.incomplete_memory_bounded_search
-        ):
-            raise NotImplementedError(
-                f"search={self.search!r} has no memory-bounded variant; "
-                "incomplete_memory_bounded_search is not supported with it."
-            )
 
 
 @dataclass(frozen=True)
@@ -377,7 +368,6 @@ class TamerLite(
         `solve()`/`get_solutions()` -- `params.heuristic` is the separate
         heuristic *name* string `_get_heuristic` dispatches on."""
         search_name = params.search
-        weak_equality = params.weak_equality
         internal_heuristic_cache = (
             params.internal_heuristic_cache and encoder.search_space.is_temporal
         )
@@ -419,7 +409,9 @@ class TamerLite(
             search = cast(
                 _SearchCallable,
                 partial(
-                    novbfs_search,
+                    novbfs_search_memory_bounded
+                    if params.incomplete_memory_bounded_search
+                    else novbfs_search,
                     heuristic=hadd,
                     novelty=novelty_tracker,
                     prefer_higher_g=(search_name == "novbfs_hg"),
@@ -428,16 +420,6 @@ class TamerLite(
             return search_name, search
 
         incomplete_memory_bounded_search = params.incomplete_memory_bounded_search
-        if (
-            search_name in {"wastar", "astar", "gbfs"}
-            and incomplete_memory_bounded_search
-            and encoder.search_space.is_temporal
-            and weak_equality
-        ):
-            warnings.warn(
-                "Memory-bounded search does not support weak equality correctly.",
-                stacklevel=2,
-            )
 
         h, weight = self._get_heuristic(
             params,

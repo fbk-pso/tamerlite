@@ -80,6 +80,7 @@ if not use_rustamer:
         gbfs_search,
         gbfs_search_memory_bounded,
         novbfs_search,
+        novbfs_search_memory_bounded,
         wastar_search,
         wastar_search_memory_bounded,
     )
@@ -133,6 +134,7 @@ else:
     )
     multiqueue_search = rustamer_lib.multiqueue_search
     novbfs_search = rustamer_lib.novbfs_search
+    novbfs_search_memory_bounded = rustamer_lib.novbfs_search_memory_bounded
     NumericNovelty = rustamer_lib.NumericNovelty
     SearchSpace, Timing, Effect, Event, Action, Fluent, Object = (
         rustamer_lib.SearchSpace,

@@ -72,7 +72,7 @@ Defines parameters for a single search strategy.
 | `symmetry_breaking`                      | `bool`            | Prune equivalent symmetric states during search. Default: `True`.                                                                                          |
 | `compression_safe_actions`               | `bool`            | Enable contiguous expansion of compression-safe temporal actions. Default: `True`.                                                                         |
 | `relevance_analysis`                     | `bool`            | Filter out actions that cannot contribute to the goal. Default: `True`.                                                                                    |
-| `incomplete_memory_bounded_search`       | `bool`            | Use incomplete memory-bounded variants of `"wastar"`, `"astar"`, and `"gbfs"`. Rejected (raises `NotImplementedError` when `SearchParams` is constructed) together with `search="novbfs_hg"`/`"novbfs_lg"`, which have no memory-bounded variant. Default: `False`. |
+| `incomplete_memory_bounded_search`       | `bool`            | Use incomplete memory-bounded variants of `"wastar"`, `"astar"`, `"gbfs"`, `"novbfs_hg"` and `"novbfs_lg"`. Default: `False`. |
 
 ### `MultiqueueParams`
 
