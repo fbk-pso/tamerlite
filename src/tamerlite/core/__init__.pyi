@@ -28,6 +28,7 @@ from tamerlite.core.search import (
     gbfs_search,
     gbfs_search_memory_bounded,
     novbfs_search,
+    novbfs_search_memory_bounded,
     wastar_search,
     wastar_search_memory_bounded,
 )
@@ -98,6 +99,7 @@ __all__ = [
     "make_rational_constant_node",
     "multiqueue_search",
     "novbfs_search",
+    "novbfs_search_memory_bounded",
     "shift_expression",
     "simplify",
     "use_rustamer",

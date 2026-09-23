@@ -151,7 +151,7 @@ Adjust `--space-limit` (MB) down for a single test file/case, and prefer targeti
 
 [src/tamerlite/core/__init__.py](src/tamerlite/core/__init__.py) is the dispatch point. The exposed interface is identical between backends:
 
-- **Search algorithms**: `wastar_search`, `astar_search`, `gbfs_search`, `bfs_search`, `dfs_search`, `ehc_search`, `multiqueue_search`, `novbfs_search` (and `*_memory_bounded` variants for every one but `novbfs_search`, which has none in either core).
+- **Search algorithms**: `wastar_search`, `astar_search`, `gbfs_search`, `bfs_search`, `dfs_search`, `ehc_search`, `multiqueue_search`, `novbfs_search` (and `*_memory_bounded` variants of `wastar_search`, `astar_search`, `gbfs_search` and `novbfs_search`).
 - **Heuristics**: `HFF`, `HAdd`, `HMax`, `HMaxExplicit`, `CustomHeuristic`.
 - **Data structures**: `SearchSpace`, `State`, `Action`, `Event`, `Effect`, `Timing`, `Expression`, `NumericNovelty`.
 - **Id types**: `Fluent`, `Object`, `Action` (see below).
@@ -229,25 +229,25 @@ a second, runtime-probe-based classifier.
 
 Rust implementation lives in [crates/rustamer-base/src/](crates/rustamer-base/src/) (core library) and [crates/rustamer/src/](crates/rustamer/src/) (PyO3 bindings).
 
-**`wastar_search`, `wastar_search_memory_bounded` and `novbfs_search` share one
-priority-search driver per core** -- `_priority_search` (`search.py`) /
-`priority_search` (`search.rs`) -- rather than three hand-mirrored copies of
+**`wastar_search`, `wastar_search_memory_bounded`, `novbfs_search` and
+`novbfs_search_memory_bounded` share one priority-search driver per core** -- `_priority_search` (`search.py`) /
+`priority_search` (`search.rs`) -- rather than four hand-mirrored copies of
 the same loop. Named generically rather than "best-first": `wastar_search`
 (parameterized by `weight`) already generalizes classical best-first
 search/GBFS (`weight=1`) and A* (`weight=0.5`), and `novbfs_search`'s
 priority isn't a best-first evaluation function at all, so "best-first"
 would misname the thing the driver is meant to generalize over. Each of the
-three is a thin wrapper supplying the open list, the dedup store, and
-open-list-item construction (plus, for `novbfs_search`, the
+four is a thin wrapper supplying the open list, the dedup store, and
+open-list-item construction (plus, for the two novbfs variants, the
 `NumericNovelty.begin_expansion` hook); the Rust side expresses this via
 small traits (`StatePayload`/`OpenList`/`DedupStore`/`SearchStrategy`), the
 idiom `multiqueue.rs`'s `MQSwitchPolicy` already uses. This makes the
 cross-backend parity invariant above structural rather than something each
-edit has to re-preserve by hand across six copies -- but two pre-existing,
+edit has to re-preserve by hand across eight copies -- but two pre-existing,
 deliberately-*un*unified quirks are worth knowing before touching the driver:
 an `early_termination` successor's goal check sits *before* dedup in Python
 and *after* dedup+heuristic-eval in Rust (a pre-existing cross-language
-divergence, consistent across all three searches in each language); and
+divergence, consistent across all four searches in each language); and
 `ehc_search`/`multiqueue_search` are excluded on purpose (`ehc` closes at
 *expansion* time and restarts on improvement; multiqueue has its own queue
 type and switch-policy abstraction) -- don't fold either into the shared

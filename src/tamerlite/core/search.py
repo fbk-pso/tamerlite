@@ -159,24 +159,29 @@ class _PriorityQueue(Generic[ItemT]):
         return len(self._heap)
 
 
-class _BoundedPriorityQueue:
+class _BoundedPriorityQueue(Generic[ItemT]):
     """Adapts `BoundedPriorityQueue` (the module-level, `MinMaxHeap`-backed
     class this wraps -- not to be confused with this class itself) to
     `_OpenList`. `push`'s accepted/rejected return value is intentionally
-    discarded. Only ever used with `PrioritizedItem` -- there is no
-    memory-bounded `novbfs_search`."""
+    discarded. Holds `PrioritizedItem`s (`wastar_search_memory_bounded`) or
+    `NovBFSItem`s (`novbfs_search_memory_bounded`); `BoundedPriorityQueue`
+    only ever compares items with `<`, which both define."""
 
     def __init__(self, bound: int) -> None:
         self._queue: BoundedPriorityQueue = BoundedPriorityQueue(bound)
 
-    def push(self, item: PrioritizedItem) -> None:
-        self._queue.push(item)
+    def push(self, item: ItemT) -> None:
+        self._queue.push(item)  # type: ignore[arg-type]
 
-    def pop(self) -> PrioritizedItem:
-        return self._queue.pop()
+    def pop(self) -> ItemT:
+        return self._queue.pop()  # type: ignore[return-value]
 
     def __len__(self) -> int:
         return len(self._queue)
+
+
+# Open-list capacity shared by every `*_memory_bounded` search.
+_QUEUE_BOUND = 400_000
 
 
 class _Dedup(Protocol):
@@ -221,7 +226,8 @@ def _bloom_key(state: State) -> bytes:
 class _BloomDedup:
     """Bloom-filter-backed dedup keyed on the same equivalence as
     `WeakEqState` (`state.assignments` plus each in-progress durative action's
-    `todo` event index) -- used only by `wastar_search_memory_bounded`.
+    `todo` event index) -- used only by `wastar_search_memory_bounded` and
+    `novbfs_search_memory_bounded`.
     False positives make it strictly more aggressive (and incomplete) than
     `_SetDedup`; the two are not interchangeable."""
 
@@ -259,7 +265,8 @@ def _priority_search(
     begin_expansion: Callable[[], None] | None = None,
 ) -> tuple[list[Action] | None, dict[str, str]]:
     """Shared skeleton for every priority-queue-based search in this module
-    (`wastar_search`, `wastar_search_memory_bounded`, `novbfs_search`)."""
+    (`wastar_search`, `wastar_search_memory_bounded`, `novbfs_search`,
+    `novbfs_search_memory_bounded`)."""
 
     st = time.monotonic()
     init = ss.initial_state()
@@ -490,14 +497,13 @@ def wastar_search_memory_bounded(
         early_termination,
         weak_equality,
     )
-    QUEUE_BOUND = 400_000
     return _priority_search(
         ss,
         heuristic,
         timeout,
         early_termination,
         name="wastar_search_memory_bounded",
-        open=_BoundedPriorityQueue(QUEUE_BOUND),
+        open=_BoundedPriorityQueue(_QUEUE_BOUND),
         dedup=_BloomDedup(ss, weak_equality),
         make_root=lambda init, h: PrioritizedItem(h, init, 0),
         make_child=lambda _item, s, h, idx: PrioritizedItem(
@@ -677,9 +683,71 @@ def novbfs_search(
     cache the parent's own features across all of one expansion's children
     instead of recomputing them per child; see its class docstring."""
 
+    return _novbfs(
+        ss,
+        heuristic,
+        novelty,
+        prefer_higher_g,
+        timeout,
+        early_termination,
+        name="novbfs_search",
+        open=_PriorityQueue(),
+        dedup=_SetDedup(ss, weak_equality),
+        weak_equality=weak_equality,
+    )
+
+
+def novbfs_search_memory_bounded(
+    ss: SearchSpaceABC,
+    heuristic: Heuristic,
+    novelty: NumericNovelty,
+    prefer_higher_g: bool,
+    timeout: float | None = None,
+    early_termination: bool = False,
+    weak_equality: bool = False,
+) -> tuple[list[Action] | None, dict[str, str]]:
+    """Memory-bounded variant of `novbfs_search`: same open-list order and
+    `novelty` contract, but the open list is a `BoundedPriorityQueue`
+    (capacity `_QUEUE_BOUND`, evicting the worst item once full) and dedup is
+    a `_BloomDedup`. Both make the search incomplete -- an evicted state is
+    never regenerated, and a Bloom false positive drops a genuinely new one.
+    While the bound is never hit and no false positive occurs, it expands
+    exactly the same states as `novbfs_search`."""
+
+    return _novbfs(
+        ss,
+        heuristic,
+        novelty,
+        prefer_higher_g,
+        timeout,
+        early_termination,
+        name="novbfs_search_memory_bounded",
+        open=_BoundedPriorityQueue(_QUEUE_BOUND),
+        dedup=_BloomDedup(ss, weak_equality),
+        weak_equality=weak_equality,
+    )
+
+
+def _novbfs(
+    ss: SearchSpaceABC,
+    heuristic: Heuristic,
+    novelty: NumericNovelty,
+    prefer_higher_g: bool,
+    timeout: float | None,
+    early_termination: bool,
+    *,
+    name: str,
+    open: _OpenList[NovBFSItem],
+    dedup: _Dedup,
+    weak_equality: bool,
+) -> tuple[list[Action] | None, dict[str, str]]:
+    """Shared body of `novbfs_search`/`novbfs_search_memory_bounded`, which
+    differ only in `open`/`dedup` (`weak_equality` is only logged here; it's
+    already baked into `dedup`)."""
+
     logger.info(
-        "novbfs_search: prefer_higher_g=%s timeout=%s early_termination=%s "
-        "weak_equality=%s",
+        "%s: prefer_higher_g=%s timeout=%s early_termination=%s weak_equality=%s",
+        name,
         prefer_higher_g,
         timeout,
         early_termination,
@@ -706,9 +774,9 @@ def novbfs_search(
         heuristic,
         timeout,
         early_termination,
-        name="novbfs_search",
-        open=_PriorityQueue(),
-        dedup=_SetDedup(ss, weak_equality),
+        name=name,
+        open=open,
+        dedup=dedup,
         make_root=make_root,
         make_child=make_child,
         begin_expansion=novelty.begin_expansion,

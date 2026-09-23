@@ -191,6 +191,30 @@ pub fn novbfs_search(
 }
 
 #[pyfunction]
+#[pyo3(signature = (ss, heuristic, novelty, prefer_higher_g, timeout=None, early_termination=false, weak_equality=false))]
+#[allow(clippy::too_many_arguments)]
+pub fn novbfs_search_memory_bounded(
+    ss: &rustamer_base::SearchSpace,
+    heuristic: &Heuristic,
+    novelty: &Bound<'_, rustamer_base::NumericNovelty>,
+    prefer_higher_g: bool,
+    timeout: Option<f32>,
+    early_termination: bool,
+    weak_equality: bool,
+) -> PyResult<SearchResult> {
+    let mut novelty = novelty.try_borrow_mut()?;
+    rustamer_base::novbfs_search_memory_bounded(
+        ss,
+        heuristic,
+        &mut novelty,
+        prefer_higher_g,
+        timeout,
+        early_termination,
+        weak_equality,
+    )
+}
+
+#[pyfunction]
 #[pyo3(signature = (ss, heuristics, timeout=None, early_termination=false, weak_equality=false))]
 pub fn multiqueue_search(
     ss: &rustamer_base::SearchSpace,

@@ -718,7 +718,7 @@ def _search_algo_weak_flags(problem, search_kind):
 
 
 def _search_algo_memory_bounded_flags(problem, search_kind):
-    if search_kind in {"wastar", "astar", "gbfs"}:
+    if search_kind in {"wastar", "astar", "gbfs", "novbfs_hg", "novbfs_lg"}:
         return [True, False]
     return [False]
 

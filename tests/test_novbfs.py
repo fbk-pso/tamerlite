@@ -558,16 +558,35 @@ def test_novbfs_ignores_custom_heuristic_callable_with_warning():
     )
 
 
-def test_novbfs_rejects_memory_bounded():
-    """`SearchParams.__post_init__` rejects this combination at construction
-    time -- both `search` and `incomplete_memory_bounded_search` are known
-    there, so there's no need to wait until `_solve_ground_problem` has
-    compiled and grounded the problem to reject it."""
-    reload_tamerlite(True)
-    from tamerlite.engine import SearchParams
+@pytest.mark.parametrize("search_name", NOVBFS_SEARCHES)
+@pytest.mark.parametrize(
+    "make_problem", [p for _, p in NOVBFS_PROBLEMS], ids=[n for n, _ in NOVBFS_PROBLEMS]
+)
+def test_novbfs_memory_bounded_matches_unbounded(make_problem, search_name):
+    """On these small problems the bounded open list never fills and a Bloom
+    false positive is vanishingly unlikely, so `novbfs_search_memory_bounded`
+    must expand exactly the states `novbfs_search` does, on both backends.
+    `weak_equality=True` so the Bloom dedup is also active on the temporal
+    problem (without it, neither variant dedups there)."""
+    problem = make_problem()
+    results = []
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.engine import SearchParams
 
-    with pytest.raises(NotImplementedError):
-        SearchParams(search="novbfs_hg", incomplete_memory_bounded_search=True)
+        for memory_bounded in [False, True]:
+            search = SearchParams(
+                search=search_name,
+                weak_equality=True,
+                incomplete_memory_bounded_search=memory_bounded,
+            )
+            with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+                res: PlanGenerationResult = planner.solve(problem, timeout=60)
+                assert res.status == ResultStatus.SOLVED_SATISFICING
+                results.append(res)
+                with PlanValidator(problem_kind=problem.kind) as validator:
+                    assert validator.validate(problem, res.plan)
+    check_metrics_equality(results)
 
 
 @pytest.mark.parametrize("search_name", NOVBFS_SEARCHES)
