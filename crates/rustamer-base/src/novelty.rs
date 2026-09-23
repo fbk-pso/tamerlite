@@ -17,8 +17,13 @@
 
 //! Rust mirror of `tamerlite.core.novelty.NumericNovelty`
 //! (`src/tamerlite/core/novelty.py`); see that module's docstring for the
-//! algorithm. This file only notes where the Rust port differs in
-//! *implementation* (never in outcome).
+//! algorithm, including the sparse same-partition evaluation (dirty leaves,
+//! early exit, once-per-expansion parent snapshot), which both cores share
+//! structurally. This file only notes where the Rust port differs in
+//! *implementation* (never in outcome): generation stamps instead of
+//! resetting caches, reused classification buffers, `im::Vector`
+//! chunk-pointer diffing (`mark_dirty_by_chunks`), `Sdist`, and packed `u64`
+//! pair keys.
 //!
 //! Leaf numbering need not match the Python core's: the algorithm's result
 //! doesn't depend on leaf-id order (Pass A classifies each leaf
@@ -555,10 +560,11 @@ impl NumericNovelty {
         (h_value.floor() as u64).min(self.max_partition)
     }
 
-    /// Resets the lazy parent-feature cache. Must be called once per
-    /// expansion, before the first `eval()` call for that expansion's
-    /// children -- not enforced here (the sole caller, `novbfs_search`,
-    /// gets this right by construction).
+    /// Resets the lazy parent-feature caches and the parent snapshot (by
+    /// bumping `generation`). Must be called once per expansion, before the
+    /// first `eval()` call for that expansion's children -- not enforced
+    /// here (the sole caller, `novbfs_search`, gets this right by
+    /// construction).
     pub fn begin_expansion(&mut self) {
         self.generation += 1;
     }

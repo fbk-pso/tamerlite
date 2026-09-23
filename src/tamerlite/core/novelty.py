@@ -34,8 +34,14 @@ side effect, once per generated state, in generation order -- so it is
 consumed directly by `tamerlite.core.search.novbfs_search` rather than
 through the heuristic dispatch machinery.
 
-Implementation notes:
+Implementation notes -- the structure mirrors `NumericNovelty` in
+`crates/rustamer-base/src/novelty.rs` wherever the idiom translates:
 
+- Each leaf is precompiled once, at construction, into a `_PropLeaf` or a
+  `_NumLeaf` (Rust's `LeafData::Prop`/`LeafData::Num`), whose operands are
+  `_Operand` callables (Rust's `Operand`): a bare fluent reads
+  ``state.assignments`` directly and a bare constant returns itself, so
+  only a genuinely compound operand goes through `evaluate`.
 - Per-partition tables are sparse (``dict``/``set``), allocated lazily on
   first use per partition (see `NumericNovelty._get_partition`), rather than
   dense arrays sized eagerly for every subgoal -- a sparse table never
@@ -59,7 +65,7 @@ Implementation notes:
   `tamerlite.core.search_space.is_object_typed_operand`: numeric iff neither
   operand is object-typed.
   A ``not(...)`` leaf is always treated as propositional-only.
-- The distance feature (`_sdist_and_sat`) is computed once per state, in one
+- The distance feature (`_compute_sdist`) is computed once per state, in one
   place, alongside satisfaction (avoiding a second, redundant evaluation of
   both operands just to get a boolean already implicit in the distance), in
   an "improves = larger sdist" sign convention -- ``evaluate(rhs) -
@@ -67,29 +73,56 @@ Implementation notes:
   evaluate(lhs))`` for ``==`` -- so every caller (Pass A, B, C) reads one
   cached value instead of recomputing and re-normalizing it per use.
 - Fluent values here are exact `Fraction`/`int`, so distance-improvement
-  comparisons are exact rather than floating-point-precision sensitive.
+  comparisons are exact rather than floating-point-precision sensitive. An
+  all-`int` difference stays an `int` (Rust's `Sdist::Small`); only a
+  `Fraction` operand yields a `Fraction` (Rust's `Sdist::Big`). The two
+  compare exactly against each other, so no normalization is needed.
+- Same-partition evaluation is sparse. A leaf's value is a pure function of
+  the fluents it reads, so a leaf none of whose fluents changed between
+  `parent` and `state` ("clean") has exactly its parent's value and can
+  never be newly satisfied or improved. `eval` therefore re-evaluates only
+  the "dirty" leaves (`_mark_dirty_leaves`, via the `_fluent_to_leaves`
+  index), returns 3 straight away if none of them made progress (Pass B and
+  C are both driven by `newly_satisfied`/`numeric_improved`, so they would
+  be no-ops), and otherwise fills in the clean leaves' contribution from a
+  once-per-expansion snapshot of the parent (`_ensure_parent_snapshot`).
+  The dirty set may over-approximate (it compares values by identity, see
+  `_mark_dirty_leaves`) -- re-evaluating a clean leaf is harmless -- but
+  must never miss a changed leaf.
 - A propositional leaf is satisfied iff it evaluates to the literal boolean
-  `True` -- ``evaluate(leaf, state) is True``, not truthiness (`bool(...)`).
-  This matches Rust's `is_true` (`matches!(v, ExpressionNode::Bool(true))`,
-  `crates/rustamer-base/src/novelty.rs`), which only ever treats
-  `Bool(true)` as satisfied. Not reachable from the encoder today -- every
-  propositional leaf here is boolean-valued -- but the two backends must
-  agree on `expanded_states`/`goal_depth` exactly, so this is stated
-  explicitly rather than left to happen to agree.
+  `True` -- ``value is True``, not truthiness (`bool(...)`). This matches
+  Rust's `is_true` (`matches!(v, ExpressionNode::Bool(true))`), which only
+  ever treats `Bool(true)` as satisfied. Not reachable from the encoder
+  today -- every propositional leaf here is boolean-valued -- but the two
+  backends must agree on `expanded_states`/`goal_depth` exactly, so this is
+  stated explicitly rather than left to happen to agree.
+
+Where the Rust core deliberately differs in implementation (never in
+outcome): it invalidates its parent caches and snapshot by bumping
+generation stamps and reuses its per-call classification buffers (to avoid
+reallocating, and deallocating `Sdist::Big`s), where this module simply
+rebinds fresh ``dict``/``list``s; it diffs parent and child by comparing
+`im::Vector` chunk pointers, where this module compares plain lists
+element-wise; and it packs pair keys into a ``u64`` where this module uses
+tuples.
 """
 
 import itertools
 import math
-from collections.abc import Iterator
+import operator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from fractions import Fraction
 
 from tamerlite.core.heuristics import get_event_conditions
 from tamerlite.core.search_space import (
     Action,
+    ConstantNode,
     Event,
     Expression,
     FluentDomain,
+    FluentNode,
+    ObjectNode,
     OperatorNode,
     State,
     Timing,
@@ -97,6 +130,29 @@ from tamerlite.core.search_space import (
     extract_sub_expression,
     is_object_typed_operand,
 )
+
+# A numeric leaf's distance feature: an exact `int` when both operands are
+# integers (Rust's `Sdist::Small`), else an exact `Fraction` (`Sdist::Big`).
+_Sdist = int | Fraction
+
+# A leaf operand, precompiled once (Rust's `Operand`): evaluates it in a state.
+_Operand = Callable[[State], ConstantNode]
+
+
+def _make_operand(exp: Expression) -> _Operand:
+    """Precompiles `exp` into an `_Operand` (mirrors Rust's
+    `Operand::from_vec`): a bare fluent reads `state.assignments` directly
+    and a bare constant returns itself, skipping `evaluate`'s per-call work
+    for the overwhelmingly common case; anything else goes through
+    `evaluate`."""
+    if len(exp) == 1:
+        node = exp[0]
+        if isinstance(node, FluentNode):
+            idx = node.fluent.idx
+            return lambda state: state.assignments[idx]
+        if isinstance(node, (int, Fraction, ObjectNode)):  # bool is an int subclass
+            return lambda state: node
+    return lambda state: evaluate(exp, state)
 
 
 def _iter_subgoal_leaves(exp: Expression) -> Iterator[Expression]:
@@ -119,6 +175,45 @@ def _iter_subgoal_leaves(exp: Expression) -> Iterator[Expression]:
             yield extract_sub_expression(exp, idx)
 
 
+@dataclass(frozen=True, slots=True)
+class _PropLeaf:
+    """A propositional leaf (Rust's `LeafData::Prop`)."""
+
+    operand: _Operand
+
+
+@dataclass(frozen=True, slots=True)
+class _NumLeaf:
+    """A numeric leaf ``lhs <kind> rhs``, `kind` one of ``"<="``/``"<"``/
+    ``"=="`` (Rust's `LeafData::Num`)."""
+
+    lhs: _Operand
+    rhs: _Operand
+    kind: str
+
+
+_Leaf = _PropLeaf | _NumLeaf
+
+
+def _compute_sdist(leaf: _NumLeaf, state: State) -> tuple[_Sdist, bool]:
+    """The distance feature for a numeric leaf -- already in the "improves
+    = larger is better" sign convention (see module docstring): satisfied
+    inequalities are >= 0, satisfied equalities are exactly 0, and both
+    worsen (decrease) as the subgoal moves further from being satisfied --
+    paired with its satisfaction boolean, computed from the same operand
+    evaluation rather than a second, redundant evaluation of the whole leaf.
+    Satisfaction is *not* simply `sdist >= 0`: for strict `<`, the exact
+    boundary (`sdist == 0`) is genuinely unsatisfied, so the comparator
+    needs to stay kind-aware here too. Mirrors Rust's `compute_sdist`."""
+    diff: _Sdist = leaf.rhs(state) - leaf.lhs(state)  # type: ignore[operator]
+    kind = leaf.kind
+    if kind == "==":
+        return (diff if diff <= 0 else -diff), diff == 0  # -abs(diff)
+    if kind == "<=":
+        return diff, diff >= 0
+    return diff, diff > 0
+
+
 @dataclass
 class _PartitionTables:
     """Persistent novelty-tracking state for one `floor(h^add)` partition.
@@ -128,12 +223,12 @@ class _PartitionTables:
     # psi: subgoal (leaf id) has been satisfied at least once in this partition.
     psi_seen: set[int] = field(default_factory=set)
     # delta: best (max) sdist ever seen for a numeric subgoal in this partition.
-    best_sdist: dict[int, Fraction] = field(default_factory=dict)
+    best_sdist: dict[int, _Sdist] = field(default_factory=dict)
     # psi x psi: unordered pairs of subgoals jointly satisfied at least once.
     psi_pair_seen: set[tuple[int, int]] = field(default_factory=set)
     # psi x delta: best (max) sdist seen for a numeric subgoal conditioned on
     # a propositional subgoal, keyed (prop_leaf_id, numeric_leaf_id) directed.
-    best_sdist_with_psi: dict[tuple[int, int], Fraction] = field(default_factory=dict)
+    best_sdist_with_psi: dict[tuple[int, int], _Sdist] = field(default_factory=dict)
 
 
 class NumericNovelty:
@@ -156,10 +251,11 @@ class NumericNovelty:
     A parent's own features (psi truth, sdist) are a pure function of
     `(leaf, parent_state)`: every child of one expansion shares the same
     parent, so `eval` fills `_parent_prop_true`/`_parent_numeric` lazily on
-    first use per expansion instead of recomputing them from scratch for
-    every child, as a naive per-call `evaluate(leaf, parent)` would.
-    `begin_expansion` drops the cache; not calling it before a new parent's
-    children would silently reuse a stale parent's features.
+    first use per expansion instead of recomputing them for every child,
+    and builds the dense `_parent_snapshot` (every leaf satisfied in the
+    parent, every numeric leaf unsatisfied in it) at most once per
+    expansion. `begin_expansion` drops all three; not calling it before a
+    new parent's children would silently reuse a stale parent's features.
     """
 
     def __init__(
@@ -168,31 +264,44 @@ class NumericNovelty:
         goals: Expression,
         fluent_domains: list[FluentDomain],
     ):
-        self._leaves: list[Expression] = []
+        self._leaves: list[_Leaf] = []
         self._leaf_index: dict[Expression, int] = {}
-        # (leaf_id, lhs, rhs, kind) for "<="/"<" (always numeric) and "=="
-        # (numeric iff neither operand is object-typed).
-        self._numeric_leaves: dict[int, tuple[Expression, Expression, str]] = {}
+        leaf_to_fluents: list[list[int]] = []
 
         def add_leaf(exp: Expression) -> None:
+            """Adds `exp` to the leaf catalogue, deduplicated by structural
+            equality (mirrors Rust's `add_leaf`). ``<=``/``<`` are always
+            numeric; ``==`` is numeric iff neither operand is object-typed
+            (see the module docstring); anything else is propositional."""
             if exp in self._leaf_index:
                 return
-            idx = len(self._leaves)
-            self._leaves.append(exp)
-            self._leaf_index[exp] = idx
+            self._leaf_index[exp] = len(self._leaves)
+            leaf_to_fluents.append(
+                [n.fluent.idx for n in exp if isinstance(n, FluentNode)]
+            )
             root = exp[-1]
-            if isinstance(root, OperatorNode) and root.kind in ("<=", "<"):
-                lhs = extract_sub_expression(exp, root.operands[0])
-                rhs = extract_sub_expression(exp, root.operands[1])
-                self._numeric_leaves[idx] = (lhs, rhs, root.kind)
-            elif isinstance(root, OperatorNode) and root.kind == "==":
+            leaf: _Leaf
+            if isinstance(root, OperatorNode) and (
+                root.kind in ("<=", "<")
+                or (
+                    root.kind == "=="
+                    and not is_object_typed_operand(
+                        exp[root.operands[0]], fluent_domains
+                    )
+                    and not is_object_typed_operand(
+                        exp[root.operands[1]], fluent_domains
+                    )
+                )
+            ):
                 op1, op2 = root.operands
-                if not is_object_typed_operand(
-                    exp[op1], fluent_domains
-                ) and not is_object_typed_operand(exp[op2], fluent_domains):
-                    lhs = extract_sub_expression(exp, op1)
-                    rhs = extract_sub_expression(exp, op2)
-                    self._numeric_leaves[idx] = (lhs, rhs, "==")
+                leaf = _NumLeaf(
+                    _make_operand(extract_sub_expression(exp, op1)),
+                    _make_operand(extract_sub_expression(exp, op2)),
+                    root.kind,
+                )
+            else:
+                leaf = _PropLeaf(_make_operand(exp))
+            self._leaves.append(leaf)
 
         for event_list in events.values():
             for _, event in event_list:
@@ -202,29 +311,47 @@ class NumericNovelty:
         for leaf in _iter_subgoal_leaves(goals):
             add_leaf(leaf)
 
+        # `_fluent_to_leaves[f]`: every leaf reading fluent `f` (see
+        # `_mark_dirty_leaves`). Sized to cover every fluent a leaf reads,
+        # so no leaf's fluent can fall outside it.
+        n_fluents = max(
+            [len(fluent_domains)] + [f + 1 for fs in leaf_to_fluents for f in fs]
+        )
+        fluent_to_leaves: list[list[int]] = [[] for _ in range(n_fluents)]
+        for leaf_id, fluents in enumerate(leaf_to_fluents):
+            for f in fluents:
+                bucket = fluent_to_leaves[f]
+                if not bucket or bucket[-1] != leaf_id:
+                    bucket.append(leaf_id)
+        self._fluent_to_leaves: list[tuple[int, ...]] = [
+            tuple(b) for b in fluent_to_leaves
+        ]
+
         self._partitions: dict[int, _PartitionTables] = {}
         self._max_partition = 1
         # Lazy per-leaf caches of the current expansion's parent state's
-        # features -- reset by `begin_expansion`/`start`, filled on first
-        # use by `eval`. See the class docstring.
+        # features, plus the dense parent snapshot -- reset by
+        # `begin_expansion`/`start`, filled on first use by `eval`. See the
+        # class docstring.
         self._parent_prop_true: dict[int, bool] = {}
-        self._parent_numeric: dict[int, tuple[Fraction, bool]] = {}
+        self._parent_numeric: dict[int, tuple[_Sdist, bool]] = {}
+        self._parent_snapshot: tuple[list[int], list[int]] | None = None
 
     def start(self, initial_h: float) -> int:
         """(Re)initializes partition bookkeeping from the initial state's
-        h^add value. Must be called exactly once, before any `eval()` call.
-        Returns the root's (clamped) partition id; the caller is responsible
-        for seeding the tables with an explicit `eval()` call on the initial
-        state and then pushing the root with novelty hard-coded to 1,
-        regardless of that call's return value (see `novbfs_search`)."""
+        h^add value and clears the parent-feature caches. Must be called
+        exactly once, before any `eval()` call. Returns the root's (clamped)
+        partition id; the caller is responsible for seeding the tables with
+        an explicit `eval()` call on the initial state and then pushing the
+        root with novelty hard-coded to 1, regardless of that call's return
+        value (see `novbfs_search`)."""
         assert initial_h >= 0, (
             "initial_h must be non-negative (novbfs always uses h^add, which "
             "never returns a negative value for a reachable state)"
         )
         self._partitions = {}
         self._max_partition = max(1, math.floor(initial_h))
-        self._parent_prop_true = {}
-        self._parent_numeric = {}
+        self.begin_expansion()
         return self.partition_of(initial_h)
 
     def partition_of(self, h_value: float) -> int:
@@ -237,12 +364,13 @@ class NumericNovelty:
         return min(math.floor(h_value), self._max_partition)
 
     def begin_expansion(self) -> None:
-        """Resets the lazy parent-feature cache. Must be called once per
-        expansion, before the first `eval()` call for that expansion's
-        children -- not enforced here (the sole caller, `novbfs_search`,
-        gets this right by construction)."""
+        """Resets the lazy parent-feature caches and the parent snapshot.
+        Must be called once per expansion, before the first `eval()` call
+        for that expansion's children -- not enforced here (the sole caller,
+        `novbfs_search`, gets this right by construction)."""
         self._parent_prop_true = {}
         self._parent_numeric = {}
+        self._parent_snapshot = None
 
     def _get_partition(self, partition: int) -> _PartitionTables:
         tables = self._partitions.get(partition)
@@ -251,23 +379,68 @@ class NumericNovelty:
             self._partitions[partition] = tables
         return tables
 
-    def _sdist_and_sat(self, leaf_id: int, state: State) -> tuple[Fraction, bool]:
-        """The distance feature for a numeric leaf -- already in the
-        "improves = larger is better" sign convention (see module
-        docstring): satisfied inequalities are >= 0, satisfied equalities
-        are exactly 0, and both worsen (decrease) as the subgoal moves
-        further from being satisfied -- paired with its satisfaction
-        boolean, computed from the same `lhs`/`rhs` evaluation rather than
-        a second, redundant `evaluate(leaf, state)` over both operands
-        again. Satisfaction is *not* simply `sdist >= 0`: for strict `<`,
-        the exact boundary (`sdist == 0`) is genuinely unsatisfied, so the
-        comparator needs to stay kind-aware here too."""
-        lhs, rhs, kind = self._numeric_leaves[leaf_id]
-        diff = evaluate(rhs, state) - evaluate(lhs, state)  # type: ignore[operator]
-        if kind == "==":
-            return -abs(Fraction(diff)), diff == 0
-        sdist = Fraction(diff)
-        return sdist, (sdist >= 0 if kind == "<=" else sdist > 0)
+    def _parent_prop(self, leaf_id: int, leaf: _PropLeaf, parent: State) -> bool:
+        """`leaf`'s truth in `parent`, through the per-expansion cache."""
+        p_true = self._parent_prop_true.get(leaf_id)
+        if p_true is None:
+            p_true = leaf.operand(parent) is True
+            self._parent_prop_true[leaf_id] = p_true
+        return p_true
+
+    def _parent_num(
+        self, leaf_id: int, leaf: _NumLeaf, parent: State
+    ) -> tuple[_Sdist, bool]:
+        """`leaf`'s `(sdist, satisfied)` in `parent`, through the
+        per-expansion cache."""
+        cached = self._parent_numeric.get(leaf_id)
+        if cached is None:
+            cached = _compute_sdist(leaf, parent)
+            self._parent_numeric[leaf_id] = cached
+        return cached
+
+    def _mark_dirty_leaves(self, parent: State, state: State) -> dict[int, None]:
+        """Every leaf reading a fluent whose value may differ between
+        `parent` and `state` (mirrors Rust's `mark_dirty_leaves`), as an
+        insertion-ordered ``dict`` used as a set. Fluent values are compared
+        by identity, all in C: a child is `parent.clone()` plus a handful of
+        effect assignments, so an untouched slot still holds the very same
+        object. An assignment that happens to write back an equal but
+        distinct object is reported dirty too -- a harmless
+        over-approximation (a clean leaf re-evaluates to its parent's value)
+        -- but a genuinely changed value can never be missed."""
+        assert len(parent.assignments) == len(state.assignments)
+        fluent_to_leaves = self._fluent_to_leaves
+        n_fluents = len(fluent_to_leaves)
+        dirty: dict[int, None] = {}
+        for f in itertools.compress(
+            itertools.count(),
+            map(operator.is_not, parent.assignments, state.assignments),
+        ):
+            if f < n_fluents:
+                dirty.update(dict.fromkeys(fluent_to_leaves[f]))
+        return dirty
+
+    def _ensure_parent_snapshot(self, parent: State) -> tuple[list[int], list[int]]:
+        """The dense parent snapshot `(parent_sat, parent_num_unsat)`: every
+        leaf satisfied in `parent`, and every numeric leaf unsatisfied in it
+        (mirrors Rust's `ensure_parent_snapshot`). Built at most once per
+        expansion, lazily -- only the first time one of its children's
+        sparse Pass A finds progress (see `eval`) -- reusing whatever
+        per-leaf parent features are already cached."""
+        snapshot = self._parent_snapshot
+        if snapshot is None:
+            parent_sat: list[int] = []
+            parent_num_unsat: list[int] = []
+            for leaf_id, leaf in enumerate(self._leaves):
+                if isinstance(leaf, _PropLeaf):
+                    if self._parent_prop(leaf_id, leaf, parent):
+                        parent_sat.append(leaf_id)
+                elif self._parent_num(leaf_id, leaf, parent)[1]:
+                    parent_sat.append(leaf_id)
+                else:
+                    parent_num_unsat.append(leaf_id)
+            snapshot = self._parent_snapshot = (parent_sat, parent_num_unsat)
+        return snapshot
 
     def eval(
         self,
@@ -298,57 +471,60 @@ class NumericNovelty:
         same answer the second time."""
 
         new_partition = parent is None or parent_partition != partition
-        tables = self._get_partition(partition)
 
         newly_satisfied: list[int] = []
         currently_satisfied: list[int] = []
         persisting_satisfied: list[int] = []
         numeric_improved: list[int] = []
         numeric_unsatisfied: list[int] = []
-        sdist_cache: dict[int, Fraction] = {}
+        # Holds exactly the leaves Pass A evaluated this call (every leaf on
+        # a fresh partition, else only the dirty ones); a clean leaf's
+        # sdist is its parent's cached one instead -- see C1b.
+        sdist_cache: dict[int, _Sdist] = {}
 
-        # Pass A: classify every subgoal relative to the parent (or, on a
-        # fresh partition, relative to "nothing generated here yet" --
-        # everything currently true/satisfied counts as newly added).
-        for leaf_id, leaf in enumerate(self._leaves):
-            if leaf_id not in self._numeric_leaves:
-                # `is True`, not `bool(...)`: only a literal boolean true
-                # satisfies a propositional leaf (matches Rust's `is_true`;
-                # see the module docstring's implementation notes).
-                s_true = evaluate(leaf, state) is True
-                if s_true:
-                    currently_satisfied.append(leaf_id)
-                if new_partition:
-                    if s_true:
+        if new_partition:
+            # Pass A, dense: nothing has been generated in this partition
+            # yet, so there is no parent to diff against -- every leaf is
+            # evaluated, and everything currently true/satisfied counts as
+            # newly added.
+            for leaf_id, leaf in enumerate(self._leaves):
+                if isinstance(leaf, _PropLeaf):
+                    # `is True`, not `bool(...)`: only a literal boolean
+                    # true satisfies a propositional leaf (matches Rust's
+                    # `is_true`; see the module docstring).
+                    if leaf.operand(state) is True:
+                        currently_satisfied.append(leaf_id)
                         newly_satisfied.append(leaf_id)
-                else:
-                    assert parent is not None
-                    p_true = self._parent_prop_true.get(leaf_id)
-                    if p_true is None:
-                        p_true = evaluate(leaf, parent) is True
-                        self._parent_prop_true[leaf_id] = p_true
-                    if s_true and not p_true:
-                        newly_satisfied.append(leaf_id)
-                    elif s_true:
-                        persisting_satisfied.append(leaf_id)
-                continue
-
-            sdist, curr_sat = self._sdist_and_sat(leaf_id, state)
-            sdist_cache[leaf_id] = sdist
-            if new_partition:
+                    continue
+                sdist, curr_sat = _compute_sdist(leaf, state)
+                sdist_cache[leaf_id] = sdist
                 if curr_sat:
                     currently_satisfied.append(leaf_id)
                     newly_satisfied.append(leaf_id)
                 else:
                     numeric_unsatisfied.append(leaf_id)
                     numeric_improved.append(leaf_id)
-            else:
-                assert parent is not None
-                cached = self._parent_numeric.get(leaf_id)
-                if cached is None:
-                    cached = self._sdist_and_sat(leaf_id, parent)
-                    self._parent_numeric[leaf_id] = cached
-                pdist, parent_sat = cached
+        else:
+            assert parent is not None
+            dirty = self._mark_dirty_leaves(parent, state)
+
+            # Pass A, sparse: only the dirty leaves can differ from the
+            # parent, hence only they can be newly satisfied or improved
+            # (see the module docstring).
+            for leaf_id in dirty:
+                leaf = self._leaves[leaf_id]
+                if isinstance(leaf, _PropLeaf):
+                    p_true = self._parent_prop(leaf_id, leaf, parent)
+                    if leaf.operand(state) is True:
+                        currently_satisfied.append(leaf_id)
+                        if p_true:
+                            persisting_satisfied.append(leaf_id)
+                        else:
+                            newly_satisfied.append(leaf_id)
+                    continue
+                pdist, parent_sat = self._parent_num(leaf_id, leaf, parent)
+                sdist, curr_sat = _compute_sdist(leaf, state)
+                sdist_cache[leaf_id] = sdist
                 if curr_sat:
                     currently_satisfied.append(leaf_id)
                 else:
@@ -361,6 +537,26 @@ class NumericNovelty:
                 elif parent_sat and curr_sat:
                     persisting_satisfied.append(leaf_id)
 
+            if not newly_satisfied and not numeric_improved:
+                # Nothing dirty made progress, and a clean leaf never can --
+                # Pass B and C's outer loops are both driven by these two
+                # lists, so both are guaranteed to be no-ops.
+                return 3
+
+            # Merge in every clean leaf the sparse loop skipped: its value
+            # in `state` is its parent's.
+            parent_sat_list, parent_num_unsat_list = self._ensure_parent_snapshot(
+                parent
+            )
+            for leaf_id in parent_sat_list:
+                if leaf_id not in dirty:
+                    currently_satisfied.append(leaf_id)
+                    persisting_satisfied.append(leaf_id)
+            numeric_unsatisfied.extend(
+                leaf_id for leaf_id in parent_num_unsat_list if leaf_id not in dirty
+            )
+
+        tables = self._get_partition(partition)
         novelty = 3
 
         # Pass B: unary (size-1) novelty.
@@ -409,7 +605,14 @@ class NumericNovelty:
             for tid in numeric_unsatisfied:
                 if f == tid:
                     continue
-                sdist = sdist_cache[tid]
+                # `numeric_unsatisfied` (unlike `numeric_improved`) can hold
+                # a clean leaf on a same-partition call, which Pass A never
+                # evaluated: its sdist is its parent's cached one.
+                sdist = (
+                    sdist_cache[tid]
+                    if tid in sdist_cache
+                    else self._parent_numeric[tid][0]
+                )
                 pair = (f, tid)
                 old = tables.best_sdist_with_psi.get(pair)
                 if old is None or sdist > old:

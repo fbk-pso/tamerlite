@@ -334,9 +334,13 @@ class TestNumericNovelty:
         object_eq_id = novelty._leaf_index[object_eq]
         fluent_vs_fluent_eq_id = novelty._leaf_index[fluent_vs_fluent_eq]
 
-        assert numeric_eq_id in novelty._numeric_leaves
-        assert object_eq_id not in novelty._numeric_leaves
-        assert fluent_vs_fluent_eq_id not in novelty._numeric_leaves
+        # Imported here, right after `_fresh_novelty_test_imports()`'s reload,
+        # for the same stale-class reason given in its docstring.
+        from tamerlite.core.novelty import _NumLeaf, _PropLeaf
+
+        assert isinstance(novelty._leaves[numeric_eq_id], _NumLeaf)
+        assert isinstance(novelty._leaves[object_eq_id], _PropLeaf)
+        assert isinstance(novelty._leaves[fluent_vs_fluent_eq_id], _PropLeaf)
 
 
 class TestNumericNoveltyBinaryPassesCrossBackend:
