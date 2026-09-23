@@ -297,7 +297,7 @@ fn add_leaf(
     leaf_to_fluents.push(
         exp.iter()
             .filter_map(|n| match n {
-                ExpressionNode::Fluent(f) => Some(*f as u32),
+                ExpressionNode::Fluent(f) => Some(f.idx as u32),
                 _ => None,
             })
             .collect(),

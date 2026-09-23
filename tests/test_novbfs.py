@@ -91,6 +91,15 @@ def _fresh_novelty_test_imports():
     )
 
 
+def _fresh_id_types():
+    """`Fluent`/`Object` from the same fresh `search_space` module
+    `_fresh_novelty_test_imports` just loaded -- call it right after that
+    helper, for the same stale-class reason its docstring gives."""
+    from tamerlite.core.search_space import Fluent, Object
+
+    return Fluent, Object
+
+
 class TestNumericNovelty:
     """Direct, search-independent unit tests for `NumericNovelty.eval`,
     hand-tracing a small worked example and isolating the novelty=2
@@ -112,7 +121,8 @@ class TestNumericNovelty:
             _state,
         ) = _fresh_novelty_test_imports()
 
-        F_AT_LOC1, F_LOADED, F_FUEL = 0, 1, 2
+        Fluent, _ = _fresh_id_types()
+        F_AT_LOC1, F_LOADED, F_FUEL = Fluent(0), Fluent(1), Fluent(2)
         at_loc1 = _leaf(FluentNode(F_AT_LOC1))
         fuel_leq = _leaf(10, FluentNode(F_FUEL), OperatorNode("<=", (0, 1)))
         goal = _leaf(
@@ -192,7 +202,8 @@ class TestNumericNovelty:
             _state,
         ) = _fresh_novelty_test_imports()
 
-        F_P, F_Q = 0, 1
+        Fluent, _ = _fresh_id_types()
+        F_P, F_Q = Fluent(0), Fluent(1)
         p = _leaf(FluentNode(F_P))
         q = _leaf(FluentNode(F_Q))
         goal = _leaf(FluentNode(F_P), FluentNode(F_Q), OperatorNode("and", (0, 1)))
@@ -251,7 +262,8 @@ class TestNumericNovelty:
             _state,
         ) = _fresh_novelty_test_imports()
 
-        F_P = 0
+        Fluent, _ = _fresh_id_types()
+        F_P = Fluent(0)
         goal = _leaf(FluentNode(F_P))
         fluent_domains = [FluentDomain(FluentKind.BOOL)]
 
@@ -290,9 +302,12 @@ class TestNumericNovelty:
             _,
         ) = _fresh_novelty_test_imports()
 
-        F_NUM, F_OBJ, F_OBJ2 = 0, 1, 2
+        Fluent, Object = _fresh_id_types()
+        F_NUM, F_OBJ, F_OBJ2 = Fluent(0), Fluent(1), Fluent(2)
         numeric_eq = _leaf(FluentNode(F_NUM), 3, OperatorNode("==", (0, 1)))
-        object_eq = _leaf(FluentNode(F_OBJ), ObjectNode(0), OperatorNode("==", (0, 1)))
+        object_eq = _leaf(
+            FluentNode(F_OBJ), ObjectNode(Object(0)), OperatorNode("==", (0, 1))
+        )
         fluent_vs_fluent_eq = _leaf(
             FluentNode(F_OBJ), FluentNode(F_OBJ2), OperatorNode("==", (0, 1))
         )
@@ -301,7 +316,7 @@ class TestNumericNovelty:
             3,
             OperatorNode("==", (0, 1)),
             FluentNode(F_OBJ),
-            ObjectNode(0),
+            ObjectNode(Object(0)),
             OperatorNode("==", (3, 4)),
             FluentNode(F_OBJ),
             FluentNode(F_OBJ2),
@@ -310,8 +325,8 @@ class TestNumericNovelty:
         )
         fluent_domains = [
             FluentDomain(FluentKind.INT),
-            FluentDomain(FluentKind.OBJECT, (0, 1)),
-            FluentDomain(FluentKind.OBJECT, (0, 1)),
+            FluentDomain(FluentKind.OBJECT, (Object(0), Object(1))),
+            FluentDomain(FluentKind.OBJECT, (Object(0), Object(1))),
         ]
 
         novelty = NumericNovelty({}, goal, fluent_domains)
@@ -362,6 +377,7 @@ class TestNumericNoveltyBinaryPassesCrossBackend:
         accepting already-built nodes from the caller."""
         reload_tamerlite(disable_rustamer)
         from tamerlite.core import (
+            Fluent,
             NumericNovelty,
             SearchSpace,
             make_bool_constant_node,
@@ -372,9 +388,9 @@ class TestNumericNoveltyBinaryPassesCrossBackend:
         from tamerlite.core.search_space import FluentDomain, FluentKind
 
         goal = (
-            make_fluent_node(0),  # 0: p
+            make_fluent_node(Fluent(0)),  # 0: p
             make_int_constant_node(10),  # 1
-            make_fluent_node(1),  # 2: fuel
+            make_fluent_node(Fluent(1)),  # 2: fuel
             make_operator_node("<=", (1, 2)),  # 3: n = 10 <= fuel
             make_operator_node("and", (0, 3)),  # 4: goal = p and n
         )
