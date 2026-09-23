@@ -718,13 +718,20 @@ def _search_algo_weak_flags(problem, search_kind):
 
 
 def _search_algo_memory_bounded_flags(problem, search_kind):
-    if not testing_utils.is_temporal_problem(problem) and search_kind in {
-        "wastar",
-        "astar",
-        "gbfs",
-    }:
+    if search_kind in {"wastar", "astar", "gbfs"}:
         return [True, False]
     return [False]
+
+
+def _memory_bounded_case_is_redundant(problem, memory_bounded, weak_equality):
+    # On a temporal problem the Bloom dedup is only enabled under
+    # `weak_equality`; without it a memory-bounded run is just the unbounded
+    # one with a size-capped open list, so only the weak variant is worth it.
+    return (
+        memory_bounded
+        and testing_utils.is_temporal_problem(problem)
+        and not weak_equality
+    )
 
 
 def _search_algorithms_cases():
@@ -755,7 +762,7 @@ def _search_algorithms_cases():
         ]
         for memory_bounded in _search_algo_memory_bounded_flags(problem, search_kind)
         for weak_equality in _search_algo_weak_flags(problem, search_kind)
-        if not (memory_bounded and weak_equality)
+        if not _memory_bounded_case_is_redundant(problem, memory_bounded, weak_equality)
         for symmetry_breaking in [True, False]
         for compression_safe_actions in _compression_flags(problem)
     ]
@@ -810,6 +817,44 @@ def test_search_algorithms(
                 results.append(res)
                 with PlanValidator(problem_kind=problem.kind) as v:
                     assert v.validate(problem, res.plan)
+
+    check_metrics_equality(results)
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        pytest.param(p, id=p.name)
+        for p in _solve_problems()
+        if testing_utils.is_temporal_problem(p)
+    ],
+)
+def test_memory_bounded_weak_equality_matches_unbounded(problem):
+    """On a small temporal problem the bounded open list never fills and a
+    Bloom false positive is vanishingly unlikely, so the memory-bounded
+    search's Bloom dedup must prune exactly what `WeakEqState` prunes. It
+    used to key on `assignments` alone, merging states that differ only in
+    which durative actions are in progress."""
+    reason = prune_reason(
+        problem, "wastar", "hff", weak_equality=True, symmetry_breaking=False
+    )
+    if reason is not None:
+        pytest.skip(reason)
+
+    results = []
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        for memory_bounded in [False, True]:
+            search = tamerlite.SearchParams(
+                search="wastar",
+                heuristic="hff",
+                weak_equality=True,
+                incomplete_memory_bounded_search=memory_bounded,
+            )
+            with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+                res: PlanGenerationResult = planner.solve(problem, timeout=None)
+                assert res.status == ResultStatus.SOLVED_SATISFICING
+                results.append(res)
 
     check_metrics_equality(results)
 

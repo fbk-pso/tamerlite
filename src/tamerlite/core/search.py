@@ -214,14 +214,16 @@ def _bloom_key(state: State) -> bytes:
             key.append(f"{v.numerator}/{v.denominator}")
         elif isinstance(v, ObjectNode):
             key.append(f"{v.object}")
-    return "|".join(key).encode("utf-8")
+    todo = ",".join(f"{a.idx}:{i}" for a, (i, _) in sorted(state.todo.items()))
+    return f"{'|'.join(key)}#{todo}".encode()
 
 
 class _BloomDedup:
-    """Bloom-filter-backed dedup keyed on `state.assignments` only --
-    used only by `wastar_search_memory_bounded`. False positives make it
-    strictly more aggressive (and incomplete) than `_SetDedup`; the two are
-    not interchangeable."""
+    """Bloom-filter-backed dedup keyed on the same equivalence as
+    `WeakEqState` (`state.assignments` plus each in-progress durative action's
+    `todo` event index) -- used only by `wastar_search_memory_bounded`.
+    False positives make it strictly more aggressive (and incomplete) than
+    `_SetDedup`; the two are not interchangeable."""
 
     BLOOM_ITEMS = 20_000_000
     BLOOM_FP_RATE = 1e-4
