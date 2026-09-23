@@ -17,6 +17,7 @@
 
 import pathlib
 from collections import OrderedDict
+from fractions import Fraction
 
 from unified_planning.io import PDDLReader
 from unified_planning.shortcuts import *
@@ -351,6 +352,42 @@ def get_problem_hierarchical_types() -> Problem:
     # inequality goal using object fluent
     problem.add_goal(Not(Equals(carrier(pkg1), van1)))
 
+    return problem
+
+
+def get_problem_int_vs_rational_equality() -> Problem:
+    """Reaches the same real value `x = 3` through two differently encoded
+    routes: `set3` assigns the real constant `3.0` (a rational constant
+    node), `add3` computes `x + 3` (arithmetic, normalized to an integer).
+
+    Both cores must treat the two resulting states as one: the Python core
+    does because `Fraction(3, 1) == 3` with equal hashes; the Rust core only
+    does if every integral value is stored as `Int`, never as a
+    denominator-1 `Rational`, since its duplicate detection compares and
+    hashes values structurally. Without that canonical form the Rust core
+    expands one extra state and `check_metrics_equality` fails.
+    """
+    x = Fluent("x", RealType())
+    done = Fluent("done", BoolType())
+
+    # `x < 3` keeps `set3` from being re-applicable forever, which would make
+    # dedup-free searches (dfs) never terminate.
+    set3 = InstantaneousAction("set3")
+    set3.add_precondition(LT(x, 3))
+    set3.add_effect(x, Real(Fraction(3)))
+
+    add3 = InstantaneousAction("add3")
+    add3.add_effect(x, Plus(x, 3))
+
+    fin = InstantaneousAction("fin")
+    fin.add_precondition(GE(x, 12))
+    fin.add_effect(done, True)
+
+    problem = Problem("int_vs_rational_equality")
+    problem.add_fluent(x, default_initial_value=Real(Fraction(0)))
+    problem.add_fluent(done, default_initial_value=False)
+    problem.add_actions([set3, add3, fin])
+    problem.add_goal(done)
     return problem
 
 

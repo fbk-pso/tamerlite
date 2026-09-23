@@ -71,6 +71,7 @@ def _build_problems():
         problems_generator.get_problem_satellite(),
         problems_generator.get_problem_hierarchical_types(),
         problems_generator.get_problem_object_equality_fluents(),
+        problems_generator.get_problem_int_vs_rational_equality(),
         problems_generator.get_problem_temporal_flight(),
         problems_generator.get_problem_flight(),
         problems_generator.get_problem_if_bool_condition(),

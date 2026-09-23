@@ -209,10 +209,25 @@ pub fn make_int_constant_node(v: BigInt) -> PyExpressionNode {
     }
 }
 
+/// Canonical node for a rational value: an integral value is always an
+/// `Int`, never a denominator-1 `Rational`. Every place that produces a
+/// numeric value goes through this, because `State`'s dedup hash/equality is
+/// structural on `ExpressionNode` -- a stray `Rational(3/1)` would be a
+/// different state from `Int(3)`, whereas the Python core's
+/// `Fraction(3, 1) == 3` (same hash) treats them as one, and the two cores
+/// would then expand different numbers of states.
+pub(crate) fn rational_node(r: BigRational) -> ExpressionNode {
+    if r.is_integer() {
+        ExpressionNode::Int(Box::new(r.to_integer()))
+    } else {
+        ExpressionNode::Rational(Box::new(r))
+    }
+}
+
 #[pyfunction]
 pub fn make_rational_constant_node(numerator: BigInt, denominator: BigInt) -> PyExpressionNode {
     PyExpressionNode {
-        v: ExpressionNode::Rational(Box::new(BigRational::new(numerator, denominator))),
+        v: rational_node(BigRational::new(numerator, denominator)),
     }
 }
 

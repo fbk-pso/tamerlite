@@ -358,7 +358,13 @@ def wastar_search_memory_bounded(
             elif isinstance(v, int):
                 key.append(f"{v}")
             elif isinstance(v, Fraction):
-                key.append(f"{v.numerator}/{v.denominator}")
+                # An integral `Fraction` must key like the equal `int`: `==`
+                # (used by the non-memory-bounded dedup) already treats them
+                # as one state, and the Rust core stores them as one value.
+                if v.denominator == 1:
+                    key.append(f"{v.numerator}")
+                else:
+                    key.append(f"{v.numerator}/{v.denominator}")
             elif isinstance(v, ObjectNode):
                 key.append(f"{v.object}")
         return "|".join(key).encode("utf-8")
