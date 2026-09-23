@@ -25,8 +25,9 @@ use std::time::SystemTime;
 use std::{collections::BinaryHeap, vec::Vec};
 
 use fastbloom::BloomFilter;
-use foldhash::fast::RandomState;
+use foldhash::fast::{FixedState, RandomState};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
+use std::hash::BuildHasher;
 
 use pyo3::exceptions::PyTimeoutError;
 use pyo3::prelude::*;
@@ -159,7 +160,8 @@ impl<T: Ord> OpenList<T> for BoundedPriorityQueue<T> {
 
 /// The visited-state dedup store: a `FxHashSet<WeakEqState>`
 /// (`wastar_search`, `novbfs_search`) or a lossy `BloomFilter`
-/// (`wastar_search_memory_bounded`, keyed on `assignments` only.
+/// (`wastar_search_memory_bounded`), keyed on the same equivalence as
+/// `WeakEqState` (`assignments` plus each `todo` action's event index).
 /// `insert_new` mirrors `HashSet::insert`'s "newly inserted"
 /// polarity regardless of backing store; a disabled store (non-temporal
 /// dedup gate off) must always report "new" without recording anything.
@@ -221,7 +223,19 @@ impl DedupStore<State> for BloomDedup {
             None => true,
             // `BloomFilter::insert` returns "may have been previously
             // present" -- the opposite polarity of `HashSet::insert`.
-            Some(filter) => !filter.insert(&s.assignments),
+            Some(filter) => {
+                // Order-independent digest of `todo`: hash each entry on its
+                // own and combine with a commutative `wrapping_add`, so
+                // `FxHashMap`'s iteration order doesn't matter -- no
+                // allocation, no sort. Map keys are unique, so no entry can
+                // cancel another out the way it could under a set-style
+                // XOR. The extra collisions this admits are well below the
+                // filter's own false-positive rate.
+                let todo_digest = s.todo.iter().fold(0u64, |acc, (a, (idx, _))| {
+                    acc.wrapping_add(FixedState::default().hash_one((a, idx)))
+                });
+                !filter.insert(&(&s.assignments, todo_digest))
+            }
         }
     }
 }
