@@ -1074,8 +1074,13 @@ class SearchSpace(SearchSpaceABC):
             new_state.temporal_network.insert_interval(
                 start, end, left_bound=lower, right_bound=upper
             )
-            new_state.temporal_network.add(self._start_plan, start, 0)
-            new_state.temporal_network.add(end, self._end_plan, -self._epsilon)
+            # The plan-start/plan-end timepoints only matter under a deadline:
+            # without one, plan start has no incoming edge (its distance stays 0,
+            # so `start_plan -> start (0)` can never lower anything) and plan end
+            # has no outgoing edge (a sink nothing reads)
+            if self._deadline is not None:
+                new_state.temporal_network.add(self._start_plan, start, 0)
+                new_state.temporal_network.add(end, self._end_plan, -self._epsilon)
             id = self._counter
             for t, e in events:
                 ev = (e.action, e.pos, self._counter)
