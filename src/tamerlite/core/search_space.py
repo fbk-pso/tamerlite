@@ -1061,8 +1061,13 @@ class SearchSpace(SearchSpaceABC):
             if duration[3]:
                 upper -= self._epsilon
         tn.insert_interval(start, end, left_bound=lower, right_bound=upper)
-        tn.add(self._start_plan, start, 0)
-        tn.add(end, self._end_plan, -self._epsilon)
+        # The plan-start/plan-end timepoints only matter under a deadline:
+        # without one, plan start has no incoming edge (its distance stays 0,
+        # so `start_plan -> start (0)` can never lower anything) and plan end
+        # has no outgoing edge (a sink nothing reads)
+        if self._deadline is not None:
+            tn.add(self._start_plan, start, 0)
+            tn.add(end, self._end_plan, -self._epsilon)
         for id, (t, e) in enumerate(events, start=action_instance_id + 1):
             ev = (e.action, e.pos, id)
             if t.is_from_start():
