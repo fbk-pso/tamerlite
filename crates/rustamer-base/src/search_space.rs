@@ -652,8 +652,14 @@ impl SearchSpace {
         }
         tn.add(&start, &end, &lb);
         tn.add(&end, &start, &ub);
-        tn.add(&self.tn_interpreter.start_plan_id, &start, &0.0);
-        tn.add(&end, &self.tn_interpreter.end_plan_id, &-self.epsilon);
+        // The plan-start/plan-end timepoints only matter under a deadline:
+        // without one, plan start has no incoming edge (its distance stays 0,
+        // so `start_plan -> start (0)` can never lower anything) and plan end
+        // has no outgoing edge (a sink nothing reads)
+        if self.deadline.is_some() {
+            tn.add(&self.tn_interpreter.start_plan_id, &start, &0.0);
+            tn.add(&end, &self.tn_interpreter.end_plan_id, &-self.epsilon);
+        }
         for (id, (t, e)) in (action_instance_id + 1..).zip(events.iter()) {
             let ev = self.tn_interpreter.get_event_id(e.action, e.pos, id);
             let b1 = -rational_to_f64(&t.delay);
