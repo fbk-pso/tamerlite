@@ -157,17 +157,18 @@ class InterpretedFunctionNode:
         the declared `return_type` -- the raw callable is free to return
         any Python-native type (e.g. a plain `float` for a "real" function),
         so this normalizes it to the exact type the rest of the search space
-        expects (mirroring `Simplifier.walk_interpreted_function_exp`, which
-        does the analogous normalization on UP's side). For `OBJECT`, the
-        `Converter` already wraps the raw callable to return an `ObjectNode`
-        directly, so no further coercion is needed here."""
+        expects. An integral `REAL` result comes back as an `int`, like every
+        other integral numeric value in the search space (see
+        `make_rational_constant_node`). For `OBJECT`, the `Converter` already
+        wraps the raw callable to return an `ObjectNode` directly, so no
+        further coercion is needed here."""
         r = self.function(*arg_values)
         if self.return_type == IfReturnType.BOOL:
             return bool(r)
         elif self.return_type == IfReturnType.INT:
             return int(r)
         elif self.return_type == IfReturnType.REAL:
-            return Fraction(r)
+            return _canonical_rational(Fraction(r))
         elif self.return_type == IfReturnType.OBJECT:
             assert isinstance(r, ObjectNode)
             return r
@@ -196,8 +197,18 @@ def make_int_constant_node(v: int) -> ExpressionNode:
     return v
 
 
+def _canonical_rational(r: Fraction) -> int | Fraction:
+    """An integral value is always an `int`, never a denominator-1
+    `Fraction` -- mirroring the Rust core's `rational_node`, which has to do
+    this because its dedup compares values structurally. Here `Fraction(3, 1)
+    == 3` already, but a value that surfaces to Python (`evaluate()`, an
+    interpreted function's arguments) must have the same type on both
+    backends."""
+    return r.numerator if r.denominator == 1 else r
+
+
 def make_rational_constant_node(numerator: int, denominator: int) -> ExpressionNode:
-    return Fraction(numerator=numerator, denominator=denominator)
+    return _canonical_rational(Fraction(numerator=numerator, denominator=denominator))
 
 
 def make_object_node(obj: Object) -> ExpressionNode:

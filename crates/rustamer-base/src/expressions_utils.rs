@@ -289,8 +289,7 @@ impl Acc {
     fn into_node(self) -> ExpressionNode {
         match self {
             Acc::Int(v) => ExpressionNode::Int(Box::new(v)),
-            Acc::Rational(r) if r.is_integer() => ExpressionNode::Int(Box::new(r.to_integer())),
-            Acc::Rational(r) => ExpressionNode::Rational(Box::new(r)),
+            Acc::Rational(r) => rational_node(r),
         }
     }
 }
@@ -330,11 +329,7 @@ fn num_div(a: NumRef, b: NumRef) -> PyResult<ExpressionNode> {
         (NumRef::Rational(a), NumRef::Int(b)) => a.clone() / BigRational::from_integer(b.clone()),
         (NumRef::Rational(a), NumRef::Rational(b)) => a.clone() / b.clone(),
     };
-    Ok(if r.is_integer() {
-        ExpressionNode::Int(Box::new(r.to_integer()))
-    } else {
-        ExpressionNode::Rational(Box::new(r))
-    })
+    Ok(rational_node(r))
 }
 
 #[pyfunction]
@@ -542,13 +537,7 @@ pub fn simplify(
                     e.v
                 }
             }
-            ExpressionNode::Rational(v) => {
-                if v.is_integer() {
-                    ExpressionNode::Int(Box::new(v.to_integer()))
-                } else {
-                    ExpressionNode::Rational(v)
-                }
-            }
+            ExpressionNode::Rational(v) => rational_node(*v),
             other => other,
         };
         res.push(value);

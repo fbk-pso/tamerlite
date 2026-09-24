@@ -71,6 +71,7 @@ def _build_problems():
         problems_generator.get_problem_satellite(),
         problems_generator.get_problem_hierarchical_types(),
         problems_generator.get_problem_object_equality_fluents(),
+        problems_generator.get_problem_int_vs_rational_equality(),
         problems_generator.get_problem_temporal_flight(),
         problems_generator.get_problem_flight(),
         problems_generator.get_problem_if_bool_condition(),
@@ -1098,14 +1099,10 @@ def test_evaluate_fixed_cases():
     `crates/rustamer-base/src/expressions_utils.rs`:
 
     - `+ - * /` collapsing an integral result down to `int`/`Int`.
-    - `Equals` between an integer and an integral-valued real agreeing on
-      both backends even though `make_rational_constant_node` does *not*
-      normalize a denominator-1 value at construction (a real-typed fluent
-      holding an integral value stays a `Fraction`/`Rational`, see
-      `fluent_real_3` below): Rust's `internal_evaluate` gives `Equals` a
-      numeric fallback for exactly this case (mirroring `simplify`'s
-      identical fallback), rather than relying on construction-time
-      normalization to make the structural comparison always agree.
+    - `make_rational_constant_node` doing the same for a denominator-1
+      value at construction: a real-typed fluent holding an integral value
+      is an `int`/`Int` on both backends (`fluent_real_3` below), so the
+      Rust dedup's structural comparison agrees with Python's `==`.
     - Division, including by zero.
 
     Plus one fluent read of every constant type (bool, int, real, object) as
@@ -1189,7 +1186,7 @@ def test_evaluate_fixed_cases():
             ("fluent_bool_true", f_bool_t, ("ok", "bool", True)),
             ("fluent_bool_false", f_bool_f, ("ok", "bool", False)),
             ("fluent_int_3", f_int_3, ("ok", "int", 3)),
-            ("fluent_real_3", f_real_3, ("ok", "real", 3, 1)),
+            ("fluent_real_3", f_real_3, ("ok", "int", 3)),
             ("fluent_real_7_2", f_real_7_2, ("ok", "real", 7, 2)),
             ("fluent_object_l1", f_obj_l1, ("ok", "object", 0)),
             ("real_minus_real_to_int", op("-", r7_2, r1_2), ("ok", "int", 3)),
@@ -1216,7 +1213,7 @@ def test_evaluate_fixed_cases():
                 ("ok", "bool", False),
             ),
             (
-                "real_fluent_eq_int_literal_numeric_fallback",
+                "real_fluent_eq_int_literal",
                 op("==", f_real_3, i3),
                 ("ok", "bool", True),
             ),
@@ -1405,14 +1402,12 @@ def test_numeric_constants_above_i32_range():
 
 def test_evaluate_interpreted_function_normalization():
     """Cross-backend differential test for interpreted-function calls
-    through `evaluate()`, covering every `IfReturnType`: a `REAL` return
-    always stays a `Fraction`/`Rational` on both backends
-    (`InterpretedFunctionNode.call`'s `REAL` branch,
-    `interpreted_function_result`'s `Real` arm), even when the value is
-    integral -- mirroring UP's own `Simplifier.walk_interpreted_function_exp`.
-    Also covers `BOOL`/`OBJECT` returns and an object-typed argument, and a
-    nested interpreted-function call (the outer call's argument is itself
-    the inner call's `Fraction` result)."""
+    through `evaluate()`, covering every `IfReturnType`: an integral `REAL`
+    return is an `int`/`Int` on both backends, a non-integral one a
+    `Fraction`/`Rational` (`InterpretedFunctionNode.call`'s `REAL` branch,
+    `interpreted_function_result`'s `Real` arm). Also covers `BOOL`/`OBJECT`
+    returns and an object-typed argument, and a nested interpreted-function
+    call (the outer call's argument is itself the inner call's result)."""
 
     for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
@@ -1448,9 +1443,8 @@ def test_evaluate_interpreted_function_normalization():
             evaluate, (three, to_real_node), state
         ) == (
             "ok",
-            "real",
+            "int",
             3,
-            1,
         )
 
         half_node = make_interpreted_function_node(half, IfReturnType.REAL, (0,))
@@ -1484,17 +1478,16 @@ def test_evaluate_interpreted_function_normalization():
             True,
         )
 
-        # Nested call: the outer `to_real` receives the inner one's `Fraction`
-        # result directly (`Fraction(Fraction(3, 1)) == Fraction(3, 1)`).
+        # Nested call: the outer `to_real` receives the inner one's
+        # (integral, hence `int`) result directly.
         inner = make_interpreted_function_node(to_real, IfReturnType.REAL, (0,))
         outer = make_interpreted_function_node(to_real, IfReturnType.REAL, (1,))
         assert testing_utils._evaluate_outcome(
             evaluate, (three, inner, outer), state
         ) == (
             "ok",
-            "real",
+            "int",
             3,
-            1,
         )
 
 
@@ -2919,13 +2912,13 @@ def test_interpreted_functions_bounded_types_examples_excluded():
 
 
 def test_interpreted_functions_real_return_backend_normalization():
-    """Both backends always keep a real-typed IF return as a `Fraction`/
-    `Rational`, even when the value is integral: Rust's
-    `interpreted_function_result`
-    (`crates/rustamer-base/src/interpreted_functions.rs`) and Python's
-    `InterpretedFunctionNode.call` (`src/tamerlite/core/search_space.py`)
-    both mirror UP's own `Simplifier.walk_interpreted_function_exp`, which
-    does the same unconditionally. This test's own `to_int` deliberately
+    """Both backends turn an integral real-typed IF return into an `int`/
+    `Int`: Rust's `interpreted_function_result`
+    (`crates/rustamer-base/src/interpreted_functions.rs`, via
+    `rational_node`) and Python's `InterpretedFunctionNode.call`
+    (`src/tamerlite/core/search_space.py`, via `_canonical_rational`). The
+    Rust dedup compares values structurally, so a stray `Rational(4/1)`
+    would be a different state from `Int(4)`. This test's own `to_int` deliberately
     returns an integral value (`4`) so that's actually exercised --
     `get_problem_if_signature_shapes`'s real-return case just needs to prove
     the solve path works at all, not pin this specific rule.
@@ -2980,7 +2973,7 @@ def test_interpreted_functions_real_return_backend_normalization():
         )
         converted = converter.convert(exp)
         value = evaluate(converted, init_state)
-        assert value == 4 and type(value) is Fraction
+        assert value == 4 and type(value) is int
 
 
 def test_simplify_with_interpreted_functions():
@@ -3489,72 +3482,70 @@ def test_interpreted_function_reentrant_callable():
 
 
 def test_interpreted_function_real_arg_int_normalization():
-    """A real-typed argument position can arrive as either `Int` or
-    `Rational`, depending on whether a prior computation normalized it down
-    (Rust's `interpreted_function_result` collapses an integral `Real` result
-    to `Int`, `crates/rustamer-base/src/interpreted_functions.rs`). The Rust memo keys
-    on the raw `ExpressionNode`, so `Int(3)` and `Rational(3, 1)` are two
-    distinct cache entries -- this callable is invoked twice, once receiving
-    a Python `int` and once a `Fraction`, never sharing a cached answer. This
-    is finer-grained than the pre-existing Python-side `_if_cache`
-    (`Converter._get_interpreted_function_wrapper`), whose dict key silently
-    merges the two (`Fraction(3) == 3`, equal hashes) -- a pre-existing
-    wrinkle this change neither fixes nor worsens.
+    """An integral real-typed argument reaches the callable as a Python
+    `int` on both backends, however it was built -- an `int` constant or a
+    denominator-1 rational constant alike. `make_rational_constant_node`
+    turns the latter into an `int`/`Int` at construction (Rust's
+    `rational_node`, Python's `_canonical_rational`), so the callable never
+    sees a `Fraction(3, 1)` on one backend and an `int` on the other, and the
+    Rust memo (keyed on the raw `ExpressionNode`) can't split one value into
+    two cache entries.
 
     Uses `evaluate()`, not `simplify()`: `simplify`'s own node-rebuild
-    normalizes any bare, integral `Rational` leaf down to `Int` as a general
-    simplification rule, independent of interpreted functions
-    (`expressions_utils.rs`), which would silently erase the very
-    distinction this test needs. `internal_evaluate`'s leaf case does not
-    (`other => (*other).clone()`), so a raw, un-normalized `Rational(3, 1)`
-    node survives through to the interpreted-function call. `evaluate()`
-    needs a real `State`, which the two expressions below never read (they
-    contain no `Fluent` node) -- it exists only because Rust's `State` has
-    no Python constructor, so one has to come from a real (otherwise
-    irrelevant) `Encoder`."""
+    normalizes integral values as a general simplification rule, which
+    would hide a construction-time regression. `evaluate()` needs a real
+    `State`, which the two expressions below never read (they contain no
+    `Fluent` node) -- it exists only because Rust's `State` has no Python
+    constructor, so one has to come from a real (otherwise irrelevant)
+    `Encoder`."""
 
-    received_types = []
+    problem = Problem("if_real_arg_int_normalization_dummy")
+    received_types: list[type] = []
 
     def record_type(x):
         received_types.append(type(x))
         return True
 
-    reload_tamerlite(False)
-    from tamerlite.core import (
-        IfReturnType,
-        evaluate,
-        make_int_constant_node,
-        make_interpreted_function_node,
-        make_rational_constant_node,
-    )
+    for disable_rustamer in [True, False]:
+        received_types.clear()
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.core import (
+            IfReturnType,
+            evaluate,
+            make_int_constant_node,
+            make_interpreted_function_node,
+            make_rational_constant_node,
+        )
 
-    problem = Problem("if_real_arg_int_normalization_dummy")
-    lifted_problem, ground_problem, map_back_action_instance = (
-        testing_utils.compile_problem(problem)
-    )
-    encoder = Encoder(
-        ground_problem,
-        lifted_problem,
-        map_back_action_instance,
-        symmetry_breaking=False,
-        compression_safe_actions=False,
-        relevance_analysis=False,
-    )
-    state = encoder.search_space.initial_state()
+        lifted_problem, ground_problem, map_back_action_instance = (
+            testing_utils.compile_problem(problem)
+        )
+        encoder = Encoder(
+            ground_problem,
+            lifted_problem,
+            map_back_action_instance,
+            symmetry_breaking=False,
+            compression_safe_actions=False,
+            relevance_analysis=False,
+        )
+        state = encoder.search_space.initial_state()
 
-    three_int = make_int_constant_node(3)
-    three_real = make_rational_constant_node(3, 1)
-    if_node_for_int = make_interpreted_function_node(
-        record_type, IfReturnType.BOOL, (0,)
-    )
-    if_node_for_real = make_interpreted_function_node(
-        record_type, IfReturnType.BOOL, (0,)
-    )
+        three_int = make_int_constant_node(3)
+        three_real = make_rational_constant_node(3, 1)
+        if_node_for_int = make_interpreted_function_node(
+            record_type, IfReturnType.BOOL, (0,)
+        )
+        if_node_for_real = make_interpreted_function_node(
+            record_type, IfReturnType.BOOL, (0,)
+        )
 
-    evaluate((three_int, if_node_for_int), state)
-    evaluate((three_real, if_node_for_real), state)
+        evaluate((three_int, if_node_for_int), state)
+        evaluate((three_real, if_node_for_real), state)
 
-    assert received_types == [int, Fraction]
+        assert received_types, "record_type was never called"
+        assert set(received_types) == {int}, (
+            f"{'python' if disable_rustamer else 'rust'} backend: {received_types}"
+        )
 
 
 def test_interpreted_functions_duration():
