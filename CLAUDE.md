@@ -213,6 +213,11 @@ same invariant as the object-equality rewrite below: the returned novelty
 class and hence `expanded_states`/`goal_depth` must agree exactly
 (`tests/test_novbfs.py::test_novbfs_cross_backend_parity`, plus
 `test_novbfs_metrics_regression`'s pinned YAMLs, run on both backends).
+novbfs takes its heuristic like `wastar` does (`TamerLite._get_search`:
+the configured `heuristic`, default `hff`, or a custom callable), and uses
+its raw value both as the novelty partition (`floor(h)`) and as the
+tie-break after novelty; `weight` is ignored with a warning. The heuristic
+must never return a negative value (`NumericNovelty.partition_of` asserts it).
 Unlike most of this file's cross-backend invariants, the two cores' internal
 leaf **numbering** does *not* need to match -- `novelty.rs`'s module
 docstring works through why the algorithm's outcome is invariant to leaf-id

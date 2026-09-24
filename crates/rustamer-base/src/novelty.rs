@@ -324,7 +324,7 @@ fn add_leaf(
     Ok(())
 }
 
-/// Persistent novelty-tracking tables for one `floor(h^add)` partition --
+/// Persistent novelty-tracking tables for one `floor(h)` partition --
 /// mirrors `novelty.py::_PartitionTables`. Sparse (never dense arrays)
 /// deliberately: the pair tables are up to O(#leaves^2) per partition, and
 /// most leaf pairs are never jointly touched.
@@ -527,7 +527,7 @@ impl NumericNovelty {
     }
 
     /// (Re)initializes partition bookkeeping from the initial state's
-    /// h^add value and clears the parent-feature cache (so a following
+    /// heuristic value and clears the parent-feature cache (so a following
     /// `eval` on the root sees "no parent" unconditionally, matching
     /// calling `eval(init, p, None, None)` directly). Must be called before
     /// any `eval()` call -- and again, before any further `eval()`, if this
@@ -536,8 +536,8 @@ impl NumericNovelty {
     pub fn start(&mut self, initial_h: f64) -> u64 {
         assert!(
             initial_h >= 0.0,
-            "initial_h must be non-negative (novbfs always uses h^add, which \
-             never returns a negative value for a reachable state)"
+            "initial_h must be non-negative (novbfs partitions on floor(h), \
+             so its heuristic must never return a negative value)"
         );
         self.partitions.clear();
         self.max_partition = (initial_h.floor() as u64).max(1);
@@ -546,16 +546,16 @@ impl NumericNovelty {
     }
 
     /// The partition function: `floor(h_value)`, clamped at the top to
-    /// `max_partition`. `h_value` is always h^add (see `start`), which is
-    /// never negative for a reachable state -- callers already filter out
+    /// `max_partition`. `h_value` is the search heuristic's value (see
+    /// `start`), which must never be negative -- callers already filter out
     /// `None` (unreachable) before calling this, so `partition` is a
     /// genuine, always-non-negative index, never a signed quantity that
     /// happens to stay positive.
     pub fn partition_of(&self, h_value: f64) -> u64 {
         assert!(
             h_value >= 0.0,
-            "h_value must be non-negative (novbfs always uses h^add, which \
-             never returns a negative value for a reachable state)"
+            "h_value must be non-negative (novbfs partitions on floor(h), \
+             so its heuristic must never return a negative value)"
         );
         (h_value.floor() as u64).min(self.max_partition)
     }

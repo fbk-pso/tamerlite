@@ -606,7 +606,7 @@ def ehc_search(
 @dataclass
 class NovBFSItem:
     """Open-list entry for `novbfs_search`: the numeric-novelty tie-break
-    chain `(novelty, h^add, +-g)`, then `len(state.todo)` (fewer durative
+    chain `(novelty, h, +-g)`, then `len(state.todo)` (fewer durative
     actions in flight first, matching every other search's
     `PrioritizedItem`), then an `idx` insertion-order tie-break for
     determinism. `todo_len` is inert on classical problems -- `state.todo` is
@@ -614,7 +614,7 @@ class NovBFSItem:
     real ties among temporal states."""
 
     novelty: int  # 1 (most novel) .. 3 (not novel)
-    h: float  # h^add
+    h: float  # the search heuristic's value
     g_key: float  # state.g, sign-flipped by `prefer_higher_g` at push time
     idx: int
     state: State
@@ -649,19 +649,19 @@ def novbfs_search(
     weak_equality: bool = False,
 ) -> tuple[list[Action] | None, dict[str, str]]:
     """A single open list ordered lexicographically on
-    `(novelty, h^add, +-g, len(state.todo))` -- numeric novelty first,
-    `h^add` only as a tie-breaker, plan cost `g` next, and the count of
+    `(novelty, h, +-g, len(state.todo))` -- numeric novelty first,
+    the heuristic value `h` only as a tie-breaker, plan cost `g` next, and the count of
     durative actions in flight (fewer first) as a final tie-break before
     insertion order -- see `NovBFSItem`. That last key is a no-op on
     classical problems, where `state.todo` is always empty.
     `prefer_higher_g=True` is `novbfs_hg`
     (cost-*maximizing* final tie-break, to dive into longer committed plans
     and find *a* solution fast); `prefer_higher_g=False` is `novbfs_lg`
-    (cost-*minimizing*). `heuristic` must be an h^add instance -- see
-    `TamerLite._solve_ground_problem`'s novbfs dispatch branch, which always
-    builds one internally regardless of the configured heuristic.
+    (cost-*minimizing*). `heuristic` is any `Heuristic`: its raw value both
+    picks the novelty partition (`floor(h)`) and breaks ties after novelty.
+    It must never return a negative value (see `NumericNovelty.partition_of`).
 
-    This function calls `novelty.start()` once, on the initial state's h^add
+    This function calls `novelty.start()` once, on the initial state's heuristic
     value, before doing anything else -- safe to call even if `novelty` was
     already used by a previous `novbfs_search` call on the same instance
     (e.g. `TamerLite._solve_ground_problem`'s `weak_equality` retry, which

@@ -788,18 +788,12 @@ def test_search_algorithms(
     if reason is not None:
         pytest.skip(reason)
 
-    # novbfs_hg/novbfs_lg always use an internal, unit-weighted hadd
-    # heuristic and ignore whatever `heuristic` names -- passing `None`
-    # here (rather than the unused "hff") avoids the "always use an
-    # internal hadd" warning firing on every one of this matrix's cases.
-    is_novbfs = search_kind in ("novbfs_hg", "novbfs_lg")
-
     results = []
     for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
         search = tamerlite.SearchParams(
             search=search_kind,
-            heuristic=None if is_novbfs else heuristic,
+            heuristic=heuristic,
             weak_equality=weak_equality,
             symmetry_breaking=symmetry_breaking,
             compression_safe_actions=compression_safe_actions,

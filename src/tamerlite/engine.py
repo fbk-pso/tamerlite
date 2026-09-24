@@ -331,11 +331,11 @@ class TamerLite(
             # `encoder.fluent_domains`/`encoder.goal` already describe the
             # (possibly `relevant_equality`-compacted) encoding, so no
             # separate fluent restriction is needed here.
+            # Every considered action has an `events` entry (`SearchSpace`
+            # checks it), and both follow `Encoder._actions` order, so this
+            # is the considered-only slice of `events`, in its own order.
             considered_actions = encoder.considered_actions
-            considered_actions_set = set(considered_actions)
-            events = {
-                a: e for a, e in encoder.events.items() if a in considered_actions_set
-            }
+            events = {a: encoder.events[a] for a in considered_actions}
             h = hh_map[h_name](
                 considered_actions,
                 encoder.fluent_domains,
@@ -356,13 +356,8 @@ class TamerLite(
         heuristic: Callable[[State], float | None] | None,
     ) -> tuple[str, _SearchCallable]:
         """Selects and binds the search callable for `params.search`,
-        building whatever heuristic(s) it needs along the way. Heuristic
-        construction has to happen in here because `novbfs_hg`/`novbfs_lg`
-        must *not* build the configured heuristic -- they force their own
-        internal, unit-weighted `hadd` -- so the decision of which heuristic
-        (if any) to build is itself part of search selection. This is what
-        lets every search name, novbfs included, be selected in one place,
-        with a single error message below naming all of them.
+        building the heuristic it needs along the way (`dfs`/`bfs` build one
+        too and just never read it).
 
         `heuristic` is the optional custom heuristic *callable* passed to
         `solve()`/`get_solutions()` -- `params.heuristic` is the separate
@@ -371,54 +366,6 @@ class TamerLite(
         internal_heuristic_cache = (
             params.internal_heuristic_cache and encoder.search_space.is_temporal
         )
-
-        if search_name in ("novbfs_hg", "novbfs_lg"):
-            if (
-                params.heuristic not in (None, "hadd")
-                or params.weight is not None
-                or heuristic is not None
-            ):
-                warnings.warn(
-                    "novbfs_hg/novbfs_lg always use an internal, "
-                    "unit-weighted hadd heuristic; the configured "
-                    "heuristic/weight (including any custom "
-                    "heuristic callable passed to solve()) is "
-                    "ignored.",
-                    stacklevel=2,
-                )
-            # `heuristic=None`: unlike every other search, novbfs never
-            # falls back to a user-supplied heuristic callable --
-            # `HeuristicParams(heuristic="hadd")` below always forces
-            # `_get_heuristic`'s "hadd" branch, so the callable would never
-            # actually be read; passing `None` here makes that visible
-            # instead of relying on it being dead code at this call site.
-            hadd, _ = self._get_heuristic(
-                HeuristicParams(heuristic="hadd"),
-                None,
-                encoder,
-                params.inadmissible_numeric_heuristic_variant,
-                internal_heuristic_cache,
-            )
-            assert encoder.goal is not None
-            considered_actions = set(encoder.considered_actions)
-            novelty_tracker = NumericNovelty(
-                {a: e for a, e in encoder.events.items() if a in considered_actions},
-                encoder.goal,
-                encoder.fluent_domains,
-            )
-            search = cast(
-                _SearchCallable,
-                partial(
-                    novbfs_search_memory_bounded
-                    if params.incomplete_memory_bounded_search
-                    else novbfs_search,
-                    heuristic=hadd,
-                    novelty=novelty_tracker,
-                    prefer_higher_g=(search_name == "novbfs_hg"),
-                ),
-            )
-            return search_name, search
-
         incomplete_memory_bounded_search = params.incomplete_memory_bounded_search
 
         h, weight = self._get_heuristic(
@@ -452,6 +399,30 @@ class TamerLite(
             search = partial(bfs_search)
         elif search_name == "ehc":
             search = partial(ehc_search, heuristic=h)
+        elif search_name in ("novbfs_hg", "novbfs_lg"):
+            # novbfs uses the raw heuristic value both as its novelty
+            # partition (`floor(h)`) and as the tie-break after novelty, so a
+            # weight has nothing to scale.
+            if params.weight is not None:
+                warnings.warn(
+                    "novbfs_hg/novbfs_lg do not use a heuristic weight; the "
+                    "configured weight is ignored.",
+                    stacklevel=2,
+                )
+            assert encoder.goal is not None
+            novelty_tracker = NumericNovelty(
+                {a: encoder.events[a] for a in encoder.considered_actions},
+                encoder.goal,
+                encoder.fluent_domains,
+            )
+            search = partial(
+                novbfs_search_memory_bounded
+                if incomplete_memory_bounded_search
+                else novbfs_search,
+                heuristic=h,
+                novelty=novelty_tracker,
+                prefer_higher_g=(search_name == "novbfs_hg"),
+            )
         else:
             raise NotImplementedError(
                 f"Unknown search '{search_name}'. "
