@@ -91,6 +91,21 @@ impl State {
         }
     }
 
+    /// Like `clone_for_child`, but leaves `temporal_network` empty.
+    /// `SearchSpace::expand_event` copies the parent's network in only once the
+    /// successor has passed its non-temporal checks, which reject most successors
+    pub fn clone_for_child_without_tn(&self) -> Self {
+        Self {
+            assignments: self.assignments.clone(),
+            temporal_network: None,
+            todo: self.todo.clone(),
+            active_conditions: self.active_conditions.clone(),
+            g: self.g,
+            path: self.path.clone(),
+            heuristic_cache: Mutex::new(FxHashMap::with_hasher(FxBuildHasher)),
+        }
+    }
+
     /// Clones the current state, including the caches
     pub fn full_clone(&self) -> Self {
         Self {

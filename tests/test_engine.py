@@ -24,6 +24,7 @@ import warnings
 import weakref
 from collections import OrderedDict
 from collections.abc import Callable
+from fractions import Fraction
 from functools import partial
 from typing import Any, NamedTuple, cast
 
@@ -1888,6 +1889,29 @@ def test_weak_equality_warns_on_non_temporal_problem():
                     assert res.status == ResultStatus.SOLVED_SATISFICING
             messages = [str(w.message) for w in caught]
             assert not any("weak_equality" in m for m in messages)
+
+
+def test_no_subsumption_stn_keeps_redundant_edges():
+    # `_NoSubsumptionSTN` works by overriding UP's private `_is_subsumed`; pin
+    # that `add` still consults it, so a UP update that renames it or inlines
+    # the check fails here instead of silently restoring the out-list walk.
+    from tamerlite.core.search_space import _NoSubsumptionSTN
+
+    def out_degree(stn, x):
+        n, count = stn._constraints[x], 0
+        while n is not None:
+            n, count = n.next, count + 1
+        return count
+
+    plain = DeltaSimpleTemporalNetwork()
+    no_subsumption = _NoSubsumptionSTN()
+    for stn in (plain, no_subsumption):
+        stn.add("a", "b", Fraction(1))
+        stn.add("a", "b", Fraction(2))  # implied by the first edge
+    assert out_degree(plain, "a") == 1
+    assert out_degree(no_subsumption, "a") == 2
+    assert no_subsumption.check_stn()
+    assert no_subsumption.distances == plain.distances
 
 
 def test_temporal_no_start_event():
