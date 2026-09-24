@@ -495,14 +495,16 @@ def test_novbfs_solves_and_validates(make_problem, search_name):
             assert validator.validate(problem, res.plan)
 
 
+@pytest.mark.parametrize("heuristic", ["hff", "hadd", "hmax", "blind"])
 @pytest.mark.parametrize("search_name", NOVBFS_SEARCHES)
 @pytest.mark.parametrize(
     "make_problem", [p for _, p in NOVBFS_PROBLEMS], ids=[n for n, _ in NOVBFS_PROBLEMS]
 )
-def test_novbfs_cross_backend_parity(make_problem, search_name):
+def test_novbfs_cross_backend_parity(make_problem, search_name, heuristic):
     """Both cores must expand exactly the same states -- see
     `testing_utils.check_metrics_equality`, the same check every other
-    search in `test_engine.py` is held to."""
+    search in `test_engine.py` is held to -- whichever heuristic novbfs is
+    configured with (`blind` covers the degenerate single-partition case)."""
     problem = make_problem()
     results = []
     for disable_rustamer in [True, False]:
@@ -510,7 +512,8 @@ def test_novbfs_cross_backend_parity(make_problem, search_name):
         from tamerlite.engine import SearchParams
 
         with OneshotPlanner(
-            name="tamerlite", params={"search": SearchParams(search=search_name)}
+            name="tamerlite",
+            params={"search": SearchParams(search=search_name, heuristic=heuristic)},
         ) as planner:
             res: PlanGenerationResult = planner.solve(problem, timeout=60)
             assert res.status == ResultStatus.SOLVED_SATISFICING
@@ -520,7 +523,10 @@ def test_novbfs_cross_backend_parity(make_problem, search_name):
     check_metrics_equality(results)
 
 
-def test_novbfs_ignores_configured_heuristic_with_warning():
+@pytest.mark.parametrize("weight", [None, 0.5])
+def test_novbfs_warns_on_weight(weight):
+    """novbfs uses the raw heuristic value, so a configured `weight` is
+    ignored -- and flagged, but only when one is actually set."""
     reload_tamerlite(True)
     from tamerlite.engine import SearchParams
 
@@ -529,33 +535,43 @@ def test_novbfs_ignores_configured_heuristic_with_warning():
         warnings.simplefilter("always")
         with OneshotPlanner(
             name="tamerlite",
-            params={"search": SearchParams(search="novbfs_hg", heuristic="hff")},
+            params={"search": SearchParams(search="novbfs_hg", weight=weight)},
         ) as planner:
             res = planner.solve(problem, timeout=30)
     assert res.status == ResultStatus.SOLVED_SATISFICING
-    assert any("always use an internal" in str(w.message) for w in caught), (
-        "expected a warning that the configured heuristic is ignored"
-    )
+    warned = any("weight" in str(w.message) for w in caught)
+    assert warned == (weight is not None)
 
 
-def test_novbfs_ignores_custom_heuristic_callable_with_warning():
-    """A custom heuristic callable passed to `solve()` (as opposed to a
-    `SearchParams.heuristic` string) must be flagged too -- it is just as
-    silently dropped by novbfs_hg/novbfs_lg."""
-    reload_tamerlite(True)
-    from tamerlite.engine import SearchParams
-
+@pytest.mark.parametrize("search_name", NOVBFS_SEARCHES)
+def test_novbfs_uses_custom_heuristic_callable(search_name):
+    """A custom heuristic callable passed to `solve()` drives novbfs, like
+    it drives wastar, on both backends -- and both backends agree."""
     problem = problems_generator.get_problem_numeric()
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
+    results = []
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.engine import SearchParams
+
+        calls = 0
+
+        def custom_heuristic(state) -> float:
+            nonlocal calls
+            calls += 1
+            return 0.0
+
         with OneshotPlanner(
-            name="tamerlite", params={"search": SearchParams(search="novbfs_lg")}
+            name="tamerlite", params={"search": SearchParams(search=search_name)}
         ) as planner:
-            res = planner.solve(problem, heuristic=lambda state: 0.0, timeout=30)
-    assert res.status == ResultStatus.SOLVED_SATISFICING
-    assert any("always use an internal" in str(w.message) for w in caught), (
-        "expected a warning that the custom heuristic callable is ignored"
-    )
+            res: PlanGenerationResult = planner.solve(
+                problem, heuristic=custom_heuristic, timeout=30
+            )
+        assert res.status == ResultStatus.SOLVED_SATISFICING
+        with PlanValidator(problem_kind=problem.kind) as validator:
+            assert validator.validate(problem, res.plan)
+        assert calls > 0, "the custom heuristic callable was never evaluated"
+        results.append(res)
+    check_metrics_equality(results)
 
 
 @pytest.mark.parametrize("search_name", NOVBFS_SEARCHES)
@@ -589,6 +605,7 @@ def test_novbfs_memory_bounded_matches_unbounded(make_problem, search_name):
     check_metrics_equality(results)
 
 
+@pytest.mark.parametrize("heuristic", ["hadd", "hff"])
 @pytest.mark.parametrize("search_name", NOVBFS_SEARCHES)
 @pytest.mark.parametrize(
     "make_problem",
@@ -598,7 +615,9 @@ def test_novbfs_memory_bounded_matches_unbounded(make_problem, search_name):
     ],
     ids=["numeric", "logistics"],
 )
-def test_novbfs_metrics_regression(make_problem, search_name, data_regression):
+def test_novbfs_metrics_regression(
+    make_problem, search_name, heuristic, data_regression
+):
     """Pins `expanded_states`/`goal_depth` for a couple of fixed small
     problems, on *both* backends against the same pinned YAML -- the primary
     check that the Rust core's `novbfs` mirrors the pure-Python one exactly.
@@ -613,7 +632,10 @@ def test_novbfs_metrics_regression(make_problem, search_name, data_regression):
     almost any scoring function, so it could never detect drift in the
     novelty measure itself. `logistics(1, 1, 4, 2)` is the problem
     `TestNumericNoveltyBinaryPassesCrossBackend`'s motivation measured Pass
-    C1b as actually changing the novelty-class histogram on."""
+    C1b as actually changing the novelty-class histogram on.
+
+    `hadd` pins novbfs's original, hadd-only behavior; `hff` pins the
+    default heuristic novbfs now shares with `wastar`."""
     problem = make_problem()
     metrics = None
     for disable_rustamer in [True, False]:
@@ -621,7 +643,8 @@ def test_novbfs_metrics_regression(make_problem, search_name, data_regression):
         from tamerlite.engine import SearchParams
 
         with OneshotPlanner(
-            name="tamerlite", params={"search": SearchParams(search=search_name)}
+            name="tamerlite",
+            params={"search": SearchParams(search=search_name, heuristic=heuristic)},
         ) as planner:
             res = planner.solve(problem, timeout=60)
             assert res.status == ResultStatus.SOLVED_SATISFICING

@@ -23,7 +23,8 @@ gets a propositional feature psi (is it satisfied?) and, if it is a numeric
 comparison, a distance feature delta (how close is it?). A state's novelty
 class (1 = a size-1 conjunction of features is new, 2 = only a size-2
 conjunction is new, 3 = nothing is new) is evaluated relative to its parent
-state, within a table partitioned by `floor(h^add)` -- so novelty stays
+state, within a table partitioned by `floor(h)`, where `h` is whatever
+heuristic the search was configured with, -- so novelty stays
 meaningful deep into a long search instead of diluting against the entire
 search history. See `NumericNovelty` below.
 
@@ -48,12 +49,13 @@ Implementation notes -- the structure mirrors `NumericNovelty` in
   allocates what it doesn't touch, so there's no quadratic up-front
   allocation to guard against and no need for a size-based fallback that
   would degrade novelty precision on large problems.
-- The partition count is frozen at ``max(1, floor(h^add(s0)))`` when a
-  search starts, and any state whose h^add exceeds the initial state's is
+- The partition count is frozen at ``max(1, floor(h(s0)))`` when a
+  search starts, and any state whose h exceeds the initial state's is
   clamped into the top partition -- a known sharp edge on problems where
-  h^add is not monotone (temporal problems especially: a durative action's
-  very first event can raise h^add above `h^add(s0)` more readily than in
-  classical planning).
+  h is not monotone (temporal problems especially: a durative action's
+  very first event can raise h above `h(s0)` more readily than in
+  classical planning). A heuristic that is constant (e.g. ``blind``)
+  degenerates to a single partition, i.e. unpartitioned novelty.
 - Subgoal leaves are deduplicated directly by structural equality:
   `tamerlite.core.search_space.Expression` is already a frozen, hashable,
   structurally-comparable tuple, so no separate id-remapping table is
@@ -216,7 +218,7 @@ def _compute_sdist(leaf: _NumLeaf, state: State) -> tuple[_Sdist, bool]:
 
 @dataclass
 class _PartitionTables:
-    """Persistent novelty-tracking state for one `floor(h^add)` partition.
+    """Persistent novelty-tracking state for one `floor(h)` partition.
     One instance per partition, allocated lazily on first use (see
     `NumericNovelty._get_partition`)."""
 
@@ -339,15 +341,15 @@ class NumericNovelty:
 
     def start(self, initial_h: float) -> int:
         """(Re)initializes partition bookkeeping from the initial state's
-        h^add value and clears the parent-feature caches. Must be called
+        heuristic value and clears the parent-feature caches. Must be called
         exactly once, before any `eval()` call. Returns the root's (clamped)
         partition id; the caller is responsible for seeding the tables with
         an explicit `eval()` call on the initial state and then pushing the
         root with novelty hard-coded to 1, regardless of that call's return
         value (see `novbfs_search`)."""
         assert initial_h >= 0, (
-            "initial_h must be non-negative (novbfs always uses h^add, which "
-            "never returns a negative value for a reachable state)"
+            "initial_h must be non-negative (novbfs partitions on "
+            "floor(h), so its heuristic must never return a negative value)"
         )
         self._partitions = {}
         self._max_partition = max(1, math.floor(initial_h))
@@ -358,8 +360,8 @@ class NumericNovelty:
         """The partition function: `floor(h_value)`, clamped at the top to
         `max_partition`."""
         assert h_value >= 0, (
-            "h_value must be non-negative (novbfs always uses h^add, which "
-            "never returns a negative value for a reachable state)"
+            "h_value must be non-negative (novbfs partitions on "
+            "floor(h), so its heuristic must never return a negative value)"
         )
         return min(math.floor(h_value), self._max_partition)
 
@@ -455,7 +457,7 @@ class NumericNovelty:
         signal psi (is it satisfied?) and, if numeric, a distance signal
         delta (how close, and did it just beat its best-ever value?).
         Returns `state`'s novelty class relative to its parent, judged
-        against the `partition` (`floor(h^add)`) bucket's own history so
+        against the `partition` (`floor(h)`) bucket's own history so
         far: 1 (some single subgoal was newly satisfied, or some single
         numeric subgoal's distance just beat its personal best in this
         partition), 2 (no single subgoal did, but some *pair* of subgoals

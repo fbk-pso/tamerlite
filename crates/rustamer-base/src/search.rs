@@ -843,7 +843,7 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
 
 /// Open-list entry for `novbfs_search` (`P = Rc<State>`) and
 /// `novbfs_search_memory_bounded` (`P = State`): the numeric-novelty tie-break chain
-/// `(novelty, h^add, ±g)`, then `todo_len` (fewer durative actions in
+/// `(novelty, h, ±g)`, then `todo_len` (fewer durative actions in
 /// flight first, matching every other search's `PrioritizedItem`), then an
 /// `idx` insertion-order tie-break for determinism. `todo_len` is inert on
 /// classical problems -- `State::todo` is only ever populated on the
@@ -972,17 +972,17 @@ impl<P: StatePayload> SearchStrategy for NovBFSStrategy<'_, P> {
 }
 
 /// A single open list ordered lexicographically on
-/// `(novelty, h^add, ±g, todo_len)` -- numeric novelty first, `h^add` only
-/// as a tie-breaker, plan cost `g` next, and the count of durative actions
+/// `(novelty, h, ±g, todo_len)` -- numeric novelty first, the heuristic
+/// value `h` only as a tie-breaker, plan cost `g` next, and the count of durative actions
 /// in flight (fewer first) as a final tie-break before insertion order --
 /// see `NovBFSItem`. That last key is a no-op on classical
 /// problems, where `State::todo` is always empty.
 /// `prefer_higher_g=true` is `novbfs_hg` (cost-*maximizing* final
 /// tie-break, to dive into longer committed plans and find *a* solution
 /// fast); `prefer_higher_g=false` is `novbfs_lg` (cost-*minimizing*).
-/// `heuristic` must be an h^add instance -- see
-/// `TamerLite._solve_ground_problem`'s novbfs dispatch branch, which always
-/// builds one internally regardless of the configured heuristic.
+/// `heuristic` is any heuristic: its raw value both picks the novelty
+/// partition (`floor(h)`) and breaks ties after novelty. It must never
+/// return a negative value (see `NumericNovelty::partition_of`).
 ///
 /// `novelty` must not have had `start()` called yet -- this function calls
 /// it once, on the initial state, and expects a fresh instance per search
