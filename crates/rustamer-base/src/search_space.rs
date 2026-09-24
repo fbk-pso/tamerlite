@@ -793,7 +793,7 @@ impl SearchSpaceTrait for SearchSpace {
             return Ok(path.iter().map(|a| (None, *a, None)).collect());
         }
 
-        let mut tn = DeltaSTN::new(mk_rational(0, 1));
+        let mut tn = DeltaSTN::new_without_subsumption(mk_rational(0, 1));
         let mut todo: FxHashMap<Action, (usize, u32)> = FxHashMap::with_hasher(FxBuildHasher);
         let mut event_path: Vec<(Event, u32)> = Vec::new();
         let mut counter = 0;
