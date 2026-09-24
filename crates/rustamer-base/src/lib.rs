@@ -21,6 +21,7 @@ mod heuristics;
 mod interpreted_functions;
 mod multiqueue;
 mod multiset;
+mod novelty;
 mod search;
 mod search_space;
 mod search_state;
@@ -43,8 +44,10 @@ pub use interpreted_functions::{clear_interpreted_function_cache, IfReturnType};
 pub use multiqueue::{
     _multiqueue_search, multiqueue_search, MQSwitchPolicy, PrioritizedItem, StateContainer,
 };
+pub use novelty::NumericNovelty;
 pub use search::{
-    bfs_search, dfs_search, ehc_search, wastar_search, wastar_search_memory_bounded, SearchResult,
+    bfs_search, dfs_search, ehc_search, novbfs_search, novbfs_search_memory_bounded, wastar_search,
+    wastar_search_memory_bounded, SearchResult,
 };
 pub use search_space::{py_get_fluents, SearchSpace, SearchSpaceTrait};
 pub use search_state::State;

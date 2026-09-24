@@ -18,6 +18,7 @@
 
 from tamerlite.core.heuristics import HFF, CustomHeuristic, HAdd, HMax, HMaxExplicit
 from tamerlite.core.multiqueue import multiqueue_search
+from tamerlite.core.novelty import NumericNovelty
 from tamerlite.core.search import (
     astar_search,
     astar_search_memory_bounded,
@@ -26,6 +27,8 @@ from tamerlite.core.search import (
     ehc_search,
     gbfs_search,
     gbfs_search_memory_bounded,
+    novbfs_search,
+    novbfs_search_memory_bounded,
     wastar_search,
     wastar_search_memory_bounded,
 )
@@ -71,6 +74,7 @@ __all__ = [
     "HMax",
     "HMaxExplicit",
     "IfReturnType",
+    "NumericNovelty",
     "Object",
     "SearchSpace",
     "State",
@@ -94,6 +98,8 @@ __all__ = [
     "make_operator_node",
     "make_rational_constant_node",
     "multiqueue_search",
+    "novbfs_search",
+    "novbfs_search_memory_bounded",
     "shift_expression",
     "simplify",
     "use_rustamer",

@@ -17,9 +17,7 @@
 
 import contextlib
 import gc
-import importlib
 import os
-import types
 import warnings
 import weakref
 from collections import OrderedDict
@@ -164,52 +162,14 @@ def expressions():
     return expressions
 
 
-def reload_package(package):
-    assert hasattr(package, "__package__")
-    fn = package.__file__
-    fn_dir = os.path.dirname(fn) + os.sep
-    module_visit = {fn}
-    del fn
-
-    def reload_recursive_ex(module):
-        # Children must be reloaded *before* `module` itself: `module`'s own
-        # top-level code re-runs `from child import name` statements, and
-        # those need `child` already holding its freshest definitions --
-        # otherwise `name` rebinds to whatever `child` had before this reload
-        # pass touched it, leaving two live, non-identical objects (e.g. two
-        # `Enum` classes) that compare unequal despite being "the same" type
-        # conceptually. For this same reason, callers must always reload the
-        # whole `tamerlite` package (via `reload_tamerlite`) and never a lone
-        # submodule on its own: e.g. calling `reload_package(tamerlite.encoder)`
-        # again *after* `reload_tamerlite` rebuilds `tamerlite.encoder.Encoder`
-        # a second time without anything re-running `tamerlite.engine`'s
-        # `from tamerlite.encoder import Encoder`, leaving
-        # `tamerlite.engine.Encoder is not tamerlite.encoder.Encoder` for the
-        # rest of the process -- silently, since both classes share
-        # `__globals__` and behave identically except for object identity.
-        children = []
-        for module_child in vars(module).values():
-            if isinstance(module_child, types.ModuleType):
-                fn_child = getattr(module_child, "__file__", None)
-                if (
-                    (fn_child is not None)
-                    and fn_child.startswith(fn_dir)
-                    and fn_child not in module_visit
-                ):
-                    module_visit.add(fn_child)
-                    children.append(module_child)
-
-        for module_child in children:
-            reload_recursive_ex(module_child)
-
-        importlib.reload(module)
-
-    return reload_recursive_ex(package)
-
-
-def reload_tamerlite(disable_rustamer: bool):
-    os.environ["DISABLE_RUSTAMER"] = str(disable_rustamer)
-    reload_package(tamerlite)
+# `reload_package`/`reload_tamerlite`/`check_metrics_equality` live in
+# `testing_utils` (shared with `tests/test_novbfs.py`, which needs them
+# without pulling in this module's heavier `up_test_cases` import);
+# re-exported here under their original names so every existing call site
+# below keeps working unchanged.
+reload_package = testing_utils.reload_package
+reload_tamerlite = testing_utils.reload_tamerlite
+check_metrics_equality = testing_utils.check_metrics_equality
 
 
 class PruneCase(NamedTuple):
@@ -439,18 +399,6 @@ def generate_states(ss: SearchSpaceABC, state, num_states: int):
         states += list(ss.get_successor_states(state))
         i += 1
     return states
-
-
-def check_metrics_equality(results: List[PlanGenerationResult]):
-    for i in range(len(results) - 1):
-        res1: PlanGenerationResult = results[i]
-        res2: PlanGenerationResult = results[i + 1]
-        assert res1.metrics is not None and res2.metrics is not None
-        assert len(res1.metrics) == len(res2.metrics)
-        assert int(res1.metrics["expanded_states"]) == int(
-            res2.metrics["expanded_states"]
-        )
-        assert int(res1.metrics["goal_depth"]) == int(res2.metrics["goal_depth"])
 
 
 def _inadmissible_flags(problem, heuristic):
@@ -770,13 +718,20 @@ def _search_algo_weak_flags(problem, search_kind):
 
 
 def _search_algo_memory_bounded_flags(problem, search_kind):
-    if not testing_utils.is_temporal_problem(problem) and search_kind in {
-        "wastar",
-        "astar",
-        "gbfs",
-    }:
+    if search_kind in {"wastar", "astar", "gbfs", "novbfs_hg", "novbfs_lg"}:
         return [True, False]
     return [False]
+
+
+def _memory_bounded_case_is_redundant(problem, memory_bounded, weak_equality):
+    # On a temporal problem the Bloom dedup is only enabled under
+    # `weak_equality`; without it a memory-bounded run is just the unbounded
+    # one with a size-capped open list, so only the weak variant is worth it.
+    return (
+        memory_bounded
+        and testing_utils.is_temporal_problem(problem)
+        and not weak_equality
+    )
 
 
 def _search_algorithms_cases():
@@ -795,10 +750,19 @@ def _search_algorithms_cases():
             f"-csa{int(compression_safe_actions)}",
         )
         for problem in _solve_problems()
-        for search_kind in ["wastar", "astar", "gbfs", "dfs", "bfs", "ehc"]
+        for search_kind in [
+            "wastar",
+            "astar",
+            "gbfs",
+            "dfs",
+            "bfs",
+            "ehc",
+            "novbfs_hg",
+            "novbfs_lg",
+        ]
         for memory_bounded in _search_algo_memory_bounded_flags(problem, search_kind)
         for weak_equality in _search_algo_weak_flags(problem, search_kind)
-        if not (memory_bounded and weak_equality)
+        if not _memory_bounded_case_is_redundant(problem, memory_bounded, weak_equality)
         for symmetry_breaking in [True, False]
         for compression_safe_actions in _compression_flags(problem)
     ]
@@ -847,6 +811,44 @@ def test_search_algorithms(
                 results.append(res)
                 with PlanValidator(problem_kind=problem.kind) as v:
                     assert v.validate(problem, res.plan)
+
+    check_metrics_equality(results)
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        pytest.param(p, id=p.name)
+        for p in _solve_problems()
+        if testing_utils.is_temporal_problem(p)
+    ],
+)
+def test_memory_bounded_weak_equality_matches_unbounded(problem):
+    """On a small temporal problem the bounded open list never fills and a
+    Bloom false positive is vanishingly unlikely, so the memory-bounded
+    search's Bloom dedup must prune exactly what `WeakEqState` prunes. It
+    used to key on `assignments` alone, merging states that differ only in
+    which durative actions are in progress."""
+    reason = prune_reason(
+        problem, "wastar", "hff", weak_equality=True, symmetry_breaking=False
+    )
+    if reason is not None:
+        pytest.skip(reason)
+
+    results = []
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        for memory_bounded in [False, True]:
+            search = tamerlite.SearchParams(
+                search="wastar",
+                heuristic="hff",
+                weak_equality=True,
+                incomplete_memory_bounded_search=memory_bounded,
+            )
+            with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+                res: PlanGenerationResult = planner.solve(problem, timeout=None)
+                assert res.status == ResultStatus.SOLVED_SATISFICING
+                results.append(res)
 
     check_metrics_equality(results)
 

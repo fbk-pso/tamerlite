@@ -61,7 +61,7 @@ Defines parameters for a single search strategy.
 
 | Field                                    | Type              | Description                                                                                                                                                |
 |------------------------------------------|-------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `search`                                 | `Optional[str]`   | Search algorithm to use. Supported values: `"astar"`, `"wastar"`, `"gbfs"`, `"bfs"`, `"dfs"`, `"ehc"`. Default: `"wastar"`.                                |
+| `search`                                 | `Optional[str]`   | Search algorithm to use. Supported values: `"astar"`, `"wastar"`, `"gbfs"`, `"bfs"`, `"dfs"`, `"ehc"`, `"novbfs_hg"`, `"novbfs_lg"`. Default: `"wastar"`. `"novbfs_hg"`/`"novbfs_lg"` (partitioned numeric novelty search, cost-maximizing/cost-minimizing final tie-break) use the configured `heuristic` (default `"hff"`) both to partition novelty (`floor(h)`) and as a tie-breaker, and ignore `weight`. |
 | `heuristic`                              | `Optional[str]`   | Heuristic used by heuristic search algorithms. Supported values: `"hff"`, `"hadd"`, `"hmax"`, `"hmax_explicit"`, `"blind"`, `"custom"`. Default: `"hff"`.  |
 | `weight`                                 | `Optional[float]` | Heuristic weight used by weighted search variants like `wastar`. Must be between 0 and 1. Default: `0.8`.                                                  |
 | `internal_heuristic_cache`               | `bool`            | Enable internal caching within the heuristic. Default: `True`.                                                                                             |
@@ -72,7 +72,7 @@ Defines parameters for a single search strategy.
 | `symmetry_breaking`                      | `bool`            | Prune equivalent symmetric states during search. Default: `True`.                                                                                          |
 | `compression_safe_actions`               | `bool`            | Enable contiguous expansion of compression-safe temporal actions. Default: `True`.                                                                         |
 | `relevance_analysis`                     | `bool`            | Filter out actions that cannot contribute to the goal. Default: `True`.                                                                                    |
-| `incomplete_memory_bounded_search`       | `bool`            | Use incomplete memory-bounded variants of `"wastar"`, `"astar"`, and `"gbfs"`. Default: `False`.                                                           |
+| `incomplete_memory_bounded_search`       | `bool`            | Use incomplete memory-bounded variants of `"wastar"`, `"astar"`, `"gbfs"`, `"novbfs_hg"` and `"novbfs_lg"`. Default: `False`. |
 
 ### `MultiqueueParams`
 

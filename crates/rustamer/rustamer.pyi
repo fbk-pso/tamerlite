@@ -200,6 +200,30 @@ class Heuristic:
     def eval(self, state: State, ss: SearchSpace) -> float | None: ...
     def reachable_actions(self, state: State) -> set[Action]: ...
 
+class NumericNovelty:
+    """Partitioned numeric novelty over the subgoals of `events`/`goals`,
+    for `novbfs_search`. See `tamerlite.core.novelty.NumericNovelty` --
+    construct once per search, call `start(initial_h)` once, then
+    `begin_expansion()` once per expanded state followed by `eval()` once
+    per surviving successor, in generation order."""
+
+    def __init__(
+        self,
+        events: dict[Action, list[tuple[Timing, Event]]],
+        goals: list[ExpressionNode],
+        fluent_domains: list[FluentDomain],
+    ) -> None: ...
+    def start(self, initial_h: float) -> int: ...
+    def partition_of(self, h_value: float) -> int: ...
+    def begin_expansion(self) -> None: ...
+    def eval(
+        self,
+        state: State,
+        partition: int,
+        parent: State | None = ...,
+        parent_partition: int | None = ...,
+    ) -> int: ...
+
 # --- expression builders -------------------------------------------------
 
 class IfReturnType:
@@ -290,6 +314,15 @@ def gbfs_search(
 def gbfs_search_memory_bounded(
     ss: SearchSpace,
     heuristic: Heuristic,
+    timeout: float | None = ...,
+    early_termination: bool = ...,
+    weak_equality: bool = ...,
+) -> SearchResult: ...
+def novbfs_search(
+    ss: SearchSpace,
+    heuristic: Heuristic,
+    novelty: NumericNovelty,
+    prefer_higher_g: bool,
     timeout: float | None = ...,
     early_termination: bool = ...,
     weak_equality: bool = ...,
