@@ -183,8 +183,8 @@ fn get_fluents<'a>(expr: &'a [ExpressionNode]) -> impl Iterator<Item = Fluent> +
     })
 }
 
-/// An action being opened by `open_action`: the action, its
-/// `action_instance_id` and its events
+/// An action being opened by `open_action`, whose constraints `expand_event`
+/// adds: the action, its `action_instance_id` and its events
 type PendingOpening<'a> = (Action, u32, &'a [(Timing, Event)]);
 
 #[pyclass(name = "SearchSpace")]
@@ -444,7 +444,7 @@ impl SearchSpace {
                         return Ok(None);
                     }
 
-                    let mut new_state = state.clone_for_child();
+                    let mut new_state = state.clone_for_child_without_tn();
                     new_state.g += 1.0;
 
                     if index + 1 >= events.len() {
@@ -452,7 +452,7 @@ impl SearchSpace {
                     } else {
                         new_state.todo.insert(action, (index + 1, id + 1));
                     }
-                    if self.expand_event(state, &mut new_state, e, index, id)? {
+                    if self.expand_event(state, &mut new_state, e, index, id, None)? {
                         return Ok(Some(new_state));
                     }
                 }
@@ -472,7 +472,7 @@ impl SearchSpace {
                     return Ok(None);
                 }
 
-                let mut new_state = state.clone_for_child();
+                let mut new_state = state.clone_for_child_without_tn();
                 new_state.g += 1.0;
                 if !self.open_action(state, &mut new_state, action, events)? {
                     return Ok(None);
@@ -494,9 +494,16 @@ impl SearchSpace {
                         )? {
                             return Ok(None);
                         }
-                        let state = new_state.clone_for_child();
+                        let state = new_state.clone_for_child_without_tn();
                         new_state.g += 1.0;
-                        if !self.expand_event(&state, &mut new_state, &event.1, &index, &id)? {
+                        if !self.expand_event(
+                            &state,
+                            &mut new_state,
+                            &event.1,
+                            &index,
+                            &id,
+                            None,
+                        )? {
                             return Ok(None);
                         }
                     }
@@ -545,6 +552,7 @@ impl SearchSpace {
         e: &Event,
         index: &usize,
         id: &u32,
+        pending_opening: Option<PendingOpening>,
     ) -> PyResult<bool> {
         new_state.path = PersistentList::append((e.action, e.pos, *id), &new_state.path);
 
@@ -591,8 +599,17 @@ impl SearchSpace {
         }
 
         if self.is_temporal {
-            // Add temporal constraints between past or todo events and the current one
+            // Only now, with the non-temporal checks passed, copy the parent's
+            // network (a compression-safe chain already owns one after its
+            // first event)
+            if new_state.temporal_network.is_none() {
+                new_state.temporal_network = state.temporal_network.clone();
+            }
             let tn = new_state.temporal_network.as_mut().unwrap();
+            if let Some(pending_opening) = pending_opening {
+                self.add_opening_constraints(state, tn, pending_opening)?;
+            }
+            // Add temporal constraints between past or todo events and the current one
             let ev = self.tn_interpreter.get_event_id(e.action, e.pos, *id);
 
             // Only two of the edges from past events are needed. The edge from
@@ -667,11 +684,14 @@ impl SearchSpace {
         action: Action,
         events: &[(Timing, Event)],
     ) -> PyResult<bool> {
+        // Allocate the instance ids exactly as if the constraints were added
+        // here, but defer the constraints themselves to `expand_event`, after
+        // the checks that reject most successors
         let mut counter = self.counter.lock().unwrap();
         let mut id = *counter;
+        let mut pending_opening = None;
         if self.is_temporal {
-            let tn = new_state.temporal_network.as_mut().unwrap();
-            self.add_opening_constraints(state, tn, (action, *counter, events))?;
+            pending_opening = Some((action, *counter, events));
             *counter += 1;
             id = *counter;
             *counter += events.len() as u32;
@@ -679,7 +699,8 @@ impl SearchSpace {
                 new_state.todo.insert(action, (1, id + 1));
             }
         }
-        self.expand_event(state, new_state, &events[0].1, &0, &id)
+        drop(counter);
+        self.expand_event(state, new_state, &events[0].1, &0, &id, pending_opening)
     }
 
     /// Adds the constraints of an action opened by `open_action`: the duration
