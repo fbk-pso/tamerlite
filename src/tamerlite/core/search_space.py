@@ -975,19 +975,28 @@ class SearchSpace(SearchSpaceABC):
                 self._add_opening_constraints(state, new_state, *pending_opening)
             # update TN
             e_id = (e.action, index)
-            if len(state.path) > 0:
-                for e2_action, e2_pos, id2 in state.path:
-                    e2_id = (e2_action, e2_pos)
-                    if (e_id, e2_id) in self._mutex:
-                        new_state.temporal_network.add(
-                            (e2_action, e2_pos, id2),
-                            (e.action, e.pos, id),
-                            -self._epsilon,
-                        )
-                    else:
-                        new_state.temporal_network.add(
-                            (e2_action, e2_pos, id2), (e.action, e.pos, id), 0
-                        )
+            # Only two of the edges from past events are needed. The edge from
+            # the immediate predecessor is always added, so the path is a
+            # chain in which each event is no later than the next: a 0-edge
+            # from any older event is already implied. Likewise, once the most
+            # recent mutex predecessor e_m gets its -epsilon edge, every older
+            # event e_j satisfies t(e_j) <= t(e_m) <= t(e) - epsilon, so the
+            # scan stops there.
+            is_predecessor = True
+            for e2_action, e2_pos, id2 in reversed(state.path):
+                e2_id = (e2_action, e2_pos)
+                if (e_id, e2_id) in self._mutex:
+                    new_state.temporal_network.add(
+                        (e2_action, e2_pos, id2),
+                        (e.action, e.pos, id),
+                        -self._epsilon,
+                    )
+                    break
+                if is_predecessor:
+                    new_state.temporal_network.add(
+                        (e2_action, e2_pos, id2), (e.action, e.pos, id), 0
+                    )
+                    is_predecessor = False
             for a, i in new_state.todo.items():
                 id2 = i[1]
                 for j in range(len(self._events[a][i[0] :])):

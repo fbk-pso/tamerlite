@@ -544,15 +544,26 @@ impl SearchSpace {
             }
             // Add temporal constraints between past or todo events and the current one
             let ev = self.tn_interpreter.get_event_id(e.action, e.pos, *id);
+
+            // Only two of the edges from past events are needed. The edge from
+            // the immediate predecessor is always added, so the path is a
+            // chain in which each event is no later than the next: a 0-edge
+            // from any older event is already implied. Likewise, once the
+            // most recent mutex predecessor e_m gets its -epsilon edge, every
+            // older event e_j satisfies t(e_j) <= t(e_m) <= t(e) - epsilon, so
+            // the scan stops there.
+            let e_id = (e.action, *index);
+            let mut is_predecessor = true;
             for e2 in PersistentList::iter_rev(&state.path) {
                 let ev2 = self.tn_interpreter.get_event_id(e2.0, e2.1, e2.2);
-                let e_id = (e.action, *index);
                 let e2_id = (e2.0, e2.1);
                 if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
-                    let b: f64 = -self.epsilon;
-                    tn.add(&ev2, &ev, &b);
-                } else {
+                    tn.add(&ev2, &ev, &-self.epsilon);
+                    break;
+                }
+                if is_predecessor {
                     tn.add(&ev2, &ev, &0.0);
+                    is_predecessor = false;
                 }
             }
             for (a, i) in new_state.todo.iter() {
