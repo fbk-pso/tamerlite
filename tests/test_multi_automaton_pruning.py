@@ -4,7 +4,12 @@ from pathlib import Path
 from aalpy.automata.Dfa import Dfa, DfaState
 from tamerlite.core.search import WeakEqState
 from tamerlite.core.search_space import Action, Event, MultiSet, SearchSpace, State, Timing
-from tamerlite.pruning_automata import DfaPruningModel, MultiAutomatonPruningModel
+from tamerlite.pruning_automata import (
+    DfaPruningModel,
+    MultiAutomatonPruningModel,
+    MultiAutomatonSpec,
+)
+from classifier import local_state_signature_features, train_classifier
 
 
 def _build_dfa(bad_token: str) -> Dfa:
@@ -711,6 +716,82 @@ def test_multi_automaton_initializes_lazy_monitor_with_init_and_goal_prefixes():
     next_progress = pruning_model.advance(progress, load)
     assert pruning_model.is_prunable(next_progress)
     assert next_progress.object_states == (("kit", "k1", "bad"),)
+
+
+def test_multi_automaton_selects_class_dfa():
+    load = Action(0)
+    objects_by_type = {"kit": ["k1"]}
+    placeholders = {"kit": "k"}
+    object_types = {"k1": "kit"}
+    state_a = {
+        "initial_values": {_FakeAtom("ready", ["k1"]): _FakeValue(True, "bool")},
+        "goals": [_FakeGoal("completed", ["k1"])],
+    }
+    state_b = {
+        "initial_values": {_FakeAtom("ready", ["k1"]): _FakeValue(True, "bool")},
+        "goals": [_FakeGoal("stored", ["k1"])],
+    }
+
+    def features(state):
+        return local_state_signature_features(
+            state["initial_values"],
+            state["goals"],
+            profile_types=("kit",),
+            focus_tuple=("k1",),
+            slot_placeholders=("k",),
+            placeholders_by_type=placeholders,
+            object_type_by_name=object_types,
+            abstract_other_objects=True,
+        )
+
+    classifier = train_classifier(
+        {0: features(state_a), 1: features(state_b)},
+        profile_types=("kit",),
+        slot_placeholders=("k",),
+        max_classes=2,
+        min_instances_per_class=1,
+        feature_semantics="set-of-local-abstract-init-goal-tokens",
+        routing_scope="focus-tuple",
+    )
+    class_a = next(
+        class_id for class_id, entry in classifier["classes"].items()
+        if 0 in entry["problem_ids"]
+    )
+    class_b = next(
+        class_id for class_id, entry in classifier["classes"].items()
+        if 1 in entry["problem_ids"]
+    )
+    bad_spec = MultiAutomatonSpec(
+        "kit", ("kit",), "k", ("k",), _build_dfa("load(*k*)")
+    )
+    safe_spec = MultiAutomatonSpec(
+        "kit", ("kit",), "k", ("k",), _build_dfa("unrelated(*k*)")
+    )
+    pruning_model = MultiAutomatonPruningModel(
+        action_parameter_types={"load": ["kit"]},
+        placeholders_by_type=placeholders,
+        automata={"kit": bad_spec},
+        classified_automata={"kit": {class_a: bad_spec, class_b: safe_spec}},
+        classifiers={"kit": classifier},
+        drop_wildcards=True,
+        abstract_other_objects=True,
+    )
+
+    pruning_model.bind_to_planner(
+        action_by_name={"load_k1": load},
+        objects_by_type=objects_by_type,
+        **state_a,
+    )
+    assert pruning_model.selected_classifier_classes == {"kit": {class_a: 1}}
+    assert pruning_model.is_prunable(pruning_model.advance(pruning_model.initial_state, load))
+
+    pruning_model.bind_to_planner(
+        action_by_name={"load_k1": load},
+        objects_by_type=objects_by_type,
+        **state_b,
+    )
+    assert pruning_model.selected_classifier_classes == {"kit": {class_b: 1}}
+    assert not pruning_model.is_prunable(pruning_model.advance(pruning_model.initial_state, load))
 
 
 def test_multi_automaton_disables_monitor_when_prefix_transition_is_missing():

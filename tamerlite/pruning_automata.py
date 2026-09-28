@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+from collections import Counter
+import itertools
 import json
 import os
 from dataclasses import dataclass
@@ -19,6 +21,12 @@ try:
         split_ground_action,
     )
     from goal_trace_utils import add_state_trace_markers, goal_tokens_for_profile, init_tokens_for_profile
+    from classifier import (
+        state_signature_features,
+        local_goal_signature_features,
+        local_state_signature_features,
+        predict_classifier_class,
+    )
 except ModuleNotFoundError:
     REPO_ROOT = Path(__file__).resolve().parents[2]
     for candidate in (
@@ -34,6 +42,12 @@ except ModuleNotFoundError:
         split_ground_action,
     )
     from goal_trace_utils import add_state_trace_markers, goal_tokens_for_profile, init_tokens_for_profile
+    from classifier import (
+        state_signature_features,
+        local_goal_signature_features,
+        local_state_signature_features,
+        predict_classifier_class,
+    )
 
 
 @dataclass(frozen=True)
@@ -275,6 +289,8 @@ class MultiAutomatonPruningModel:
         compact_init_prefixes: bool = False,
         drop_negative_init_predicates: bool = False,
         const_actions_enabled: bool = False,
+        classifiers: Mapping[str, Mapping[str, object]] | None = None,
+        classified_automata: Mapping[str, Mapping[str, MultiAutomatonSpec]] | None = None,
         disable_monitor_on_demand: bool = False,
     ):
         self._action_parameter_types = {
@@ -286,6 +302,19 @@ class MultiAutomatonPruningModel:
             focus_label: self._coerce_spec(focus_label, spec)
             for focus_label, spec in automata.items()
         }
+        self._classifiers = {
+            str(focus_label): dict(classifier)
+            for focus_label, classifier in (classifiers or {}).items()
+        }
+        self._classified_automata = {
+            str(focus_label): {
+                str(class_id): self._coerce_spec(str(focus_label), spec)
+                for class_id, spec in automata_by_class.items()
+            }
+            for focus_label, automata_by_class in (classified_automata or {}).items()
+        }
+        self._selected_classifier_classes: Dict[str, object] = {}
+        self._classifier_class_by_focus: Dict[tuple[str, ...], str] = {}
         self._drop_wildcards = drop_wildcards
         self._abstract_other_objects = abstract_other_objects
         self._include_goal_prefixes = include_goal_prefixes
@@ -299,6 +328,13 @@ class MultiAutomatonPruningModel:
         self._state_by_type_and_id = {
             focus_label: {str(state.state_id): state for state in spec.dfa.states}
             for focus_label, spec in self._automata.items()
+        }
+        self._state_by_classifier_and_id = {
+            (focus_label, class_id): {
+                str(state.state_id): state for state in spec.dfa.states
+            }
+            for focus_label, automata_by_class in self._classified_automata.items()
+            for class_id, spec in automata_by_class.items()
         }
         self._objects_by_type: Dict[str, tuple[str, ...]] = {}
         self._object_type_by_name: Dict[str, str] = {}
@@ -356,7 +392,47 @@ class MultiAutomatonPruningModel:
         const_actions_enabled = bool(payload.get("const_actions_enabled", signature.get("const_actions_enabled", False)))
 
         automata = {}
+        classifiers = {}
+        classified_automata = {}
+
+        def resolve_artifact_path(raw_path: str | Path, fallback: Path | None = None) -> Path:
+            path = Path(raw_path)
+            if path.is_absolute():
+                return path
+            candidates = [summary_file.parent / path]
+            candidates.extend(parent / path for parent in summary_file.parents)
+            if fallback is not None:
+                candidates.append(fallback)
+            return next((candidate for candidate in candidates if candidate.exists()), candidates[0])
+
         for focus_label, entry in (payload.get("automata") or {}).items():
+            if entry.get("classes"):
+                classifier_path = resolve_artifact_path(
+                    entry["classifier_json"],
+                    summary_file.parent / focus_label / "classifier.json",
+                )
+                classifiers[focus_label] = json.loads(
+                    classifier_path.read_text(encoding="utf-8")
+                )
+                class_specs = {}
+                for class_id, class_entry in sorted(entry["classes"].items()):
+                    dot_path = resolve_artifact_path(
+                        class_entry["dot_path"],
+                        summary_file.parent / focus_label / "classes" / class_id / "automaton.dot",
+                    )
+                    dfa = load_automaton_from_file(str(dot_path), automaton_type="dfa")
+                    focus_profile = entry.get("profile_types") or [focus_label]
+                    slot_placeholders = entry.get("slot_placeholders") or [entry["placeholder"]]
+                    class_specs[class_id] = MultiAutomatonSpec(
+                        focus_label=focus_label,
+                        profile_types=tuple(str(current) for current in focus_profile),
+                        placeholder=str(entry["placeholder"]),
+                        slot_placeholders=tuple(str(current) for current in slot_placeholders),
+                        dfa=dfa,
+                    )
+                classified_automata[focus_label] = class_specs
+                automata[focus_label] = class_specs[sorted(class_specs)[0]]
+                continue
             raw_dot_path = Path(entry["dot_path"])
             if raw_dot_path.is_absolute():
                 dot_path = raw_dot_path
@@ -419,6 +495,8 @@ class MultiAutomatonPruningModel:
             compact_init_prefixes=compact_init_prefixes,
             drop_negative_init_predicates=drop_negative_init_predicates,
             const_actions_enabled=const_actions_enabled,
+            classifiers=classifiers,
+            classified_automata=classified_automata,
             disable_monitor_on_demand=disable_monitor_on_demand,
         )
 
@@ -432,6 +510,18 @@ class MultiAutomatonPruningModel:
         root = Path(automata_root)
         if not root.is_dir():
             raise FileNotFoundError(f"Multi automata root does not exist: {root}")
+        summary_path = root / "summary.json"
+        if summary_path.exists():
+            summary_payload = json.loads(summary_path.read_text(encoding="utf-8"))
+            if (
+                summary_payload.get("classifier_mode")
+                or summary_payload.get("context_dt")
+                or summary_payload.get("goal_dt")
+            ):
+                return cls.from_summary_file(
+                    summary_path,
+                    disable_monitor_on_demand=disable_monitor_on_demand,
+                )
 
         metadata_entries: list[tuple[str, Path, dict[str, object]]] = []
         for metadata_path in sorted(root.rglob("automaton.metadata.json")):
@@ -528,6 +618,8 @@ class MultiAutomatonPruningModel:
         self._problem_initial_values = dict(initial_values or {})
         self._problem_goals = tuple(goals or ())
         self._prefixed_initial_states = {}
+        self._classifier_class_by_focus = {}
+        self._selected_classifier_classes = {}
         numeric_values_by_type: Dict[str, set[int]] = {}
 
         for action_name, action in self._action_by_name.items():
@@ -554,12 +646,113 @@ class MultiAutomatonPruningModel:
             max_value = max(values)
             self._objects_by_type[numeric_type] = tuple(str(value) for value in range(min_value, max_value + 1))
 
-        for spec in self._automata.values():
+        if self._classifiers:
+            selected_automata = dict(self._automata)
+            selected_classes = {}
+            for focus_label, classifier in self._classifiers.items():
+                automata_by_class = self._classified_automata.get(focus_label, {})
+                if not automata_by_class:
+                    continue
+                profile_types = tuple(str(current) for current in classifier["profile_types"])
+                slot_placeholders = tuple(str(current) for current in classifier["slot_placeholders"])
+                if classifier.get("routing_scope") == "focus-tuple":
+                    domains = [
+                        self._objects_by_type.get(canonical_parameter_type(current), ())
+                        for current in profile_types
+                    ]
+                    class_counts: Counter[str] = Counter()
+                    for focus_tuple in itertools.product(*domains):
+                        if len(set(focus_tuple)) != len(focus_tuple):
+                            continue
+                        if classifier.get("include_initial_state"):
+                            features = local_state_signature_features(
+                                self._problem_initial_values,
+                                self._problem_goals,
+                                profile_types=profile_types,
+                                focus_tuple=tuple(focus_tuple),
+                                slot_placeholders=slot_placeholders,
+                                placeholders_by_type=self._placeholders_by_type,
+                                object_type_by_name=self._object_type_by_name,
+                                abstract_other_objects=self._abstract_other_objects,
+                            )
+                        else:
+                            features = local_goal_signature_features(
+                                self._problem_goals,
+                                profile_types=profile_types,
+                                focus_tuple=tuple(focus_tuple),
+                                slot_placeholders=slot_placeholders,
+                                placeholders_by_type=self._placeholders_by_type,
+                                object_type_by_name=self._object_type_by_name,
+                                abstract_other_objects=self._abstract_other_objects,
+                            )
+                        class_id = predict_classifier_class(classifier, features)
+                        if class_id not in automata_by_class:
+                            raise ValueError(
+                                f"Classifier for '{focus_label}' selected missing "
+                                f"class '{class_id}'."
+                            )
+                        self._classifier_class_by_focus[(focus_label, *focus_tuple)] = class_id
+                        class_counts[class_id] += 1
+                    selected_classes[focus_label] = dict(sorted(class_counts.items()))
+                    continue
+                features = state_signature_features(
+                    self._problem_initial_values,
+                    self._problem_goals,
+                    profile_types=profile_types,
+                    slot_placeholders=slot_placeholders,
+                    placeholders_by_type=self._placeholders_by_type,
+                    object_type_by_name=self._object_type_by_name,
+                    abstract_other_objects=self._abstract_other_objects,
+                    objects_by_type=self._objects_by_type,
+                )
+                class_id = predict_classifier_class(classifier, features)
+                if class_id not in automata_by_class:
+                    raise ValueError(
+                        f"Classifier for '{focus_label}' selected missing class '{class_id}'."
+                    )
+                selected_automata[focus_label] = automata_by_class[class_id]
+                selected_classes[focus_label] = class_id
+            self._automata = selected_automata
+            self._selected_classifier_classes = selected_classes
+            self._state_by_type_and_id = {
+                focus_label: {str(state.state_id): state for state in spec.dfa.states}
+                for focus_label, spec in self._automata.items()
+            }
+
+        specs_to_normalize = list(self._automata.values()) + [
+            spec
+            for automata_by_class in self._classified_automata.values()
+            for spec in automata_by_class.values()
+        ]
+        seen_dfas = set()
+        for spec in specs_to_normalize:
+            if id(spec.dfa) in seen_dfas:
+                continue
+            seen_dfas.add(id(spec.dfa))
             for state in spec.dfa.states:
                 new_transitions = {}
                 for token, destination_state in state.transitions.items():
                     new_transitions[_normalize_transition_token(token)] = destination_state
                 state.transitions = new_transitions
+
+    @property
+    def selected_classifier_classes(self) -> Mapping[str, object]:
+        return dict(self._selected_classifier_classes)
+
+    def _spec_for_focus_tuple(
+        self, focus_label: str, focus_tuple: tuple[str, ...]
+    ) -> tuple[MultiAutomatonSpec, str | None]:
+        class_id = self._classifier_class_by_focus.get((focus_label, *focus_tuple))
+        if class_id is None:
+            return self._automata[focus_label], None
+        return self._classified_automata[focus_label][class_id], class_id
+
+    def _state_for(
+        self, focus_label: str, class_id: str | None, state_id: str
+    ) -> object:
+        if class_id is None:
+            return self._state_by_type_and_id[focus_label][state_id]
+        return self._state_by_classifier_and_id[(focus_label, class_id)][state_id]
 
     @property
     def initial_state(self) -> MultiAutomatonProgress:
@@ -613,26 +806,27 @@ class MultiAutomatonPruningModel:
                 continue
             for focus_tuple in candidate_focus_tuples:
                 entry_key = (focus_label, *focus_tuple)
+                tuple_spec, class_id = self._spec_for_focus_tuple(focus_label, focus_tuple)
                 state_id = updated_states.get(entry_key)
                 if state_id == self._DISABLED_MONITOR_STATE_ID:
                     continue
                 if state_id is None:
                     state_id = self._prefixed_initial_state_id(
                         focus_label,
-                        spec,
+                        tuple_spec,
                         focus_tuple,
                         global_trace_tokens.get(focus_label, ()),
                     )
                     if state_id is None:
                         continue
-                token = self._render_token(action_name, typed_parameters, spec, focus_tuple)
+                token = self._render_token(action_name, typed_parameters, tuple_spec, focus_tuple)
                 if token is None:
                     continue
 
-                current_state = self._state_by_type_and_id[focus_label][state_id]
+                current_state = self._state_for(focus_label, class_id, state_id)
                 next_state = current_state.transitions.get(token)
                 if next_state is None:
-                    legacy_token = self._legacy_same_type_token(token, spec)
+                    legacy_token = self._legacy_same_type_token(token, tuple_spec)
                     if legacy_token is not None:
                         next_state = current_state.transitions.get(legacy_token)
                 if next_state is None:
@@ -666,7 +860,9 @@ class MultiAutomatonPruningModel:
                 state_id = progress_entry[-1]
                 if state_id == self._DISABLED_MONITOR_STATE_ID:
                     continue
-                if self._state_by_type_and_id[focus_label][state_id].is_accepting:
+                focus_tuple = tuple(progress_entry[1:-1])
+                _, class_id = self._spec_for_focus_tuple(focus_label, focus_tuple)
+                if self._state_for(focus_label, class_id, state_id).is_accepting:
                     accepting_focus_types.add(focus_label)
                     break
         return tuple(sorted(accepting_focus_types))
