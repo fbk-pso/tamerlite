@@ -44,6 +44,9 @@ instance bot bot2;
 def test_split_trace_accepts_pipe_and_tuple_formats():
     assert split_trace("a|b|c") == ("a", "b", "c")
     assert split_trace("(a, b, c)") == ("a", "b", "c")
+    assert split_trace("") == ()
+    assert split_trace(None) == ()
+    assert split_trace(float("nan")) == ()
     assert split_trace("(move(x,y), to-tray_item3_right2_bot2)") == (
         "move(x,y)",
         "to-tray_item3_right2_bot2",
