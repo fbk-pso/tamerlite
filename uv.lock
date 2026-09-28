@@ -1189,8 +1189,8 @@ wheels = [
 
 [[package]]
 name = "unified-planning"
-version = "1.3.1.dev719+gc638f59da"
-source = { git = "https://github.com/aiplan4eu/unified-planning.git#c638f59da6db1359568d3d951ea4dfb952cda8be" }
+version = "1.3.1.dev727+gee5372efc"
+source = { git = "https://github.com/aiplan4eu/unified-planning.git#ee5372efcba3209cf0c0c9bb682818002bf06909" }
 dependencies = [
     { name = "configspace" },
     { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
