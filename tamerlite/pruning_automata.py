@@ -602,6 +602,7 @@ class MultiAutomatonPruningModel:
         goals: Sequence[object] | None = None,
     ) -> None:
         self._action_by_name = dict(action_by_name)
+        self._planner_action_details = {}
         objects_by_type_normalized = {
             canonical_parameter_type(str(object_type)): tuple(sorted(object_names))
             for object_type, object_names in objects_by_type.items()
