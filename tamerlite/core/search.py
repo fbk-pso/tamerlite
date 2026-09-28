@@ -165,9 +165,29 @@ def wastar_search(
     early_termination: bool = False,
     weak_equality: bool = False,
     max_len: Optional[float] = None,
+    max_expanded_states: Optional[int] = None,
+    soft_fallback_interval: int = 0,
+    monitor_vote_penalty: int = 0,
 ):
+    if soft_fallback_interval < 0:
+        raise ValueError("soft_fallback_interval must be nonnegative")
+    if soft_fallback_interval and early_termination:
+        raise ValueError("soft fallback requires goal checks when states leave the queue")
+    if monitor_vote_penalty < 0 or (monitor_vote_penalty and soft_fallback_interval):
+        raise ValueError("vote penalty must be nonnegative and cannot be combined with soft fallback")
     st = time.time()
     open: List[PrioritizedItem] = []
+    fallback_open: List[PrioritizedItem] = []
+    primary_pops_since_fallback = 0
+    fallback_pops = 0
+    deferred_states = 0
+    penalized_states = 0
+    def soft_metrics():
+        return {
+            "soft_deferred_states": str(deferred_states),
+            "soft_fallback_pops": str(fallback_pops),
+            "monitor_penalized_states": str(penalized_states),
+        } if (soft_fallback_interval or monitor_vote_penalty) else {}
     init = ss.initial_state()
     if getattr(ss, "_trace_search", False):
         ss._trace_heuristic = heuristic
@@ -200,12 +220,29 @@ def wastar_search(
     plans = []
     if max_len is not None:            
         assert timeout is not None
-    while open:
+    while open or fallback_open:
         if max_len is not None and time.time() - st > timeout:
-            raise TimeoutError({"expanded_states": str(expanded_states), "plans": plans})
+            raise TimeoutError({"expanded_states": str(expanded_states), "plans": plans, **soft_metrics()})
         if timeout is not None and time.time() - st > timeout:
-            raise TimeoutError({"expanded_states": str(expanded_states)})
-        item = heapq.heappop(open)
+            raise TimeoutError({"expanded_states": str(expanded_states), **soft_metrics()})
+        if max_expanded_states is not None and expanded_states >= max_expanded_states:
+            raise TimeoutError(
+                {
+                    "expanded_states": str(expanded_states),
+                    "expansion_limit_reached": "true",
+                    **soft_metrics(),
+                }
+            )
+        use_fallback = bool(fallback_open) and (
+            not open or primary_pops_since_fallback >= soft_fallback_interval
+        )
+        if use_fallback:
+            item = heapq.heappop(fallback_open)
+            fallback_pops += 1
+            primary_pops_since_fallback = 0
+        else:
+            item = heapq.heappop(open)
+            primary_pops_since_fallback += 1
         state = item.state
         expanded_states += 1
         if callable(trace_state):
@@ -224,7 +261,8 @@ def wastar_search(
                 return ss.build_plan(state), {
                     "expanded_states": str(expanded_states),
                     "goal_depth": str(state.g),
-                    "len_plan": len([a for a, _, _ in state.path])
+                    "len_plan": len([a for a, _, _ in state.path]),
+                    **soft_metrics(),
                 }
 
         candidate_states = []
@@ -263,7 +301,10 @@ def wastar_search(
                     heuristic_is_dead_end=h is None,
                 )
             if h is not None:
-                f = (1 - weight) * succ_state.g + weight * h
+                votes = int(getattr(succ_state, "_monitor_vote_count", 0))
+                f = (1 - weight) * succ_state.g + weight * h + monitor_vote_penalty * votes
+                if votes:
+                    penalized_states += 1
                 if callable(trace_state):
                     trace_state(
                         succ_state,
@@ -271,11 +312,14 @@ def wastar_search(
                         f_value=f,
                     )
                 added_states += 1
+                deferred = soft_fallback_interval > 0 and getattr(succ_state, "_soft_deferred", False)
+                if deferred:
+                    deferred_states += 1
                 heapq.heappush(
-                    open,
+                    fallback_open if deferred else open,
                     PrioritizedItem(f, succ_state, candidate_indices[id(succ_state)]),
                 )
-    res = {"expanded_states": str(expanded_states)} if max_len is None else {"expanded_states": str(expanded_states), "plans": plans}
+    res = {"expanded_states": str(expanded_states), **soft_metrics()} if max_len is None else {"expanded_states": str(expanded_states), "plans": plans, **soft_metrics()}
     return None , res
 
 

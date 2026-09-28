@@ -88,6 +88,9 @@ class SearchParams(HeuristicParams):
     dfa: object = None
     max_len : Optional[float] = None
     incomplete_memory_bounded_search: bool = False
+    max_expanded_states: Optional[int] = None
+    soft_fallback_interval: int = 0
+    monitor_vote_penalty: int = 0
 
 
 @dataclass(frozen=True)
@@ -341,6 +344,22 @@ class TamerLite(
                     }
                     if supports_max_len:
                         kwargs["max_len"] = self._params.max_len
+                    if self._params.max_expanded_states is not None:
+                        if search_name != "wastar" or self._params.incomplete_memory_bounded_search:
+                            raise ValueError(
+                                "max_expanded_states currently requires non-memory-bounded wastar."
+                            )
+                        kwargs["max_expanded_states"] = self._params.max_expanded_states
+                    if self._params.soft_fallback_interval:
+                        if search_name != "wastar" or self._params.dfa is None:
+                            raise ValueError("soft fallback requires weighted A* and a DFA")
+                        encoder.search_space._soft_fallback_interval = self._params.soft_fallback_interval
+                        kwargs["soft_fallback_interval"] = self._params.soft_fallback_interval
+                    if self._params.monitor_vote_penalty:
+                        if search_name != "wastar" or self._params.dfa is None:
+                            raise ValueError("monitor vote penalty requires weighted A* and a DFA")
+                        encoder.search_space._monitor_vote_penalty = self._params.monitor_vote_penalty
+                        kwargs["monitor_vote_penalty"] = self._params.monitor_vote_penalty
                     plan, metrics = search(encoder.search_space, **kwargs)  # type: ignore
             if "plans" in metrics:
                 traces = []

@@ -532,6 +532,8 @@ class SearchSpace(SearchSpaceABC):
         self._is_temporal = any(v is not None for v in actions_duration)
         self._counter = 0
         self._dfa = dfa
+        self._soft_fallback_interval = 0
+        self._monitor_vote_penalty = 0
         self._pruned_subtrees = 0
         self._pruned_subtrees_by_label: Dict[str, int] = {}
         self._debug_prunes_limit = max(0, int(os.environ.get("TAMERLITE_DEBUG_PRUNES", "0") or "0"))
@@ -695,6 +697,18 @@ class SearchSpace(SearchSpaceABC):
                 continue
 
             if self._dfa is not None and self._dfa.is_prunable(new_state.pruning_state):
+                vote_count_fn = getattr(self._dfa, "pruning_vote_count", None)
+                vote_count = int(vote_count_fn(new_state.pruning_state)) if callable(vote_count_fn) else 1
+                if self._monitor_vote_penalty > 0:
+                    new_state._monitor_vote_count = vote_count
+                    self.trace_state(new_state, parent=state, action=action, status="penalized")
+                    yield new_state
+                    continue
+                if self._soft_fallback_interval > 0:
+                    new_state._soft_deferred = True
+                    self.trace_state(new_state, parent=state, action=action, status="deferred")
+                    yield new_state
+                    continue
                 self._pruned_subtrees += 1
                 labels: Tuple[str, ...] = ()
                 labels_fn = getattr(self._dfa, "pruning_labels", None)

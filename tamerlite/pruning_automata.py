@@ -848,6 +848,31 @@ class MultiAutomatonPruningModel:
     def is_prunable(self, progress: MultiAutomatonProgress | None) -> bool:
         return bool(self.pruning_labels(progress))
 
+    def pruning_vote_count(self, progress: MultiAutomatonProgress | None) -> int:
+        """Count accepting grounded monitors once per first focus object.
+
+        Groundings that share their first profile object are correlated (for
+        example, the many location-pair monitors for one Ferry car), so they
+        contribute a single vote. Unary profiles naturally count one vote per
+        grounded object.
+        """
+        if progress is None:
+            return 0
+        accepting_groups = set()
+        for focus_label, _ in self._automata.items():
+            for progress_entry in progress.object_states:
+                if not progress_entry or progress_entry[0] != focus_label:
+                    continue
+                state_id = progress_entry[-1]
+                if state_id == self._DISABLED_MONITOR_STATE_ID:
+                    continue
+                focus_tuple = tuple(progress_entry[1:-1])
+                _, class_id = self._spec_for_focus_tuple(focus_label, focus_tuple)
+                if self._state_for(focus_label, class_id, state_id).is_accepting:
+                    first_object = focus_tuple[0] if focus_tuple else focus_label
+                    accepting_groups.add((focus_label, first_object))
+        return len(accepting_groups)
+
     def pruning_labels(self, progress: MultiAutomatonProgress | None) -> tuple[str, ...]:
         if progress is None:
             return ()
