@@ -160,6 +160,10 @@ fn get_fluents<'a>(expr: &'a [ExpressionNode]) -> impl Iterator<Item = Fluent> +
     })
 }
 
+/// An action being opened by `open_action`, whose constraints `expand_event`
+/// adds: the action, its `action_instance_id` and its events
+type PendingOpening<'a> = (Action, u32, &'a [(Timing, Event)]);
+
 #[pyclass(name = "SearchSpace")]
 #[derive(Debug)]
 pub struct SearchSpace {
@@ -168,6 +172,7 @@ pub struct SearchSpace {
     relevant_actions: Vec<Action>,
     compression_safe_actions: Option<Vec<bool>>,
     event_fluents: EventFluents,
+    effect_independent_start_conditions: Vec<Vec<Box<[usize]>>>,
     mutex: MutexChecker,
     precedence: PrecedenceChecker,
     action_objects: Option<Vec<Vec<Object>>>,
@@ -236,6 +241,7 @@ impl SearchSpace {
             .collect();
 
         let mut event_fluents = vec![Vec::new(); actions.len()];
+        let mut effect_independent_start_conditions = vec![Vec::new(); actions.len()];
         for (a, le) in &events {
             let duration = &converted_actions_duration[a.idx];
             for (i, (_, e)) in le.iter().enumerate() {
@@ -254,6 +260,14 @@ impl SearchSpace {
                     }
                 }
                 let writes: FxHashSet<Fluent> = e.effects.iter().map(|eff| eff.fluent).collect();
+                effect_independent_start_conditions[a.idx].push(
+                    e.start_conditions
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, c)| get_fluents(c).all(|f| !writes.contains(&f)))
+                        .map(|(k, _)| k)
+                        .collect(),
+                );
                 let read_writes: FxHashSet<Fluent> = reads.union(&writes).copied().collect();
                 let start_cond_reads: FxHashSet<Fluent> = e
                     .start_conditions
@@ -283,6 +297,7 @@ impl SearchSpace {
             relevant_actions,
             compression_safe_actions,
             event_fluents,
+            effect_independent_start_conditions,
             mutex: MutexChecker::new(),
             precedence: PrecedenceChecker::new(),
             action_objects,
@@ -399,11 +414,14 @@ impl SearchSpace {
             if let Some((index, id)) = state.todo.get(&action) {
                 if let Some((_, e)) = events.get(*index) {
                     // Check if the event is applicable before creating the new state
-                    if !self.is_sat(&e.conditions, state)? {
+                    if !self.is_sat(&e.conditions, state)?
+                        || !self
+                            .effect_independent_start_conditions_hold(action, *index, e, state)?
+                    {
                         return Ok(None);
                     }
 
-                    let mut new_state = state.clone_for_child();
+                    let mut new_state = state.clone_for_child_without_tn();
                     new_state.g += 1.0;
 
                     if index + 1 >= events.len() {
@@ -411,17 +429,24 @@ impl SearchSpace {
                     } else {
                         new_state.todo.insert(action, (index + 1, id + 1));
                     }
-                    if self.expand_event(state, &mut new_state, e, index, id)? {
+                    if self.expand_event(state, &mut new_state, e, index, id, None)? {
                         return Ok(Some(new_state));
                     }
                 }
             } else {
                 // Check if action is applicable before creating the new state
-                if !self.is_sat(&events[0].1.conditions, state)? {
+                if !self.is_sat(&events[0].1.conditions, state)?
+                    || !self.effect_independent_start_conditions_hold(
+                        action,
+                        0,
+                        &events[0].1,
+                        state,
+                    )?
+                {
                     return Ok(None);
                 }
 
-                let mut new_state = state.clone_for_child();
+                let mut new_state = state.clone_for_child_without_tn();
                 new_state.g += 1.0;
                 if !self.open_action(state, &mut new_state, action, events)? {
                     return Ok(None);
@@ -437,9 +462,22 @@ impl SearchSpace {
                     let start_id = new_state.todo.remove(&action).unwrap().1;
                     for (id, (index, event)) in (start_id..).zip(events.iter().enumerate().skip(1))
                     {
-                        let state = new_state.clone_for_child();
+                        // `expand_event` relies on this check having been made
+                        if !self.effect_independent_start_conditions_hold(
+                            action, index, &event.1, &new_state,
+                        )? {
+                            return Ok(None);
+                        }
+                        let state = new_state.clone_for_child_without_tn();
                         new_state.g += 1.0;
-                        if !self.expand_event(&state, &mut new_state, &event.1, &index, &id)? {
+                        if !self.expand_event(
+                            &state,
+                            &mut new_state,
+                            &event.1,
+                            &index,
+                            &id,
+                            None,
+                        )? {
                             return Ok(None);
                         }
                     }
@@ -462,6 +500,25 @@ impl SearchSpace {
         Ok(sat)
     }
 
+    /// Whether event `index`'s effect-independent start conditions hold on the
+    /// parent `state`. They can't change value in the child, so this rejects
+    /// exactly the successors `expand_event`'s post-effect check would, but
+    /// before cloning the state or opening the action.
+    fn effect_independent_start_conditions_hold(
+        &self,
+        action: Action,
+        index: usize,
+        e: &Event,
+        state: &State,
+    ) -> PyResult<bool> {
+        for &k in self.effect_independent_start_conditions[action.idx][index].iter() {
+            if !self.is_sat(&e.start_conditions[k], state)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     fn expand_event(
         &self,
         state: &State,
@@ -469,25 +526,16 @@ impl SearchSpace {
         e: &Event,
         index: &usize,
         id: &u32,
+        pending_opening: Option<PendingOpening>,
     ) -> PyResult<bool> {
         new_state.path = PersistentList::append((e.action, e.pos, *id), &new_state.path);
 
         // check conditions is done before calling this method
 
-        // check active conditions
-        for c in new_state.active_conditions.iter() {
-            let sat = match internal_evaluate(c, state)? {
-                ExpressionNode::Bool(v) => v,
-                _ => {
-                    return Err(PyException::new_err(
-                        "An action condition is not a boolean expression!",
-                    ))
-                }
-            };
-            if !sat {
-                return Ok(false);
-            }
-        }
+        // The inherited active conditions need no check here, on the parent:
+        // every state this search space returns passed the post-effect check
+        // below on its own assignments, and the initial state has none (a
+        // `State` can't be built from Python), so they all hold on `state`
 
         // remove end conditions
         for c in e.end_conditions.iter() {
@@ -504,34 +552,59 @@ impl SearchSpace {
             new_state.assignments[eff.fluent.idx] = internal_evaluate(&eff.value, state)?;
         }
 
-        // check active conditions
-        for c in new_state.active_conditions.iter() {
-            let sat = match internal_evaluate(c, new_state)? {
-                ExpressionNode::Bool(v) => v,
-                _ => {
-                    return Err(PyException::new_err(
-                        "An action condition is not a boolean expression!",
-                    ))
+        // check active conditions. Without effects the child's assignments are
+        // the parent's: the inherited conditions hold on them (see above), and
+        // the new start conditions, all effect-independent, were checked by
+        // the caller with `effect_independent_start_conditions_hold`
+        if !e.effects.is_empty() {
+            for c in new_state.active_conditions.iter() {
+                let sat = match internal_evaluate(c, new_state)? {
+                    ExpressionNode::Bool(v) => v,
+                    _ => {
+                        return Err(PyException::new_err(
+                            "An action condition is not a boolean expression!",
+                        ))
+                    }
+                };
+                if !sat {
+                    return Ok(false);
                 }
-            };
-            if !sat {
-                return Ok(false);
             }
         }
 
         if self.is_temporal {
-            // Add temporal constraints between past or todo events and the current one
+            // Only now, with the non-temporal checks passed, copy the parent's
+            // network (a compression-safe chain already owns one after its
+            // first event)
+            if new_state.temporal_network.is_none() {
+                new_state.temporal_network = state.temporal_network.clone();
+            }
             let tn = new_state.temporal_network.as_mut().unwrap();
+            if let Some(pending_opening) = pending_opening {
+                self.add_opening_constraints(state, tn, pending_opening)?;
+            }
+            // Add temporal constraints between past or todo events and the current one
             let ev = self.tn_interpreter.get_event_id(e.action, e.pos, *id);
+
+            // Only two of the edges from past events are needed. The edge from
+            // the immediate predecessor is always added, so the path is a
+            // chain in which each event is no later than the next: a 0-edge
+            // from any older event is already implied. Likewise, once the
+            // most recent mutex predecessor e_m gets its -epsilon edge, every
+            // older event e_j satisfies t(e_j) <= t(e_m) <= t(e) - epsilon, so
+            // the scan stops there.
+            let e_id = (e.action, *index);
+            let mut is_predecessor = true;
             for e2 in PersistentList::iter_rev(&state.path) {
                 let ev2 = self.tn_interpreter.get_event_id(e2.0, e2.1, e2.2);
-                let e_id = (e.action, *index);
                 let e2_id = (e2.0, e2.1);
                 if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
-                    let b: f64 = -self.epsilon;
-                    tn.add(&ev2, &ev, &b);
-                } else {
+                    tn.add(&ev2, &ev, &-self.epsilon);
+                    break;
+                }
+                if is_predecessor {
                     tn.add(&ev2, &ev, &0.0);
+                    is_predecessor = false;
                 }
             }
             for (a, i) in new_state.todo.iter() {
@@ -579,51 +652,79 @@ impl SearchSpace {
             }
         }
 
+        // Allocate the instance ids exactly as if the constraints were added
+        // here, but defer the constraints themselves to `expand_event`, after
+        // the checks that reject most successors
         let mut counter = self.counter.lock().unwrap();
         let mut id = *counter;
+        let mut pending_opening = None;
         if self.is_temporal {
-            // Add temporal constraints between events of the action
-            let tn = new_state.temporal_network.as_mut().unwrap();
-            let start = self.tn_interpreter.get_action_id(action, true, *counter);
-            let end = self.tn_interpreter.get_action_id(action, false, *counter);
+            pending_opening = Some((action, *counter, events));
             *counter += 1;
-            let duration = self.actions_duration[action.idx].as_ref();
-            let mut lb: f64 = 0.0;
-            let mut ub: f64 = 0.0;
-            if let Some(duration) = duration {
-                let d = duration;
-                lb = -expression_node_to_f64(&internal_evaluate(&d.0, state)?)?;
-                ub = expression_node_to_f64(&internal_evaluate(&d.1, state)?)?;
-                if d.2 {
-                    lb -= self.epsilon;
-                }
-                if d.3 {
-                    ub -= self.epsilon;
-                }
-            }
-            tn.add(&start, &end, &lb);
-            tn.add(&end, &start, &ub);
-            tn.add(&self.tn_interpreter.start_plan_id, &start, &0.0);
-            tn.add(&end, &self.tn_interpreter.end_plan_id, &-self.epsilon);
             id = *counter;
-            for (t, e) in events.iter() {
-                let ev = self.tn_interpreter.get_event_id(e.action, e.pos, *counter);
-                let b1 = -rational_to_f64(&t.delay);
-                let b2 = rational_to_f64(&t.delay);
-                if t.is_from_start() {
-                    tn.add(&start, &ev, &b1);
-                    tn.add(&ev, &start, &b2);
-                } else {
-                    tn.add(&end, &ev, &b1);
-                    tn.add(&ev, &end, &b2);
-                }
-                *counter += 1;
-            }
+            *counter += events.len() as u32;
             if events.len() > 1 {
                 new_state.todo.insert(action, (1, id + 1));
             }
         }
-        self.expand_event(state, new_state, &events[0].1, &0, &id)
+        drop(counter);
+        self.expand_event(state, new_state, &events[0].1, &0, &id, pending_opening)
+    }
+
+    /// Adds the constraints of an action opened by `open_action`: the duration
+    /// bounds, the plan-start/plan-end edges and the rigid edges tying each
+    /// event to its anchor. `action_instance_id` identifies this instance of
+    /// the action (its start/end timepoints) and event `k` gets instance id
+    /// `action_instance_id + 1 + k`.
+    fn add_opening_constraints(
+        &self,
+        state: &State,
+        tn: &mut DeltaSTN<u64, f64>,
+        (action, action_instance_id, events): PendingOpening,
+    ) -> PyResult<()> {
+        let start = self
+            .tn_interpreter
+            .get_action_id(action, true, action_instance_id);
+        let end = self
+            .tn_interpreter
+            .get_action_id(action, false, action_instance_id);
+        let duration = self.actions_duration[action.idx].as_ref();
+        let mut lb: f64 = 0.0;
+        let mut ub: f64 = 0.0;
+        if let Some(duration) = duration {
+            let d = duration;
+            lb = -expression_node_to_f64(&internal_evaluate(&d.0, state)?)?;
+            ub = expression_node_to_f64(&internal_evaluate(&d.1, state)?)?;
+            if d.2 {
+                lb -= self.epsilon;
+            }
+            if d.3 {
+                ub -= self.epsilon;
+            }
+        }
+        tn.add(&start, &end, &lb);
+        tn.add(&end, &start, &ub);
+        // The plan-start/plan-end timepoints only matter under a deadline:
+        // without one, plan start has no incoming edge (its distance stays 0,
+        // so `start_plan -> start (0)` can never lower anything) and plan end
+        // has no outgoing edge (a sink nothing reads)
+        if self.deadline.is_some() {
+            tn.add(&self.tn_interpreter.start_plan_id, &start, &0.0);
+            tn.add(&end, &self.tn_interpreter.end_plan_id, &-self.epsilon);
+        }
+        for (id, (t, e)) in (action_instance_id + 1..).zip(events.iter()) {
+            let ev = self.tn_interpreter.get_event_id(e.action, e.pos, id);
+            let b1 = -rational_to_f64(&t.delay);
+            let b2 = rational_to_f64(&t.delay);
+            if t.is_from_start() {
+                tn.add(&start, &ev, &b1);
+                tn.add(&ev, &start, &b2);
+            } else {
+                tn.add(&end, &ev, &b1);
+                tn.add(&ev, &end, &b2);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -744,7 +845,7 @@ impl SearchSpaceTrait for SearchSpace {
             return Ok(path.iter().map(|a| (None, *a, None)).collect());
         }
 
-        let mut tn = DeltaSTN::new(mk_rational(0, 1));
+        let mut tn = DeltaSTN::new_without_subsumption(mk_rational(0, 1));
         let mut todo: FxHashMap<Action, (usize, u32)> = FxHashMap::with_hasher(FxBuildHasher);
         let mut event_path: Vec<(Event, u32)> = Vec::new();
         let mut counter = 0;

@@ -24,6 +24,20 @@ from fractions import Fraction
 from unified_planning.model import DeltaSimpleTemporalNetwork
 
 
+class _NoSubsumptionSTN(DeltaSimpleTemporalNetwork):
+    """A `DeltaSimpleTemporalNetwork` whose `add` never checks for subsumption
+    and always prepends the new edge, mirroring the Rust core's
+    `DeltaSTN::new_without_subsumption`. Meant for `SearchSpace.build_plan`'s
+    network, where each (x, y) pair is added about once, so the out-list walk
+    almost always misses. Skipping it changes neither the verdict nor the schedule,
+    since an implied edge never lowers a distance.
+
+    Overrides UP's private `_is_subsumed`, which `add` calls."""
+
+    def _is_subsumed(self, x: object, y: object, b: Fraction) -> bool:
+        return False
+
+
 class IfReturnType(Enum):
     """The declared return type of an interpreted function, as tagged by
     `Converter.walk_interpreted_function_exp`. Mirrors the `#[pyclass] enum
@@ -374,10 +388,17 @@ class State:
     def get_value(self, fluent: Fluent) -> ConstantNode:
         return self.assignments[fluent.idx]
 
-    def clone(self):
+    def clone(self, with_tn: bool = True):
+        # `with_tn=False` leaves the network empty: `SearchSpace._expand_event`
+        # copies the parent's one in only once the successor has passed its
+        # non-temporal checks, which reject most successors
         assignments = list(self.assignments)
         todo = self.todo.copy()
-        tn = self.temporal_network.copy_stn() if self.temporal_network else None
+        tn = (
+            self.temporal_network.copy_stn()
+            if with_tn and self.temporal_network
+            else None
+        )
         return State(
             assignments, tn, todo, self.active_conditions.clone(), self.g, self.path[:]
         )
@@ -689,6 +710,12 @@ def simplify(
     return tuple(final_res)
 
 
+# An action being opened by `SearchSpace._open_action`, whose constraints
+# `SearchSpace._expand_event` adds: the action, its `action_instance_id` and
+# its events
+_PendingOpening = tuple[Action, int, list[tuple[Timing, Event]]]
+
+
 class SearchSpaceABC(ABC):
     @property
     @abstractmethod
@@ -781,6 +808,9 @@ class SearchSpace(SearchSpaceABC):
         event_fluents: list[
             list[tuple[set[Fluent], set[Fluent], set[Fluent], set[Fluent], set[Fluent]]]
         ] = [[] for _ in actions]
+        self._effect_independent_start_conditions: list[list[list[Expression]]] = [
+            [] for _ in actions
+        ]
         for a, le in self._events.items():
             duration = self._actions_duration[a.idx]
             for i, (_, e) in enumerate(le):
@@ -796,6 +826,13 @@ class SearchSpace(SearchSpaceABC):
                     reads.update(get_fluents(duration[0]))
                     reads.update(get_fluents(duration[1]))
                 writes = {eff.fluent for eff in e.effects}
+                self._effect_independent_start_conditions[a.idx].append(
+                    [
+                        c
+                        for c in e.start_conditions
+                        if all(f not in writes for f in get_fluents(c))
+                    ]
+                )
                 read_writes = reads.union(writes)
                 start_cond_reads = {
                     f for c in e.start_conditions for f in get_fluents(c)
@@ -852,17 +889,31 @@ class SearchSpace(SearchSpaceABC):
         self, state: State, action: Action, enable_compression_safe_actions: bool
     ) -> State | None:
         events = self._events[action]
-        new_state = state.clone()
-        new_state.g = state.g + 1
         if action in state.todo:
             index, id = state.todo[action]
             _, e = events[index]
+            # Check if the event is applicable before creating the new state
+            if not evaluate(
+                e.conditions, state
+            ) or not self._effect_independent_start_conditions_hold(
+                action, index, state
+            ):
+                return None
+            new_state = state.clone(with_tn=False)
+            new_state.g = state.g + 1
             if index + 1 >= len(events):
                 new_state.todo.pop(action)
             else:
                 new_state.todo[action] = index + 1, id + 1
             new_state = self._expand_event(state, new_state, e, index, id)
         else:
+            # Check if the action is applicable before creating the new state
+            if not evaluate(
+                events[0][1].conditions, state
+            ) or not self._effect_independent_start_conditions_hold(action, 0, state):
+                return None
+            new_state = state.clone(with_tn=False)
+            new_state.g = state.g + 1
             new_state = self._open_action(state, new_state, action, events)
             if (
                 enable_compression_safe_actions
@@ -873,10 +924,20 @@ class SearchSpace(SearchSpaceABC):
             ):
                 _, id = new_state.todo.pop(action)
                 for index in range(1, len(events)):
-                    state = new_state.clone()
-                    new_state.g += 1
                     _, e = events[index]
-                    new_state = self._expand_event(state, new_state, e, index, id)
+                    # `_expand_event` relies on these checks having been made
+                    if not evaluate(
+                        e.conditions, new_state
+                    ) or not self._effect_independent_start_conditions_hold(
+                        action, index, new_state
+                    ):
+                        return None
+                    state = new_state.clone(with_tn=False)
+                    new_state.g += 1
+                    expanded = self._expand_event(state, new_state, e, index, id)
+                    if expanded is None:
+                        return None
+                    new_state = expanded
                     id += 1
 
         result: State | None = new_state
@@ -917,17 +978,33 @@ class SearchSpace(SearchSpaceABC):
                 res.add(g)
         return res
 
+    def _effect_independent_start_conditions_hold(
+        self, action: Action, index: int, state: State
+    ) -> bool:
+        """Whether event `index`'s effect-independent start conditions hold on
+        the parent `state`. They can't change value in the child, so this
+        rejects exactly the successors `_expand_event`'s post-effect check
+        would, but before cloning the state or opening the action."""
+        return all(
+            evaluate(c, state)
+            for c in self._effect_independent_start_conditions[action.idx][index]
+        )
+
     def _expand_event(
-        self, state: State, new_state: State, e: Event, index: int, id: int
+        self,
+        state: State,
+        new_state: State,
+        e: Event,
+        index: int,
+        id: int,
+        pending_opening: "_PendingOpening | None" = None,
     ) -> State | None:
         new_state.path.append((e.action, e.pos, id))
-        # check conditions
-        if not evaluate(e.conditions, state):
-            return None
-        # check active conditions
-        for c in new_state.active_conditions:
-            if not evaluate(c, state):
-                return None
+        # check conditions is done before calling this method
+        # The inherited active conditions need no check here, on the parent:
+        # every state this search space returns passed the post-effect check
+        # below on its own assignments, and the initial state has none, so they
+        # all hold on `state`
         # remove end conditions
         for c in e.end_conditions:
             new_state.active_conditions.remove(c)
@@ -938,27 +1015,47 @@ class SearchSpace(SearchSpaceABC):
         for eff in e.effects:
             v = evaluate(eff.value, state)
             new_state.assignments[eff.fluent.idx] = v
-        # check active conditions
-        for c in new_state.active_conditions:
-            if not evaluate(c, new_state):
-                return None
+        # check active conditions. Without effects the child's assignments are
+        # the parent's: the inherited conditions hold on them (see above), and
+        # the new start conditions, all effect-independent, were checked by
+        # the caller with `_effect_independent_start_conditions_hold`
+        if e.effects:
+            for c in new_state.active_conditions:
+                if not evaluate(c, new_state):
+                    return None
         if self._is_temporal:
+            # Only now, with the non-temporal checks passed, copy the parent's
+            # network (a compression-safe chain already owns one after its
+            # first event)
+            if new_state.temporal_network is None:
+                assert state.temporal_network is not None
+                new_state.temporal_network = state.temporal_network.copy_stn()
+            if pending_opening is not None:
+                self._add_opening_constraints(state, new_state, *pending_opening)
             # update TN
-            assert new_state.temporal_network is not None
             e_id = (e.action, index)
-            if len(state.path) > 0:
-                for e2_action, e2_pos, id2 in state.path:
-                    e2_id = (e2_action, e2_pos)
-                    if (e_id, e2_id) in self._mutex:
-                        new_state.temporal_network.add(
-                            (e2_action, e2_pos, id2),
-                            (e.action, e.pos, id),
-                            -self._epsilon,
-                        )
-                    else:
-                        new_state.temporal_network.add(
-                            (e2_action, e2_pos, id2), (e.action, e.pos, id), 0
-                        )
+            # Only two of the edges from past events are needed. The edge from
+            # the immediate predecessor is always added, so the path is a
+            # chain in which each event is no later than the next: a 0-edge
+            # from any older event is already implied. Likewise, once the most
+            # recent mutex predecessor e_m gets its -epsilon edge, every older
+            # event e_j satisfies t(e_j) <= t(e_m) <= t(e) - epsilon, so the
+            # scan stops there.
+            is_predecessor = True
+            for e2_action, e2_pos, id2 in reversed(state.path):
+                e2_id = (e2_action, e2_pos)
+                if (e_id, e2_id) in self._mutex:
+                    new_state.temporal_network.add(
+                        (e2_action, e2_pos, id2),
+                        (e.action, e.pos, id),
+                        -self._epsilon,
+                    )
+                    break
+                if is_predecessor:
+                    new_state.temporal_network.add(
+                        (e2_action, e2_pos, id2), (e.action, e.pos, id), 0
+                    )
+                    is_predecessor = False
             for a, i in new_state.todo.items():
                 id2 = i[1]
                 for j in range(len(self._events[a][i[0] :])):
@@ -995,49 +1092,70 @@ class SearchSpace(SearchSpaceABC):
                 if not any(a in prev_actions for a, _, _ in state.path):
                     return None
 
+        # Allocate the instance ids exactly as if the constraints were added
+        # here, but defer the constraints themselves to `_expand_event`, after
+        # the checks that reject most successors
+        pending_opening: _PendingOpening | None = None
         if self._is_temporal:
-            assert new_state.temporal_network is not None
-            start = (action, True, self._counter)
-            end = (action, False, self._counter)
+            pending_opening = (action, self._counter, events)
             self._counter += 1
-            duration = self._actions_duration[action.idx]
-            lower: int | Fraction
-            upper: int | Fraction
-            if duration is None:
-                lower, upper = 0, 0
-            else:
-                evaluated_lower = evaluate(duration[0], state)
-                assert isinstance(evaluated_lower, (int, Fraction))
-                lower = evaluated_lower
-                if duration[2]:
-                    lower += self._epsilon
-                evaluated_upper = evaluate(duration[1], state)
-                assert isinstance(evaluated_upper, (int, Fraction))
-                upper = evaluated_upper
-                if duration[3]:
-                    upper -= self._epsilon
-            new_state.temporal_network.insert_interval(
-                start, end, left_bound=lower, right_bound=upper
-            )
-            new_state.temporal_network.add(self._start_plan, start, 0)
-            new_state.temporal_network.add(end, self._end_plan, -self._epsilon)
             id = self._counter
-            for t, e in events:
-                ev = (e.action, e.pos, self._counter)
-                if t.is_from_start():
-                    new_state.temporal_network.insert_interval(
-                        start, ev, left_bound=t.delay, right_bound=t.delay
-                    )
-                else:
-                    new_state.temporal_network.insert_interval(
-                        end, ev, left_bound=t.delay, right_bound=t.delay
-                    )
-                self._counter += 1
+            self._counter += len(events)
             if len(events) > 1:
                 new_state.todo[action] = 1, id + 1
         else:
             id = self._counter
-        return self._expand_event(state, new_state, events[0][1], 0, id)
+        return self._expand_event(
+            state, new_state, events[0][1], 0, id, pending_opening
+        )
+
+    def _add_opening_constraints(
+        self,
+        state: State,
+        new_state: State,
+        action: Action,
+        action_instance_id: int,
+        events: list[tuple[Timing, Event]],
+    ) -> None:
+        """Adds the constraints of an action opened by `_open_action`: the
+        duration bounds, the plan-start/plan-end edges and the rigid edges tying
+        each event to its anchor. `action_instance_id` identifies this instance
+        of the action (its start/end timepoints) and event `k` gets instance id
+        `action_instance_id + 1 + k`."""
+        tn = new_state.temporal_network
+        assert tn is not None
+        start = (action, True, action_instance_id)
+        end = (action, False, action_instance_id)
+        duration = self._actions_duration[action.idx]
+        lower: int | Fraction
+        upper: int | Fraction
+        if duration is None:
+            lower, upper = 0, 0
+        else:
+            evaluated_lower = evaluate(duration[0], state)
+            assert isinstance(evaluated_lower, (int, Fraction))
+            lower = evaluated_lower
+            if duration[2]:
+                lower += self._epsilon
+            evaluated_upper = evaluate(duration[1], state)
+            assert isinstance(evaluated_upper, (int, Fraction))
+            upper = evaluated_upper
+            if duration[3]:
+                upper -= self._epsilon
+        tn.insert_interval(start, end, left_bound=lower, right_bound=upper)
+        # The plan-start/plan-end timepoints only matter under a deadline:
+        # without one, plan start has no incoming edge (its distance stays 0,
+        # so `start_plan -> start (0)` can never lower anything) and plan end
+        # has no outgoing edge (a sink nothing reads)
+        if self._deadline is not None:
+            tn.add(self._start_plan, start, 0)
+            tn.add(end, self._end_plan, -self._epsilon)
+        for id, (t, e) in enumerate(events, start=action_instance_id + 1):
+            ev = (e.action, e.pos, id)
+            if t.is_from_start():
+                tn.insert_interval(start, ev, left_bound=t.delay, right_bound=t.delay)
+            else:
+                tn.insert_interval(end, ev, left_bound=t.delay, right_bound=t.delay)
 
     def build_plan(
         self, path: list[Action]
@@ -1045,7 +1163,7 @@ class SearchSpace(SearchSpaceABC):
         if not self.is_temporal:
             return [(None, a, None) for a in path]
 
-        tn = DeltaSimpleTemporalNetwork()
+        tn = _NoSubsumptionSTN()
         todo: dict[Action, tuple[int, int]] = {}
         event_path: list[tuple[Event, int]] = []
         counter = 0

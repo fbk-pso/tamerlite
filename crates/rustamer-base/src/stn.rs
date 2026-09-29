@@ -15,12 +15,9 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 
-use log::warn;
 use std::collections::VecDeque;
-use std::fs::read_to_string;
 use std::sync::Arc;
 
-use regex::Regex;
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
 #[derive(Debug)]
@@ -54,6 +51,7 @@ pub struct DeltaSTN<T, Q> {
     pub distances: FxHashMap<T, Q>,
     is_sat: bool,
     pub tolerance: Q,
+    subsumption: bool,
 }
 
 impl<T, Q> DeltaSTN<T, Q>
@@ -67,6 +65,20 @@ where
             distances: FxHashMap::with_hasher(FxBuildHasher),
             is_sat: true,
             tolerance,
+            subsumption: true,
+        }
+    }
+
+    /// A network whose `add` never checks for subsumption and always prepends
+    /// the new edge. Meant for a network where each (x, y) pair is added about
+    /// once, like `SearchSpace::build_plan`'s, so the walk almost always
+    /// misses. Skipping it changes neither the verdict nor the schedule, since an
+    /// implied edge never lowers a distance; it only leaves a redundant edge
+    /// in the out-list.
+    pub fn new_without_subsumption(tolerance: Q) -> Self {
+        DeltaSTN {
+            subsumption: false,
+            ..Self::new(tolerance)
         }
     }
 
@@ -80,7 +92,7 @@ where
                 self.distances.insert(*y, Q::zero());
                 self.constraints.insert(*y, DeltaNeighbors::mk_empty());
             }
-            if !self.is_subsumed(x, y, b) {
+            if !self.subsumption || !self.is_subsumed(x, y, b) {
                 let old_x = self.constraints.get(x).unwrap();
                 self.constraints
                     .insert(*x, DeltaNeighbors::add(y, b, old_x));
@@ -91,10 +103,6 @@ where
 
     pub fn check(&self) -> bool {
         self.is_sat
-    }
-
-    pub fn get_model_value(&self, x: &T) -> Option<Q> {
-        self.distances.get(x).map(|v| v.clone() * (-Q::one()))
     }
 
     fn is_subsumed(&self, x: &T, y: &T, b: &Q) -> bool {
@@ -144,59 +152,5 @@ where
             }
         }
         true
-    }
-}
-
-pub fn _tnsolve(fname: String) {
-    let re_new_tn = Regex::new(r#"^NewTN\("([a-z0-9]+)"\);$"#).unwrap();
-    let re_check = Regex::new(r#"^Check\("([a-z0-9]+)"\);$"#).unwrap();
-    let re_destroy_tn = Regex::new(r#"^DestroyTN\("([a-z0-9]+)"\);$"#).unwrap();
-    let re_copy_tn = Regex::new(r#"^CopyTN\("([a-z0-9]+)",\s*"([a-z0-9]+)"\);$"#).unwrap();
-    let re_add = Regex::new(
-        r#"^Add\("([a-z0-9]+)",\s*([0-9]+),\s*([0-9]+),\s*((-?)(0|([1-9][0-9]*))(\.[0-9]+)?)\);$"#,
-    )
-    .unwrap();
-
-    let mut tn_map = FxHashMap::<String, DeltaSTN<u32, f64>>::with_hasher(FxBuildHasher);
-
-    for line in read_to_string(fname).unwrap().lines() {
-        if let Some(new_tn) = re_new_tn.captures(line) {
-            tn_map.insert(new_tn[1].to_owned(), DeltaSTN::new(0.00000001));
-            continue;
-        }
-
-        if let Some(check) = re_check.captures(line) {
-            print!(
-                "{} ",
-                if tn_map[&check[1].to_owned()].check() {
-                    "1"
-                } else {
-                    "0"
-                }
-            );
-            continue;
-        }
-
-        if let Some(destroy_tn) = re_destroy_tn.captures(line) {
-            tn_map.remove(&destroy_tn[1]);
-            continue;
-        }
-
-        if let Some(copy_tn) = re_copy_tn.captures(line) {
-            let map = &mut tn_map;
-            let new = map[&copy_tn[1].to_owned()].clone();
-            map.insert(copy_tn[2].to_owned(), new);
-            continue;
-        }
-
-        if let Some(add) = re_add.captures(line) {
-            let x = add[2].parse::<u32>().unwrap();
-            let y = add[3].parse::<u32>().unwrap();
-            let b = add[4].parse::<f64>().unwrap();
-            tn_map.get_mut(&add[1]).unwrap().add(&x, &y, &b);
-            continue;
-        }
-
-        warn!("Unmatched line: {}", line)
     }
 }

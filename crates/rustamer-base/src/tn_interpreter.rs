@@ -25,7 +25,6 @@ pub struct TNInterpreter {
     actions_ids: FxHashMap<(Action, bool), u32>,
     events_ids: FxHashMap<(Action, usize), u32>,
     actions_ids_map_back: FxHashMap<u32, (Action, bool)>,
-    events_ids_map_back: FxHashMap<u32, (Action, usize)>,
     pub start_plan_id: u64,
     pub end_plan_id: u64,
 }
@@ -47,12 +46,10 @@ impl TNInterpreter {
         }
 
         let mut events_ids = FxHashMap::with_hasher(FxBuildHasher);
-        let mut events_ids_map_back = FxHashMap::with_hasher(FxBuildHasher);
 
         for (action, events) in events {
             for (_t, e) in events {
                 events_ids.insert((*action, e.pos), next_id);
-                events_ids_map_back.insert(next_id, (*action, e.pos));
                 next_id += 1;
             }
         }
@@ -61,7 +58,6 @@ impl TNInterpreter {
             actions_ids,
             events_ids,
             actions_ids_map_back,
-            events_ids_map_back,
             start_plan_id,
             end_plan_id,
         }
@@ -93,34 +89,6 @@ impl TNInterpreter {
         //return 0;
     }
 
-    pub fn get_action_timing<Q>(
-        &self,
-        tn: &DeltaSTN<u64, Q>,
-        action: Action,
-        is_start: bool,
-        id: u32,
-    ) -> Option<Q>
-    where
-        Q: num_traits::Num + std::ops::Neg<Output = Q> + PartialOrd + Clone,
-    {
-        let id = self.get_action_id(action, is_start, id);
-        tn.get_model_value(&id)
-    }
-
-    pub fn get_event_timing<Q>(
-        &self,
-        tn: &DeltaSTN<u64, Q>,
-        action: Action,
-        pos: usize,
-        id: u32,
-    ) -> Option<Q>
-    where
-        Q: num_traits::Num + std::ops::Neg<Output = Q> + PartialOrd + Clone,
-    {
-        let id = self.get_event_id(action, pos, id);
-        tn.get_model_value(&id)
-    }
-
     pub fn get_actions_timings<Q>(&self, tn: &DeltaSTN<u64, Q>) -> Vec<((Action, bool, u32), Q)>
     where
         Q: num_traits::Num + std::ops::Neg<Output = Q> + PartialOrd + Clone,
@@ -131,22 +99,6 @@ impl TNInterpreter {
             let a = self.actions_ids_map_back.get(&action_id);
             if let Some((action, is_start)) = a {
                 res.push(((*action, *is_start, outer_id), v.clone() * (-Q::one())));
-            }
-        }
-        res.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        res
-    }
-
-    pub fn get_events_timings<Q>(&self, tn: &DeltaSTN<u64, Q>) -> Vec<((Action, usize, u32), Q)>
-    where
-        Q: num_traits::Num + std::ops::Neg<Output = Q> + PartialOrd + Clone,
-    {
-        let mut res = Vec::new();
-        for (id, v) in tn.distances.iter() {
-            let (event_id, outer_id) = self.unpack_u64(*id);
-            let a = self.events_ids_map_back.get(&event_id);
-            if let Some((action, pos)) = a {
-                res.push(((*action, *pos, outer_id), v.clone() * (-Q::one())));
             }
         }
         res.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
