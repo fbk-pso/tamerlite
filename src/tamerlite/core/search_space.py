@@ -447,7 +447,7 @@ class PrecedenceChecker:
     ) -> bool:
         (a1, i1), (a2, i2) = events_pair
         if a1 == a2:
-            return False
+            return True
 
         res = self._cache.get(events_pair, None)
         if res is None:
