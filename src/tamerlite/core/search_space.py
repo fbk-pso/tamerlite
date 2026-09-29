@@ -808,6 +808,9 @@ class SearchSpace(SearchSpaceABC):
         event_fluents: list[
             list[tuple[set[Fluent], set[Fluent], set[Fluent], set[Fluent], set[Fluent]]]
         ] = [[] for _ in actions]
+        self._effect_independent_start_conditions: list[list[list[Expression]]] = [
+            [] for _ in actions
+        ]
         for a, le in self._events.items():
             duration = self._actions_duration[a.idx]
             for i, (_, e) in enumerate(le):
@@ -823,6 +826,13 @@ class SearchSpace(SearchSpaceABC):
                     reads.update(get_fluents(duration[0]))
                     reads.update(get_fluents(duration[1]))
                 writes = {eff.fluent for eff in e.effects}
+                self._effect_independent_start_conditions[a.idx].append(
+                    [
+                        c
+                        for c in e.start_conditions
+                        if all(f not in writes for f in get_fluents(c))
+                    ]
+                )
                 read_writes = reads.union(writes)
                 start_cond_reads = {
                     f for c in e.start_conditions for f in get_fluents(c)
@@ -879,17 +889,31 @@ class SearchSpace(SearchSpaceABC):
         self, state: State, action: Action, enable_compression_safe_actions: bool
     ) -> State | None:
         events = self._events[action]
-        new_state = state.clone(with_tn=False)
-        new_state.g = state.g + 1
         if action in state.todo:
             index, id = state.todo[action]
             _, e = events[index]
+            # Check if the event is applicable before creating the new state
+            if not evaluate(
+                e.conditions, state
+            ) or not self._effect_independent_start_conditions_hold(
+                action, index, state
+            ):
+                return None
+            new_state = state.clone(with_tn=False)
+            new_state.g = state.g + 1
             if index + 1 >= len(events):
                 new_state.todo.pop(action)
             else:
                 new_state.todo[action] = index + 1, id + 1
             new_state = self._expand_event(state, new_state, e, index, id)
         else:
+            # Check if the action is applicable before creating the new state
+            if not evaluate(
+                events[0][1].conditions, state
+            ) or not self._effect_independent_start_conditions_hold(action, 0, state):
+                return None
+            new_state = state.clone(with_tn=False)
+            new_state.g = state.g + 1
             new_state = self._open_action(state, new_state, action, events)
             if (
                 enable_compression_safe_actions
@@ -900,10 +924,20 @@ class SearchSpace(SearchSpaceABC):
             ):
                 _, id = new_state.todo.pop(action)
                 for index in range(1, len(events)):
+                    _, e = events[index]
+                    # `_expand_event` relies on these checks having been made
+                    if not evaluate(
+                        e.conditions, new_state
+                    ) or not self._effect_independent_start_conditions_hold(
+                        action, index, new_state
+                    ):
+                        return None
                     state = new_state.clone(with_tn=False)
                     new_state.g += 1
-                    _, e = events[index]
-                    new_state = self._expand_event(state, new_state, e, index, id)
+                    expanded = self._expand_event(state, new_state, e, index, id)
+                    if expanded is None:
+                        return None
+                    new_state = expanded
                     id += 1
 
         result: State | None = new_state
@@ -944,6 +978,18 @@ class SearchSpace(SearchSpaceABC):
                 res.add(g)
         return res
 
+    def _effect_independent_start_conditions_hold(
+        self, action: Action, index: int, state: State
+    ) -> bool:
+        """Whether event `index`'s effect-independent start conditions hold on
+        the parent `state`. They can't change value in the child, so this
+        rejects exactly the successors `_expand_event`'s post-effect check
+        would, but before cloning the state or opening the action."""
+        return all(
+            evaluate(c, state)
+            for c in self._effect_independent_start_conditions[action.idx][index]
+        )
+
     def _expand_event(
         self,
         state: State,
@@ -954,13 +1000,11 @@ class SearchSpace(SearchSpaceABC):
         pending_opening: "_PendingOpening | None" = None,
     ) -> State | None:
         new_state.path.append((e.action, e.pos, id))
-        # check conditions
-        if not evaluate(e.conditions, state):
-            return None
-        # check active conditions
-        for c in new_state.active_conditions:
-            if not evaluate(c, state):
-                return None
+        # check conditions is done before calling this method
+        # The inherited active conditions need no check here, on the parent:
+        # every state this search space returns passed the post-effect check
+        # below on its own assignments, and the initial state has none, so they
+        # all hold on `state`
         # remove end conditions
         for c in e.end_conditions:
             new_state.active_conditions.remove(c)
@@ -971,10 +1015,14 @@ class SearchSpace(SearchSpaceABC):
         for eff in e.effects:
             v = evaluate(eff.value, state)
             new_state.assignments[eff.fluent.idx] = v
-        # check active conditions
-        for c in new_state.active_conditions:
-            if not evaluate(c, new_state):
-                return None
+        # check active conditions. Without effects the child's assignments are
+        # the parent's: the inherited conditions hold on them (see above), and
+        # the new start conditions, all effect-independent, were checked by
+        # the caller with `_effect_independent_start_conditions_hold`
+        if e.effects:
+            for c in new_state.active_conditions:
+                if not evaluate(c, new_state):
+                    return None
         if self._is_temporal:
             # Only now, with the non-temporal checks passed, copy the parent's
             # network (a compression-safe chain already owns one after its

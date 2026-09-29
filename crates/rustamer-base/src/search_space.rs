@@ -172,6 +172,7 @@ pub struct SearchSpace {
     relevant_actions: Vec<Action>,
     compression_safe_actions: Option<Vec<bool>>,
     event_fluents: EventFluents,
+    effect_independent_start_conditions: Vec<Vec<Box<[usize]>>>,
     mutex: MutexChecker,
     precedence: PrecedenceChecker,
     action_objects: Option<Vec<Vec<Object>>>,
@@ -240,6 +241,7 @@ impl SearchSpace {
             .collect();
 
         let mut event_fluents = vec![Vec::new(); actions.len()];
+        let mut effect_independent_start_conditions = vec![Vec::new(); actions.len()];
         for (a, le) in &events {
             let duration = &converted_actions_duration[a.idx];
             for (i, (_, e)) in le.iter().enumerate() {
@@ -258,6 +260,14 @@ impl SearchSpace {
                     }
                 }
                 let writes: FxHashSet<Fluent> = e.effects.iter().map(|eff| eff.fluent).collect();
+                effect_independent_start_conditions[a.idx].push(
+                    e.start_conditions
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, c)| get_fluents(c).all(|f| !writes.contains(&f)))
+                        .map(|(k, _)| k)
+                        .collect(),
+                );
                 let read_writes: FxHashSet<Fluent> = reads.union(&writes).copied().collect();
                 let start_cond_reads: FxHashSet<Fluent> = e
                     .start_conditions
@@ -287,6 +297,7 @@ impl SearchSpace {
             relevant_actions,
             compression_safe_actions,
             event_fluents,
+            effect_independent_start_conditions,
             mutex: MutexChecker::new(),
             precedence: PrecedenceChecker::new(),
             action_objects,
@@ -403,7 +414,10 @@ impl SearchSpace {
             if let Some((index, id)) = state.todo.get(&action) {
                 if let Some((_, e)) = events.get(*index) {
                     // Check if the event is applicable before creating the new state
-                    if !self.is_sat(&e.conditions, state)? {
+                    if !self.is_sat(&e.conditions, state)?
+                        || !self
+                            .effect_independent_start_conditions_hold(action, *index, e, state)?
+                    {
                         return Ok(None);
                     }
 
@@ -421,7 +435,14 @@ impl SearchSpace {
                 }
             } else {
                 // Check if action is applicable before creating the new state
-                if !self.is_sat(&events[0].1.conditions, state)? {
+                if !self.is_sat(&events[0].1.conditions, state)?
+                    || !self.effect_independent_start_conditions_hold(
+                        action,
+                        0,
+                        &events[0].1,
+                        state,
+                    )?
+                {
                     return Ok(None);
                 }
 
@@ -441,6 +462,12 @@ impl SearchSpace {
                     let start_id = new_state.todo.remove(&action).unwrap().1;
                     for (id, (index, event)) in (start_id..).zip(events.iter().enumerate().skip(1))
                     {
+                        // `expand_event` relies on this check having been made
+                        if !self.effect_independent_start_conditions_hold(
+                            action, index, &event.1, &new_state,
+                        )? {
+                            return Ok(None);
+                        }
                         let state = new_state.clone_for_child_without_tn();
                         new_state.g += 1.0;
                         if !self.expand_event(
@@ -473,6 +500,25 @@ impl SearchSpace {
         Ok(sat)
     }
 
+    /// Whether event `index`'s effect-independent start conditions hold on the
+    /// parent `state`. They can't change value in the child, so this rejects
+    /// exactly the successors `expand_event`'s post-effect check would, but
+    /// before cloning the state or opening the action.
+    fn effect_independent_start_conditions_hold(
+        &self,
+        action: Action,
+        index: usize,
+        e: &Event,
+        state: &State,
+    ) -> PyResult<bool> {
+        for &k in self.effect_independent_start_conditions[action.idx][index].iter() {
+            if !self.is_sat(&e.start_conditions[k], state)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     fn expand_event(
         &self,
         state: &State,
@@ -486,20 +532,10 @@ impl SearchSpace {
 
         // check conditions is done before calling this method
 
-        // check active conditions
-        for c in new_state.active_conditions.iter() {
-            let sat = match internal_evaluate(c, state)? {
-                ExpressionNode::Bool(v) => v,
-                _ => {
-                    return Err(PyException::new_err(
-                        "An action condition is not a boolean expression!",
-                    ))
-                }
-            };
-            if !sat {
-                return Ok(false);
-            }
-        }
+        // The inherited active conditions need no check here, on the parent:
+        // every state this search space returns passed the post-effect check
+        // below on its own assignments, and the initial state has none (a
+        // `State` can't be built from Python), so they all hold on `state`
 
         // remove end conditions
         for c in e.end_conditions.iter() {
@@ -516,18 +552,23 @@ impl SearchSpace {
             new_state.assignments[eff.fluent.idx] = internal_evaluate(&eff.value, state)?;
         }
 
-        // check active conditions
-        for c in new_state.active_conditions.iter() {
-            let sat = match internal_evaluate(c, new_state)? {
-                ExpressionNode::Bool(v) => v,
-                _ => {
-                    return Err(PyException::new_err(
-                        "An action condition is not a boolean expression!",
-                    ))
+        // check active conditions. Without effects the child's assignments are
+        // the parent's: the inherited conditions hold on them (see above), and
+        // the new start conditions, all effect-independent, were checked by
+        // the caller with `effect_independent_start_conditions_hold`
+        if !e.effects.is_empty() {
+            for c in new_state.active_conditions.iter() {
+                let sat = match internal_evaluate(c, new_state)? {
+                    ExpressionNode::Bool(v) => v,
+                    _ => {
+                        return Err(PyException::new_err(
+                            "An action condition is not a boolean expression!",
+                        ))
+                    }
+                };
+                if !sat {
+                    return Ok(false);
                 }
-            };
-            if !sat {
-                return Ok(false);
             }
         }
 
