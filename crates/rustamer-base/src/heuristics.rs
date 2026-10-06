@@ -287,7 +287,20 @@ impl Hash for OperatorHmax {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 struct CacheKey {
     values: Vector<ExpressionNode>,
-    todo_values: Vec<usize>,
+    /// `todo_key(&state.todo)`: sparse, so a key costs nothing per action that
+    /// isn't in progress.
+    todo_values: Vec<(Action, usize)>,
+}
+
+/// The `(action, next event index)` pairs of a state's `todo`, sorted so that
+/// equal maps give equal keys whatever their iteration order. It tells states
+/// apart exactly as one index per heuristic action (`0` when absent) did:
+/// indices in `todo` are always >= 1, and in search every `todo` action is one
+/// of the heuristic's own (both are `relevant_actions`).
+fn todo_key(todo: &FxHashMap<Action, (usize, u32)>) -> Vec<(Action, usize)> {
+    let mut key: Vec<(Action, usize)> = todo.iter().map(|(a, (j, _))| (*a, *j)).collect();
+    key.sort_unstable();
+    key
 }
 
 fn get_event_conditions(
@@ -1407,7 +1420,6 @@ pub struct DeleteRelaxationHeuristicConfig {
 
 #[derive(Clone, Debug)]
 pub struct DeleteRelaxationHeuristic {
-    actions: Vec<Action>,
     events: FxHashMap<Action, usize>,
     goals: HeuristicExpression,
     extra_fluents: FxHashMap<Action, Vec<Expression>>,
@@ -1684,7 +1696,6 @@ impl DeleteRelaxationHeuristic {
         };
 
         let res = DeleteRelaxationHeuristic {
-            actions,
             events: events_len,
             goals,
             extra_fluents,
@@ -1737,14 +1748,9 @@ impl DeleteRelaxationHeuristic {
     pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
         let mut internal_caching = self.internal_caching.lock().unwrap();
         if let Some(internal_caching) = internal_caching.as_mut() {
-            let todo_values: Vec<usize> = self
-                .actions
-                .iter()
-                .map(|action| state.todo.get(action).map(|(j, _)| *j).unwrap_or(0))
-                .collect();
             let cache_key = CacheKey {
                 values: state.assignments.clone(),
-                todo_values,
+                todo_values: todo_key(&state.todo),
             };
             if let Some(res) = internal_caching.get(&cache_key) {
                 return Ok(*res);
@@ -2358,7 +2364,6 @@ fn for_each_new_value(
 
 #[derive(Clone, Debug)]
 pub struct HMaxExplicit {
-    actions: Vec<Action>,
     events: FxHashMap<Action, Vec<(Timing, Event)>>,
     goals: Vec<Vec<ExpressionNode>>,
     goal_expressions: Vec<Expression>,
@@ -2373,7 +2378,6 @@ pub struct HMaxExplicit {
 
 impl HMaxExplicit {
     pub fn new(
-        actions: Vec<Action>,
         fluent_domains: Vec<FluentDomain>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         goals: Vec<PyExpressionNode>,
@@ -2489,7 +2493,6 @@ impl HMaxExplicit {
         };
 
         let res = HMaxExplicit {
-            actions,
             events,
             goals,
             goal_expressions,
@@ -2574,14 +2577,9 @@ impl HMaxExplicit {
     pub fn eval(&self, state: &State) -> PyResult<Option<f64>> {
         let mut internal_caching = self.internal_caching.lock().unwrap();
         if let Some(internal_caching) = internal_caching.as_mut() {
-            let todo_values: Vec<usize> = self
-                .actions
-                .iter()
-                .map(|action| state.todo.get(action).map(|(j, _)| *j).unwrap_or(0))
-                .collect();
             let cache_key = CacheKey {
                 values: state.assignments.clone(),
-                todo_values,
+                todo_values: todo_key(&state.todo),
             };
             if let Some(res) = internal_caching.get(&cache_key) {
                 return Ok(*res);
