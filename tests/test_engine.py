@@ -22,6 +22,7 @@ import warnings
 import weakref
 from collections import OrderedDict
 from collections.abc import Callable
+from fractions import Fraction
 from functools import partial
 from typing import Any, NamedTuple, cast
 
@@ -938,6 +939,45 @@ def test_search_space(problem, relevance_analysis):
             assert state1.todo[k][0] == todo2[k.idx][0]
 
         assert state1.g == state2.g
+
+
+def test_temporal_todo_empty_dedup():
+    """`DedupPolicy.TODO_EMPTY`: without `weak_equality`, a temporal search
+    still dedups states with no durative action in progress, but not once a
+    deadline is set (`DedupPolicy.OFF`), on both backends identically."""
+    problem = problems_generator.get_problem_temporal_commuting()
+    expanded: dict[tuple[bool, bool], int] = {}
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.core import CustomHeuristic, wastar_search
+        from tamerlite.encoder import Encoder
+
+        for with_deadline in [False, True]:
+            lifted_problem, ground_problem, map_back_action_instance = (
+                testing_utils.compile_problem(problem)
+            )
+            encoder = Encoder(
+                ground_problem,
+                lifted_problem,
+                map_back_action_instance,
+                symmetry_breaking=False,
+                compression_safe_actions=False,
+                relevance_analysis=False,
+                deadline=Fraction(100) if with_deadline else None,
+            )
+            path, metrics = wastar_search(
+                encoder.search_space,
+                CustomHeuristic(lambda _: 0.0, False),
+                0.0,
+                weak_equality=False,
+            )
+            assert path is not None
+            expanded[disable_rustamer, with_deadline] = int(metrics["expanded_states"])
+
+    for disable_rustamer in [True, False]:
+        assert expanded[disable_rustamer, False] < expanded[disable_rustamer, True]
+    assert expanded[True, False] == expanded[False, False]
+    assert expanded[True, True] == expanded[False, True]
 
 
 def _anytime_cases():

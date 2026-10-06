@@ -48,6 +48,7 @@ type PyDurationInterval = (Vec<PyExpressionNode>, Vec<PyExpressionNode>, bool, b
 
 pub trait SearchSpaceTrait {
     fn is_temporal(&self) -> bool;
+    fn has_deadline(&self) -> bool;
     fn tn_interpreter(&self) -> &TNInterpreter;
     fn initial_state(&self, initial_state: Option<Vec<PyExpressionNode>>) -> PyResult<State>;
     fn get_successor_state(&self, state: &State, action: Action) -> PyResult<Option<State>>;
@@ -630,6 +631,10 @@ impl SearchSpace {
 impl SearchSpaceTrait for SearchSpace {
     fn is_temporal(&self) -> bool {
         self.is_temporal
+    }
+
+    fn has_deadline(&self) -> bool {
+        self.deadline.is_some()
     }
 
     fn tn_interpreter(&self) -> &TNInterpreter {

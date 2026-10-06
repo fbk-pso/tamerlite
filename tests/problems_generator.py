@@ -721,7 +721,8 @@ def get_problem_bookkeeping_fluent_temporal() -> Problem:
     fluents entirely, rather than exercising the duration-bound-read branch.
 
     Being temporal, it also covers compaction on a problem whose dedup regime
-    (`is_temporal and not weak_equality`) never dedups at all -- compaction is
+    (`is_temporal and not weak_equality`) dedups only states with no durative
+    action in progress (`DedupPolicy.TODO_EMPTY`) -- compaction is
     unconditional on `is_temporal`/`weak_equality`, unlike the dedup-only
     reduction it replaced.
     """
@@ -837,6 +838,25 @@ def get_problem_temporal_no_start_event() -> Problem:
 
     problem.add_goal(done)
 
+    return problem
+
+
+def get_problem_temporal_commuting() -> Problem:
+    """Three independent durative actions, each runnable once (`not done_x` at
+    start, `done_x` at end), goal: all three done. Every ordering of the
+    completed actions reaches the same no-action-in-progress state, so this is
+    the minimal problem where `DedupPolicy.TODO_EMPTY` (temporal, no
+    `weak_equality`, no deadline) prunes something."""
+    problem = Problem("temporal_commuting")
+    for name, duration in [("a", 2), ("b", 3), ("c", 5)]:
+        done = Fluent(f"done_{name}")
+        problem.add_fluent(done, default_initial_value=False)
+        run = DurativeAction(f"run_{name}")
+        run.set_fixed_duration(duration)
+        run.add_condition(StartTiming(), Not(done))
+        run.add_effect(EndTiming(), done, True)
+        problem.add_action(run)
+        problem.add_goal(done)
     return problem
 
 
