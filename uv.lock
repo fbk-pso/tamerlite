@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -1255,8 +1255,8 @@ wheels = [
 
 [[package]]
 name = "unified-planning"
-version = "1.3.1.dev727+gee5372efc"
-source = { git = "https://github.com/aiplan4eu/unified-planning.git#ee5372efcba3209cf0c0c9bb682818002bf06909" }
+version = "1.3.1.dev733+g0c8092e03"
+source = { git = "https://github.com/aiplan4eu/unified-planning.git#0c8092e0358f1af39ba25c24db74ce512577b978" }
 dependencies = [
     { name = "configspace" },
     { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
