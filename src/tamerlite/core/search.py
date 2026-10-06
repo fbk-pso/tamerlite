@@ -21,6 +21,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum, auto
 from fractions import Fraction
 from typing import Any, Generic, Protocol, TypeVar
 
@@ -87,11 +88,50 @@ class BoundedPriorityQueue:
         return int(self._heap.size())
 
 
+class DedupPolicy(Enum):
+    """Which states take part in visited-state dedup -- shared by every dedup
+    site (`_SetDedup`, `_BloomDedup`, `ehc_search`, `multiqueue_search`),
+    mirrored by `DedupPolicy` in `search.rs`.
+
+    - `ALL`: a classical problem, or `weak_equality` on a temporal one.
+    - `TODO_EMPTY`: a temporal problem without `weak_equality` and without a
+      deadline dedups only states with an empty `todo`. With no durative action
+      in progress there are no active conditions and no pending events, so any
+      continuation of one such state can be scheduled from any other with the
+      same `assignments`: sound for plan existence, only makespan can differ.
+    - `OFF`: a temporal problem without `weak_equality`, but with a deadline.
+      It pins `end_plan - start_plan`, so pruning the faster of two such states
+      can lose a plan that meets it (the anytime makespan-improvement loop is
+      what sets it).
+    """
+
+    ALL = auto()
+    TODO_EMPTY = auto()
+    OFF = auto()
+
+    @staticmethod
+    def of(ss: SearchSpaceABC, weak_equality: bool) -> "DedupPolicy":
+        if not ss.is_temporal or weak_equality:
+            return DedupPolicy.ALL
+        if ss.has_deadline:
+            return DedupPolicy.OFF
+        return DedupPolicy.TODO_EMPTY
+
+    def applies(self, state: State) -> bool:
+        if self is DedupPolicy.ALL:
+            return True
+        if self is DedupPolicy.TODO_EMPTY:
+            return len(state.todo) == 0
+        return False
+
+
 @dataclass
 class WeakEqState:
     """Wraps a State so the visited-state dedup set also compares `todo` (the
     durative actions currently in progress), which is what the temporal
     `weak_equality` dedup path needs on top of the full `assignments` compare/hash.
+    It is also the key on the `DedupPolicy.TODO_EMPTY` path, where `todo` is always
+    empty: `State.__eq__` is always `False` on a temporal problem.
     """
 
     state: State
@@ -114,8 +154,11 @@ class WeakEqState:
         return True
 
 
-def state_representation(state: State, weak_equality: bool) -> State | WeakEqState:
-    if weak_equality:
+def state_representation(state: State, ss: SearchSpaceABC) -> State | WeakEqState:
+    """The visited-state dedup key: `WeakEqState` on a temporal problem, where
+    `State.__eq__` is always `False`; the bare `State` on a classical one, where
+    `todo` is always empty and the two compare the same."""
+    if ss.is_temporal:
         return WeakEqState(state)
     return state
 
@@ -190,18 +233,17 @@ class _Dedup(Protocol):
 
 class _SetDedup:
     """Set-backed dedup keyed by `state_representation`, gated on
-    `not ss.is_temporal or weak_equality` -- a disabled instance treats
-    every state as new."""
+    `DedupPolicy` -- a state the policy doesn't apply to is always new."""
 
     def __init__(self, ss: SearchSpaceABC, weak_equality: bool) -> None:
-        self._weak_equality = weak_equality
-        self._enabled = not ss.is_temporal or weak_equality
+        self._ss = ss
+        self._policy = DedupPolicy.of(ss, weak_equality)
         self._seen: set[State | WeakEqState] = set()
 
     def is_new(self, state: State) -> bool:
-        if not self._enabled:
+        if not self._policy.applies(state):
             return True
-        repr_ = state_representation(state, self._weak_equality)
+        repr_ = state_representation(state, self._ss)
         if repr_ in self._seen:
             return False
         self._seen.add(repr_)
@@ -235,14 +277,15 @@ class _BloomDedup:
     BLOOM_FP_RATE = 1e-4
 
     def __init__(self, ss: SearchSpaceABC, weak_equality: bool) -> None:
+        self._policy = DedupPolicy.of(ss, weak_equality)
         self._filter: BloomFilter | None = (
             BloomFilter(max_elements=self.BLOOM_ITEMS, error_rate=self.BLOOM_FP_RATE)
-            if (not ss.is_temporal or weak_equality)
+            if self._policy is not DedupPolicy.OFF
             else None
         )
 
     def is_new(self, state: State) -> bool:
-        if self._filter is None:
+        if self._filter is None or not self._policy.applies(state):
             return True
         key = _bloom_key(state)
         if key in self._filter:
@@ -542,14 +585,15 @@ def ehc_search(
         return None, {"expanded_states": str(0)}
     logger.debug("ehc_search: initial h=%.4g", best_h)
 
+    policy = DedupPolicy.of(ss, weak_equality)
     closed = set()
     while len(open) > 0:
         if timeout is not None and time.monotonic() - st > timeout:
             raise TimeoutError
         state = open.popleft()
         expanded_states += 1
-        if not ss.is_temporal or weak_equality:
-            closed.add(state_representation(state, weak_equality))
+        if policy.applies(state):
+            closed.add(state_representation(state, ss))
 
         if not early_termination and ss.goal_reached(state):
             logger.info(
@@ -575,8 +619,8 @@ def ehc_search(
                     "goal_depth": str(succ_state.g),
                 }
 
-            if not ss.is_temporal or weak_equality:
-                state_repr = state_representation(succ_state, weak_equality)
+            if policy.applies(succ_state):
+                state_repr = state_representation(succ_state, ss)
                 if state_repr not in closed:
                     candidate_states.append(succ_state)
             else:

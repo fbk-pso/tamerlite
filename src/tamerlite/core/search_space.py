@@ -739,6 +739,11 @@ class SearchSpaceABC(ABC):
     def is_temporal(self) -> bool:
         pass
 
+    @property
+    @abstractmethod
+    def has_deadline(self) -> bool:
+        """Whether a makespan deadline pins `end_plan - start_plan`."""
+
     @abstractmethod
     def reset(self):
         pass
@@ -854,6 +859,10 @@ class SearchSpace(SearchSpaceABC):
     @property
     def is_temporal(self) -> bool:
         return self._is_temporal
+
+    @property
+    def has_deadline(self) -> bool:
+        return self._deadline is not None
 
     @property
     def relevant_actions(self) -> list[Action]:

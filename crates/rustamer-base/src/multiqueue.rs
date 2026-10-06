@@ -169,13 +169,13 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
         },
     };
 
-    let dedup = !ss.is_temporal() || weak_equality;
+    let policy = DedupPolicy::new(ss, weak_equality);
     // State and WeakEqState contain interior mutability only for heuristic
     // caches. The mutable fields are ignored by Hash/Eq, so using them as HashSet keys is
     // safe.
     #[allow(clippy::mutable_key_type)]
     let mut visited_states = FxHashSet::with_hasher(FxBuildHasher);
-    if dedup {
+    if policy.applies(&item.state_container.state) {
         visited_states.insert(WeakEqState {
             state: Rc::clone(&item.state_container.state),
         });
@@ -242,7 +242,7 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
                     return Ok((Some(extract_path(&s)), metrics));
                 }
                 let s = Rc::new(s);
-                let keep = !dedup
+                let keep = !policy.applies(&s)
                     || visited_states.insert(WeakEqState {
                         state: Rc::clone(&s),
                     });

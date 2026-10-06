@@ -165,14 +165,14 @@ impl<T: Ord> OpenList<T> for BoundedPriorityQueue<T> {
 /// keyed on the same equivalence as
 /// `WeakEqState` (`assignments` plus each `todo` action's event index).
 /// `insert_new` mirrors `HashSet::insert`'s "newly inserted"
-/// polarity regardless of backing store; a disabled store (non-temporal
-/// dedup gate off) must always report "new" without recording anything.
+/// polarity regardless of backing store; a state its `DedupPolicy` doesn't
+/// apply to must always report "new" without recording anything.
 trait DedupStore<P> {
     fn insert_new(&mut self, p: &P) -> bool;
 }
 
 struct HashSetDedup {
-    enabled: bool,
+    policy: DedupPolicy,
     // `State::heuristic_cache` is a `Mutex`, which is what trips this lint on
     // `Rc<State>` -- but `WeakEqState`'s `Hash`/`PartialEq` impls only ever
     // read `assignments`/`todo`, never `heuristic_cache`, so mutating the
@@ -185,7 +185,7 @@ struct HashSetDedup {
 impl HashSetDedup {
     fn new<S: SearchSpaceTrait>(ss: &S, weak_equality: bool) -> Self {
         Self {
-            enabled: !ss.is_temporal() || weak_equality,
+            policy: DedupPolicy::new(ss, weak_equality),
             seen: FxHashSet::with_hasher(FxBuildHasher),
         }
     }
@@ -193,7 +193,7 @@ impl HashSetDedup {
 
 impl DedupStore<Rc<State>> for HashSetDedup {
     fn insert_new(&mut self, s: &Rc<State>) -> bool {
-        if !self.enabled {
+        if !self.policy.applies(s) {
             return true;
         }
         self.seen.insert(WeakEqState {
@@ -203,6 +203,7 @@ impl DedupStore<Rc<State>> for HashSetDedup {
 }
 
 struct BloomDedup {
+    policy: DedupPolicy,
     filter: Option<BloomFilter<RandomState>>,
 }
 
@@ -210,17 +211,21 @@ impl BloomDedup {
     fn new<S: SearchSpaceTrait>(ss: &S, weak_equality: bool) -> Self {
         const BLOOM_ITEMS: usize = 20_000_000;
         const BLOOM_FP_RATE: f64 = 1e-4;
-        let filter = (!ss.is_temporal() || weak_equality).then(|| {
+        let policy = DedupPolicy::new(ss, weak_equality);
+        let filter = (policy != DedupPolicy::Off).then(|| {
             BloomFilter::with_false_pos(BLOOM_FP_RATE)
                 .hasher(RandomState::default())
                 .expected_items(BLOOM_ITEMS)
         });
-        Self { filter }
+        Self { policy, filter }
     }
 }
 
 impl DedupStore<State> for BloomDedup {
     fn insert_new(&mut self, s: &State) -> bool {
+        if !self.policy.applies(s) {
+            return true;
+        }
         match &mut self.filter {
             None => true,
             // `BloomFilter::insert` returns "may have been previously
@@ -398,10 +403,52 @@ impl<T: Ord> BoundedPriorityQueue<T> {
     }
 }
 
+/// Which states take part in visited-state dedup -- shared by every dedup site
+/// (`HashSetDedup`, `BloomDedup`, `ehc_search`, `multiqueue_search`), mirrored
+/// by `DedupPolicy` in `search.py`.
+///
+/// - `All`: a classical problem, or `weak_equality` on a temporal one.
+/// - `TodoEmpty`: a temporal problem without `weak_equality` and without a
+///   deadline dedups only states with an empty `todo`. With no durative action
+///   in progress there are no active conditions and no pending events, so any
+///   continuation of one such state can be scheduled from any other with the
+///   same `assignments`: sound for plan existence, only makespan can differ.
+/// - `Off`: a temporal problem without `weak_equality`, but with a deadline.
+///   It pins `end_plan - start_plan`, so pruning the faster of two such states
+///   can lose a plan that meets it (the anytime makespan-improvement loop is
+///   what sets it).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum DedupPolicy {
+    All,
+    TodoEmpty,
+    Off,
+}
+
+impl DedupPolicy {
+    pub(crate) fn new<S: SearchSpaceTrait>(ss: &S, weak_equality: bool) -> Self {
+        if !ss.is_temporal() || weak_equality {
+            DedupPolicy::All
+        } else if ss.has_deadline() {
+            DedupPolicy::Off
+        } else {
+            DedupPolicy::TodoEmpty
+        }
+    }
+
+    pub(crate) fn applies(&self, s: &State) -> bool {
+        match self {
+            DedupPolicy::All => true,
+            DedupPolicy::TodoEmpty => s.todo.is_empty(),
+            DedupPolicy::Off => false,
+        }
+    }
+}
+
 /// Wraps a state so the visited-state dedup set also compares `todo` (durative actions
 /// in progress), which is what the temporal `weak_equality` dedup path needs on top of
-/// the full `assignments` compare/hash. On the classical (`!is_temporal()`) dedup path
-/// `todo` is always empty, so that comparison is a no-op there.
+/// the full `assignments` compare/hash. On the classical (`!is_temporal()`) and
+/// `DedupPolicy::TodoEmpty` dedup paths `todo` is always empty, so that comparison is
+/// a no-op there.
 pub struct WeakEqState {
     pub state: Rc<State>,
 }
@@ -755,7 +802,7 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     let mut open = VecDeque::new();
     open.push_back(init);
 
-    let dedup = !ss.is_temporal() || weak_equality;
+    let policy = DedupPolicy::new(ss, weak_equality);
     // State and WeakEqState contain interior mutability only for heuristic
     // caches. The mutable fields are ignored by Hash/Eq, so using them as HashSet keys is
     // safe.
@@ -778,7 +825,7 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
             metrics.insert("goal_depth", state.g.to_string());
             return Ok((Some(extract_path(&state)), metrics));
         } else {
-            if dedup {
+            if policy.applies(&state) {
                 closed.insert(WeakEqState {
                     state: Rc::clone(&state),
                 });
@@ -789,7 +836,7 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
                 .filter_map(|rs| match rs {
                     Ok(s) => {
                         let s = Rc::new(s);
-                        if dedup {
+                        if policy.applies(&s) {
                             let weak_eq_state = WeakEqState { state: s };
                             (!closed.contains(&weak_eq_state)).then_some(Ok(weak_eq_state.state))
                         } else {
