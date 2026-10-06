@@ -23,14 +23,13 @@ use std::vec::Vec;
 #[derive(Debug)]
 pub struct TNInterpreter {
     actions_ids: FxHashMap<(Action, bool), u32>,
-    events_ids: FxHashMap<(Action, usize), u32>,
     actions_ids_map_back: FxHashMap<u32, (Action, bool)>,
     pub start_plan_id: u64,
     pub end_plan_id: u64,
 }
 
 impl TNInterpreter {
-    pub fn new(actions: &Vec<Action>, events: &FxHashMap<Action, Vec<(Timing, Event)>>) -> Self {
+    pub fn new(actions: &Vec<Action>) -> Self {
         let mut actions_ids = FxHashMap::with_hasher(FxBuildHasher);
         let mut actions_ids_map_back = FxHashMap::with_hasher(FxBuildHasher);
         let start_plan_id = 1;
@@ -45,18 +44,8 @@ impl TNInterpreter {
             }
         }
 
-        let mut events_ids = FxHashMap::with_hasher(FxBuildHasher);
-
-        for (action, events) in events {
-            for (_t, e) in events {
-                events_ids.insert((*action, e.pos), next_id);
-                next_id += 1;
-            }
-        }
-
         TNInterpreter {
             actions_ids,
-            events_ids,
             actions_ids_map_back,
             start_plan_id,
             end_plan_id,
@@ -78,14 +67,6 @@ impl TNInterpreter {
             return self.pack_u32(*aid, id);
         }
         panic!("Action not found in the TNInterpreter");
-        //return 0;
-    }
-
-    pub fn get_event_id(&self, action: Action, pos: usize, id: u32) -> u64 {
-        if let Some(eid) = self.events_ids.get(&(action, pos)) {
-            return self.pack_u32(*eid, id);
-        }
-        panic!("Event not found in the TNInterpreter");
         //return 0;
     }
 

@@ -1907,6 +1907,34 @@ def test_no_subsumption_stn_keeps_redundant_edges():
     assert no_subsumption.distances == plain.distances
 
 
+def test_add_event_constraint_translates_onto_anchors():
+    # Pure-Python mirror of the Rust core's `add_event_constraint` unit test
+    from tamerlite.core.search_space import Action, _add_event_constraint
+
+    a = (Action(0), True, 0)
+    b = (Action(1), True, 1)
+    c = (Action(2), False, 2)
+    tn = DeltaSimpleTemporalNetwork()
+
+    # Different anchors: t(u) - t(v) <= -1 with u = a + 2, v = b + 1/2
+    # becomes t(a) - t(b) <= -5/2, so b is at least 5/2 after a
+    assert _add_event_constraint(
+        tn, (a, Fraction(2)), (b, Fraction(1, 2)), Fraction(-1)
+    )
+    assert tn.check_stn()
+    assert tn.distances[b] - tn.distances[a] == Fraction(-5, 2)
+
+    # Same anchor, satisfied: no edge, no new timepoint
+    assert _add_event_constraint(tn, (c, Fraction(1)), (c, Fraction(2)), Fraction(-1))
+    assert c not in tn.distances
+
+    # Same anchor, violated (exact arithmetic, no tolerance): an event 1 after
+    # its anchor can't also be strictly more than 1 after an event 2 after it
+    assert not _add_event_constraint(
+        tn, (c, Fraction(1)), (c, Fraction(2)), Fraction(-1) - Fraction(1, 1000)
+    )
+
+
 def test_temporal_no_start_event():
     """Every durative action must own an event at its start timepoint.
 

@@ -711,9 +711,32 @@ def simplify(
 
 
 # An action being opened by `SearchSpace._open_action`, whose constraints
-# `SearchSpace._expand_event` adds: the action, its `action_instance_id` and
-# its events
-_PendingOpening = tuple[Action, int, list[tuple[Timing, Event]]]
+# `SearchSpace._expand_event` adds: the action and its `action_instance_id`
+_PendingOpening = tuple[Action, int]
+
+# An event's STN timepoint: its anchor (its action instance's start or end
+# timepoint, `(action, is_start, action_instance_id)`) and its delay from it
+_EventTimepoint = tuple[tuple[Action, bool, int], Fraction]
+
+
+def _add_event_constraint(
+    tn: DeltaSimpleTemporalNetwork,
+    u: _EventTimepoint,
+    v: _EventTimepoint,
+    b: Fraction,
+) -> bool:
+    """Adds `t(u) - t(v) <= b` for two events `u`, `v`. Events are rigidly
+    `t(anchor) + delay`, so they get no timepoint of their own: the constraint
+    becomes one on the anchors, `t(a_u) - t(a_v) <= b - delay_u + delay_v`, or
+    a constant when both share an anchor. Returns False if that constant is
+    violated, i.e. the network is inconsistent; `tn.add` records every other
+    inconsistency in `tn.check_stn()`."""
+    (x, dx), (y, dy) = u, v
+    b = b - dx + dy
+    if x == y:
+        return b >= 0
+    tn.add(x, y, b)
+    return True
 
 
 class SearchSpaceABC(ABC):
@@ -808,11 +831,15 @@ class SearchSpace(SearchSpaceABC):
         event_fluents: list[
             list[tuple[set[Fluent], set[Fluent], set[Fluent], set[Fluent], set[Fluent]]]
         ] = [[] for _ in actions]
+        # For event `k` of action `a`, at `[a.idx][k]`: whether it is anchored
+        # at the action's start (else its end) and its delay from that anchor
+        self._event_anchors: list[list[tuple[bool, Fraction]]] = [[] for _ in actions]
         self._effect_independent_start_conditions: list[list[list[Expression]]] = [
             [] for _ in actions
         ]
         for a, le in self._events.items():
             duration = self._actions_duration[a.idx]
+            self._event_anchors[a.idx] = [(t.is_from_start(), t.delay) for t, _ in le]
             for i, (_, e) in enumerate(le):
                 reads = set(get_fluents(e.conditions))
                 reads.update(x for eff in e.effects for x in get_fluents(eff.value))
@@ -1034,6 +1061,7 @@ class SearchSpace(SearchSpaceABC):
                 self._add_opening_constraints(state, new_state, *pending_opening)
             # update TN
             e_id = (e.action, index)
+            ev = self._event_timepoint(e.action, e.pos, id)
             # Only two of the edges from past events are needed. The edge from
             # the immediate predecessor is always added, so the path is a
             # chain in which each event is no later than the next: a 0-edge
@@ -1042,31 +1070,25 @@ class SearchSpace(SearchSpaceABC):
             # event e_j satisfies t(e_j) <= t(e_m) <= t(e) - epsilon, so the
             # scan stops there.
             is_predecessor = True
+            tn = new_state.temporal_network
             for e2_action, e2_pos, id2 in reversed(state.path):
                 e2_id = (e2_action, e2_pos)
+                ev2 = self._event_timepoint(e2_action, e2_pos, id2)
                 if (e_id, e2_id) in self._mutex:
-                    new_state.temporal_network.add(
-                        (e2_action, e2_pos, id2),
-                        (e.action, e.pos, id),
-                        -self._epsilon,
-                    )
+                    if not _add_event_constraint(tn, ev2, ev, -self._epsilon):
+                        return None
                     break
                 if is_predecessor:
-                    new_state.temporal_network.add(
-                        (e2_action, e2_pos, id2), (e.action, e.pos, id), 0
-                    )
+                    if not _add_event_constraint(tn, ev2, ev, Fraction(0)):
+                        return None
                     is_predecessor = False
             for a, i in new_state.todo.items():
                 id2 = i[1]
-                for j in range(len(self._events[a][i[0] :])):
-                    e2_id = (a, i[0] + j)
-                    e2 = (a, i[0] + j, id2)
-                    if (e_id, e2_id) in self._mutex:
-                        new_state.temporal_network.add(
-                            (e.action, e.pos, id), e2, -self._epsilon
-                        )
-                    else:
-                        new_state.temporal_network.add((e.action, e.pos, id), e2, 0)
+                for j in range(i[0], len(self._events[a])):
+                    b = -self._epsilon if (e_id, (a, j)) in self._mutex else Fraction(0)
+                    ev2 = self._event_timepoint(a, j, id2)
+                    if not _add_event_constraint(tn, ev, ev2, b):
+                        return None
                     id2 += 1
             # check TN
             if not new_state.temporal_network.check_stn():
@@ -1097,7 +1119,7 @@ class SearchSpace(SearchSpaceABC):
         # the checks that reject most successors
         pending_opening: _PendingOpening | None = None
         if self._is_temporal:
-            pending_opening = (action, self._counter, events)
+            pending_opening = (action, self._counter)
             self._counter += 1
             id = self._counter
             self._counter += len(events)
@@ -1115,13 +1137,12 @@ class SearchSpace(SearchSpaceABC):
         new_state: State,
         action: Action,
         action_instance_id: int,
-        events: list[tuple[Timing, Event]],
     ) -> None:
         """Adds the constraints of an action opened by `_open_action`: the
-        duration bounds, the plan-start/plan-end edges and the rigid edges tying
-        each event to its anchor. `action_instance_id` identifies this instance
-        of the action (its start/end timepoints) and event `k` gets instance id
-        `action_instance_id + 1 + k`."""
+        duration bounds and the plan-start/plan-end edges. `action_instance_id`
+        identifies this instance of the action (its start/end timepoints) and
+        event `k` gets instance id `action_instance_id + 1 + k`. Events have no
+        timepoints of their own: `_event_timepoint` maps them onto start/end."""
         tn = new_state.temporal_network
         assert tn is not None
         start = (action, True, action_instance_id)
@@ -1150,12 +1171,48 @@ class SearchSpace(SearchSpaceABC):
         if self._deadline is not None:
             tn.add(self._start_plan, start, 0)
             tn.add(end, self._end_plan, -self._epsilon)
-        for id, (t, e) in enumerate(events, start=action_instance_id + 1):
-            ev = (e.action, e.pos, id)
-            if t.is_from_start():
-                tn.insert_interval(start, ev, left_bound=t.delay, right_bound=t.delay)
-            else:
-                tn.insert_interval(end, ev, left_bound=t.delay, right_bound=t.delay)
+
+    def _event_timepoint(self, action: Action, index: int, id: int) -> _EventTimepoint:
+        """Where event `index` of `action` sits in the STN, given the event's
+        instance `id`.
+
+        Events have no timepoint of their own: each one is fixed at its action
+        instance's start or end timepoint plus a constant delay. Returns that
+        (anchor timepoint, delay) pair.
+
+        The anchor's instance id is `id - 1 - index`, because `_open_action`
+        numbers an instance's events right after the instance itself: event `k`
+        gets `action_instance_id + 1 + k`."""
+        is_start, delay = self._event_anchors[action.idx][index]
+        return (action, is_start, id - 1 - index), delay
+
+    def _add_plan_event_constraints(
+        self,
+        tn: DeltaSimpleTemporalNetwork,
+        e: Event,
+        id: int,
+        event_path: list[tuple[Event, int]],
+        todo: dict[Action, tuple[int, int]],
+    ) -> None:
+        """Adds `build_plan`'s ordering constraints between event `e`
+        (instance id `id`) and the events already on the plan or still to come.
+        The plan comes from the search, whose networks were consistent, so a
+        violated constant between events of one action instance can't happen
+        here"""
+        e_id = (e.action, e.pos)
+        ev = self._event_timepoint(e.action, e.pos, id)
+        for e2, id2 in event_path:
+            e2_id = (e2.action, e2.pos)
+            ev2 = self._event_timepoint(e2.action, e2.pos, id2)
+            if (e_id, e2_id) in self._mutex:
+                _add_event_constraint(tn, ev2, ev, -self._epsilon)
+            elif (e2_id, e_id) in self._precedence:
+                _add_event_constraint(tn, ev2, ev, Fraction(0))
+        for a, i in todo.items():
+            for id2, j in enumerate(range(i[0], len(self._events[a])), start=i[1]):
+                if (e_id, (a, j)) in self._mutex:
+                    ev2 = self._event_timepoint(a, j, id2)
+                    _add_event_constraint(tn, ev, ev2, -self._epsilon)
 
     def build_plan(
         self, path: list[Action]
@@ -1178,24 +1235,7 @@ class SearchSpace(SearchSpaceABC):
                     todo[action] = (index + 1, id + 1)
 
                 _, e = action_events[index]
-                for e2, id2 in event_path:
-                    if ((e.action, e.pos), (e2.action, e2.pos)) in self._mutex:
-                        b = -self._epsilon
-                        tn.add((e2.action, e2.pos, id2), (e.action, e.pos, id), b)
-                    elif ((e2.action, e2.pos), (e.action, e.pos)) in self._precedence:
-                        tn.add(
-                            (e2.action, e2.pos, id2), (e.action, e.pos, id), Fraction(0)
-                        )
-
-                for a, i in todo.items():
-                    id2 = i[1]
-                    for j in range(i[0], len(self._events[a])):
-                        _, e2 = self._events[a][j]
-                        if ((e.action, e.pos), (e2.action, e2.pos)) in self._mutex:
-                            b = -self._epsilon
-                            tn.add((e.action, e.pos, id), (e2.action, e2.pos, id2), b)
-                        id2 += 1
-
+                self._add_plan_event_constraints(tn, e, id, event_path, todo)
                 event_path.append((e, id))
 
             else:
@@ -1222,39 +1262,11 @@ class SearchSpace(SearchSpaceABC):
 
                 tn.add(start, end, lb)
                 tn.add(end, start, ub)
+                # Event `k` gets instance id `id + k`, as in `_open_action`
                 id = counter
-                for t, e in action_events:
-                    ev = (e.action, e.pos, counter)
-                    b1 = -t.delay
-                    b2 = t.delay
-                    if t.is_from_start():
-                        tn.add(start, ev, b1)
-                        tn.add(ev, start, b2)
-                    else:
-                        tn.add(end, ev, b1)
-                        tn.add(ev, end, b2)
-                    counter += 1
-
+                counter += len(action_events)
                 e = action_events[0][1]
-                ev = (e.action, e.pos, id)
-                for e2, id2 in event_path:
-                    ev2 = (e2.action, e2.pos, id2)
-                    if ((e.action, e.pos), (e2.action, e2.pos)) in self._mutex:
-                        b = -self._epsilon
-                        tn.add(ev2, ev, b)
-                    elif ((e2.action, e2.pos), (e.action, e.pos)) in self._precedence:
-                        tn.add(ev2, ev, Fraction(0))
-
-                for a, i in todo.items():
-                    id2 = i[1]
-                    for j in range(i[0], len(self._events[a])):
-                        _, e2 = self._events[a][j]
-                        ev2 = (e2.action, e2.pos, id2)
-                        if ((e.action, e.pos), (e2.action, e2.pos)) in self._mutex:
-                            b = -self._epsilon
-                            tn.add(ev, ev2, b)
-                        id2 += 1
-
+                self._add_plan_event_constraints(tn, e, id, event_path, todo)
                 event_path.append((e, id))
                 if len(action_events) > 1:
                     todo[action] = (1, id + 1)
