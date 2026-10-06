@@ -708,7 +708,7 @@ impl SearchSpace {
     }
 
     /// Adds the constraints of an action opened by `open_action`: the duration
-    /// bounds and the plan-start/plan-end edges. `action_instance_id`
+    /// bounds and, under a deadline, the edge to plan end. `action_instance_id`
     /// identifies this instance of the action (its start/end timepoints) and
     /// event `k` gets instance id `action_instance_id + 1 + k`. Events have no
     /// timepoints of their own: `event_timepoint` maps them onto start/end.
@@ -740,12 +740,11 @@ impl SearchSpace {
         }
         tn.add(&start, &end, &lb);
         tn.add(&end, &start, &ub);
-        // The plan-start/plan-end timepoints only matter under a deadline:
-        // without one, plan start has no incoming edge (its distance stays 0,
-        // so `start_plan -> start (0)` can never lower anything) and plan end
-        // has no outgoing edge (a sink nothing reads)
+        // Under a deadline, plan end follows the latest action end (plus
+        // epsilon) and the network bounds its earliest time by the deadline
+        // (see `DeltaSTN::with_deadline`). Without one, plan end would be a
+        // sink nothing reads, so the edge is skipped
         if self.deadline.is_some() {
-            tn.add(&self.tn_interpreter.start_plan_id, &start, &0.0);
             tn.add(&end, &self.tn_interpreter.end_plan_id, &-self.epsilon);
         }
         Ok(())
@@ -844,20 +843,13 @@ impl SearchSpaceTrait for SearchSpace {
             },
         };
         let tn: Option<DeltaSTN<u64, f64>> = if self.is_temporal {
-            let mut tn = DeltaSTN::new(self.epsilon / 1000.0);
-            if let Some(deadline) = &self.deadline {
-                tn.add(
-                    &self.tn_interpreter.end_plan_id,
-                    &self.tn_interpreter.start_plan_id,
-                    deadline,
-                );
-                tn.add(
-                    &self.tn_interpreter.start_plan_id,
-                    &self.tn_interpreter.end_plan_id,
-                    &-deadline,
-                );
-            }
-            Some(tn)
+            let tolerance = self.epsilon / 1000.0;
+            Some(match self.deadline {
+                Some(deadline) => {
+                    DeltaSTN::with_deadline(tolerance, self.tn_interpreter.end_plan_id, deadline)
+                }
+                None => DeltaSTN::new(tolerance),
+            })
         } else {
             None
         };

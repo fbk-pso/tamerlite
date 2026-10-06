@@ -38,6 +38,49 @@ class _NoSubsumptionSTN(DeltaSimpleTemporalNetwork):
         return False
 
 
+class _DeadlineSTN(DeltaSimpleTemporalNetwork):
+    """A `DeltaSimpleTemporalNetwork` in which the earliest time of `end_plan`
+    must not exceed `deadline`, mirroring the Rust core's
+    `DeltaSTN::with_deadline`. Distances only ever decrease and all start at
+    0, so the earliest schedule has every timepoint at >= 0 and the bound is
+    checked directly on `end_plan`'s distance, instead of through edges to a
+    plan-start timepoint, which would close a cycle through every timepoint
+    and catch a late `end_plan` only after propagating all the way round it.
+
+    Overrides UP's private `_inc_check`, which `add` calls, and `copy_stn`,
+    which would otherwise return the base class."""
+
+    def __init__(
+        self,
+        end_plan: object,
+        deadline: Fraction,
+        constraints=None,
+        distances=None,
+        is_sat: bool = True,
+    ):
+        super().__init__(constraints, distances, is_sat)
+        self._end_plan = end_plan
+        self._deadline = deadline
+
+    def _inc_check(self, x: object, y: object, b: Fraction) -> bool:
+        # Propagation from a consistent network terminates (`end_plan` is a
+        # sink, so no cycle runs through it), so checking once it is done
+        # reaches the verdict the Rust core reaches mid-propagation
+        return (
+            super()._inc_check(x, y, b)
+            and self._distances.get(self._end_plan, 0) >= -self._deadline
+        )
+
+    def copy_stn(self) -> "_DeadlineSTN":
+        return _DeadlineSTN(
+            self._end_plan,
+            self._deadline,
+            self._constraints.copy(),
+            self._distances.copy(),
+            self._is_sat,
+        )
+
+
 class IfReturnType(Enum):
     """The declared return type of an interpreted function, as tagged by
     `Converter.walk_interpreted_function_exp`. Mirrors the `#[pyclass] enum
@@ -822,7 +865,6 @@ class SearchSpace(SearchSpaceABC):
         self._initial_state = initial_state
         self._goal = goal
         self._deadline = deadline
-        self._start_plan = "start_plan"
         self._end_plan = "end_plan"
         self._epsilon = Fraction(1, 100) if epsilon is None else epsilon
         self._is_temporal = any(v is not None for v in actions_duration)
@@ -891,14 +933,11 @@ class SearchSpace(SearchSpaceABC):
         initial_state: list[ConstantNode] | None = None,
     ) -> State:
         if self._is_temporal:
-            tn = DeltaSimpleTemporalNetwork()
-            if self._deadline is not None:
-                tn.insert_interval(
-                    self._start_plan,
-                    self._end_plan,
-                    left_bound=self._deadline,
-                    right_bound=self._deadline,
-                )
+            tn = (
+                DeltaSimpleTemporalNetwork()
+                if self._deadline is None
+                else _DeadlineSTN(self._end_plan, self._deadline)
+            )
         else:
             tn = None
         if initial_state is not None:
@@ -1139,10 +1178,11 @@ class SearchSpace(SearchSpaceABC):
         action_instance_id: int,
     ) -> None:
         """Adds the constraints of an action opened by `_open_action`: the
-        duration bounds and the plan-start/plan-end edges. `action_instance_id`
-        identifies this instance of the action (its start/end timepoints) and
-        event `k` gets instance id `action_instance_id + 1 + k`. Events have no
-        timepoints of their own: `_event_timepoint` maps them onto start/end."""
+        duration bounds and, under a deadline, the edge to plan end.
+        `action_instance_id` identifies this instance of the action (its
+        start/end timepoints) and event `k` gets instance id
+        `action_instance_id + 1 + k`. Events have no timepoints of their own:
+        `_event_timepoint` maps them onto start/end."""
         tn = new_state.temporal_network
         assert tn is not None
         start = (action, True, action_instance_id)
@@ -1164,12 +1204,11 @@ class SearchSpace(SearchSpaceABC):
             if duration[3]:
                 upper -= self._epsilon
         tn.insert_interval(start, end, left_bound=lower, right_bound=upper)
-        # The plan-start/plan-end timepoints only matter under a deadline:
-        # without one, plan start has no incoming edge (its distance stays 0,
-        # so `start_plan -> start (0)` can never lower anything) and plan end
-        # has no outgoing edge (a sink nothing reads)
+        # Under a deadline, plan end follows the latest action end (plus
+        # epsilon) and the network bounds its earliest time by the deadline
+        # (see `_DeadlineSTN`). Without one, plan end would be a sink nothing
+        # reads, so the edge is skipped
         if self._deadline is not None:
-            tn.add(self._start_plan, start, 0)
             tn.add(end, self._end_plan, -self._epsilon)
 
     def _event_timepoint(self, action: Action, index: int, id: int) -> _EventTimepoint:

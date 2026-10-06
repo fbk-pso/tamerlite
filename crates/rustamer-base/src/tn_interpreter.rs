@@ -24,7 +24,6 @@ use std::vec::Vec;
 pub struct TNInterpreter {
     actions_ids: FxHashMap<(Action, bool), u32>,
     actions_ids_map_back: FxHashMap<u32, (Action, bool)>,
-    pub start_plan_id: u64,
     pub end_plan_id: u64,
 }
 
@@ -32,7 +31,6 @@ impl TNInterpreter {
     pub fn new(actions: &Vec<Action>) -> Self {
         let mut actions_ids = FxHashMap::with_hasher(FxBuildHasher);
         let mut actions_ids_map_back = FxHashMap::with_hasher(FxBuildHasher);
-        let start_plan_id = 1;
         let end_plan_id = 2;
 
         let mut next_id = 3;
@@ -47,7 +45,6 @@ impl TNInterpreter {
         TNInterpreter {
             actions_ids,
             actions_ids_map_back,
-            start_plan_id,
             end_plan_id,
         }
     }

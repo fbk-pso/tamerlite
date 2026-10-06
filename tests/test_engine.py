@@ -1907,6 +1907,35 @@ def test_no_subsumption_stn_keeps_redundant_edges():
     assert no_subsumption.distances == plain.distances
 
 
+def test_deadline_stn_bounds_plan_end():
+    # `_DeadlineSTN` works by overriding UP's private `_inc_check`; pin that
+    # `add` still consults it, and that `copy_stn` keeps the bound
+    from tamerlite.core.search_space import _DeadlineSTN
+
+    eps = Fraction(1, 100)
+    tn = _DeadlineSTN("end_plan", Fraction(10))
+    tn.add("end1", "end_plan", -eps)
+    tn.add("end2", "end_plan", -eps)
+
+    # End 1 at 10 - eps puts plan end exactly on the deadline
+    tn.add("t0", "end1", -(10 - eps))
+    assert tn.check_stn()
+
+    # A copy keeps the class and the bound: end 2 later than 10 - eps
+    # (exact arithmetic, no tolerance) misses the deadline, through propagation
+    copy = tn.copy_stn()
+    assert isinstance(copy, _DeadlineSTN)
+    copy.add("t0", "end2", -(10 - eps) - Fraction(1, 1000))
+    assert not copy.check_stn()
+    assert tn.check_stn()
+
+    # Without a deadline, nothing bounds plan end
+    free = DeltaSimpleTemporalNetwork()
+    free.add("end1", "end_plan", -eps)
+    free.add("t0", "end1", -(10 - eps) - Fraction(1, 1000))
+    assert free.check_stn()
+
+
 def test_add_event_constraint_translates_onto_anchors():
     # Pure-Python mirror of the Rust core's `add_event_constraint` unit test
     from tamerlite.core.search_space import Action, _add_event_constraint
