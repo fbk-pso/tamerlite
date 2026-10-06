@@ -22,7 +22,12 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 from tamerlite.core.heuristics import Heuristic
-from tamerlite.core.search import extract_path, state_representation
+from tamerlite.core.search import (
+    DedupPolicy,
+    WeakEqState,
+    extract_path,
+    state_representation,
+)
 from tamerlite.core.search_space import Action, SearchSpaceABC, State
 
 logger = logging.getLogger(__name__)
@@ -111,8 +116,10 @@ def _multiqueue_search(
     st = time.monotonic()
     opens = []
     init = ss.initial_state()
-    if not ss.is_temporal or weak_equality:
-        visited_states = {state_representation(init, weak_equality)}
+    policy = DedupPolicy.of(ss, weak_equality)
+    visited_states: set[State | WeakEqState] = set()
+    if policy.applies(init):
+        visited_states.add(state_representation(init, ss))
     states_expanded = 0
     generated_states = 1
     if early_termination and ss.goal_reached(init):
@@ -177,8 +184,8 @@ def _multiqueue_search(
                     "expanded_states": str(states_expanded),
                     "goal_depth": str(s.g),
                 }
-            if not ss.is_temporal or weak_equality:
-                state_repr = state_representation(s, weak_equality)
+            if policy.applies(s):
+                state_repr = state_representation(s, ss)
                 if state_repr not in visited_states:
                     visited_states.add(state_repr)
                     candidate_states.append(s)
