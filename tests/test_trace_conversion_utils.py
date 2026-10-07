@@ -2,10 +2,10 @@ import sys
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT / "src" / "trace_preprocessing"))
+REPO_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from trace_conversion_utils import read_domain_symbols, split_ground_action, split_trace
+from planning_prove.traces.preprocessing.conversion import read_domain_symbols, split_ground_action, split_trace
 
 
 def test_read_domain_symbols_accepts_hyphenated_action_names(tmp_path: Path):

@@ -2,10 +2,10 @@ import sys
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT / "src" / "trace_preprocessing"))
+REPO_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from abstract_traces_by_object_type import abstract_trace_for_profile
+from planning_prove.traces.preprocessing.abstraction import abstract_trace_for_profile
 
 
 def test_parameterless_actions_are_kept_in_multi_abstraction():
@@ -44,4 +44,4 @@ def test_integer_only_actions_are_kept_as_global_tokens_without_integer_monitor(
         abstract_other_objects=True,
     )
 
-    assert abstracted == ["prepare_unload(INT)", "move(*r*,l,l)"]
+    assert abstracted == ["prepare_unload", "move(*r*,l,l)"]

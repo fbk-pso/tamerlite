@@ -14,35 +14,39 @@ from aalpy.automata.Dfa import Dfa
 from aalpy.utils import load_automaton_from_file
 
 try:
-    from trace_conversion_utils import (
+    from planning_prove.traces.preprocessing.conversion import (
         _is_numeric_parameter_type,
         canonical_parameter_type,
         canonicalize_identifier,
         split_ground_action,
     )
-    from goal_trace_utils import add_state_trace_markers, goal_tokens_for_profile, init_tokens_for_profile
-    from classifier import (
+    from planning_prove.traces.preprocessing.context import (
+        add_state_trace_markers,
+        goal_tokens_for_profile,
+        init_tokens_for_profile,
+    )
+    from planning_prove.traces.preprocessing.classifier import (
         state_signature_features,
         local_goal_signature_features,
         local_state_signature_features,
         predict_classifier_class,
     )
 except ModuleNotFoundError:
-    REPO_ROOT = Path(__file__).resolve().parents[2]
-    for candidate in (
-        REPO_ROOT / "src",
-        REPO_ROOT / "src" / "trace_preprocessing",
-    ):
-        if str(candidate) not in sys.path:
-            sys.path.insert(0, str(candidate))
-    from trace_conversion_utils import (
+    repository_source = Path(__file__).resolve().parents[3] / "src"
+    if str(repository_source) not in sys.path:
+        sys.path.insert(0, str(repository_source))
+    from planning_prove.traces.preprocessing.conversion import (
         _is_numeric_parameter_type,
         canonical_parameter_type,
         canonicalize_identifier,
         split_ground_action,
     )
-    from goal_trace_utils import add_state_trace_markers, goal_tokens_for_profile, init_tokens_for_profile
-    from classifier import (
+    from planning_prove.traces.preprocessing.context import (
+        add_state_trace_markers,
+        goal_tokens_for_profile,
+        init_tokens_for_profile,
+    )
+    from planning_prove.traces.preprocessing.classifier import (
         state_signature_features,
         local_goal_signature_features,
         local_state_signature_features,

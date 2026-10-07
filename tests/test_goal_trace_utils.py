@@ -3,10 +3,10 @@ from pathlib import Path
 import pytest
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT / "src" / "trace_preprocessing"))
+REPO_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from goal_trace_utils import (
+from planning_prove.traces.preprocessing.context import (
     INIT_START_TOKEN,
     GOAL_START_TOKEN,
     TRACE_START_TOKEN,
