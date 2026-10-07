@@ -2137,6 +2137,24 @@ def test_symmetry_breaking_default_value_objects():
     assert [{obj.name for obj in group} for group in groups] == [{"x"}, {"y"}, {"z"}]
 
 
+def _equivalence_groups(problem: Problem) -> list[set[str]]:
+    """The names in each equivalence class `Encoder` computes for `problem`."""
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    encoder = Encoder(
+        ground_problem,
+        lifted_problem,
+        map_back_action_instance,
+        symmetry_breaking=False,
+        compression_safe_actions=False,
+        relevance_analysis=False,
+    )
+    return [
+        {obj.name for obj in group} for group in encoder._compute_equivalent_objects()
+    ]
+
+
 def test_symmetry_breaking_goal_taint_is_per_object():
     """
     An unrecognized goal conjunct (one _extract_goal_obj_to_fluent_map doesn't
@@ -2149,28 +2167,11 @@ def test_symmetry_breaking_goal_taint_is_per_object():
     MinimizeSequentialPlanLength metric).
     """
 
-    def groups_for(problem):
-        lifted_problem, ground_problem, map_back_action_instance = (
-            testing_utils.compile_problem(problem)
-        )
-        encoder = Encoder(
-            ground_problem,
-            lifted_problem,
-            map_back_action_instance,
-            symmetry_breaking=False,
-            compression_safe_actions=False,
-            relevance_analysis=False,
-        )
-        return [
-            {obj.name for obj in group}
-            for group in encoder._compute_equivalent_objects()
-        ]
-
     # Partial taint: an Or(...) goal conjunct is unrecognized and taints the
     # objects it references (p1, p4), but must not affect p2/p3, which only
     # appear in recognized (plain fluent) goal conjuncts and remain
     # genuinely symmetric.
-    groups = groups_for(problems_generator.get_problem_goal_taint_partial())
+    groups = _equivalence_groups(problems_generator.get_problem_goal_taint_partial())
     assert {"p2", "p3"} in groups
     assert {"p1"} in groups
     assert {"p4"} in groups
@@ -2181,7 +2182,7 @@ def test_symmetry_breaking_goal_taint_is_per_object():
     # assign the wrong meaning (Equals(fl(a), fr(b)) only requires the two
     # values to match, e.g. both zero; it does not require either to hold
     # any specific value on its own).
-    groups = groups_for(
+    groups = _equivalence_groups(
         problems_generator.get_problem_goal_taint_equals_fluent_fluent()
     )
     assert groups == [{"a"}, {"b"}]
@@ -2226,6 +2227,73 @@ def test_symmetry_breaking_goal_taint_is_per_object():
     assert len(observed_groups) >= 2
     for pkg_groups in observed_groups[:2]:
         assert {"p1", "p2", "p3"} in pkg_groups
+
+
+def test_symmetry_breaking_goal_non_object_arguments():
+    """
+    Goal fluents are compared on all their arguments, not just the objects:
+    `o1` and `o2` below have goals that differ only in an int argument of `f`,
+    so they are not interchangeable, and treating them as such makes the
+    first-use ordering prune the only plans (which must use `o2` first).
+    The same goals without the extra `f(o2, 2)` keep the symmetry.
+    """
+
+    asymmetric = problems_generator.get_problem_goal_int_argument(symmetric=False)
+    assert _equivalence_groups(asymmetric) == [{"o1"}, {"o2"}]
+    assert {"o1", "o2"} in _equivalence_groups(
+        problems_generator.get_problem_goal_int_argument(symmetric=True)
+    )
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+
+        for symmetry_breaking in [True, False]:
+            search = tamerlite.SearchParams(
+                search="wastar",
+                heuristic="hadd",
+                symmetry_breaking=symmetry_breaking,
+                compression_safe_actions=False,
+            )
+            with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+                res: PlanGenerationResult = planner.solve(asymmetric, timeout=None)
+                assert res.status == ResultStatus.SOLVED_SATISFICING
+                with PlanValidator(problem_kind=asymmetric.kind) as v:
+                    assert v.validate(asymmetric, res.plan)
+
+
+def test_symmetry_breaking_metric_objects_excluded():
+    """
+    An object named in a quality metric is not interchangeable with the
+    others, even when the initial state and the goal can't tell them apart.
+    That includes the `default` of `MinimizeActionCosts`, which UP's
+    `Problem.domain_constants` doesn't collect: treating `t1` and `t2` as
+    interchangeable there makes first-use ordering refuel `t1` first, which
+    prunes every zero-cost plan, and the anytime loop then reports a cost-1
+    plan as optimal.
+    """
+
+    groups = _equivalence_groups(problems_generator.get_problem_metric_object_taint())
+    assert groups == [{"t1"}, {"t2"}]
+
+    default_cost = problems_generator.get_problem_metric_default_cost_object()
+    assert _equivalence_groups(default_cost) == [{"t1"}, {"t2"}]
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        search = tamerlite.SearchParams(
+            search="wastar",
+            heuristic="hadd",
+            symmetry_breaking=True,
+            compression_safe_actions=False,
+        )
+        with AnytimePlanner(name="tamerlite", params={"search": search}) as planner:
+            results = list(planner.get_solutions(default_cost, timeout=None))
+        assert results[-1].status == ResultStatus.SOLVED_OPTIMALLY
+        with PlanValidator(problem_kind=default_cost.kind) as v:
+            val_res: ValidationResult = v.validate(default_cost, results[-1].plan)
+            assert val_res
+            assert val_res.metric_evaluations is not None
+            assert list(val_res.metric_evaluations.values()) == [0]
 
 
 def test_symmetry_breaking_compression_safe_prunes_witness_fluent():

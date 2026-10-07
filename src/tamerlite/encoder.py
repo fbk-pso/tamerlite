@@ -104,6 +104,9 @@ def extract_and_arguments(expressions: list[FNode]) -> Iterable[FNode]:
 # fluent-equals-constant comparison.
 ConstantValue = bool | int | Fraction | UPObject
 GoalFluentValue = ConstantValue | tuple[ConstantValue, bool]
+# A recognized goal conjunct: the fluent, all of its arguments, and its
+# expected value.
+GoalEntry = tuple[UPFluent, tuple[ConstantValue, ...], GoalFluentValue]
 
 
 class Encoder:
@@ -802,13 +805,22 @@ class Encoder:
 
     def _extract_domain_objects(self) -> set[UPObject]:
         """
-        Extract all objects that appear in the problem's domain.
+        Extract all objects that appear in the problem's domain or in its
+        quality metrics.
+
+        `domain_constants` covers the metrics too, except the `default` of
+        `MinimizeActionCosts`, so the metric expressions are scanned here as
+        well.
 
         Returns:
-            Set[UPObject]: A set of all objects that appear in the domain.
+            Set[UPObject]: A set of all objects that appear in the domain or
+            in a quality metric.
         """
 
-        return set(self._lifted_problem.domain_constants)
+        objects = set(self._lifted_problem.domain_constants)
+        for exp in self._iter_metric_expressions():
+            objects.update(extract_objects(exp))
+        return objects
 
     def _extract_interpreted_function_tainted_objects(self) -> set[UPObject]:
         """
@@ -894,10 +906,7 @@ class Encoder:
 
     def _extract_goal_obj_to_fluent_map(
         self,
-    ) -> tuple[
-        dict[UPObject, set[tuple[UPFluent, tuple[UPObject, ...], GoalFluentValue]]],
-        set[UPObject],
-    ]:
+    ) -> tuple[dict[UPObject, set[GoalEntry]], set[UPObject]]:
         """
         Build a mapping from objects to goal fluents they appear in.
 
@@ -914,65 +923,67 @@ class Encoder:
         conjuncts elsewhere in the goal.
 
         Returns:
-            Tuple[Dict[UPObject, Set[Tuple[UPFluent, Tuple[UPObject, ...],
-            GoalFluentValue]]], Set[UPObject]]:
+            Tuple[Dict[UPObject, Set[GoalEntry]], Set[UPObject]]:
                 - A dictionary mapping each object to the set of associated
                   recognized-conjunct entries.
                 - The set of objects appearing in some unrecognized conjunct,
                   who must be excluded from equivalence.
         """
 
-        obj_to_fluent_map: dict[
-            UPObject, set[tuple[UPFluent, tuple[UPObject, ...], GoalFluentValue]]
-        ] = {obj: set() for obj in self._problem.all_objects}
+        obj_to_fluent_map: dict[UPObject, set[GoalEntry]] = {
+            obj: set() for obj in self._problem.all_objects
+        }
+
+        def register(
+            fluent_exp: FNode, value: GoalFluentValue, value_exp: FNode | None
+        ) -> bool:
+            """Records the entry of `fluent_exp` under every object among its
+            arguments and `value_exp`. The entry keeps every argument, objects
+            or not: two goals that differ only in an int or bool argument are
+            different constraints. Returns False, recording nothing, if an
+            argument is not a constant."""
+            if not all(arg.is_constant() for arg in fluent_exp.args):
+                return False
+            args = tuple(
+                arg.object() if arg.is_object_exp() else arg.constant_value()
+                for arg in fluent_exp.args
+            )
+            entry = (fluent_exp.fluent(), args, value)
+            entry_objs = {arg for arg in args if isinstance(arg, UPObject)}
+            if value_exp is not None and value_exp.is_object_exp():
+                entry_objs.add(value_exp.object())
+            for obj in entry_objs:
+                obj_to_fluent_map[obj].add(entry)
+            return True
 
         def extract_fluent_equals_constant_exp(
             arg1: FNode, arg2: FNode, is_negated: bool
         ) -> bool:
-            fluent_exp = None
-            value_exp = None
             if arg1.is_fluent_exp() and arg2.is_constant():
-                fluent_exp = arg1
-                value_exp = arg2
-                v = arg2.constant_value()
+                fluent_exp, value_exp = arg1, arg2
             elif arg2.is_fluent_exp() and arg1.is_constant():
-                fluent_exp = arg2
-                value_exp = arg1
-                v = arg1.constant_value()
-
-            if fluent_exp is None:
-                return False
+                fluent_exp, value_exp = arg2, arg1
             else:
-                value = (v, False) if is_negated else v
-                fluent = fluent_exp.fluent()
-                objs = tuple(
-                    arg.object() for arg in fluent_exp.args if arg.is_object_exp()
-                )
-                entry_objs = set(objs)
-                assert value_exp is not None
-                if value_exp.is_object_exp():
-                    entry_objs.add(value_exp.object())
-                for obj in entry_objs:
-                    obj_to_fluent_map[obj].add((fluent, objs, value))
-
-                return True
+                return False
+            v = (
+                value_exp.object()
+                if value_exp.is_object_exp()
+                else value_exp.constant_value()
+            )
+            value = (v, False) if is_negated else v
+            return register(fluent_exp, value, value_exp)
 
         tainted_objects: set[UPObject] = set()
         stack: list[FNode] = list(self._problem.goals)
         while len(stack) > 0:
             exp = stack.pop()
             if exp.is_fluent_exp():
-                fluent = exp.fluent()
-                objs = tuple(arg.object() for arg in exp.args if arg.is_object_exp())
-                for obj in objs:
-                    obj_to_fluent_map[obj].add((fluent, objs, True))
+                if not register(exp, True, None):
+                    tainted_objects.update(extract_objects(exp))
 
             elif exp.is_not() and exp.args[0].is_fluent_exp():
-                exp = exp.args[0]
-                fluent = exp.fluent()
-                objs = tuple(arg.object() for arg in exp.args if arg.is_object_exp())
-                for obj in objs:
-                    obj_to_fluent_map[obj].add((fluent, objs, False))
+                if not register(exp.args[0], False, None):
+                    tainted_objects.update(extract_objects(exp))
 
             elif exp.is_equals():
                 arg1, arg2 = exp.args
@@ -996,9 +1007,7 @@ class Encoder:
         self,
         obj1: UPObject,
         obj2: UPObject,
-        goal_obj_to_fluent_map: dict[
-            UPObject, set[tuple[UPFluent, tuple[UPObject, ...], GoalFluentValue]]
-        ],
+        goal_obj_to_fluent_map: dict[UPObject, set[GoalEntry]],
         obj_to_init_assignments: dict[UPObject, list[tuple[FNode, FNode]]],
     ) -> bool:
         """
@@ -1010,9 +1019,7 @@ class Encoder:
         Args:
             obj1 (UPObject): The first object to compare.
             obj2 (UPObject): The second object to compare.
-            goal_obj_to_fluent_map
-                (Dict[UPObject, Set[Tuple[UPFluent, Tuple[UPObject, ...],
-                GoalFluentValue]]]):
+            goal_obj_to_fluent_map (Dict[UPObject, Set[GoalEntry]]):
                 Mapping from objects to the recognized goal fluents they
                 appear in (as an argument or as the compared value). Objects
                 appearing in an unrecognized goal conjunct are excluded from
@@ -1047,10 +1054,10 @@ class Encoder:
         # for each goal fluent involving obj1, ensure the corresponding
         # fluent (with obj1/obj2 swapped in both the arguments and the
         # compared value) exists for obj2
-        for fluent, objs1, v in goal_obj_to_fluent_map[obj1]:
-            objs2 = tuple(transpose(obj) for obj in objs1)
+        for fluent, args1, v in goal_obj_to_fluent_map[obj1]:
+            args2 = tuple(transpose_constant(arg) for arg in args1)
             v2 = transpose_value(v)
-            if (fluent, objs2, v2) not in goal_obj_to_fluent_map[obj2]:
+            if (fluent, args2, v2) not in goal_obj_to_fluent_map[obj2]:
                 return False
 
         # For each initial-value assignment (explicit or default) involving
