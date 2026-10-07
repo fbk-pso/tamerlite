@@ -1938,11 +1938,10 @@ def test_deadline_stn_bounds_plan_end():
 
 def test_add_event_constraint_translates_onto_anchors():
     # Pure-Python mirror of the Rust core's `add_event_constraint` unit test
-    from tamerlite.core.search_space import Action, _add_event_constraint
+    from tamerlite.core.search_space import _add_event_constraint
 
-    a = (Action(0), True, 0)
-    b = (Action(1), True, 1)
-    c = (Action(2), False, 2)
+    # Anchors are timepoints, numbered in creation order
+    a, b, c = 1, 3, 2
     tn = DeltaSimpleTemporalNetwork()
 
     # Different anchors: t(u) - t(v) <= -1 with u = a + 2, v = b + 1/2

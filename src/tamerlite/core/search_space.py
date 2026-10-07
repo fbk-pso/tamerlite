@@ -754,12 +754,19 @@ def simplify(
 
 
 # An action being opened by `SearchSpace._open_action`, whose constraints
-# `SearchSpace._expand_event` adds: the action and its `action_instance_id`
+# `SearchSpace._expand_event` adds: the action and the timepoint its start gets
+# (its end gets the next)
 _PendingOpening = tuple[Action, int]
 
 # An event's STN timepoint: its anchor (its action instance's start or end
-# timepoint, `(action, is_start, action_instance_id)`) and its delay from it
-_EventTimepoint = tuple[tuple[Action, bool, int], Fraction]
+# timepoint) and its delay from it
+_EventTimepoint = tuple[int, Fraction]
+
+# STN timepoints are ints numbered in creation order, so a network and its
+# copies agree on the number of every timepoint they share. Plan end is the
+# first one in every search network; only a deadline reads it. Mirrors the
+# Rust core's `PLAN_END`
+_PLAN_END = 0
 
 
 def _add_event_constraint(
@@ -865,10 +872,8 @@ class SearchSpace(SearchSpaceABC):
         self._initial_state = initial_state
         self._goal = goal
         self._deadline = deadline
-        self._end_plan = "end_plan"
         self._epsilon = Fraction(1, 100) if epsilon is None else epsilon
         self._is_temporal = any(v is not None for v in actions_duration)
-        self._counter = 0
 
         event_fluents: list[
             list[tuple[set[Fluent], set[Fluent], set[Fluent], set[Fluent], set[Fluent]]]
@@ -934,9 +939,16 @@ class SearchSpace(SearchSpaceABC):
     ) -> State:
         if self._is_temporal:
             tn = (
-                DeltaSimpleTemporalNetwork()
+                DeltaSimpleTemporalNetwork(
+                    constraints={_PLAN_END: None}, distances={_PLAN_END: 0}
+                )
                 if self._deadline is None
-                else _DeadlineSTN(self._end_plan, self._deadline)
+                else _DeadlineSTN(
+                    _PLAN_END,
+                    self._deadline,
+                    constraints={_PLAN_END: None},
+                    distances={_PLAN_END: 0},
+                )
             )
         else:
             tn = None
@@ -970,7 +982,7 @@ class SearchSpace(SearchSpaceABC):
             if index + 1 >= len(events):
                 new_state.todo.pop(action)
             else:
-                new_state.todo[action] = index + 1, id + 1
+                new_state.todo[action] = index + 1, id
             new_state = self._expand_event(state, new_state, e, index, id)
         else:
             # Check if the action is applicable before creating the new state
@@ -1006,7 +1018,6 @@ class SearchSpace(SearchSpaceABC):
                     if expanded is None:
                         return None
                     new_state = expanded
-                    id += 1
 
         result: State | None = new_state
         return result
@@ -1124,13 +1135,11 @@ class SearchSpace(SearchSpaceABC):
                         return None
                     is_predecessor = False
             for a, i in new_state.todo.items():
-                id2 = i[1]
                 for j in range(i[0], len(self._events[a])):
                     b = -self._epsilon if (e_id, (a, j)) in self._mutex else Fraction(0)
-                    ev2 = self._event_timepoint(a, j, id2)
+                    ev2 = self._event_timepoint(a, j, i[1])
                     if not _add_event_constraint(tn, ev, ev2, b):
                         return None
-                    id2 += 1
             # check TN
             if not new_state.temporal_network.check_stn():
                 return None
@@ -1160,21 +1169,19 @@ class SearchSpace(SearchSpaceABC):
         action: Action,
         events: list[tuple[Timing, Event]],
     ) -> State | None:
-        # Allocate the instance ids exactly as if the constraints were added
-        # here, but defer the constraints themselves to `_expand_event`, after
-        # the checks that reject most successors
+        # The instance's start and end are the next two timepoints of the
+        # parent's network, which the child's copies. `_expand_event` adds them
+        # and the opening constraints, after the checks that reject most successors
         pending_opening: _PendingOpening | None = None
+        start = 0
         if self._is_temporal:
-            pending_opening = (action, self._counter)
-            self._counter += 1
-            id = self._counter
-            self._counter += len(events)
+            assert state.temporal_network is not None
+            start = len(state.temporal_network.distances)
+            pending_opening = (action, start)
             if len(events) > 1:
-                new_state.todo[action] = 1, id + 1
-        else:
-            id = self._counter
+                new_state.todo[action] = 1, start
         return self._expand_event(
-            state, new_state, events[0][1], 0, id, pending_opening
+            state, new_state, events[0][1], 0, start, pending_opening
         )
 
     def _add_opening_constraints(
@@ -1182,18 +1189,17 @@ class SearchSpace(SearchSpaceABC):
         state: State,
         new_state: State,
         action: Action,
-        action_instance_id: int,
+        start: int,
     ) -> None:
-        """Adds the constraints of an action opened by `_open_action`: the
-        duration bounds and, under a deadline, the edge to plan end.
-        `action_instance_id` identifies this instance of the action (its
-        start/end timepoints) and event `k` gets instance id
-        `action_instance_id + 1 + k`. Events have no timepoints of their own:
-        `_event_timepoint` maps them onto start/end."""
+        """Adds the start and end timepoints of an action opened by
+        `_open_action` (`insert_interval` creates both) and its constraints:
+        the duration bounds and, under a deadline, the edge to plan end.
+        Events have no timepoints of their own: `_event_timepoint` maps them
+        onto start/end."""
         tn = new_state.temporal_network
         assert tn is not None
-        start = (action, True, action_instance_id)
-        end = (action, False, action_instance_id)
+        assert len(tn.distances) == start
+        end = start + 1
         duration = self._actions_duration[action.idx]
         lower: int | Fraction
         upper: int | Fraction
@@ -1216,21 +1222,20 @@ class SearchSpace(SearchSpaceABC):
         # (see `_DeadlineSTN`). Without one, plan end would be a sink nothing
         # reads, so the edge is skipped
         if self._deadline is not None:
-            tn.add(end, self._end_plan, -self._epsilon)
+            tn.add(end, _PLAN_END, -self._epsilon)
 
-    def _event_timepoint(self, action: Action, index: int, id: int) -> _EventTimepoint:
-        """Where event `index` of `action` sits in the STN, given the event's
-        instance `id`.
+    def _event_timepoint(
+        self, action: Action, index: int, start: int
+    ) -> _EventTimepoint:
+        """Where event `index` of `action` sits in the STN, given the start
+        timepoint `start` of its action instance.
 
         Events have no timepoint of their own: each one is fixed at its action
         instance's start or end timepoint plus a constant delay. Returns that
-        (anchor timepoint, delay) pair.
-
-        The anchor's instance id is `id - 1 - index`, because `_open_action`
-        numbers an instance's events right after the instance itself: event `k`
-        gets `action_instance_id + 1 + k`."""
+        (anchor timepoint, delay) pair. The end is the timepoint right after
+        the start (see `_add_opening_constraints`)."""
         is_start, delay = self._event_anchors[action.idx][index]
-        return (action, is_start, id - 1 - index), delay
+        return (start if is_start else start + 1), delay
 
     def _add_plan_event_constraints(
         self,
@@ -1240,11 +1245,11 @@ class SearchSpace(SearchSpaceABC):
         event_path: list[tuple[Event, int]],
         todo: dict[Action, tuple[int, int]],
     ) -> None:
-        """Adds `build_plan`'s ordering constraints between event `e`
-        (instance id `id`) and the events already on the plan or still to come.
-        The plan comes from the search, whose networks were consistent, so a
-        violated constant between events of one action instance can't happen
-        here"""
+        """Adds `build_plan`'s ordering constraints between event `e` (of the
+        action instance starting at `id`) and the events already on the plan or
+        still to come. The plan comes from the search, whose networks were
+        consistent, so a violated constant between events of one action
+        instance can't happen here"""
         e_id = (e.action, e.pos)
         ev = self._event_timepoint(e.action, e.pos, id)
         for e2, id2 in event_path:
@@ -1255,9 +1260,9 @@ class SearchSpace(SearchSpaceABC):
             elif (e2_id, e_id) in self._precedence:
                 _add_event_constraint(tn, ev2, ev, Fraction(0))
         for a, i in todo.items():
-            for id2, j in enumerate(range(i[0], len(self._events[a])), start=i[1]):
+            for j in range(i[0], len(self._events[a])):
                 if (e_id, (a, j)) in self._mutex:
-                    ev2 = self._event_timepoint(a, j, id2)
+                    ev2 = self._event_timepoint(a, j, i[1])
                     _add_event_constraint(tn, ev, ev2, -self._epsilon)
 
     def build_plan(
@@ -1269,7 +1274,8 @@ class SearchSpace(SearchSpaceABC):
         tn = _NoSubsumptionSTN()
         todo: dict[Action, tuple[int, int]] = {}
         event_path: list[tuple[Event, int]] = []
-        counter = 0
+        # Each action instance and its start timepoint (its end is the next)
+        openings: list[tuple[Action, int]] = []
         state = self.initial_state()
         for action in path:
             action_events = self._events[action]
@@ -1278,16 +1284,17 @@ class SearchSpace(SearchSpaceABC):
                 if index + 1 >= len(action_events):
                     todo.pop(action)
                 else:
-                    todo[action] = (index + 1, id + 1)
+                    todo[action] = (index + 1, id)
 
                 _, e = action_events[index]
                 self._add_plan_event_constraints(tn, e, id, event_path, todo)
                 event_path.append((e, id))
 
             else:
-                start = (action, True, counter)
-                end = (action, False, counter)
-                counter += 1
+                # `tn.add` creates both timepoints
+                start = len(tn.distances)
+                end = start + 1
+                openings.append((action, start))
                 duration = self._actions_duration[action.idx]
                 lb: Fraction
                 ub: Fraction
@@ -1308,14 +1315,11 @@ class SearchSpace(SearchSpaceABC):
 
                 tn.add(start, end, lb)
                 tn.add(end, start, ub)
-                # Event `k` gets instance id `id + k`, as in `_open_action`
-                id = counter
-                counter += len(action_events)
                 e = action_events[0][1]
-                self._add_plan_event_constraints(tn, e, id, event_path, todo)
-                event_path.append((e, id))
+                self._add_plan_event_constraints(tn, e, start, event_path, todo)
+                event_path.append((e, start))
                 if len(action_events) > 1:
-                    todo[action] = (1, id + 1)
+                    todo[action] = (1, start)
 
             # Advance to the successor state only after evaluating the action's
             # duration bounds above, so they are evaluated against the pre-action state
@@ -1324,21 +1328,12 @@ class SearchSpace(SearchSpaceABC):
             state = succ_state
 
         res: list[tuple[Fraction | None, Action, Fraction | None]] = []
-        start_time: dict[tuple[Action, int], Fraction] = {}
-        end_time: dict[tuple[Action, int], Fraction] = {}
-        for ev, dist in tn.distances.items():
-            if not isinstance(ev[1], bool):
-                continue
-
-            if ev[1]:
-                start_time[(ev[0], ev[2])] = -dist
-            else:
-                end_time[(ev[0], ev[2])] = -dist
-
-        for a_id, st in start_time.items():
-            et = end_time[a_id]
+        distances = tn.distances
+        for action, start in openings:
+            st = -distances[start]
+            et = -distances[start + 1]
             d = None if et - st == 0 else et - st
-            res.append((st, a_id[0], d))
+            res.append((st, action, d))
 
         res.sort()
         return res

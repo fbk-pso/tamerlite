@@ -26,7 +26,6 @@ mod search_space;
 mod search_state;
 mod stn;
 mod structures;
-mod tn_interpreter;
 mod utils;
 
 pub use expressions::{
