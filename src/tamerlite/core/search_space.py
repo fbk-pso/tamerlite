@@ -360,6 +360,7 @@ class State:
     active_conditions: MultiSet
     g: int
     path: list[tuple[Action, int, int]]
+    symmetry_used: tuple[int, ...] = ()
     heuristic_cache: dict[str, float | None] = field(default_factory=dict)
 
     def __hash__(self) -> int:
@@ -379,7 +380,13 @@ class State:
         todo = self.todo.copy()
         tn = self.temporal_network.copy_stn() if self.temporal_network else None
         return State(
-            assignments, tn, todo, self.active_conditions.clone(), self.g, self.path[:]
+            assignments,
+            tn,
+            todo,
+            self.active_conditions.clone(),
+            self.g,
+            self.path[:],
+            self.symmetry_used,
         )
 
 
@@ -738,8 +745,8 @@ class SearchSpace(SearchSpaceABC):
         events: dict[Action, list[tuple[Timing, Event]]],
         actions: list[Action],
         compression_safe_actions: list[bool] | None,
-        action_objects: list[list[Object]] | None,
-        obj_to_prev_actions_map: list[set[Action]] | None,
+        symmetry_requires: list[list[tuple[int, int]]] | None,
+        symmetry_advances: list[list[tuple[int, int]]] | None,
         initial_state: list[ConstantNode] | None = None,
         goal: Expression | None = None,
         relevant_actions: list[Action] | None = None,
@@ -767,8 +774,13 @@ class SearchSpace(SearchSpaceABC):
                 f"Action {missing.idx} is expandable but has no events entry"
             )
         self._compression_safe_actions = compression_safe_actions
-        self._action_objects = action_objects
-        self._obj_to_prev_actions_map = obj_to_prev_actions_map
+        self._symmetry_requires = symmetry_requires
+        self._symmetry_advances = symmetry_advances
+        # Every symmetry class has an object some action uses, so the classes
+        # are exactly the ones `symmetry_advances` mentions.
+        self._symmetry_classes = max(
+            (c + 1 for adv in symmetry_advances or [] for c, _ in adv), default=0
+        )
         self._initial_state = initial_state
         self._goal = goal
         self._deadline = deadline
@@ -837,13 +849,14 @@ class SearchSpace(SearchSpaceABC):
                 )
         else:
             tn = None
+        symmetry_used = (0,) * self._symmetry_classes
         if initial_state is not None:
-            return State(initial_state, tn, {}, MultiSet(), 0, [])
+            return State(initial_state, tn, {}, MultiSet(), 0, [], symmetry_used)
         else:
             # `initial_state` can be None if the initial state was already
             # provided when instantiating the class
             assert self._initial_state is not None
-            return State(self._initial_state, tn, {}, MultiSet(), 0, [])
+            return State(self._initial_state, tn, {}, MultiSet(), 0, [], symmetry_used)
 
     def get_successor_state(self, state: State, action: Action) -> State | None:
         return self.get_successor_state_with_compression(state, action, True)
@@ -983,17 +996,21 @@ class SearchSpace(SearchSpaceABC):
         action: Action,
         events: list[tuple[Timing, Event]],
     ) -> State | None:
-        if (
-            self._action_objects is not None
-            and self._obj_to_prev_actions_map is not None
-        ):
-            for obj in self._action_objects[action.idx]:
-                prev_actions = self._obj_to_prev_actions_map[obj.idx]
-                if not prev_actions or action in prev_actions:
-                    continue
-
-                if not any(a in prev_actions for a, _, _ in state.path):
+        # Symmetry breaking: the objects of each class are first used in class
+        # order, so the used ones are always the first `symmetry_used[class]`.
+        # An object needs its predecessor in the class to be used already or
+        # to be a parameter of this action too.
+        if self._symmetry_requires is not None:
+            for c, k in self._symmetry_requires[action.idx]:
+                if state.symmetry_used[c] < k:
                     return None
+        if self._symmetry_advances is not None:
+            advances = self._symmetry_advances[action.idx]
+            if any(new_state.symmetry_used[c] < k for c, k in advances):
+                symmetry_used = list(new_state.symmetry_used)
+                for c, k in advances:
+                    symmetry_used[c] = max(symmetry_used[c], k)
+                new_state.symmetry_used = tuple(symmetry_used)
 
         if self._is_temporal:
             assert new_state.temporal_network is not None

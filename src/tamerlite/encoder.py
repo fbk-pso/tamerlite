@@ -107,6 +107,9 @@ GoalFluentValue = ConstantValue | tuple[ConstantValue, bool]
 # A recognized goal conjunct: the fluent, all of its arguments, and its
 # expected value.
 GoalEntry = tuple[UPFluent, tuple[ConstantValue, ...], GoalFluentValue]
+# Per action index, `(symmetry class, count)` pairs; see
+# `Encoder._compute_symmetry_constraints`.
+SymmetryConstraints = list[list[tuple[int, int]]]
 
 
 class Encoder:
@@ -191,8 +194,8 @@ class Encoder:
 
         initial_state = None
         self._goal = None
-        action_objects = None
-        obj_to_prev_actions_map = None
+        symmetry_requires = None
+        symmetry_advances = None
         self._compression_safe_actions = None
         if full:
             initial_state = self.initial_state(self._problem_initial_values)
@@ -204,14 +207,9 @@ class Encoder:
             # numbering, so computed once here rather than repeated around a
             # possible pass-2 re-encode below.
             if symmetry_breaking:
-                action_objects, obj_to_prev_actions_map = (
-                    self._compute_obj_to_prev_actions_map()
-                )
-                if not any(obj_to_prev_actions_map):
-                    # Symmetry breaking is not beneficial because there are no
-                    # equivalent objects
-                    action_objects = None
-                    obj_to_prev_actions_map = None
+                symmetry_constraints = self._compute_symmetry_constraints()
+                if symmetry_constraints is not None:
+                    symmetry_requires, symmetry_advances = symmetry_constraints
 
             if compression_safe_actions:
                 self._compression_safe_actions = (
@@ -232,8 +230,8 @@ class Encoder:
             self._events,
             self._actions,
             self._compression_safe_actions,
-            action_objects,
-            obj_to_prev_actions_map,
+            symmetry_requires,
+            symmetry_advances,
             initial_state,
             self._goal,
             self._applicable_actions,
@@ -285,16 +283,16 @@ class Encoder:
                     # Renumbering changed `_actions_duration`/`_events`, so
                     # the mutex/precedence analysis the `SearchSpace` above
                     # ran is now stale over the new numbering and must be
-                    # redone -- `_compression_safe_actions`/`action_objects`/
-                    # `obj_to_prev_actions_map` don't depend on fluent
-                    # numbering at all, so they're reused as-is.
+                    # redone -- `_compression_safe_actions`/`symmetry_requires`/
+                    # `symmetry_advances` don't depend on fluent numbering at
+                    # all, so they're reused as-is.
                     self._search_space = SearchSpace(
                         self._actions_duration,
                         self._events,
                         self._actions,
                         self._compression_safe_actions,
-                        action_objects,
-                        obj_to_prev_actions_map,
+                        symmetry_requires,
+                        symmetry_advances,
                         initial_state,
                         self._goal,
                         self.considered_actions,
@@ -650,53 +648,73 @@ class Encoder:
                     stack.append(f)
         return relevant_fluents
 
-    def _compute_obj_to_prev_actions_map(
+    def _compute_symmetry_constraints(
         self,
-    ) -> tuple[list[list[Object]], list[set[Action]]]:
+    ) -> tuple[SymmetryConstraints, SymmetryConstraints] | None:
         """
-        This method produces two outputs:
-            1. A list of lists of object ids, where each inner list corresponds
-                to the objects used as parameters for the action.
-            2. A list, indexed by object id, of the set of actions that include
-                the previous equivalent object as a parameter (empty set if the
-                object has no such constraint).
+        Encode symmetry breaking's first-use ordering for `SearchSpace`.
+
+        The objects of each class of equivalent objects must be first used in
+        class order: an action may use the k-th object of a class only if the
+        (k-1)-th is used by an action of the path already, or is a parameter
+        of the action too. The used objects of a class are therefore always
+        its first ones, and the search only tracks how many they are
+        (`State.symmetry_used`).
+
+        A class is cut before every object whose predecessor no action uses:
+        that predecessor can never be used, so the object starts a new class
+        instead of being blocked forever. A class of one object constrains
+        nothing and is dropped.
 
         Returns:
-            Tuple[List[List[Object]], List[Set[Action]]]:
-                - List of object id lists for each action.
-                - List, indexed by object id, of the set of actions.
+            None if no class is left. Otherwise two lists indexed by action
+            index, holding `(class, count)` pairs:
+                - requires: the action can be opened only if each listed
+                  class has at least `count` used objects;
+                - advances: once the action is opened, each listed class has
+                  at least `count` used objects.
         """
 
-        equivalent_objects = self._compute_equivalent_objects()
-        prev_equivalent_object = {}
-        for group in equivalent_objects:
-            for i, obj in enumerate(group):
-                prev_equivalent_object[obj] = None if i == 0 else group[i - 1]
-
-        obj_to_actions_map: dict[UPObject, set[Action]] = {}
-        action_objects: list[list[Object]] = [[] for _ in range(len(self.actions))]
+        action_objects: list[tuple[Action, list[UPObject]]] = []
+        used_objects: set[UPObject] = set()
         for action in self._problem.actions:
             ai = self._map_back_action_instance(action())
             assert ai is not None
             objects = [p.object() for p in ai.actual_parameters if p.is_object_exp()]
-            action_objects[self.action_by_name[action.name].idx] = [
-                self._object_ids[obj.name] for obj in objects
-            ]
+            action_objects.append((self._action_by_name[action.name], objects))
+            used_objects.update(objects)
+
+        # object -> (class, position in the class)
+        positions: dict[UPObject, tuple[int, int]] = {}
+        num_classes = 0
+        for group in self._compute_equivalent_objects():
+            classes: list[list[UPObject]] = [[]]
+            for i, obj in enumerate(group):
+                if i > 0 and group[i - 1] not in used_objects:
+                    classes.append([])
+                classes[-1].append(obj)
+            for cls in classes:
+                if len(cls) > 1:
+                    for k, obj in enumerate(cls):
+                        positions[obj] = (num_classes, k)
+                    num_classes += 1
+        if num_classes == 0:
+            return None
+
+        requires: SymmetryConstraints = [[] for _ in self.actions]
+        advances: SymmetryConstraints = [[] for _ in self.actions]
+        for search_action, objects in action_objects:
+            class_positions: dict[int, set[int]] = {}
             for obj in objects:
-                if obj not in obj_to_actions_map:
-                    obj_to_actions_map[obj] = set()
-                obj_to_actions_map[obj].add(self._action_by_name[action.name])
-
-        obj_to_prev_actions_map: list[set[Action]] = [
-            set() for _ in range(len(self._object_names))
-        ]
-        for obj, prev_obj in prev_equivalent_object.items():
-            if prev_obj is not None and prev_obj in obj_to_actions_map:
-                obj_to_prev_actions_map[self._object_ids[obj.name].idx] = (
-                    obj_to_actions_map[prev_obj]
-                )
-
-        return action_objects, obj_to_prev_actions_map
+                if obj in positions:
+                    c, k = positions[obj]
+                    class_positions.setdefault(c, set()).add(k)
+            for c, ks in class_positions.items():
+                needed = max((k for k in ks if k > 0 and k - 1 not in ks), default=0)
+                if needed > 0:
+                    requires[search_action.idx].append((c, needed))
+                advances[search_action.idx].append((c, max(ks) + 1))
+        return requires, advances
 
     def _compute_equivalent_objects(self) -> list[list[UPObject]]:
         """
