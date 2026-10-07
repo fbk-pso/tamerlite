@@ -420,6 +420,9 @@ impl SearchSpace {
                 if !self.is_sat(&events[0].1.conditions, state)? {
                     return Ok(None);
                 }
+                if !self.symmetry_allows_opening(state, action) {
+                    return Ok(None);
+                }
 
                 let mut new_state = state.clone_for_child();
                 new_state.g += 1.0;
@@ -555,13 +558,10 @@ impl SearchSpace {
         Ok(true)
     }
 
-    fn open_action(
-        &self,
-        state: &State,
-        new_state: &mut State,
-        action: Action,
-        events: &[(Timing, Event)],
-    ) -> PyResult<bool> {
+    /// Whether symmetry breaking lets `action` be opened after the parent
+    /// `state`. It reads only the parent's path, so it runs before cloning the
+    /// state for the child.
+    fn symmetry_allows_opening(&self, state: &State, action: Action) -> bool {
         if let (Some(action_objects), Some(obj_to_prev_actions_map)) =
             (&self.action_objects, &self.obj_to_prev_actions_map)
         {
@@ -574,11 +574,20 @@ impl SearchSpace {
 
                 if !PersistentList::iter_rev(&state.path).any(|(a, _, _)| prev_actions.contains(a))
                 {
-                    return Ok(false);
+                    return false;
                 }
             }
         }
+        true
+    }
 
+    fn open_action(
+        &self,
+        state: &State,
+        new_state: &mut State,
+        action: Action,
+        events: &[(Timing, Event)],
+    ) -> PyResult<bool> {
         let mut counter = self.counter.lock().unwrap();
         let mut id = *counter;
         if self.is_temporal {

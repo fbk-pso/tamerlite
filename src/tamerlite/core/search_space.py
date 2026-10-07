@@ -907,6 +907,10 @@ class SearchSpace(SearchSpaceABC):
         self, state: State, action: Action, enable_compression_safe_actions: bool
     ) -> State | None:
         events = self._events[action]
+        if action not in state.todo and not self._symmetry_allows_opening(
+            state, action
+        ):
+            return None
         new_state = state.clone()
         new_state.g = state.g + 1
         if action in state.todo:
@@ -1031,13 +1035,10 @@ class SearchSpace(SearchSpaceABC):
                 return None
         return new_state
 
-    def _open_action(
-        self,
-        state: State,
-        new_state: State,
-        action: Action,
-        events: list[tuple[Timing, Event]],
-    ) -> State | None:
+    def _symmetry_allows_opening(self, state: State, action: Action) -> bool:
+        """Whether symmetry breaking lets `action` be opened after the parent
+        `state`. It reads only the parent's path, so it runs before cloning
+        the state for the child."""
         if (
             self._action_objects is not None
             and self._obj_to_prev_actions_map is not None
@@ -1048,8 +1049,16 @@ class SearchSpace(SearchSpaceABC):
                     continue
 
                 if not any(a in prev_actions for a, _, _ in state.path):
-                    return None
+                    return False
+        return True
 
+    def _open_action(
+        self,
+        state: State,
+        new_state: State,
+        action: Action,
+        events: list[tuple[Timing, Event]],
+    ) -> State | None:
         if self._is_temporal:
             assert new_state.temporal_network is not None
             start = (action, True, self._counter)
