@@ -978,6 +978,8 @@ class SearchSpace(SearchSpaceABC):
                 events[0][1].conditions, state
             ) or not self._effect_independent_start_conditions_hold(action, 0, state):
                 return None
+            if not self._symmetry_allows_opening(state, action):
+                return None
             new_state = state.clone(with_tn=False)
             new_state.g = state.g + 1
             new_state = self._open_action(state, new_state, action, events)
@@ -1134,13 +1136,10 @@ class SearchSpace(SearchSpaceABC):
                 return None
         return new_state
 
-    def _open_action(
-        self,
-        state: State,
-        new_state: State,
-        action: Action,
-        events: list[tuple[Timing, Event]],
-    ) -> State | None:
+    def _symmetry_allows_opening(self, state: State, action: Action) -> bool:
+        """Whether symmetry breaking lets `action` be opened after the parent
+        `state`. It reads only the parent's path, so it runs before cloning
+        the state for the child."""
         if (
             self._action_objects is not None
             and self._obj_to_prev_actions_map is not None
@@ -1151,8 +1150,16 @@ class SearchSpace(SearchSpaceABC):
                     continue
 
                 if not any(a in prev_actions for a, _, _ in state.path):
-                    return None
+                    return False
+        return True
 
+    def _open_action(
+        self,
+        state: State,
+        new_state: State,
+        action: Action,
+        events: list[tuple[Timing, Event]],
+    ) -> State | None:
         # Allocate the instance ids exactly as if the constraints were added
         # here, but defer the constraints themselves to `_expand_event`, after
         # the checks that reject most successors

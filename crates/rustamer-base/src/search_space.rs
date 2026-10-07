@@ -473,6 +473,9 @@ impl SearchSpace {
                 {
                     return Ok(None);
                 }
+                if !self.symmetry_allows_opening(state, action) {
+                    return Ok(None);
+                }
 
                 let mut new_state = state.clone_for_child_without_tn();
                 new_state.g += 1.0;
@@ -664,13 +667,10 @@ impl SearchSpace {
         Ok(true)
     }
 
-    fn open_action(
-        &self,
-        state: &State,
-        new_state: &mut State,
-        action: Action,
-        events: &[(Timing, Event)],
-    ) -> PyResult<bool> {
+    /// Whether symmetry breaking lets `action` be opened after the parent
+    /// `state`. It reads only the parent's path, so it runs before cloning the
+    /// state for the child.
+    fn symmetry_allows_opening(&self, state: &State, action: Action) -> bool {
         if let (Some(action_objects), Some(obj_to_prev_actions_map)) =
             (&self.action_objects, &self.obj_to_prev_actions_map)
         {
@@ -683,11 +683,20 @@ impl SearchSpace {
 
                 if !PersistentList::iter_rev(&state.path).any(|(a, _, _)| prev_actions.contains(a))
                 {
-                    return Ok(false);
+                    return false;
                 }
             }
         }
+        true
+    }
 
+    fn open_action(
+        &self,
+        state: &State,
+        new_state: &mut State,
+        action: Action,
+        events: &[(Timing, Event)],
+    ) -> PyResult<bool> {
         // Allocate the instance ids exactly as if the constraints were added
         // here, but defer the constraints themselves to `expand_event`, after
         // the checks that reject most successors
