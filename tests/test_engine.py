@@ -24,6 +24,7 @@ import warnings
 import weakref
 from collections import OrderedDict
 from collections.abc import Callable
+from fractions import Fraction
 from functools import partial
 from typing import Any, NamedTuple, cast
 
@@ -1881,6 +1882,85 @@ def test_weak_equality_warns_on_non_temporal_problem():
                     assert res.status == ResultStatus.SOLVED_SATISFICING
             messages = [str(w.message) for w in caught]
             assert not any("weak_equality" in m for m in messages)
+
+
+def test_no_subsumption_stn_keeps_redundant_edges():
+    # `_NoSubsumptionSTN` works by overriding UP's private `_is_subsumed`; pin
+    # that `add` still consults it, so a UP update that renames it or inlines
+    # the check fails here instead of silently restoring the out-list walk.
+    from tamerlite.core.search_space import _NoSubsumptionSTN
+
+    def out_degree(stn, x):
+        n, count = stn._constraints[x], 0
+        while n is not None:
+            n, count = n.next, count + 1
+        return count
+
+    plain = DeltaSimpleTemporalNetwork()
+    no_subsumption = _NoSubsumptionSTN()
+    for stn in (plain, no_subsumption):
+        stn.add("a", "b", Fraction(1))
+        stn.add("a", "b", Fraction(2))  # implied by the first edge
+    assert out_degree(plain, "a") == 1
+    assert out_degree(no_subsumption, "a") == 2
+    assert no_subsumption.check_stn()
+    assert no_subsumption.distances == plain.distances
+
+
+def test_deadline_stn_bounds_plan_end():
+    # `_DeadlineSTN` works by overriding UP's private `_inc_check`; pin that
+    # `add` still consults it, and that `copy_stn` keeps the bound
+    from tamerlite.core.search_space import _DeadlineSTN
+
+    eps = Fraction(1, 100)
+    tn = _DeadlineSTN("end_plan", Fraction(10))
+    tn.add("end1", "end_plan", -eps)
+    tn.add("end2", "end_plan", -eps)
+
+    # End 1 at 10 - eps puts plan end exactly on the deadline
+    tn.add("t0", "end1", -(10 - eps))
+    assert tn.check_stn()
+
+    # A copy keeps the class and the bound: end 2 later than 10 - eps
+    # (exact arithmetic, no tolerance) misses the deadline, through propagation
+    copy = tn.copy_stn()
+    assert isinstance(copy, _DeadlineSTN)
+    copy.add("t0", "end2", -(10 - eps) - Fraction(1, 1000))
+    assert not copy.check_stn()
+    assert tn.check_stn()
+
+    # Without a deadline, nothing bounds plan end
+    free = DeltaSimpleTemporalNetwork()
+    free.add("end1", "end_plan", -eps)
+    free.add("t0", "end1", -(10 - eps) - Fraction(1, 1000))
+    assert free.check_stn()
+
+
+def test_add_event_constraint_translates_onto_anchors():
+    # Pure-Python mirror of the Rust core's `add_event_constraint` unit test
+    from tamerlite.core.search_space import _add_event_constraint
+
+    # Anchors are timepoints, numbered in creation order
+    a, b, c = 1, 3, 2
+    tn = DeltaSimpleTemporalNetwork()
+
+    # Different anchors: t(u) - t(v) <= -1 with u = a + 2, v = b + 1/2
+    # becomes t(a) - t(b) <= -5/2, so b is at least 5/2 after a
+    assert _add_event_constraint(
+        tn, (a, Fraction(2)), (b, Fraction(1, 2)), Fraction(-1)
+    )
+    assert tn.check_stn()
+    assert tn.distances[b] - tn.distances[a] == Fraction(-5, 2)
+
+    # Same anchor, satisfied: no edge, no new timepoint
+    assert _add_event_constraint(tn, (c, Fraction(1)), (c, Fraction(2)), Fraction(-1))
+    assert c not in tn.distances
+
+    # Same anchor, violated (exact arithmetic, no tolerance): an event 1 after
+    # its anchor can't also be strictly more than 1 after an event 2 after it
+    assert not _add_event_constraint(
+        tn, (c, Fraction(1)), (c, Fraction(2)), Fraction(-1) - Fraction(1, 1000)
+    )
 
 
 def test_temporal_no_start_event():

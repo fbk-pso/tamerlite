@@ -35,7 +35,7 @@ use super::utils::*;
 #[derive(Debug)]
 pub struct State {
     pub assignments: Vector<ExpressionNode>,
-    pub temporal_network: Option<DeltaSTN<u64, f64>>,
+    pub temporal_network: Option<DeltaSTN<f64>>,
     pub todo: FxHashMap<Action, (usize, u32)>,
     pub active_conditions: HashMultiSet<Vec<ExpressionNode>>,
     pub g: f64,
@@ -88,6 +88,21 @@ impl State {
             g: self.g,
             path: self.path.clone(),
             heuristic_cache: Mutex::new(FxHashMap::with_hasher(FxBuildHasher)), // Cloning erases the cache
+        }
+    }
+
+    /// Like `clone_for_child`, but leaves `temporal_network` empty.
+    /// `SearchSpace::expand_event` copies the parent's network in only once the
+    /// successor has passed its non-temporal checks, which reject most successors
+    pub fn clone_for_child_without_tn(&self) -> Self {
+        Self {
+            assignments: self.assignments.clone(),
+            temporal_network: None,
+            todo: self.todo.clone(),
+            active_conditions: self.active_conditions.clone(),
+            g: self.g,
+            path: self.path.clone(),
+            heuristic_cache: Mutex::new(FxHashMap::with_hasher(FxBuildHasher)),
         }
     }
 

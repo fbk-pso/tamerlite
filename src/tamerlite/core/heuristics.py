@@ -90,6 +90,21 @@ class OperatorHmax:
     effect_fluents: tuple[tuple[Fluent, ...], ...]
 
 
+_CacheKey = tuple[tuple[ConstantNode, ...], tuple[tuple[Action, int], ...]]
+
+
+def _cache_key(state: State) -> _CacheKey:
+    """`state.assignments` plus the `(action, next event index)` pairs of
+    `state.todo`, sorted so that equal maps give equal keys whatever their
+    insertion order (as `todo_key` in the Rust core). It tells states apart
+    exactly as one index per heuristic action (`None` when absent) did: indices
+    in `todo` are always >= 1, and in search every `todo` action is one of the
+    heuristic's own (both are `relevant_actions`)."""
+    return tuple(state.assignments), tuple(
+        sorted((a, j) for a, (j, _) in state.todo.items())
+    )
+
+
 class HeuristicKind(Enum):
     HFF = 1
     HADD = 2
@@ -170,7 +185,6 @@ class DeleteRelaxationHeuristic(Heuristic):
     ):
         super().__init__(cache_value_in_state)
         self._heuristic_kind = heuristic_kind
-        self._actions = actions
         self._events = events
         self._operators: list[Operator] = []
         self._extra_fluents: dict[Action, list[Fluent]] = {}
@@ -306,9 +320,9 @@ class DeleteRelaxationHeuristic(Heuristic):
             _, weights = self._simple_numeric_conds[simple_cond]
             weights[-1] += epsilon
 
-        self._internal_caching: (
-            dict[tuple[ConstantNode | None, ...], float | None] | None
-        ) = {} if internal_caching else None
+        self._internal_caching: dict[_CacheKey, float | None] | None = (
+            {} if internal_caching else None
+        )
 
     @property
     def name(self) -> str:
@@ -1033,14 +1047,12 @@ class DeleteRelaxationHeuristic(Heuristic):
 
     def _eval(self, state: State, ss: SearchSpaceABC) -> float | None:
         if self._internal_caching is not None:
-            assignments_values = tuple(state.assignments) + tuple(
-                state.todo.get(action, (None, None))[0] for action in self._actions
-            )
-            if assignments_values in self._internal_caching:
-                return self._internal_caching[assignments_values]
+            key = _cache_key(state)
+            if key in self._internal_caching:
+                return self._internal_caching[key]
 
             res, _ = self._eval_core(state)
-            self._internal_caching[assignments_values] = res
+            self._internal_caching[key] = res
         else:
             res, _ = self._eval_core(state)
 
@@ -1615,7 +1627,6 @@ class HMaxExplicit(Heuristic):
         inadmissible_numeric_heuristic_variant: bool,
     ):
         super().__init__(cache_value_in_state)
-        self._actions = actions
         self._events = events
         self._operators: list[OperatorHmax] = []
         self._extra_fluents: dict[Action, list[Fluent]] = {}
@@ -1687,9 +1698,9 @@ class HMaxExplicit(Heuristic):
                         if isinstance(expression_node, FluentNode)
                     )
 
-        self._internal_caching: (
-            dict[tuple[ConstantNode | None, ...], float | None] | None
-        ) = {} if internal_caching else None
+        self._internal_caching: dict[_CacheKey, float | None] | None = (
+            {} if internal_caching else None
+        )
 
         # Seeded into `_eval_core`'s `assignments_changes` on every call: every
         # fluent, including the extra ones (index >= `len(fluent_types)`) that
@@ -1760,14 +1771,12 @@ class HMaxExplicit(Heuristic):
 
     def _eval(self, state: State, ss: SearchSpaceABC) -> float | None:
         if self._internal_caching is not None:
-            assignments_values = tuple(state.assignments) + tuple(
-                state.todo.get(action, (None, None))[0] for action in self._actions
-            )
-            if assignments_values in self._internal_caching:
-                return self._internal_caching[assignments_values]
+            key = _cache_key(state)
+            if key in self._internal_caching:
+                return self._internal_caching[key]
 
             res = self._eval_core(state)
-            self._internal_caching[assignments_values] = res
+            self._internal_caching[key] = res
         else:
             res = self._eval_core(state)
 

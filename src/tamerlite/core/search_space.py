@@ -24,6 +24,63 @@ from fractions import Fraction
 from unified_planning.model import DeltaSimpleTemporalNetwork
 
 
+class _NoSubsumptionSTN(DeltaSimpleTemporalNetwork):
+    """A `DeltaSimpleTemporalNetwork` whose `add` never checks for subsumption
+    and always prepends the new edge, mirroring the Rust core's
+    `DeltaSTN::new_without_subsumption`. Meant for `SearchSpace.build_plan`'s
+    network, where each (x, y) pair is added about once, so the out-list walk
+    almost always misses. Skipping it changes neither the verdict nor the schedule,
+    since an implied edge never lowers a distance.
+
+    Overrides UP's private `_is_subsumed`, which `add` calls."""
+
+    def _is_subsumed(self, x: object, y: object, b: Fraction) -> bool:
+        return False
+
+
+class _DeadlineSTN(DeltaSimpleTemporalNetwork):
+    """A `DeltaSimpleTemporalNetwork` in which the earliest time of `end_plan`
+    must not exceed `deadline`, mirroring the Rust core's
+    `DeltaSTN::with_deadline`. Distances only ever decrease and all start at
+    0, so the earliest schedule has every timepoint at >= 0 and the bound is
+    checked directly on `end_plan`'s distance, instead of through edges to a
+    plan-start timepoint, which would close a cycle through every timepoint
+    and catch a late `end_plan` only after propagating all the way round it.
+
+    Overrides UP's private `_inc_check`, which `add` calls, and `copy_stn`,
+    which would otherwise return the base class."""
+
+    def __init__(
+        self,
+        end_plan: object,
+        deadline: Fraction,
+        constraints=None,
+        distances=None,
+        is_sat: bool = True,
+    ):
+        super().__init__(constraints, distances, is_sat)
+        self._end_plan = end_plan
+        self._deadline = deadline
+
+    def _inc_check(self, x: object, y: object, b: Fraction) -> bool:
+        # Propagation from a consistent network terminates (`end_plan` is a
+        # sink, so no cycle runs through it), so checking once it is done
+        # reaches the verdict the Rust core reaches mid-propagation
+        return (
+            super()._inc_check(x, y, b)
+            and self._distances.get(self._end_plan, 0) >= -self._deadline
+        )
+
+    def copy_stn(self) -> "_DeadlineSTN":
+        return _DeadlineSTN(
+            self._end_plan,
+            self._deadline,
+            self._constraints.copy(),
+            self._distances.copy(),
+            self._is_sat,
+        )
+
+
 class IfReturnType(Enum):
     """The declared return type of an interpreted function, as tagged by
     `Converter.walk_interpreted_function_exp`. Mirrors the `#[pyclass] enum
@@ -374,10 +431,17 @@ class State:
     def get_value(self, fluent: Fluent) -> ConstantNode:
         return self.assignments[fluent.idx]
 
-    def clone(self):
+    def clone(self, with_tn: bool = True):
+        # `with_tn=False` leaves the network empty: `SearchSpace._expand_event`
+        # copies the parent's one in only once the successor has passed its
+        # non-temporal checks, which reject most successors
         assignments = list(self.assignments)
         todo = self.todo.copy()
-        tn = self.temporal_network.copy_stn() if self.temporal_network else None
+        tn = (
+            self.temporal_network.copy_stn()
+            if with_tn and self.temporal_network
+            else None
+        )
         return State(
             assignments, tn, todo, self.active_conditions.clone(), self.g, self.path[:]
         )
@@ -426,7 +490,7 @@ class PrecedenceChecker:
     ) -> bool:
         (a1, i1), (a2, i2) = events_pair
         if a1 == a2:
-            return False
+            return True
 
         res = self._cache.get(events_pair, None)
         if res is None:
@@ -689,6 +753,42 @@ def simplify(
     return tuple(final_res)
 
 
+# An action being opened by `SearchSpace._open_action`, whose constraints
+# `SearchSpace._expand_event` adds: the action and the timepoint its start gets
+# (its end gets the next)
+_PendingOpening = tuple[Action, int]
+
+# An event's STN timepoint: its anchor (its action instance's start or end
+# timepoint) and its delay from it
+_EventTimepoint = tuple[int, Fraction]
+
+# STN timepoints are ints numbered in creation order, so a network and its
+# copies agree on the number of every timepoint they share. Plan end is the
+# first one in every search network; only a deadline reads it. Mirrors the
+# Rust core's `PLAN_END`
+_PLAN_END = 0
+
+
+def _add_event_constraint(
+    tn: DeltaSimpleTemporalNetwork,
+    u: _EventTimepoint,
+    v: _EventTimepoint,
+    b: Fraction,
+) -> bool:
+    """Adds `t(u) - t(v) <= b` for two events `u`, `v`. Events are rigidly
+    `t(anchor) + delay`, so they get no timepoint of their own: the constraint
+    becomes one on the anchors, `t(a_u) - t(a_v) <= b - delay_u + delay_v`, or
+    a constant when both share an anchor. Returns False if that constant is
+    violated, i.e. the network is inconsistent; `tn.add` records every other
+    inconsistency in `tn.check_stn()`."""
+    (x, dx), (y, dy) = u, v
+    b = b - dx + dy
+    if x == y:
+        return b >= 0
+    tn.add(x, y, b)
+    return True
+
+
 class SearchSpaceABC(ABC):
     @property
     @abstractmethod
@@ -772,17 +872,21 @@ class SearchSpace(SearchSpaceABC):
         self._initial_state = initial_state
         self._goal = goal
         self._deadline = deadline
-        self._start_plan = "start_plan"
-        self._end_plan = "end_plan"
         self._epsilon = Fraction(1, 100) if epsilon is None else epsilon
         self._is_temporal = any(v is not None for v in actions_duration)
-        self._counter = 0
 
         event_fluents: list[
             list[tuple[set[Fluent], set[Fluent], set[Fluent], set[Fluent], set[Fluent]]]
         ] = [[] for _ in actions]
+        # For event `k` of action `a`, at `[a.idx][k]`: whether it is anchored
+        # at the action's start (else its end) and its delay from that anchor
+        self._event_anchors: list[list[tuple[bool, Fraction]]] = [[] for _ in actions]
+        self._effect_independent_start_conditions: list[list[list[Expression]]] = [
+            [] for _ in actions
+        ]
         for a, le in self._events.items():
             duration = self._actions_duration[a.idx]
+            self._event_anchors[a.idx] = [(t.is_from_start(), t.delay) for t, _ in le]
             for i, (_, e) in enumerate(le):
                 reads = set(get_fluents(e.conditions))
                 reads.update(x for eff in e.effects for x in get_fluents(eff.value))
@@ -796,6 +900,13 @@ class SearchSpace(SearchSpaceABC):
                     reads.update(get_fluents(duration[0]))
                     reads.update(get_fluents(duration[1]))
                 writes = {eff.fluent for eff in e.effects}
+                self._effect_independent_start_conditions[a.idx].append(
+                    [
+                        c
+                        for c in e.start_conditions
+                        if all(f not in writes for f in get_fluents(c))
+                    ]
+                )
                 read_writes = reads.union(writes)
                 start_cond_reads = {
                     f for c in e.start_conditions for f in get_fluents(c)
@@ -827,14 +938,18 @@ class SearchSpace(SearchSpaceABC):
         initial_state: list[ConstantNode] | None = None,
     ) -> State:
         if self._is_temporal:
-            tn = DeltaSimpleTemporalNetwork()
-            if self._deadline is not None:
-                tn.insert_interval(
-                    self._start_plan,
-                    self._end_plan,
-                    left_bound=self._deadline,
-                    right_bound=self._deadline,
+            tn = (
+                DeltaSimpleTemporalNetwork(
+                    constraints={_PLAN_END: None}, distances={_PLAN_END: 0}
                 )
+                if self._deadline is None
+                else _DeadlineSTN(
+                    _PLAN_END,
+                    self._deadline,
+                    constraints={_PLAN_END: None},
+                    distances={_PLAN_END: 0},
+                )
+            )
         else:
             tn = None
         if initial_state is not None:
@@ -852,17 +967,33 @@ class SearchSpace(SearchSpaceABC):
         self, state: State, action: Action, enable_compression_safe_actions: bool
     ) -> State | None:
         events = self._events[action]
-        new_state = state.clone()
-        new_state.g = state.g + 1
         if action in state.todo:
             index, id = state.todo[action]
             _, e = events[index]
+            # Check if the event is applicable before creating the new state
+            if not evaluate(
+                e.conditions, state
+            ) or not self._effect_independent_start_conditions_hold(
+                action, index, state
+            ):
+                return None
+            new_state = state.clone(with_tn=False)
+            new_state.g = state.g + 1
             if index + 1 >= len(events):
                 new_state.todo.pop(action)
             else:
-                new_state.todo[action] = index + 1, id + 1
+                new_state.todo[action] = index + 1, id
             new_state = self._expand_event(state, new_state, e, index, id)
         else:
+            # Check if the action is applicable before creating the new state
+            if not evaluate(
+                events[0][1].conditions, state
+            ) or not self._effect_independent_start_conditions_hold(action, 0, state):
+                return None
+            if not self._symmetry_allows_opening(state, action):
+                return None
+            new_state = state.clone(with_tn=False)
+            new_state.g = state.g + 1
             new_state = self._open_action(state, new_state, action, events)
             if (
                 enable_compression_safe_actions
@@ -873,11 +1004,20 @@ class SearchSpace(SearchSpaceABC):
             ):
                 _, id = new_state.todo.pop(action)
                 for index in range(1, len(events)):
-                    state = new_state.clone()
-                    new_state.g += 1
                     _, e = events[index]
-                    new_state = self._expand_event(state, new_state, e, index, id)
-                    id += 1
+                    # `_expand_event` relies on these checks having been made
+                    if not evaluate(
+                        e.conditions, new_state
+                    ) or not self._effect_independent_start_conditions_hold(
+                        action, index, new_state
+                    ):
+                        return None
+                    state = new_state.clone(with_tn=False)
+                    new_state.g += 1
+                    expanded = self._expand_event(state, new_state, e, index, id)
+                    if expanded is None:
+                        return None
+                    new_state = expanded
 
         result: State | None = new_state
         return result
@@ -917,17 +1057,33 @@ class SearchSpace(SearchSpaceABC):
                 res.add(g)
         return res
 
+    def _effect_independent_start_conditions_hold(
+        self, action: Action, index: int, state: State
+    ) -> bool:
+        """Whether event `index`'s effect-independent start conditions hold on
+        the parent `state`. They can't change value in the child, so this
+        rejects exactly the successors `_expand_event`'s post-effect check
+        would, but before cloning the state or opening the action."""
+        return all(
+            evaluate(c, state)
+            for c in self._effect_independent_start_conditions[action.idx][index]
+        )
+
     def _expand_event(
-        self, state: State, new_state: State, e: Event, index: int, id: int
+        self,
+        state: State,
+        new_state: State,
+        e: Event,
+        index: int,
+        id: int,
+        pending_opening: "_PendingOpening | None" = None,
     ) -> State | None:
         new_state.path.append((e.action, e.pos, id))
-        # check conditions
-        if not evaluate(e.conditions, state):
-            return None
-        # check active conditions
-        for c in new_state.active_conditions:
-            if not evaluate(c, state):
-                return None
+        # check conditions is done before calling this method
+        # The inherited active conditions need no check here, on the parent:
+        # every state this search space returns passed the post-effect check
+        # below on its own assignments, and the initial state has none, so they
+        # all hold on `state`
         # remove end conditions
         for c in e.end_conditions:
             new_state.active_conditions.remove(c)
@@ -938,51 +1094,61 @@ class SearchSpace(SearchSpaceABC):
         for eff in e.effects:
             v = evaluate(eff.value, state)
             new_state.assignments[eff.fluent.idx] = v
-        # check active conditions
-        for c in new_state.active_conditions:
-            if not evaluate(c, new_state):
-                return None
+        # check active conditions. Without effects the child's assignments are
+        # the parent's: the inherited conditions hold on them (see above), and
+        # the new start conditions, all effect-independent, were checked by
+        # the caller with `_effect_independent_start_conditions_hold`
+        if e.effects:
+            for c in new_state.active_conditions:
+                if not evaluate(c, new_state):
+                    return None
         if self._is_temporal:
+            # Only now, with the non-temporal checks passed, copy the parent's
+            # network (a compression-safe chain already owns one after its
+            # first event)
+            if new_state.temporal_network is None:
+                assert state.temporal_network is not None
+                new_state.temporal_network = state.temporal_network.copy_stn()
+            if pending_opening is not None:
+                self._add_opening_constraints(state, new_state, *pending_opening)
             # update TN
-            assert new_state.temporal_network is not None
             e_id = (e.action, index)
-            if len(state.path) > 0:
-                for e2_action, e2_pos, id2 in state.path:
-                    e2_id = (e2_action, e2_pos)
-                    if (e_id, e2_id) in self._mutex:
-                        new_state.temporal_network.add(
-                            (e2_action, e2_pos, id2),
-                            (e.action, e.pos, id),
-                            -self._epsilon,
-                        )
-                    else:
-                        new_state.temporal_network.add(
-                            (e2_action, e2_pos, id2), (e.action, e.pos, id), 0
-                        )
+            ev = self._event_timepoint(e.action, e.pos, id)
+            # Only two of the edges from past events are needed. The edge from
+            # the immediate predecessor is always added, so the path is a
+            # chain in which each event is no later than the next: a 0-edge
+            # from any older event is already implied. Likewise, once the most
+            # recent mutex predecessor e_m gets its -epsilon edge, every older
+            # event e_j satisfies t(e_j) <= t(e_m) <= t(e) - epsilon, so the
+            # scan stops there.
+            is_predecessor = True
+            tn = new_state.temporal_network
+            for e2_action, e2_pos, id2 in reversed(state.path):
+                e2_id = (e2_action, e2_pos)
+                ev2 = self._event_timepoint(e2_action, e2_pos, id2)
+                if (e_id, e2_id) in self._mutex:
+                    if not _add_event_constraint(tn, ev2, ev, -self._epsilon):
+                        return None
+                    break
+                if is_predecessor:
+                    if not _add_event_constraint(tn, ev2, ev, Fraction(0)):
+                        return None
+                    is_predecessor = False
             for a, i in new_state.todo.items():
-                id2 = i[1]
-                for j in range(len(self._events[a][i[0] :])):
-                    e2_id = (a, i[0] + j)
-                    e2 = (a, i[0] + j, id2)
-                    if (e_id, e2_id) in self._mutex:
-                        new_state.temporal_network.add(
-                            (e.action, e.pos, id), e2, -self._epsilon
-                        )
-                    else:
-                        new_state.temporal_network.add((e.action, e.pos, id), e2, 0)
-                    id2 += 1
+                for j in range(i[0], len(self._events[a])):
+                    b = -self._epsilon if (e_id, (a, j)) in self._mutex else Fraction(0)
+                    ev2 = self._event_timepoint(a, j, i[1])
+                    if not _add_event_constraint(tn, ev, ev2, b):
+                        return None
             # check TN
             if not new_state.temporal_network.check_stn():
                 return None
         return new_state
 
-    def _open_action(
-        self,
-        state: State,
-        new_state: State,
-        action: Action,
-        events: list[tuple[Timing, Event]],
-    ) -> State | None:
+    def _symmetry_allows_opening(self, state: State, action: Action) -> bool:
+        """Whether symmetry breaking lets `action` be opened after the parent
+        `state`. It reads only the parent's path, so it runs before cloning
+        the state for the child."""
         if (
             self._action_objects is not None
             and self._obj_to_prev_actions_map is not None
@@ -993,51 +1159,111 @@ class SearchSpace(SearchSpaceABC):
                     continue
 
                 if not any(a in prev_actions for a, _, _ in state.path):
-                    return None
+                    return False
+        return True
 
+    def _open_action(
+        self,
+        state: State,
+        new_state: State,
+        action: Action,
+        events: list[tuple[Timing, Event]],
+    ) -> State | None:
+        # The instance's start and end are the next two timepoints of the
+        # parent's network, which the child's copies. `_expand_event` adds them
+        # and the opening constraints, after the checks that reject most successors
+        pending_opening: _PendingOpening | None = None
+        start = 0
         if self._is_temporal:
-            assert new_state.temporal_network is not None
-            start = (action, True, self._counter)
-            end = (action, False, self._counter)
-            self._counter += 1
-            duration = self._actions_duration[action.idx]
-            lower: int | Fraction
-            upper: int | Fraction
-            if duration is None:
-                lower, upper = 0, 0
-            else:
-                evaluated_lower = evaluate(duration[0], state)
-                assert isinstance(evaluated_lower, (int, Fraction))
-                lower = evaluated_lower
-                if duration[2]:
-                    lower += self._epsilon
-                evaluated_upper = evaluate(duration[1], state)
-                assert isinstance(evaluated_upper, (int, Fraction))
-                upper = evaluated_upper
-                if duration[3]:
-                    upper -= self._epsilon
-            new_state.temporal_network.insert_interval(
-                start, end, left_bound=lower, right_bound=upper
-            )
-            new_state.temporal_network.add(self._start_plan, start, 0)
-            new_state.temporal_network.add(end, self._end_plan, -self._epsilon)
-            id = self._counter
-            for t, e in events:
-                ev = (e.action, e.pos, self._counter)
-                if t.is_from_start():
-                    new_state.temporal_network.insert_interval(
-                        start, ev, left_bound=t.delay, right_bound=t.delay
-                    )
-                else:
-                    new_state.temporal_network.insert_interval(
-                        end, ev, left_bound=t.delay, right_bound=t.delay
-                    )
-                self._counter += 1
+            assert state.temporal_network is not None
+            start = len(state.temporal_network.distances)
+            pending_opening = (action, start)
             if len(events) > 1:
-                new_state.todo[action] = 1, id + 1
+                new_state.todo[action] = 1, start
+        return self._expand_event(
+            state, new_state, events[0][1], 0, start, pending_opening
+        )
+
+    def _add_opening_constraints(
+        self,
+        state: State,
+        new_state: State,
+        action: Action,
+        start: int,
+    ) -> None:
+        """Adds the start and end timepoints of an action opened by
+        `_open_action` (`insert_interval` creates both) and its constraints:
+        the duration bounds and, under a deadline, the edge to plan end.
+        Events have no timepoints of their own: `_event_timepoint` maps them
+        onto start/end."""
+        tn = new_state.temporal_network
+        assert tn is not None
+        assert len(tn.distances) == start
+        end = start + 1
+        duration = self._actions_duration[action.idx]
+        lower: int | Fraction
+        upper: int | Fraction
+        if duration is None:
+            lower, upper = 0, 0
         else:
-            id = self._counter
-        return self._expand_event(state, new_state, events[0][1], 0, id)
+            evaluated_lower = evaluate(duration[0], state)
+            assert isinstance(evaluated_lower, (int, Fraction))
+            lower = evaluated_lower
+            if duration[2]:
+                lower += self._epsilon
+            evaluated_upper = evaluate(duration[1], state)
+            assert isinstance(evaluated_upper, (int, Fraction))
+            upper = evaluated_upper
+            if duration[3]:
+                upper -= self._epsilon
+        tn.insert_interval(start, end, left_bound=lower, right_bound=upper)
+        # Under a deadline, plan end follows the latest action end (plus
+        # epsilon) and the network bounds its earliest time by the deadline
+        # (see `_DeadlineSTN`). Without one, plan end would be a sink nothing
+        # reads, so the edge is skipped
+        if self._deadline is not None:
+            tn.add(end, _PLAN_END, -self._epsilon)
+
+    def _event_timepoint(
+        self, action: Action, index: int, start: int
+    ) -> _EventTimepoint:
+        """Where event `index` of `action` sits in the STN, given the start
+        timepoint `start` of its action instance.
+
+        Events have no timepoint of their own: each one is fixed at its action
+        instance's start or end timepoint plus a constant delay. Returns that
+        (anchor timepoint, delay) pair. The end is the timepoint right after
+        the start (see `_add_opening_constraints`)."""
+        is_start, delay = self._event_anchors[action.idx][index]
+        return (start if is_start else start + 1), delay
+
+    def _add_plan_event_constraints(
+        self,
+        tn: DeltaSimpleTemporalNetwork,
+        e: Event,
+        id: int,
+        event_path: list[tuple[Event, int]],
+        todo: dict[Action, tuple[int, int]],
+    ) -> None:
+        """Adds `build_plan`'s ordering constraints between event `e` (of the
+        action instance starting at `id`) and the events already on the plan or
+        still to come. The plan comes from the search, whose networks were
+        consistent, so a violated constant between events of one action
+        instance can't happen here"""
+        e_id = (e.action, e.pos)
+        ev = self._event_timepoint(e.action, e.pos, id)
+        for e2, id2 in event_path:
+            e2_id = (e2.action, e2.pos)
+            ev2 = self._event_timepoint(e2.action, e2.pos, id2)
+            if (e_id, e2_id) in self._mutex:
+                _add_event_constraint(tn, ev2, ev, -self._epsilon)
+            elif (e2_id, e_id) in self._precedence:
+                _add_event_constraint(tn, ev2, ev, Fraction(0))
+        for a, i in todo.items():
+            for j in range(i[0], len(self._events[a])):
+                if (e_id, (a, j)) in self._mutex:
+                    ev2 = self._event_timepoint(a, j, i[1])
+                    _add_event_constraint(tn, ev, ev2, -self._epsilon)
 
     def build_plan(
         self, path: list[Action]
@@ -1045,10 +1271,11 @@ class SearchSpace(SearchSpaceABC):
         if not self.is_temporal:
             return [(None, a, None) for a in path]
 
-        tn = DeltaSimpleTemporalNetwork()
+        tn = _NoSubsumptionSTN()
         todo: dict[Action, tuple[int, int]] = {}
         event_path: list[tuple[Event, int]] = []
-        counter = 0
+        # Each action instance and its start timepoint (its end is the next)
+        openings: list[tuple[Action, int]] = []
         state = self.initial_state()
         for action in path:
             action_events = self._events[action]
@@ -1057,33 +1284,17 @@ class SearchSpace(SearchSpaceABC):
                 if index + 1 >= len(action_events):
                     todo.pop(action)
                 else:
-                    todo[action] = (index + 1, id + 1)
+                    todo[action] = (index + 1, id)
 
                 _, e = action_events[index]
-                for e2, id2 in event_path:
-                    if ((e.action, e.pos), (e2.action, e2.pos)) in self._mutex:
-                        b = -self._epsilon
-                        tn.add((e2.action, e2.pos, id2), (e.action, e.pos, id), b)
-                    elif ((e2.action, e2.pos), (e.action, e.pos)) in self._precedence:
-                        tn.add(
-                            (e2.action, e2.pos, id2), (e.action, e.pos, id), Fraction(0)
-                        )
-
-                for a, i in todo.items():
-                    id2 = i[1]
-                    for j in range(i[0], len(self._events[a])):
-                        _, e2 = self._events[a][j]
-                        if ((e.action, e.pos), (e2.action, e2.pos)) in self._mutex:
-                            b = -self._epsilon
-                            tn.add((e.action, e.pos, id), (e2.action, e2.pos, id2), b)
-                        id2 += 1
-
+                self._add_plan_event_constraints(tn, e, id, event_path, todo)
                 event_path.append((e, id))
 
             else:
-                start = (action, True, counter)
-                end = (action, False, counter)
-                counter += 1
+                # `tn.add` creates both timepoints
+                start = len(tn.distances)
+                end = start + 1
+                openings.append((action, start))
                 duration = self._actions_duration[action.idx]
                 lb: Fraction
                 ub: Fraction
@@ -1104,42 +1315,11 @@ class SearchSpace(SearchSpaceABC):
 
                 tn.add(start, end, lb)
                 tn.add(end, start, ub)
-                id = counter
-                for t, e in action_events:
-                    ev = (e.action, e.pos, counter)
-                    b1 = -t.delay
-                    b2 = t.delay
-                    if t.is_from_start():
-                        tn.add(start, ev, b1)
-                        tn.add(ev, start, b2)
-                    else:
-                        tn.add(end, ev, b1)
-                        tn.add(ev, end, b2)
-                    counter += 1
-
                 e = action_events[0][1]
-                ev = (e.action, e.pos, id)
-                for e2, id2 in event_path:
-                    ev2 = (e2.action, e2.pos, id2)
-                    if ((e.action, e.pos), (e2.action, e2.pos)) in self._mutex:
-                        b = -self._epsilon
-                        tn.add(ev2, ev, b)
-                    elif ((e2.action, e2.pos), (e.action, e.pos)) in self._precedence:
-                        tn.add(ev2, ev, Fraction(0))
-
-                for a, i in todo.items():
-                    id2 = i[1]
-                    for j in range(i[0], len(self._events[a])):
-                        _, e2 = self._events[a][j]
-                        ev2 = (e2.action, e2.pos, id2)
-                        if ((e.action, e.pos), (e2.action, e2.pos)) in self._mutex:
-                            b = -self._epsilon
-                            tn.add(ev, ev2, b)
-                        id2 += 1
-
-                event_path.append((e, id))
+                self._add_plan_event_constraints(tn, e, start, event_path, todo)
+                event_path.append((e, start))
                 if len(action_events) > 1:
-                    todo[action] = (1, id + 1)
+                    todo[action] = (1, start)
 
             # Advance to the successor state only after evaluating the action's
             # duration bounds above, so they are evaluated against the pre-action state
@@ -1148,21 +1328,12 @@ class SearchSpace(SearchSpaceABC):
             state = succ_state
 
         res: list[tuple[Fraction | None, Action, Fraction | None]] = []
-        start_time: dict[tuple[Action, int], Fraction] = {}
-        end_time: dict[tuple[Action, int], Fraction] = {}
-        for ev, dist in tn.distances.items():
-            if not isinstance(ev[1], bool):
-                continue
-
-            if ev[1]:
-                start_time[(ev[0], ev[2])] = -dist
-            else:
-                end_time[(ev[0], ev[2])] = -dist
-
-        for a_id, st in start_time.items():
-            et = end_time[a_id]
+        distances = tn.distances
+        for action, start in openings:
+            st = -distances[start]
+            et = -distances[start + 1]
             d = None if et - st == 0 else et - st
-            res.append((st, a_id[0], d))
+            res.append((st, action, d))
 
         res.sort()
         return res

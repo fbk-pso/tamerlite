@@ -25,9 +25,8 @@ use super::expressions::*;
 use super::expressions_utils::*;
 use super::multiset::HashMultiSet;
 use super::search_state::*;
-use super::stn::DeltaSTN;
+use super::stn::{DeltaSTN, Timepoint};
 use super::structures::*;
-use super::tn_interpreter::TNInterpreter;
 use super::utils::*;
 
 type ScheduledAction = (Option<BigRational>, Action, Option<BigRational>);
@@ -48,7 +47,6 @@ type PyDurationInterval = (Vec<PyExpressionNode>, Vec<PyExpressionNode>, bool, b
 
 pub trait SearchSpaceTrait {
     fn is_temporal(&self) -> bool;
-    fn tn_interpreter(&self) -> &TNInterpreter;
     fn initial_state(&self, initial_state: Option<Vec<PyExpressionNode>>) -> PyResult<State>;
     fn get_successor_state(&self, state: &State, action: Action) -> PyResult<Option<State>>;
     fn get_successor_states_iter<'a>(
@@ -160,6 +158,38 @@ fn get_fluents<'a>(expr: &'a [ExpressionNode]) -> impl Iterator<Item = Fluent> +
     })
 }
 
+/// An action being opened by `open_action`, whose constraints `expand_event`
+/// adds: the action and the timepoint its start gets (its end gets the next)
+type PendingOpening = (Action, Timepoint);
+
+/// Plan end's timepoint in every search network: the first one created. Only
+/// a deadline reads it
+const PLAN_END: Timepoint = 0;
+
+/// Adds `t(u) - t(v) <= b` for two events `u`, `v`, each given as the
+/// timepoint of its anchor (its action instance's start or end) and its
+/// constant delay from it. Events are rigidly `t(anchor) + delay`, so they get
+/// no timepoint of their own: the constraint becomes one on the anchors,
+/// `t(a_u) - t(a_v) <= b - delay_u + delay_v`, or a constant when both share
+/// an anchor. Returns false if that constant is violated, i.e. the network is
+/// inconsistent; `tn.add` records every other inconsistency in `tn.check()`.
+fn add_event_constraint<Q>(
+    tn: &mut DeltaSTN<Q>,
+    u: (Timepoint, &Q),
+    v: (Timepoint, &Q),
+    b: Q,
+) -> bool
+where
+    Q: num_traits::Num + std::ops::Neg<Output = Q> + PartialOrd + Clone,
+{
+    let b = b - u.1.clone() + v.1.clone();
+    if u.0 == v.0 {
+        return b >= -tn.tolerance.clone();
+    }
+    tn.add(u.0, v.0, &b);
+    true
+}
+
 #[pyclass(name = "SearchSpace")]
 #[derive(Debug)]
 pub struct SearchSpace {
@@ -168,18 +198,20 @@ pub struct SearchSpace {
     relevant_actions: Vec<Action>,
     compression_safe_actions: Option<Vec<bool>>,
     event_fluents: EventFluents,
+    /// For event `k` of action `a`, at `[a.idx][k]`: whether it is anchored at
+    /// the action's start (else its end) and its delay from that anchor
+    event_anchors: Vec<Vec<(bool, f64)>>,
+    effect_independent_start_conditions: Vec<Vec<Box<[usize]>>>,
     mutex: MutexChecker,
     precedence: PrecedenceChecker,
     action_objects: Option<Vec<Vec<Object>>>,
     obj_to_prev_actions_map: Option<Vec<FxHashSet<Action>>>,
     initial_state: Option<Vec<ExpressionNode>>,
     goal: Option<Vec<ExpressionNode>>,
-    tn_interpreter: TNInterpreter,
     deadline: Option<f64>,
     epsilon: f64,
     epsilon_rational: BigRational,
     is_temporal: bool,
-    counter: Mutex<u32>,
 }
 
 #[pymethods]
@@ -236,8 +268,14 @@ impl SearchSpace {
             .collect();
 
         let mut event_fluents = vec![Vec::new(); actions.len()];
+        let mut effect_independent_start_conditions = vec![Vec::new(); actions.len()];
+        let mut event_anchors = vec![Vec::new(); actions.len()];
         for (a, le) in &events {
             let duration = &converted_actions_duration[a.idx];
+            event_anchors[a.idx] = le
+                .iter()
+                .map(|(t, _)| (t.is_from_start(), rational_to_f64(&t.delay)))
+                .collect();
             for (i, (_, e)) in le.iter().enumerate() {
                 let mut reads: FxHashSet<Fluent> = get_fluents(&e.conditions).collect();
                 reads.extend(e.effects.iter().flat_map(|eff| get_fluents(&eff.value)));
@@ -254,6 +292,14 @@ impl SearchSpace {
                     }
                 }
                 let writes: FxHashSet<Fluent> = e.effects.iter().map(|eff| eff.fluent).collect();
+                effect_independent_start_conditions[a.idx].push(
+                    e.start_conditions
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, c)| get_fluents(c).all(|f| !writes.contains(&f)))
+                        .map(|(k, _)| k)
+                        .collect(),
+                );
                 let read_writes: FxHashSet<Fluent> = reads.union(&writes).copied().collect();
                 let start_cond_reads: FxHashSet<Fluent> = e
                     .start_conditions
@@ -275,14 +321,14 @@ impl SearchSpace {
             }
         }
 
-        let tn_interpreter = TNInterpreter::new(&actions, &events);
-
         let res = SearchSpace {
             actions_duration: converted_actions_duration,
             events,
             relevant_actions,
             compression_safe_actions,
             event_fluents,
+            event_anchors,
+            effect_independent_start_conditions,
             mutex: MutexChecker::new(),
             precedence: PrecedenceChecker::new(),
             action_objects,
@@ -290,7 +336,6 @@ impl SearchSpace {
             initial_state: initial_state
                 .map(|inner_vec| inner_vec.into_iter().map(|v| v.v).collect()),
             goal: goal.map(|inner_vec| inner_vec.into_iter().map(|e| e.v).collect()),
-            tn_interpreter,
             deadline: deadline.map(|v| rational_to_f64(&v)),
             epsilon: match &epsilon {
                 Some(x) => rational_to_f64(x),
@@ -301,7 +346,6 @@ impl SearchSpace {
                 None => mk_rational(1, 100),
             },
             is_temporal,
-            counter: Mutex::new(0),
         };
         Ok(res)
     }
@@ -399,29 +443,42 @@ impl SearchSpace {
             if let Some((index, id)) = state.todo.get(&action) {
                 if let Some((_, e)) = events.get(*index) {
                     // Check if the event is applicable before creating the new state
-                    if !self.is_sat(&e.conditions, state)? {
+                    if !self.is_sat(&e.conditions, state)?
+                        || !self
+                            .effect_independent_start_conditions_hold(action, *index, e, state)?
+                    {
                         return Ok(None);
                     }
 
-                    let mut new_state = state.clone_for_child();
+                    let mut new_state = state.clone_for_child_without_tn();
                     new_state.g += 1.0;
 
                     if index + 1 >= events.len() {
                         new_state.todo.remove(&action);
                     } else {
-                        new_state.todo.insert(action, (index + 1, id + 1));
+                        new_state.todo.insert(action, (index + 1, *id));
                     }
-                    if self.expand_event(state, &mut new_state, e, index, id)? {
+                    if self.expand_event(state, &mut new_state, e, index, id, None)? {
                         return Ok(Some(new_state));
                     }
                 }
             } else {
                 // Check if action is applicable before creating the new state
-                if !self.is_sat(&events[0].1.conditions, state)? {
+                if !self.is_sat(&events[0].1.conditions, state)?
+                    || !self.effect_independent_start_conditions_hold(
+                        action,
+                        0,
+                        &events[0].1,
+                        state,
+                    )?
+                {
+                    return Ok(None);
+                }
+                if !self.symmetry_allows_opening(state, action) {
                     return Ok(None);
                 }
 
-                let mut new_state = state.clone_for_child();
+                let mut new_state = state.clone_for_child_without_tn();
                 new_state.g += 1.0;
                 if !self.open_action(state, &mut new_state, action, events)? {
                     return Ok(None);
@@ -434,12 +491,24 @@ impl SearchSpace {
                         .is_some_and(|is_compression_safe| is_compression_safe[action.idx])
                     && events.len() > 1
                 {
-                    let start_id = new_state.todo.remove(&action).unwrap().1;
-                    for (id, (index, event)) in (start_id..).zip(events.iter().enumerate().skip(1))
-                    {
-                        let state = new_state.clone_for_child();
+                    let start = new_state.todo.remove(&action).unwrap().1;
+                    for (index, event) in events.iter().enumerate().skip(1) {
+                        // `expand_event` relies on this check having been made
+                        if !self.effect_independent_start_conditions_hold(
+                            action, index, &event.1, &new_state,
+                        )? {
+                            return Ok(None);
+                        }
+                        let state = new_state.clone_for_child_without_tn();
                         new_state.g += 1.0;
-                        if !self.expand_event(&state, &mut new_state, &event.1, &index, &id)? {
+                        if !self.expand_event(
+                            &state,
+                            &mut new_state,
+                            &event.1,
+                            &index,
+                            &start,
+                            None,
+                        )? {
                             return Ok(None);
                         }
                     }
@@ -462,32 +531,42 @@ impl SearchSpace {
         Ok(sat)
     }
 
+    /// Whether event `index`'s effect-independent start conditions hold on the
+    /// parent `state`. They can't change value in the child, so this rejects
+    /// exactly the successors `expand_event`'s post-effect check would, but
+    /// before cloning the state or opening the action.
+    fn effect_independent_start_conditions_hold(
+        &self,
+        action: Action,
+        index: usize,
+        e: &Event,
+        state: &State,
+    ) -> PyResult<bool> {
+        for &k in self.effect_independent_start_conditions[action.idx][index].iter() {
+            if !self.is_sat(&e.start_conditions[k], state)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     fn expand_event(
         &self,
         state: &State,
         new_state: &mut State,
         e: &Event,
         index: &usize,
-        id: &u32,
+        id: &Timepoint,
+        pending_opening: Option<PendingOpening>,
     ) -> PyResult<bool> {
         new_state.path = PersistentList::append((e.action, e.pos, *id), &new_state.path);
 
         // check conditions is done before calling this method
 
-        // check active conditions
-        for c in new_state.active_conditions.iter() {
-            let sat = match internal_evaluate(c, state)? {
-                ExpressionNode::Bool(v) => v,
-                _ => {
-                    return Err(PyException::new_err(
-                        "An action condition is not a boolean expression!",
-                    ))
-                }
-            };
-            if !sat {
-                return Ok(false);
-            }
-        }
+        // The inherited active conditions need no check here, on the parent:
+        // every state this search space returns passed the post-effect check
+        // below on its own assignments, and the initial state has none (a
+        // `State` can't be built from Python), so they all hold on `state`
 
         // remove end conditions
         for c in e.end_conditions.iter() {
@@ -504,47 +583,83 @@ impl SearchSpace {
             new_state.assignments[eff.fluent.idx] = internal_evaluate(&eff.value, state)?;
         }
 
-        // check active conditions
-        for c in new_state.active_conditions.iter() {
-            let sat = match internal_evaluate(c, new_state)? {
-                ExpressionNode::Bool(v) => v,
-                _ => {
-                    return Err(PyException::new_err(
-                        "An action condition is not a boolean expression!",
-                    ))
+        // check active conditions. Without effects the child's assignments are
+        // the parent's: the inherited conditions hold on them (see above), and
+        // the new start conditions, all effect-independent, were checked by
+        // the caller with `effect_independent_start_conditions_hold`
+        if !e.effects.is_empty() {
+            for c in new_state.active_conditions.iter() {
+                let sat = match internal_evaluate(c, new_state)? {
+                    ExpressionNode::Bool(v) => v,
+                    _ => {
+                        return Err(PyException::new_err(
+                            "An action condition is not a boolean expression!",
+                        ))
+                    }
+                };
+                if !sat {
+                    return Ok(false);
                 }
-            };
-            if !sat {
-                return Ok(false);
             }
         }
 
         if self.is_temporal {
-            // Add temporal constraints between past or todo events and the current one
+            // Only now, with the non-temporal checks passed, copy the parent's
+            // network (a compression-safe chain already owns one after its
+            // first event), with room for the timepoints an opening appends
+            if new_state.temporal_network.is_none() {
+                let extra = if pending_opening.is_some() { 2 } else { 0 };
+                new_state.temporal_network = state
+                    .temporal_network
+                    .as_ref()
+                    .map(|tn| tn.clone_reserving(extra));
+            }
             let tn = new_state.temporal_network.as_mut().unwrap();
-            let ev = self.tn_interpreter.get_event_id(e.action, e.pos, *id);
+            if let Some(pending_opening) = pending_opening {
+                self.add_opening_constraints(state, tn, pending_opening)?;
+            }
+            // Add temporal constraints between past or todo events and the current one
+            let (ev, ev_delay) = self.event_timepoint(e.action, e.pos, *id);
+
+            // Only two of the edges from past events are needed. The edge from
+            // the immediate predecessor is always added, so the path is a
+            // chain in which each event is no later than the next: a 0-edge
+            // from any older event is already implied. Likewise, once the
+            // most recent mutex predecessor e_m gets its -epsilon edge, every
+            // older event e_j satisfies t(e_j) <= t(e_m) <= t(e) - epsilon, so
+            // the scan stops there.
+            let e_id = (e.action, *index);
+            let mut is_predecessor = true;
+            let ev = (ev, &ev_delay);
             for e2 in PersistentList::iter_rev(&state.path) {
-                let ev2 = self.tn_interpreter.get_event_id(e2.0, e2.1, e2.2);
-                let e_id = (e.action, *index);
+                let (ev2, ev2_delay) = self.event_timepoint(e2.0, e2.1, e2.2);
+                let ev2 = (ev2, &ev2_delay);
                 let e2_id = (e2.0, e2.1);
                 if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
-                    let b: f64 = -self.epsilon;
-                    tn.add(&ev2, &ev, &b);
-                } else {
-                    tn.add(&ev2, &ev, &0.0);
+                    if !add_event_constraint(tn, ev2, ev, -self.epsilon) {
+                        return Ok(false);
+                    }
+                    break;
+                }
+                if is_predecessor {
+                    if !add_event_constraint(tn, ev2, ev, 0.0) {
+                        return Ok(false);
+                    }
+                    is_predecessor = false;
                 }
             }
             for (a, i) in new_state.todo.iter() {
-                for (id2, (j, (_, e2))) in (i.1..).zip(self.events[a].iter().skip(i.0).enumerate())
-                {
+                for (j, (_, e2)) in self.events[a].iter().enumerate().skip(i.0) {
                     let e_id = (e.action, *index);
-                    let e2_id = (*a, j + i.0);
-                    let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, id2);
-                    if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
-                        let b: f64 = -self.epsilon;
-                        tn.add(&ev, &ev2, &b);
+                    let e2_id = (*a, j);
+                    let (ev2, ev2_delay) = self.event_timepoint(e2.action, e2.pos, i.1);
+                    let b = if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
+                        -self.epsilon
                     } else {
-                        tn.add(&ev, &ev2, &0.0);
+                        0.0
+                    };
+                    if !add_event_constraint(tn, ev, (ev2, &ev2_delay), b) {
+                        return Ok(false);
                     }
                 }
             }
@@ -555,13 +670,10 @@ impl SearchSpace {
         Ok(true)
     }
 
-    fn open_action(
-        &self,
-        state: &State,
-        new_state: &mut State,
-        action: Action,
-        events: &[(Timing, Event)],
-    ) -> PyResult<bool> {
+    /// Whether symmetry breaking lets `action` be opened after the parent
+    /// `state`. It reads only the parent's path, so it runs before cloning the
+    /// state for the child.
+    fn symmetry_allows_opening(&self, state: &State, action: Action) -> bool {
         if let (Some(action_objects), Some(obj_to_prev_actions_map)) =
             (&self.action_objects, &self.obj_to_prev_actions_map)
         {
@@ -574,66 +686,141 @@ impl SearchSpace {
 
                 if !PersistentList::iter_rev(&state.path).any(|(a, _, _)| prev_actions.contains(a))
                 {
-                    return Ok(false);
+                    return false;
                 }
             }
         }
+        true
+    }
 
-        let mut counter = self.counter.lock().unwrap();
-        let mut id = *counter;
+    fn open_action(
+        &self,
+        state: &State,
+        new_state: &mut State,
+        action: Action,
+        events: &[(Timing, Event)],
+    ) -> PyResult<bool> {
+        // The instance's start and end are the next two timepoints of the
+        // parent's network, which the child's copies. `expand_event` appends
+        // them and adds the opening constraints, after the checks that reject
+        // most successors
+        let mut start = 0;
+        let mut pending_opening = None;
         if self.is_temporal {
-            // Add temporal constraints between events of the action
-            let tn = new_state.temporal_network.as_mut().unwrap();
-            let start = self.tn_interpreter.get_action_id(action, true, *counter);
-            let end = self.tn_interpreter.get_action_id(action, false, *counter);
-            *counter += 1;
-            let duration = self.actions_duration[action.idx].as_ref();
-            let mut lb: f64 = 0.0;
-            let mut ub: f64 = 0.0;
-            if let Some(duration) = duration {
-                let d = duration;
-                lb = -expression_node_to_f64(&internal_evaluate(&d.0, state)?)?;
-                ub = expression_node_to_f64(&internal_evaluate(&d.1, state)?)?;
-                if d.2 {
-                    lb -= self.epsilon;
-                }
-                if d.3 {
-                    ub -= self.epsilon;
-                }
-            }
-            tn.add(&start, &end, &lb);
-            tn.add(&end, &start, &ub);
-            tn.add(&self.tn_interpreter.start_plan_id, &start, &0.0);
-            tn.add(&end, &self.tn_interpreter.end_plan_id, &-self.epsilon);
-            id = *counter;
-            for (t, e) in events.iter() {
-                let ev = self.tn_interpreter.get_event_id(e.action, e.pos, *counter);
-                let b1 = -rational_to_f64(&t.delay);
-                let b2 = rational_to_f64(&t.delay);
-                if t.is_from_start() {
-                    tn.add(&start, &ev, &b1);
-                    tn.add(&ev, &start, &b2);
-                } else {
-                    tn.add(&end, &ev, &b1);
-                    tn.add(&ev, &end, &b2);
-                }
-                *counter += 1;
-            }
+            start = state
+                .temporal_network
+                .as_ref()
+                .expect("a temporal state has a network")
+                .num_timepoints() as Timepoint;
+            pending_opening = Some((action, start));
             if events.len() > 1 {
-                new_state.todo.insert(action, (1, id + 1));
+                new_state.todo.insert(action, (1, start));
             }
         }
-        self.expand_event(state, new_state, &events[0].1, &0, &id)
+        self.expand_event(state, new_state, &events[0].1, &0, &start, pending_opening)
+    }
+
+    /// Appends the start and end timepoints of an action opened by
+    /// `open_action` and adds its constraints: the duration bounds and, under
+    /// a deadline, the edge to plan end. Events have no timepoints of their
+    /// own: `event_timepoint` maps them onto start/end.
+    fn add_opening_constraints(
+        &self,
+        state: &State,
+        tn: &mut DeltaSTN<f64>,
+        (action, start): PendingOpening,
+    ) -> PyResult<()> {
+        let appended = tn.add_timepoints(2);
+        debug_assert_eq!(appended, start);
+        let end = start + 1;
+        let duration = self.actions_duration[action.idx].as_ref();
+        let mut lb: f64 = 0.0;
+        let mut ub: f64 = 0.0;
+        if let Some(duration) = duration {
+            let d = duration;
+            lb = -expression_node_to_f64(&internal_evaluate(&d.0, state)?)?;
+            ub = expression_node_to_f64(&internal_evaluate(&d.1, state)?)?;
+            if d.2 {
+                lb -= self.epsilon;
+            }
+            if d.3 {
+                ub -= self.epsilon;
+            }
+        }
+        tn.add(start, end, &lb);
+        tn.add(end, start, &ub);
+        // Under a deadline, plan end follows the latest action end (plus
+        // epsilon) and the network bounds its earliest time by the deadline
+        // (see `DeltaSTN::with_deadline`). Without one, plan end would be a
+        // sink nothing reads, so the edge is skipped
+        if self.deadline.is_some() {
+            tn.add(end, PLAN_END, &-self.epsilon);
+        }
+        Ok(())
+    }
+
+    /// Adds `build_plan`'s ordering constraints between event `e` (of the
+    /// action instance starting at `id`) and the events already on the plan or
+    /// still to come. The plan comes from the search, whose networks were
+    /// consistent, so a violated constant between events of one action
+    /// instance can't happen here
+    fn add_plan_event_constraints(
+        &self,
+        tn: &mut DeltaSTN<BigRational>,
+        e: &Event,
+        id: Timepoint,
+        event_path: &[(Event, Timepoint)],
+        todo: &FxHashMap<Action, (usize, Timepoint)>,
+    ) {
+        let e_id = (e.action, e.pos);
+        let ev = self.event_timepoint_rational(e.action, e.pos, id);
+        for (e2, id2) in event_path.iter() {
+            let e2_id = (e2.action, e2.pos);
+            let ev2 = self.event_timepoint_rational(e2.action, e2.pos, *id2);
+            if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
+                add_event_constraint(tn, ev2, ev, -self.epsilon_rational.clone());
+            } else if self.precedence.check(&(e2_id, e_id), &self.event_fluents) {
+                add_event_constraint(tn, ev2, ev, mk_rational(0, 1));
+            }
+        }
+        for (a, i) in todo.iter() {
+            for j in i.0..self.events[a].len() {
+                let e2_id = (*a, j);
+                if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
+                    let ev2 = self.event_timepoint_rational(*a, j, i.1);
+                    add_event_constraint(tn, ev, ev2, -self.epsilon_rational.clone());
+                }
+            }
+        }
+    }
+
+    /// Where event `index` of `action` sits in the STN, given the start
+    /// timepoint `start` of its action instance.
+    ///
+    /// Events have no timepoint of their own: each one is fixed at its action
+    /// instance's start or end timepoint plus a constant delay. Returns that
+    /// (anchor timepoint, delay) pair. The end is the timepoint right after
+    /// the start (see `add_opening_constraints`).
+    fn event_timepoint(&self, action: Action, index: usize, start: Timepoint) -> (Timepoint, f64) {
+        let (is_start, delay) = self.event_anchors[action.idx][index];
+        (start + !is_start as Timepoint, delay)
+    }
+
+    /// `event_timepoint` with the exact delay, for `build_plan`
+    fn event_timepoint_rational(
+        &self,
+        action: Action,
+        index: usize,
+        start: Timepoint,
+    ) -> (Timepoint, &BigRational) {
+        let t = &self.events[&action][index].0;
+        (start + !t.is_from_start() as Timepoint, &t.delay)
     }
 }
 
 impl SearchSpaceTrait for SearchSpace {
     fn is_temporal(&self) -> bool {
         self.is_temporal
-    }
-
-    fn tn_interpreter(&self) -> &TNInterpreter {
-        &self.tn_interpreter
     }
 
     fn reset(&self) {
@@ -652,20 +839,14 @@ impl SearchSpaceTrait for SearchSpace {
                 }
             },
         };
-        let tn: Option<DeltaSTN<u64, f64>> = if self.is_temporal {
-            let mut tn = DeltaSTN::new(self.epsilon / 1000.0);
-            if let Some(deadline) = &self.deadline {
-                tn.add(
-                    &self.tn_interpreter.end_plan_id,
-                    &self.tn_interpreter.start_plan_id,
-                    deadline,
-                );
-                tn.add(
-                    &self.tn_interpreter.start_plan_id,
-                    &self.tn_interpreter.end_plan_id,
-                    &-deadline,
-                );
-            }
+        let tn: Option<DeltaSTN<f64>> = if self.is_temporal {
+            let tolerance = self.epsilon / 1000.0;
+            let mut tn = match self.deadline {
+                Some(deadline) => DeltaSTN::with_deadline(tolerance, PLAN_END, deadline),
+                None => DeltaSTN::new(tolerance),
+            };
+            let plan_end = tn.add_timepoints(1);
+            debug_assert_eq!(plan_end, PLAN_END);
             Some(tn)
         } else {
             None
@@ -744,10 +925,11 @@ impl SearchSpaceTrait for SearchSpace {
             return Ok(path.iter().map(|a| (None, *a, None)).collect());
         }
 
-        let mut tn = DeltaSTN::new(mk_rational(0, 1));
-        let mut todo: FxHashMap<Action, (usize, u32)> = FxHashMap::with_hasher(FxBuildHasher);
-        let mut event_path: Vec<(Event, u32)> = Vec::new();
-        let mut counter = 0;
+        let mut tn: DeltaSTN<BigRational> = DeltaSTN::new_without_subsumption(mk_rational(0, 1));
+        let mut todo: FxHashMap<Action, (usize, Timepoint)> = FxHashMap::with_hasher(FxBuildHasher);
+        let mut event_path: Vec<(Event, Timepoint)> = Vec::new();
+        // Each action instance and its start timepoint (its end is the next)
+        let mut openings: Vec<(Action, Timepoint)> = Vec::new();
         let mut state = self.initial_state(None)?;
         for action in path {
             if let Some(events) = self.events.get(action).cloned() {
@@ -756,43 +938,15 @@ impl SearchSpaceTrait for SearchSpace {
                         if index + 1 >= events.len() {
                             todo.remove(action);
                         } else {
-                            todo.insert(*action, (index + 1, id + 1));
+                            todo.insert(*action, (index + 1, id));
                         }
-                        let ev = self.tn_interpreter.get_event_id(e.action, e.pos, id);
-                        for (e2, id2) in event_path.iter() {
-                            let e_id = (e.action, index);
-                            let e2_id = (e2.action, e2.pos);
-                            let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, *id2);
-                            if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
-                                let b = -self.epsilon_rational.clone();
-                                tn.add(&ev2, &ev, &b);
-                            } else if self.precedence.check(&(e2_id, e_id), &self.event_fluents) {
-                                tn.add(&ev2, &ev, &mk_rational(0, 1));
-                            } else {
-                                // tn.add(&ev2, &ev, &mk_rational(0, 1));
-                            }
-                        }
-                        for (a, i) in todo.iter() {
-                            for (id2, (j, (_, e2))) in
-                                (i.1..).zip(self.events[a].iter().skip(i.0).enumerate())
-                            {
-                                let e_id = (e.action, index);
-                                let e2_id = (*a, j + i.0);
-                                let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, id2);
-                                if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
-                                    let b = -self.epsilon_rational.clone();
-                                    tn.add(&ev, &ev2, &b);
-                                } else {
-                                    // tn.add(&ev, &ev2, &mk_rational(0, 1));
-                                }
-                            }
-                        }
+                        self.add_plan_event_constraints(&mut tn, e, id, &event_path, &todo);
                         event_path.push((e.clone(), id));
                     }
                 } else {
-                    let start = self.tn_interpreter.get_action_id(*action, true, counter);
-                    let end = self.tn_interpreter.get_action_id(*action, false, counter);
-                    counter += 1;
+                    let start = tn.add_timepoints(2);
+                    let end = start + 1;
+                    openings.push((*action, start));
                     let duration = self.actions_duration[action.idx].as_ref();
                     let (lb, ub) = match duration {
                         Some(d) => {
@@ -812,55 +966,13 @@ impl SearchSpaceTrait for SearchSpace {
                         }
                         None => (mk_rational(0, 1), mk_rational(0, 1)),
                     };
-                    tn.add(&start, &end, &lb);
-                    tn.add(&end, &start, &ub);
-                    let id = counter;
-                    for (t, e) in events.iter() {
-                        let ev = self.tn_interpreter.get_event_id(e.action, e.pos, counter);
-                        let b1 = -t.delay.clone();
-                        let b2 = t.delay.clone();
-                        if t.is_from_start() {
-                            tn.add(&start, &ev, &b1);
-                            tn.add(&ev, &start, &b2);
-                        } else {
-                            tn.add(&end, &ev, &b1);
-                            tn.add(&ev, &end, &b2);
-                        }
-                        counter += 1;
-                    }
-                    let e = events[0].1.clone();
-                    let ev = self.tn_interpreter.get_event_id(e.action, e.pos, id);
-                    for (e2, id2) in event_path.iter() {
-                        let e_id = (e.action, 0);
-                        let e2_id = (e2.action, e2.pos);
-                        let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, *id2);
-                        if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
-                            let b = -self.epsilon_rational.clone();
-                            tn.add(&ev2, &ev, &b);
-                        } else if self.precedence.check(&(e2_id, e_id), &self.event_fluents) {
-                            tn.add(&ev2, &ev, &mk_rational(0, 1));
-                        } else {
-                            // tn.add(&ev2, &ev, &mk_rational(0, 1));
-                        }
-                    }
-                    for (a, i) in todo.iter() {
-                        for (id2, (j, (_, e2))) in
-                            (i.1..).zip(self.events[a].iter().skip(i.0).enumerate())
-                        {
-                            let e_id = (e.action, 0);
-                            let e2_id = (*a, j + i.0);
-                            let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, id2);
-                            if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
-                                let b = -self.epsilon_rational.clone();
-                                tn.add(&ev, &ev2, &b);
-                            } else {
-                                // tn.add(&ev, &ev2, &mk_rational(0, 1));
-                            }
-                        }
-                    }
-                    event_path.push((e.clone(), id));
+                    tn.add(start, end, &lb);
+                    tn.add(end, start, &ub);
+                    let e = &events[0].1;
+                    self.add_plan_event_constraints(&mut tn, e, start, &event_path, &todo);
+                    event_path.push((e.clone(), start));
                     if events.len() > 1 {
-                        todo.insert(*action, (1, id + 1));
+                        todo.insert(*action, (1, start));
                     }
                 }
             }
@@ -871,27 +983,16 @@ impl SearchSpaceTrait for SearchSpace {
                 .unwrap();
         }
 
-        let mut res = Vec::new();
-        let mut start_time: FxHashMap<(Action, u32), BigRational> =
-            FxHashMap::with_hasher(FxBuildHasher);
-        let mut end_time: FxHashMap<(Action, u32), BigRational> =
-            FxHashMap::with_hasher(FxBuildHasher);
-        for (a, t) in self.tn_interpreter.get_actions_timings(&tn).iter() {
-            if a.1 {
-                start_time.insert((a.0, a.2), t.clone());
-            } else {
-                end_time.insert((a.0, a.2), t.clone());
-            }
-        }
-        for (a, st) in start_time {
-            let et = &end_time[&a];
-            let d = et - st.clone();
+        let mut res = Vec::with_capacity(openings.len());
+        for (action, start) in openings {
+            let st = tn.earliest_time(start);
+            let d = tn.earliest_time(start + 1) - st.clone();
             let d: Option<BigRational> = if d == mk_rational(0, 1) {
                 None
             } else {
                 Some(d)
             };
-            res.push((Some(st), a.0, d));
+            res.push((Some(st), action, d));
         }
         res.sort();
         Ok(res)
