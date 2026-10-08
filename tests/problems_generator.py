@@ -1063,9 +1063,8 @@ def get_problem_goal_taint_partial() -> Problem:
     problem.add_fluent(f, default_initial_value=False)
     problem.add_fluent(g, default_initial_value=False)
     problem.add_fluent(h, default_initial_value=False)
-    # Or(...) is an unrecognized goal shape: it taints p1 and p4 (the objects
-    # it references), but must not affect p2/p3, which only appear in
-    # recognized (plain fluent) goal conjuncts and remain genuinely symmetric.
+    # Or(f(p1), g(p4)) tells p1 and p4 apart, but must not affect p2/p3,
+    # which only appear in h(p2)/h(p3) and remain genuinely symmetric.
     problem.add_goal(Or(f(p1), g(p4)))
     problem.add_goal(h(p2))
     problem.add_goal(h(p3))
@@ -1082,10 +1081,9 @@ def get_problem_goal_taint_equals_fluent_fluent() -> Problem:
     problem.add_objects([a, b])
     problem.add_fluent(fl, default_initial_value=0)
     problem.add_fluent(fr, default_initial_value=0)
-    # Equals(fluent, fluent) (neither side a constant) is an unrecognized
-    # shape: it must taint a and b as a single opaque conjunct, not be
-    # decomposed into independent "fl(a) must hold"/"fr(b) must hold"
-    # literals (which would be a different, wrong constraint).
+    # Equals(fl(a), fr(b)) must be compared as a whole, not decomposed into
+    # independent "fl(a) must hold"/"fr(b) must hold" literals (which would be
+    # a different, wrong constraint); swapped, it is not a goal conjunct.
     problem.add_goal(Equals(fl(a), fr(b)))
     return problem
 
@@ -1105,6 +1103,164 @@ def get_problem_anytime_symmetric_delivery() -> Problem:
     problem.add_goal(delivered(p1))
     problem.add_goal(delivered(p2))
     problem.add_goal(delivered(p3))
+    return problem
+
+
+def get_problem_goal_int_argument(symmetric: bool) -> Problem:
+    T = UserType("T")
+    o1, o2 = Object("o1", T), Object("o2", T)
+    f = Fluent("f", BoolType(), o=T, k=IntType(1, 2))
+    step = Fluent("step", IntType(0, 2))
+
+    # Only one `do2` can ever run, so with the asymmetric goal it must be
+    # `do2(o2)`, and it must come first.
+    do2 = InstantaneousAction("do2", o=T)
+    do2.add_precondition(Equals(step, 0))
+    do2.add_effect(f(do2.parameter("o"), 2), True)
+    do2.add_effect(step, 1)
+
+    do1 = InstantaneousAction("do1", o=T)
+    do1.add_precondition(GE(step, 1))
+    do1.add_effect(f(do1.parameter("o"), 1), True)
+
+    problem = Problem(f"goal_int_argument_{'' if symmetric else 'a'}symmetric")
+    problem.add_objects([o1, o2])
+    problem.add_fluent(f, default_initial_value=False)
+    problem.add_fluent(step, default_initial_value=0)
+    problem.add_actions([do1, do2])
+    # The goals of `o1` and `o2` differ only in `f`'s int argument.
+    problem.add_goal(f(o1, 1))
+    problem.add_goal(f(o2, 1))
+    if not symmetric:
+        problem.add_goal(f(o2, 2))
+    return problem
+
+
+def get_problem_metric_object_taint() -> Problem:
+    T = UserType("T")
+    t1, t2 = Object("t1", T), Object("t2", T)
+    fuel = Fluent("fuel", IntType(0, 10), t=T)
+    done = Fluent("done", BoolType())
+
+    refuel = InstantaneousAction("refuel", t=T)
+    refuel.add_increase_effect(fuel(refuel.parameter("t")), 1)
+    refuel.add_effect(done, True)
+
+    problem = Problem("metric_object_taint")
+    problem.add_objects([t1, t2])
+    problem.add_fluent(fuel, default_initial_value=0)
+    problem.add_fluent(done, default_initial_value=False)
+    problem.add_action(refuel)
+    problem.add_goal(done)
+    # The metric is the only thing that tells `t1` and `t2` apart.
+    problem.add_quality_metric(MinimizeExpressionOnFinalState(fuel(t1)))
+    return problem
+
+
+def get_problem_metric_default_cost_object() -> Problem:
+    T = UserType("T")
+    t1, t2 = Object("t1", T), Object("t2", T)
+    fuel = Fluent("fuel", IntType(), t=T)
+    n = Fluent("n", IntType())
+
+    refuel = InstantaneousAction("refuel", t=T)
+    refuel.add_precondition(LT(n, 2))
+    refuel.add_increase_effect(fuel(refuel.parameter("t")), 1)
+    refuel.add_increase_effect(n, 1)
+
+    problem = Problem("metric_default_cost_object")
+    problem.add_objects([t1, t2])
+    problem.add_fluent(fuel, default_initial_value=0)
+    problem.add_fluent(n, default_initial_value=0)
+    problem.add_action(refuel)
+    problem.add_goal(Equals(n, 2))
+    # Every action costs `t1`'s current fuel, so the only zero-cost plans
+    # never refuel `t1` before the last step. Only the metric's `default`
+    # tells `t1` and `t2` apart.
+    problem.add_quality_metric(MinimizeActionCosts({}, default=fuel(t1)))
+    return problem
+
+
+def _get_problem_refuel_trucks(name: str, n_trucks: int) -> Problem:
+    """Trucks `t1`, `t2`, ... with no fuel, and an action adding one unit of
+    fuel to a truck. The caller adds the goal."""
+    T = UserType("Truck")
+    fuel = Fluent("fuel", IntType(), t=T)
+    refuel = InstantaneousAction("refuel", t=T)
+    refuel.add_increase_effect(fuel(refuel.parameter("t")), 1)
+
+    problem = Problem(name)
+    problem.add_objects([Object(f"t{i}", T) for i in range(1, n_trucks + 1)])
+    problem.add_fluent(fuel, default_initial_value=0)
+    problem.add_action(refuel)
+    return problem
+
+
+def get_problem_goal_numeric_symmetry() -> Problem:
+    problem = _get_problem_refuel_trucks("goal_numeric_symmetry", 3)
+    fuel = problem.fluent("fuel")
+    for t in problem.all_objects:
+        problem.add_goal(GE(fuel(t), 2))
+    return problem
+
+
+def get_problem_goal_numeric_asymmetry() -> Problem:
+    problem = _get_problem_refuel_trucks("goal_numeric_asymmetry", 2)
+    fuel = problem.fluent("fuel")
+    problem.add_goal(GE(fuel(problem.object("t1")), 2))
+    problem.add_goal(GE(fuel(problem.object("t2")), 3))
+    return problem
+
+
+def get_problem_goal_commutative_sum_symmetry() -> Problem:
+    problem = _get_problem_refuel_trucks("goal_commutative_sum_symmetry", 2)
+    fuel = problem.fluent("fuel")
+    # Swapping `t1` and `t2` turns the sum into `fuel(t2) + fuel(t1)`.
+    problem.add_goal(
+        GE(Plus(fuel(problem.object("t1")), fuel(problem.object("t2"))), 3)
+    )
+    return problem
+
+
+def get_problem_goal_repeated_conjunct_symmetry(reordered: bool) -> Problem:
+    """`t1` and `t2` are interchangeable, but the goal states `t1`'s
+    condition twice: identically, or with the sum's arguments reordered."""
+    suffix = "_reordered" if reordered else ""
+    problem = _get_problem_refuel_trucks(f"goal_repeated_conjunct{suffix}", 2)
+    fuel = problem.fluent("fuel")
+    bonus = Fluent("bonus", IntType())
+    problem.add_fluent(bonus, default_initial_value=0)
+    t1, t2 = problem.object("t1"), problem.object("t2")
+    problem.add_goal(GE(Plus(fuel(t1), bonus), 1))
+    if reordered:
+        problem.add_goal(GE(Plus(bonus, fuel(t1)), 1))
+    else:
+        problem.add_goal(GE(Plus(fuel(t1), bonus), 1))
+    problem.add_goal(GE(Plus(fuel(t2), bonus), 1))
+    return problem
+
+
+def get_problem_goal_disjunction_symmetry() -> Problem:
+    Truck = UserType("Truck")
+    Location = UserType("Location")
+    t1, t2 = Object("t1", Truck), Object("t2", Truck)
+    l0, l1 = Object("l0", Location), Object("l1", Location)
+    at = Fluent("at", BoolType(), t=Truck, l=Location)
+
+    move = InstantaneousAction("move", t=Truck, src=Location, dst=Location)
+    t, src, dst = move.parameters
+    move.add_precondition(at(t, src))
+    move.add_precondition(Not(Equals(src, dst)))
+    move.add_effect(at(t, src), False)
+    move.add_effect(at(t, dst), True)
+
+    problem = Problem("goal_disjunction_symmetry")
+    problem.add_objects([t1, t2, l0, l1])
+    problem.add_fluent(at, default_initial_value=False)
+    problem.add_action(move)
+    problem.set_initial_value(at(t1, l0), True)
+    problem.set_initial_value(at(t2, l0), True)
+    problem.add_goal(Or(at(t1, l1), at(t2, l1)))
     return problem
 
 

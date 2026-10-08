@@ -15,7 +15,8 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 
-from collections.abc import Callable, Iterable, MutableMapping
+from collections import Counter
+from collections.abc import Callable, Hashable, Iterable, MutableMapping
 from fractions import Fraction
 from typing import Any, cast
 
@@ -31,6 +32,7 @@ from unified_planning.model import (
 from unified_planning.model import Object as UPObject
 from unified_planning.model.types import _UserType
 from unified_planning.model.walkers import ExpressionQuantifiersRemover, Nnf
+from unified_planning.model.walkers.identitydag import IdentityDagWalker
 from unified_planning.plans import (
     ActionInstance,
     Plan,
@@ -99,11 +101,39 @@ def extract_and_arguments(expressions: list[FNode]) -> Iterable[FNode]:
             yield exp
 
 
-# Value recorded for a fluent appearing in a goal conjunct: the raw constant
-# (bool/int/Fraction/UPObject), or a `(value, False)` pair marking a negated
-# fluent-equals-constant comparison.
-ConstantValue = bool | int | Fraction | UPObject
-GoalFluentValue = ConstantValue | tuple[ConstantValue, bool]
+# Per action index, `(symmetry class, count)` pairs; see
+# `Encoder._compute_symmetry_constraints`.
+SymmetryConstraints = list[list[tuple[int, int]]]
+
+
+class _CommutativeCanonicalizer(IdentityDagWalker):
+    """Rebuilds an expression with the arguments of every commutative operator
+    sorted by node id, so that two expressions differing only in the order of
+    those arguments get the same node."""
+
+    def walk_and(self, expression: FNode, args: list[FNode], **kwargs) -> FNode:
+        return self.manager.And(_canonical_order(args))
+
+    def walk_or(self, expression: FNode, args: list[FNode], **kwargs) -> FNode:
+        return self.manager.Or(_canonical_order(args))
+
+    def walk_plus(self, expression: FNode, args: list[FNode], **kwargs) -> FNode:
+        return self.manager.Plus(_canonical_order(args))
+
+    def walk_times(self, expression: FNode, args: list[FNode], **kwargs) -> FNode:
+        return self.manager.Times(_canonical_order(args))
+
+    def walk_equals(self, expression: FNode, args: list[FNode], **kwargs) -> FNode:
+        left, right = _canonical_order(args)
+        return self.manager.Equals(left, right)
+
+    def walk_iff(self, expression: FNode, args: list[FNode], **kwargs) -> FNode:
+        left, right = _canonical_order(args)
+        return self.manager.Iff(left, right)
+
+
+def _canonical_order(args: list[FNode]) -> list[FNode]:
+    return sorted(args, key=lambda arg: arg.node_id)
 
 
 class Encoder:
@@ -150,6 +180,10 @@ class Encoder:
         # neither result depends on fluent numbering.
         self._fluent_name_cache: dict[FNode, str] = {}
         self._normalized_expression_cache: dict[FNode, FNode] = {}
+        # See `_compute_obj_to_all_init_assignments_map`.
+        self._obj_to_all_init_assignments: (
+            dict[UPObject, list[tuple[FNode, FNode]]] | None
+        ) = None
 
         self._problem_initial_values = problem.initial_values
 
@@ -188,8 +222,8 @@ class Encoder:
 
         initial_state = None
         self._goal = None
-        action_objects = None
-        obj_to_prev_actions_map = None
+        symmetry_requires = None
+        symmetry_advances = None
         self._compression_safe_actions = None
         if full:
             initial_state = self.initial_state(self._problem_initial_values)
@@ -201,14 +235,9 @@ class Encoder:
             # numbering, so computed once here rather than repeated around a
             # possible pass-2 re-encode below.
             if symmetry_breaking:
-                action_objects, obj_to_prev_actions_map = (
-                    self._compute_obj_to_prev_actions_map()
-                )
-                if not any(obj_to_prev_actions_map):
-                    # Symmetry breaking is not beneficial because there are no
-                    # equivalent objects
-                    action_objects = None
-                    obj_to_prev_actions_map = None
+                symmetry_constraints = self._compute_symmetry_constraints()
+                if symmetry_constraints is not None:
+                    symmetry_requires, symmetry_advances = symmetry_constraints
 
             if compression_safe_actions:
                 self._compression_safe_actions = (
@@ -229,8 +258,8 @@ class Encoder:
             self._events,
             self._actions,
             self._compression_safe_actions,
-            action_objects,
-            obj_to_prev_actions_map,
+            symmetry_requires,
+            symmetry_advances,
             initial_state,
             self._goal,
             self._applicable_actions,
@@ -282,16 +311,16 @@ class Encoder:
                     # Renumbering changed `_actions_duration`/`_events`, so
                     # the mutex/precedence analysis the `SearchSpace` above
                     # ran is now stale over the new numbering and must be
-                    # redone -- `_compression_safe_actions`/`action_objects`/
-                    # `obj_to_prev_actions_map` don't depend on fluent
-                    # numbering at all, so they're reused as-is.
+                    # redone -- `_compression_safe_actions`/`symmetry_requires`/
+                    # `symmetry_advances` don't depend on fluent numbering at
+                    # all, so they're reused as-is.
                     self._search_space = SearchSpace(
                         self._actions_duration,
                         self._events,
                         self._actions,
                         self._compression_safe_actions,
-                        action_objects,
-                        obj_to_prev_actions_map,
+                        symmetry_requires,
+                        symmetry_advances,
                         initial_state,
                         self._goal,
                         self.considered_actions,
@@ -647,113 +676,194 @@ class Encoder:
                     stack.append(f)
         return relevant_fluents
 
-    def _compute_obj_to_prev_actions_map(
+    def _compute_symmetry_constraints(
         self,
-    ) -> tuple[list[list[Object]], list[set[Action]]]:
+    ) -> tuple[SymmetryConstraints, SymmetryConstraints] | None:
         """
-        This method produces two outputs:
-            1. A list of lists of object ids, where each inner list corresponds
-                to the objects used as parameters for the action.
-            2. A list, indexed by object id, of the set of actions that include
-                the previous equivalent object as a parameter (empty set if the
-                object has no such constraint).
+        Encode symmetry breaking's first-use ordering for `SearchSpace`.
+
+        The objects of each class of equivalent objects must be first used in
+        class order: an action may use the k-th object of a class only if the
+        (k-1)-th is used by an action of the path already, or is a parameter
+        of the action too. The used objects of a class are therefore always
+        its first ones, and the search only tracks how many they are
+        (`State.symmetry_used`).
+
+        A class is cut before every object whose predecessor no action uses:
+        that predecessor can never be used, so the object starts a new class
+        instead of being blocked forever. A class of one object constrains
+        nothing and is dropped.
 
         Returns:
-            Tuple[List[List[Object]], List[Set[Action]]]:
-                - List of object id lists for each action.
-                - List, indexed by object id, of the set of actions.
+            None if no class is left. Otherwise two lists indexed by action
+            index, holding `(class, count)` pairs:
+                - requires: the action can be opened only if each listed
+                  class has at least `count` used objects;
+                - advances: once the action is opened, each listed class has
+                  at least `count` used objects.
         """
 
-        equivalent_objects = self._compute_equivalent_objects()
-        prev_equivalent_object = {}
-        for group in equivalent_objects:
-            for i, obj in enumerate(group):
-                prev_equivalent_object[obj] = None if i == 0 else group[i - 1]
-
-        obj_to_actions_map: dict[UPObject, set[Action]] = {}
-        action_objects: list[list[Object]] = [[] for _ in range(len(self.actions))]
+        action_objects: list[tuple[Action, list[UPObject]]] = []
+        used_objects: set[UPObject] = set()
         for action in self._problem.actions:
             ai = self._map_back_action_instance(action())
             assert ai is not None
             objects = [p.object() for p in ai.actual_parameters if p.is_object_exp()]
-            action_objects[self.action_by_name[action.name].idx] = [
-                self._object_ids[obj.name] for obj in objects
-            ]
+            action_objects.append((self._action_by_name[action.name], objects))
+            used_objects.update(objects)
+
+        # object -> (class, position in the class)
+        positions: dict[UPObject, tuple[int, int]] = {}
+        num_classes = 0
+        for group in self._compute_equivalent_objects():
+            classes: list[list[UPObject]] = [[]]
+            for i, obj in enumerate(group):
+                if i > 0 and group[i - 1] not in used_objects:
+                    classes.append([])
+                classes[-1].append(obj)
+            for cls in classes:
+                if len(cls) > 1:
+                    for k, obj in enumerate(cls):
+                        positions[obj] = (num_classes, k)
+                    num_classes += 1
+        if num_classes == 0:
+            return None
+
+        requires: SymmetryConstraints = [[] for _ in self.actions]
+        advances: SymmetryConstraints = [[] for _ in self.actions]
+        for search_action, objects in action_objects:
+            class_positions: dict[int, set[int]] = {}
             for obj in objects:
-                if obj not in obj_to_actions_map:
-                    obj_to_actions_map[obj] = set()
-                obj_to_actions_map[obj].add(self._action_by_name[action.name])
-
-        obj_to_prev_actions_map: list[set[Action]] = [
-            set() for _ in range(len(self._object_names))
-        ]
-        for obj, prev_obj in prev_equivalent_object.items():
-            if prev_obj is not None and prev_obj in obj_to_actions_map:
-                obj_to_prev_actions_map[self._object_ids[obj.name].idx] = (
-                    obj_to_actions_map[prev_obj]
-                )
-
-        return action_objects, obj_to_prev_actions_map
+                if obj in positions:
+                    c, k = positions[obj]
+                    class_positions.setdefault(c, set()).add(k)
+            for c, ks in class_positions.items():
+                needed = max((k for k in ks if k > 0 and k - 1 not in ks), default=0)
+                if needed > 0:
+                    requires[search_action.idx].append((c, needed))
+                advances[search_action.idx].append((c, max(ks) + 1))
+        return requires, advances
 
     def _compute_equivalent_objects(self) -> list[list[UPObject]]:
         """
-        Compute groups of equivalent objects in the problem.
+        Compute the classes of interchangeable objects.
+
+        Two objects of the same type are equivalent if swapping them
+        everywhere leaves both the goal and the initial state unchanged, and
+        neither is excluded (a domain constant, an object named in a quality
+        metric, or one an interpreted function could observe). Swaps that
+        preserve a structure compose, so this is an equivalence relation and
+        each object only needs to be compared with one representative per
+        class. Objects with different signatures (`_object_signature`) can't
+        be equivalent, so they are never compared.
 
         Returns:
-            List[List[UPObject]]: A list of equivalence classes, where each inner
-            list contains objects that are equivalent to each other.
+            List[List[UPObject]]: The equivalence classes, grouped by type in
+            the order types first appear in the problem's objects, and by
+            first member within a type. Each class is sorted by name.
         """
 
-        goal_obj_to_fluent_map, goal_tainted_objects = (
-            self._extract_goal_obj_to_fluent_map()
-        )
-        non_equivalent_objects = (
+        excluded = (
             self._extract_domain_objects()
-            | goal_tainted_objects
             | self._extract_interpreted_function_tainted_objects()
         )
+        canonicalizer = _CommutativeCanonicalizer(self._problem.environment)
+        # The goal's distinct conjuncts in canonical form: a conjunct stated
+        # twice, possibly with commutative arguments reordered, counts once.
+        conjuncts = list(
+            dict.fromkeys(
+                canonicalizer.walk(c)
+                for c in extract_and_arguments(list(self._problem.goals))
+            )
+        )
+        goal = set(conjuncts)
+        obj_to_conjuncts: dict[UPObject, list[FNode]] = {}
+        for c in conjuncts:
+            for obj in set(extract_objects(c)):
+                obj_to_conjuncts.setdefault(obj, []).append(c)
         obj_to_init_assignments = self._compute_obj_to_init_assignments_map()
+        # Objects that are some fluent's default value make the initial state
+        # depend on which groundings are implicit; see `_are_equivalent_objects`.
+        default_objects = {
+            d.object()
+            for d in self._lifted_problem.fluents_defaults.values()
+            if d.is_object_exp()
+        }
 
         objects: dict[Type, list[UPObject]] = {}
         for obj in self._problem.all_objects:
-            if obj.type not in objects:
-                objects[obj.type] = []
-            objects[obj.type].append(obj)
+            objects.setdefault(obj.type, []).append(obj)
 
-        groups = []
+        groups: list[list[UPObject]] = []
         for objs in objects.values():
-            grouped = [False] * len(objs)
-            for i, obj1 in enumerate(objs):
-                if grouped[i]:
+            bucketed = not any(obj in default_objects for obj in objs)
+            # signature -> indices in `groups` of the classes with it
+            buckets: dict[Hashable, list[int]] = {}
+            for obj in objs:
+                if obj in excluded:
+                    groups.append([obj])
                     continue
-
-                grouped[i] = True
-                groups.append([obj1])
-
-                if obj1 in non_equivalent_objects:
-                    # treat all domain objects as non-equivalent objects
-                    continue
-
-                for j in range(i + 1, len(objs)):
-                    if grouped[j]:
-                        continue
-
-                    obj2 = objs[j]
-                    if obj2 in non_equivalent_objects:
-                        continue
-
+                signature = (
+                    self._object_signature(
+                        obj, obj_to_init_assignments, obj_to_conjuncts
+                    )
+                    if bucketed
+                    else None
+                )
+                candidates = buckets.setdefault(signature, [])
+                for i in candidates:
                     if self._are_equivalent_objects(
-                        obj1,
-                        obj2,
-                        goal_obj_to_fluent_map,
+                        groups[i][0],
+                        obj,
+                        goal,
+                        obj_to_conjuncts,
+                        canonicalizer,
                         obj_to_init_assignments,
+                        default_objects,
                     ):
-                        grouped[j] = True
-                        groups[-1].append(obj2)
+                        groups[i].append(obj)
+                        break
+                else:
+                    candidates.append(len(groups))
+                    groups.append([obj])
 
-                groups[-1].sort(key=lambda obj: obj.name)
-
+        for group in groups:
+            group.sort(key=lambda obj: obj.name)
         return groups
+
+    def _object_signature(
+        self,
+        obj: UPObject,
+        obj_to_init_assignments: dict[UPObject, list[tuple[FNode, FNode]]],
+        obj_to_conjuncts: dict[UPObject, list[FNode]],
+    ) -> Hashable:
+        """
+        A summary of how `obj` appears in the initial state and the goal,
+        with `obj` itself as `SELF` and every other object replaced by its
+        type. A swap of two objects that preserves both maps each one's
+        appearances onto the other's, so equivalent objects always have equal
+        signatures.
+        """
+
+        def abstract(exp: FNode) -> Hashable:
+            if exp.is_object_exp():
+                other = exp.object()
+                return "SELF" if other == obj else other.type
+            return exp
+
+        features: list[Hashable] = [
+            (
+                fluent_exp.fluent().name,
+                tuple(abstract(arg) for arg in fluent_exp.args),
+                abstract(value_exp),
+            )
+            for fluent_exp, value_exp in obj_to_init_assignments.get(obj, [])
+        ]
+        features.extend(
+            tuple(sorted(f.name for f in extract_fluents(c)))
+            for c in obj_to_conjuncts.get(obj, [])
+        )
+        return frozenset(Counter(features).items())
 
     def _iter_lifted_action_expressions(self) -> Iterable[FNode]:
         """
@@ -802,13 +912,22 @@ class Encoder:
 
     def _extract_domain_objects(self) -> set[UPObject]:
         """
-        Extract all objects that appear in the problem's domain.
+        Extract all objects that appear in the problem's domain or in its
+        quality metrics.
+
+        `domain_constants` covers the metrics too, except the `default` of
+        `MinimizeActionCosts`, so the metric expressions are scanned here as
+        well.
 
         Returns:
-            Set[UPObject]: A set of all objects that appear in the domain.
+            Set[UPObject]: A set of all objects that appear in the domain or
+            in a quality metric.
         """
 
-        return set(self._lifted_problem.domain_constants)
+        objects = set(self._lifted_problem.domain_constants)
+        for exp in self._iter_metric_expressions():
+            objects.update(extract_objects(exp))
+        return objects
 
     def _extract_interpreted_function_tainted_objects(self) -> set[UPObject]:
         """
@@ -868,14 +987,10 @@ class Encoder:
         self,
     ) -> dict[UPObject, list[tuple[FNode, FNode]]]:
         """
-        Build a mapping from each object to the initial-value assignments it
-        participates in, either as a fluent argument or as the assigned value.
-
-        Uses `initial_values` (the complete grounded initial state, defaults
-        included) rather than `explicit_initial_values`, so that an object
-        used only as a fluent's default value is checked precisely by
-        transposition in `_are_equivalent_objects` instead of needing to be
-        conservatively excluded from equivalence altogether.
+        Build a mapping from each object to the explicit initial-value
+        assignments it participates in, either as a fluent argument or as the
+        assigned value. An assignment to the fluent's default value is left
+        out: it is indistinguishable from an implicit one.
 
         Returns:
             Dict[UPObject, List[Tuple[FNode, FNode]]]: Mapping from objects to
@@ -883,8 +998,14 @@ class Encoder:
             appear in.
         """
 
+        defaults = self._lifted_problem.fluents_defaults
         obj_to_assignments: dict[UPObject, list[tuple[FNode, FNode]]] = {}
-        for fluent_exp, value_exp in self._lifted_problem.initial_values.items():
+        for (
+            fluent_exp,
+            value_exp,
+        ) in self._lifted_problem.explicit_initial_values.items():
+            if defaults.get(fluent_exp.fluent()) == value_exp:
+                continue
             objs = {arg.object() for arg in fluent_exp.args if arg.is_object_exp()}
             if value_exp.is_object_exp():
                 objs.add(value_exp.object())
@@ -892,172 +1013,83 @@ class Encoder:
                 obj_to_assignments.setdefault(obj, []).append((fluent_exp, value_exp))
         return obj_to_assignments
 
-    def _extract_goal_obj_to_fluent_map(
+    def _compute_obj_to_all_init_assignments_map(
         self,
-    ) -> tuple[
-        dict[UPObject, set[tuple[UPFluent, tuple[UPObject, ...], GoalFluentValue]]],
-        set[UPObject],
-    ]:
+    ) -> dict[UPObject, list[tuple[FNode, FNode]]]:
         """
-        Build a mapping from objects to goal fluents they appear in.
-
-        The goal (`problem.goals`, and recursively any nested conjunction) is
-        decomposed into individual conjuncts. A conjunct is precisely
-        understood only if it has one of 4 recognized shapes: a fluent, a
-        negated fluent, a fluent compared to a constant, or its negation.
-        Objects appearing in any OTHER conjunct (of unrecognized shape, e.g. a
-        disjunction, an implication, or a comparison between two fluents) are
-        collected into a separate "tainted" set instead of being registered in
-        the map: we don't know how to verify that swapping them preserves that
-        conjunct, so they must be excluded from equivalence altogether -- but
-        this must not affect objects that only ever appear in recognized
-        conjuncts elsewhere in the goal.
-
-        Returns:
-            Tuple[Dict[UPObject, Set[Tuple[UPFluent, Tuple[UPObject, ...],
-            GoalFluentValue]]], Set[UPObject]]:
-                - A dictionary mapping each object to the set of associated
-                  recognized-conjunct entries.
-                - The set of objects appearing in some unrecognized conjunct,
-                  who must be excluded from equivalence.
+        Like `_compute_obj_to_init_assignments_map`, but over every grounding
+        of every fluent (`initial_values`, defaults included). Computed once,
+        on first use.
         """
 
-        obj_to_fluent_map: dict[
-            UPObject, set[tuple[UPFluent, tuple[UPObject, ...], GoalFluentValue]]
-        ] = {obj: set() for obj in self._problem.all_objects}
-
-        def extract_fluent_equals_constant_exp(
-            arg1: FNode, arg2: FNode, is_negated: bool
-        ) -> bool:
-            fluent_exp = None
-            value_exp = None
-            if arg1.is_fluent_exp() and arg2.is_constant():
-                fluent_exp = arg1
-                value_exp = arg2
-                v = arg2.constant_value()
-            elif arg2.is_fluent_exp() and arg1.is_constant():
-                fluent_exp = arg2
-                value_exp = arg1
-                v = arg1.constant_value()
-
-            if fluent_exp is None:
-                return False
-            else:
-                value = (v, False) if is_negated else v
-                fluent = fluent_exp.fluent()
-                objs = tuple(
-                    arg.object() for arg in fluent_exp.args if arg.is_object_exp()
-                )
-                entry_objs = set(objs)
-                assert value_exp is not None
+        if self._obj_to_all_init_assignments is None:
+            obj_to_assignments: dict[UPObject, list[tuple[FNode, FNode]]] = {}
+            for fluent_exp, value_exp in self._lifted_problem.initial_values.items():
+                objs = {arg.object() for arg in fluent_exp.args if arg.is_object_exp()}
                 if value_exp.is_object_exp():
-                    entry_objs.add(value_exp.object())
-                for obj in entry_objs:
-                    obj_to_fluent_map[obj].add((fluent, objs, value))
-
-                return True
-
-        tainted_objects: set[UPObject] = set()
-        stack: list[FNode] = list(self._problem.goals)
-        while len(stack) > 0:
-            exp = stack.pop()
-            if exp.is_fluent_exp():
-                fluent = exp.fluent()
-                objs = tuple(arg.object() for arg in exp.args if arg.is_object_exp())
+                    objs.add(value_exp.object())
                 for obj in objs:
-                    obj_to_fluent_map[obj].add((fluent, objs, True))
-
-            elif exp.is_not() and exp.args[0].is_fluent_exp():
-                exp = exp.args[0]
-                fluent = exp.fluent()
-                objs = tuple(arg.object() for arg in exp.args if arg.is_object_exp())
-                for obj in objs:
-                    obj_to_fluent_map[obj].add((fluent, objs, False))
-
-            elif exp.is_equals():
-                arg1, arg2 = exp.args
-                if not extract_fluent_equals_constant_exp(arg1, arg2, False):
-                    tainted_objects.update(extract_objects(exp))
-
-            elif exp.is_not() and exp.args[0].is_equals():
-                arg1, arg2 = exp.args[0].args
-                if not extract_fluent_equals_constant_exp(arg1, arg2, True):
-                    tainted_objects.update(extract_objects(exp))
-
-            elif exp.is_and():
-                stack.extend(exp.args)
-
-            else:
-                tainted_objects.update(extract_objects(exp))
-
-        return obj_to_fluent_map, tainted_objects
+                    obj_to_assignments.setdefault(obj, []).append(
+                        (fluent_exp, value_exp)
+                    )
+            self._obj_to_all_init_assignments = obj_to_assignments
+        return self._obj_to_all_init_assignments
 
     def _are_equivalent_objects(
         self,
         obj1: UPObject,
         obj2: UPObject,
-        goal_obj_to_fluent_map: dict[
-            UPObject, set[tuple[UPFluent, tuple[UPObject, ...], GoalFluentValue]]
-        ],
+        goal: set[FNode],
+        obj_to_conjuncts: dict[UPObject, list[FNode]],
+        canonicalizer: _CommutativeCanonicalizer,
         obj_to_init_assignments: dict[UPObject, list[tuple[FNode, FNode]]],
+        default_objects: set[UPObject],
     ) -> bool:
         """
-        Determine whether two objects are equivalent in the problem, i.e.
-        whether swapping them everywhere (as fluent arguments and as
-        object-valued fluent values) leaves the goal and initial state
+        Determine whether swapping `obj1` and `obj2` everywhere (as fluent
+        arguments and as object values) leaves the goal and the initial state
         unchanged.
+
+        The goal holds if every conjunct mentioning either object, swapped,
+        is again a conjunct of the goal. Conjuncts are compared in canonical
+        form (`_CommutativeCanonicalizer`), so the order of commutative
+        arguments doesn't matter; any other difference in form only makes the
+        objects look different.
+
+        The initial state holds if every assignment involving either object,
+        swapped, is again an assignment of the initial state. When neither
+        object is a fluent's default value, the explicit non-default
+        assignments are enough: an implicit assignment's value is the
+        default, which the swap leaves unchanged. Otherwise every grounding
+        is checked.
 
         Args:
             obj1 (UPObject): The first object to compare.
             obj2 (UPObject): The second object to compare.
-            goal_obj_to_fluent_map
-                (Dict[UPObject, Set[Tuple[UPFluent, Tuple[UPObject, ...],
-                GoalFluentValue]]]):
-                Mapping from objects to the recognized goal fluents they
-                appear in (as an argument or as the compared value). Objects
-                appearing in an unrecognized goal conjunct are excluded from
-                equivalence before reaching this method (see
-                `_extract_goal_obj_to_fluent_map`), so this map can be trusted
-                to precisely and completely describe every goal constraint
-                that could possibly distinguish obj1/obj2.
+            goal (Set[FNode]): The canonical forms of the goal's conjuncts.
+            obj_to_conjuncts (Dict[UPObject, List[FNode]]): The canonical
+                forms in `goal` mentioning each object.
+            canonicalizer (_CommutativeCanonicalizer): The walker that built
+                `goal`.
             obj_to_init_assignments (Dict[UPObject, List[Tuple[FNode, FNode]]]):
-                Mapping from objects to the initial-value assignments
-                (explicit or default) they appear in (as an argument or as
-                the value).
+                Mapping from objects to the explicit non-default initial-value
+                assignments they appear in (as an argument or as the value).
+            default_objects (Set[UPObject]): The objects that are some
+                fluent's default value.
 
         Returns:
             bool: True if the objects are equivalent; False otherwise.
         """
 
-        def transpose(x: UPObject) -> UPObject:
-            return obj2 if x == obj1 else obj1 if x == obj2 else x
+        em = self._problem.environment.expression_manager
+        obj1_exp = em.ObjectExp(obj1)
+        obj2_exp = em.ObjectExp(obj2)
 
-        def transpose_constant(c: ConstantValue) -> ConstantValue:
-            return transpose(c) if isinstance(c, UPObject) else c
-
-        def transpose_value(v: GoalFluentValue) -> GoalFluentValue:
-            if isinstance(v, tuple):
-                return (transpose_constant(v[0]), v[1])
-            return transpose_constant(v)
-
-        if len(goal_obj_to_fluent_map[obj1]) != len(goal_obj_to_fluent_map[obj2]):
-            # the two objects appear in a different number of goal fluents
-            return False
-
-        # for each goal fluent involving obj1, ensure the corresponding
-        # fluent (with obj1/obj2 swapped in both the arguments and the
-        # compared value) exists for obj2
-        for fluent, objs1, v in goal_obj_to_fluent_map[obj1]:
-            objs2 = tuple(transpose(obj) for obj in objs1)
-            v2 = transpose_value(v)
-            if (fluent, objs2, v2) not in goal_obj_to_fluent_map[obj2]:
+        swap_goal: dict[Any, Any] = {obj1_exp: obj2_exp, obj2_exp: obj1_exp}
+        substituter = self._problem.environment.substituter
+        for c in obj_to_conjuncts.get(obj1, []) + obj_to_conjuncts.get(obj2, []):
+            if canonicalizer.walk(substituter.substitute(c, swap_goal)) not in goal:
                 return False
-
-        # For each initial-value assignment (explicit or default) involving
-        # obj1 or obj2 (as an argument or as the value), swap obj1 and obj2
-        # throughout and verify that the resulting assignment still holds.
-        obj1_exp = self._lifted_problem.environment.expression_manager.ObjectExp(obj1)
-        obj2_exp = self._lifted_problem.environment.expression_manager.ObjectExp(obj2)
 
         def swap_exp(exp: FNode) -> FNode:
             if exp == obj1_exp:
@@ -1066,22 +1098,34 @@ class Encoder:
                 return obj1_exp
             return exp
 
+        every_grounding = obj1 in default_objects or obj2 in default_objects
+        assignments = (
+            self._compute_obj_to_all_init_assignments_map()
+            if every_grounding
+            else obj_to_init_assignments
+        )
+        explicit = self._lifted_problem.explicit_initial_values
+        defaults = self._lifted_problem.fluents_defaults
+
+        def initial_value(fluent_exp: FNode) -> FNode | None:
+            if every_grounding:
+                return self._lifted_problem.initial_value(fluent_exp)
+            value = explicit.get(fluent_exp)
+            if value is None:
+                return defaults.get(fluent_exp.fluent())
+            return value
+
         seen_fluent_exps: set[FNode] = set()
-        assignments = obj_to_init_assignments.get(
-            obj1, []
-        ) + obj_to_init_assignments.get(obj2, [])
-        for fluent_exp, value_exp in assignments:
+        for fluent_exp, value_exp in assignments.get(obj1, []) + assignments.get(
+            obj2, []
+        ):
             if fluent_exp in seen_fluent_exps:
                 continue
             seen_fluent_exps.add(fluent_exp)
-
-            em = self._lifted_problem.environment.expression_manager
-            new_fluent_exp = em.FluentExp(
+            swapped = em.FluentExp(
                 fluent_exp.fluent(), [swap_exp(arg) for arg in fluent_exp.args]
             )
-            if self._lifted_problem.initial_value(new_fluent_exp) != swap_exp(
-                value_exp
-            ):
+            if initial_value(swapped) != swap_exp(value_exp):
                 return False
 
         return True
