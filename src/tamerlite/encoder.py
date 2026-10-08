@@ -768,8 +768,15 @@ class Encoder:
             | self._extract_interpreted_function_tainted_objects()
         )
         canonicalizer = _CommutativeCanonicalizer(self._problem.environment)
-        conjuncts = list(extract_and_arguments(list(self._problem.goals)))
-        goal = {canonicalizer.walk(c) for c in conjuncts}
+        # The goal's distinct conjuncts in canonical form: a conjunct stated
+        # twice, possibly with commutative arguments reordered, counts once.
+        conjuncts = list(
+            dict.fromkeys(
+                canonicalizer.walk(c)
+                for c in extract_and_arguments(list(self._problem.goals))
+            )
+        )
+        goal = set(conjuncts)
         obj_to_conjuncts: dict[UPObject, list[FNode]] = {}
         for c in conjuncts:
             for obj in set(extract_objects(c)):
@@ -1060,8 +1067,8 @@ class Encoder:
             obj1 (UPObject): The first object to compare.
             obj2 (UPObject): The second object to compare.
             goal (Set[FNode]): The canonical forms of the goal's conjuncts.
-            obj_to_conjuncts (Dict[UPObject, List[FNode]]): The goal
-                conjuncts mentioning each object.
+            obj_to_conjuncts (Dict[UPObject, List[FNode]]): The canonical
+                forms in `goal` mentioning each object.
             canonicalizer (_CommutativeCanonicalizer): The walker that built
                 `goal`.
             obj_to_init_assignments (Dict[UPObject, List[Tuple[FNode, FNode]]]):

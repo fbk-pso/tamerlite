@@ -1222,6 +1222,24 @@ def get_problem_goal_commutative_sum_symmetry() -> Problem:
     return problem
 
 
+def get_problem_goal_repeated_conjunct_symmetry(reordered: bool) -> Problem:
+    """`t1` and `t2` are interchangeable, but the goal states `t1`'s
+    condition twice: identically, or with the sum's arguments reordered."""
+    suffix = "_reordered" if reordered else ""
+    problem = _get_problem_refuel_trucks(f"goal_repeated_conjunct{suffix}", 2)
+    fuel = problem.fluent("fuel")
+    bonus = Fluent("bonus", IntType())
+    problem.add_fluent(bonus, default_initial_value=0)
+    t1, t2 = problem.object("t1"), problem.object("t2")
+    problem.add_goal(GE(Plus(fuel(t1), bonus), 1))
+    if reordered:
+        problem.add_goal(GE(Plus(bonus, fuel(t1)), 1))
+    else:
+        problem.add_goal(GE(Plus(fuel(t1), bonus), 1))
+    problem.add_goal(GE(Plus(fuel(t2), bonus), 1))
+    return problem
+
+
 def get_problem_goal_disjunction_symmetry() -> Problem:
     Truck = UserType("Truck")
     Location = UserType("Location")

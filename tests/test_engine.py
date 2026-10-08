@@ -2326,6 +2326,19 @@ def test_symmetry_breaking_general_goal_shapes():
                     assert v.validate(problem, res.plan), problem.name
 
 
+def test_symmetry_breaking_repeated_goal_conjuncts():
+    """
+    A goal condition stated twice, identically or with commutative arguments
+    reordered, counts once: `t1` and `t2` stay interchangeable.
+    """
+
+    for reordered in [False, True]:
+        problem = problems_generator.get_problem_goal_repeated_conjunct_symmetry(
+            reordered
+        )
+        assert {"t1", "t2"} in _equivalence_groups(problem), problem.name
+
+
 def test_symmetry_breaking_compression_safe_prunes_witness_fluent():
     """
     Regression test for a real-world solve regression on Driverlog pfile1
