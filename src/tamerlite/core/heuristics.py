@@ -245,15 +245,20 @@ class DeleteRelaxationHeuristic(Heuristic):
     at construction; `_eval_core` initializes the cost of each cid from the
     state, then pops operators from a min-heap in order of precondition cost,
     expanding each one exactly once (no reopening) and updating the cost of
-    the conditions it achieves. The goal is a pseudo-operator `_goal_op`, and the search
-    stops as soon as it is popped -- except for hmax when some operator
-    achieves a simple numeric condition (`_drain_heap`). There, the
+    the conditions it achieves. The goal is a pseudo-operator `_goal_op`, and
+    the search stops as soon as it is popped -- except for hmax when some
+    operator achieves a simple numeric condition (`_drain_heap`). There, the
     condition's cost (`rep * cost` plus the cheapest precondition cost among
     the achievers expanded so far) can be lower than the cost of the operator
     being expanded, so an operator popped after the goal can still lower the
     goal's cost, and the heap is drained instead. Without such achievers
     every relaxed cost exceeds its achiever's, costs pop in non-decreasing
     order, and stopping at the goal is exact.
+
+    A precondition without OR nodes costs `math.inf` while any of its leaves
+    is unreached, so its cost is only computed once `unreached` (per
+    operator, counting distinct leaves) drops to 0; a precondition with an OR
+    node is recomputed whenever one of its leaves gets cheaper.
     """
 
     def __init__(
@@ -540,6 +545,17 @@ class DeleteRelaxationHeuristic(Heuristic):
 
         self._cond_to_ops = cond_to_ops
         self._num_conds = len(leaves)
+        # Per operator (including `_goal_op`): the number of distinct leaves
+        # of its precondition -- `add_reader` registers each (cid, operator)
+        # pair once -- and whether the precondition has an OR node.
+        self._op_distinct_leaves = [0] * len(self._op_conditions)
+        for readers in cond_to_ops:
+            for op in readers:
+                self._op_distinct_leaves[op] += 1
+        self._op_contains_or_node = [
+            any(kind == _OR for kind, _ in conditions)
+            for conditions in self._op_conditions
+        ]
 
     @property
     def name(self) -> str:
@@ -1319,7 +1335,16 @@ class DeleteRelaxationHeuristic(Heuristic):
         # Ordered by `(cost, op)`, a total order, so the pop sequence depends
         # only on the entries pushed.
         heap: list[tuple[float, int]] = []
+        # Per operator, how many distinct leaves of its precondition are
+        # still unreached.
+        unreached = self._op_distinct_leaves.copy()
+        for cid, readers in enumerate(self._cond_to_ops):
+            if cond_cost[cid] < math.inf:
+                for reader in readers:
+                    unreached[reader] -= 1
         for op, conditions in enumerate(self._op_conditions):
+            if not self._op_contains_or_node[op] and unreached[op] > 0:
+                continue
             c = _expression_cost(conditions, cond_cost, hmax)
             if c < math.inf:
                 op_cost[op] = c
@@ -1332,11 +1357,17 @@ class DeleteRelaxationHeuristic(Heuristic):
             reading it that is still open. On a tie, hff's `reached_by`
             prefers the operator with the larger id."""
             if cost < cond_cost[cid]:
+                first_reach = cond_cost[cid] == math.inf
                 cond_cost[cid] = cost
                 if hff:
                     reached_by[cid] = op
                 for reader in self._cond_to_ops[cid]:
                     if closed[reader]:
+                        continue
+                    if first_reach:
+                        unreached[reader] -= 1
+                    if not self._op_contains_or_node[reader] and unreached[reader] > 0:
+                        # still `math.inf`: some other leaf is unreached
                         continue
                     reader_cost = _expression_cost(
                         self._op_conditions[reader], cond_cost, hmax

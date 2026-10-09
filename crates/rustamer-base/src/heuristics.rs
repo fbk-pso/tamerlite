@@ -1635,6 +1635,9 @@ struct FixpointBuffers {
     min_achiever_pre_cost: Vec<f64>,
     /// hff only: per cid, the operator that achieved its current cost.
     reached_by: Vec<Option<usize>>,
+    /// Per operator, how many distinct leaves of its precondition are still
+    /// unreached. Reset from `distinct_leaves` by `_eval`.
+    unreached: Vec<u32>,
     heap: BinaryHeap<QueuedOperator>,
     stack: Vec<f64>,
 }
@@ -1670,15 +1673,20 @@ pub struct DeleteRelaxationHeuristicConfig {
 /// at construction; `eval` initializes the cost of each cid from the state,
 /// then pops operators from a min-heap in order of precondition cost,
 /// expanding each one exactly once (no reopening) and updating the cost of
-/// the conditions it achieves. The goal is a pseudo-operator `goal_op`, and the search stops
-/// as soon as it is popped -- except for hmax when some operator achieves a
-/// simple numeric condition (`drain_heap`). There, the condition's cost
-/// (`rep * cost` plus the cheapest precondition cost among the achievers
-/// expanded so far) can be lower than the cost of the operator being
-/// expanded, so an operator popped after the goal can still lower the goal's
-/// cost, and the heap is drained instead. Without such achievers every
+/// the conditions it achieves. The goal is a pseudo-operator `goal_op`, and
+/// the search stops as soon as it is popped -- except for hmax when some
+/// operator achieves a simple numeric condition (`drain_heap`). There, the
+/// condition's cost (`rep * cost` plus the cheapest precondition cost among
+/// the achievers expanded so far) can be lower than the cost of the operator
+/// being expanded, so an operator popped after the goal can still lower the
+/// goal's cost, and the heap is drained instead. Without such achievers every
 /// relaxed cost exceeds its achiever's, costs pop in non-decreasing order, and
 /// stopping at the goal is exact.
+///
+/// A precondition without OR nodes costs `inf` while any of its leaves is
+/// unreached, so its cost is only computed once `unreached` (per operator,
+/// counting distinct leaves) drops to 0; a precondition with an OR node is
+/// recomputed whenever one of its leaves gets cheaper.
 #[derive(Clone, Debug)]
 pub struct DeleteRelaxationHeuristic {
     actions: Vec<Action>,
@@ -1694,6 +1702,9 @@ pub struct DeleteRelaxationHeuristic {
     goals: IndexedHeuristicExpression,
     /// cid -> operators (including `goal_op`) whose precondition reads it.
     cond_to_ops: Vec<Vec<usize>>,
+    /// Per operator (including `goal_op`), the number of distinct leaves of
+    /// its precondition.
+    distinct_leaves: Vec<u32>,
     /// Per operator, the cids of its effects that some precondition reads.
     op_effects: Vec<Vec<u32>>,
     /// Per operator, `(cid, fluents, weights)` of every simple numeric
@@ -2060,6 +2071,15 @@ impl DeleteRelaxationHeuristic {
         let drain_heap = matches!(config.heuristic_kind, HeuristicKind::HMAX)
             && op_numeric_conds.iter().any(|conds| !conds.is_empty());
 
+        // `add_reader` registers each (cid, operator) pair once, so this
+        // counts each operator's distinct leaves.
+        let mut distinct_leaves = vec![0u32; op_conditions.len()];
+        for readers in &interner.cond_to_ops {
+            for &op in readers {
+                distinct_leaves[op] += 1;
+            }
+        }
+
         let res = DeleteRelaxationHeuristic {
             actions,
             events: events_len,
@@ -2068,6 +2088,7 @@ impl DeleteRelaxationHeuristic {
             op_conditions,
             goals,
             cond_to_ops: interner.cond_to_ops,
+            distinct_leaves,
             op_effects,
             op_numeric_conds,
             drain_heap,
@@ -2173,7 +2194,20 @@ impl DeleteRelaxationHeuristic {
         buffers.reset(self.cond_to_ops.len(), self.goal_op + 1);
         self.init_condition_costs(state, &mut buffers.cond_cost)?;
 
+        buffers.unreached.clear();
+        buffers.unreached.extend_from_slice(&self.distinct_leaves);
+        for (cid, readers) in self.cond_to_ops.iter().enumerate() {
+            if buffers.cond_cost[cid].is_finite() {
+                for &reader in readers {
+                    buffers.unreached[reader] -= 1;
+                }
+            }
+        }
+
         for (op, conditions) in self.op_conditions.iter().enumerate() {
+            if !conditions.contains_or_node && buffers.unreached[op] > 0 {
+                continue;
+            }
             let c = expression_cost(conditions, &buffers.cond_cost, hmax, &mut buffers.stack);
             if c.is_finite() {
                 buffers.op_cost[op] = c;
@@ -2339,6 +2373,7 @@ impl DeleteRelaxationHeuristic {
         let hff = matches!(self.heuristic_kind, HeuristicKind::HFF);
         let c = cid as usize;
         if cost < buffers.cond_cost[c] {
+            let first_reach = buffers.cond_cost[c] == f64::INFINITY;
             buffers.cond_cost[c] = cost;
             if hff {
                 buffers.reached_by[c] = Some(op);
@@ -2346,6 +2381,13 @@ impl DeleteRelaxationHeuristic {
             let hmax = matches!(self.heuristic_kind, HeuristicKind::HMAX);
             for &reader in &self.cond_to_ops[c] {
                 if buffers.closed[reader] {
+                    continue;
+                }
+                if first_reach {
+                    buffers.unreached[reader] -= 1;
+                }
+                if !self.op_conditions[reader].contains_or_node && buffers.unreached[reader] > 0 {
+                    // still `inf`: some other leaf is unreached
                     continue;
                 }
                 let reader_cost = expression_cost(

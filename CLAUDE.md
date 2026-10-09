@@ -289,7 +289,10 @@ there the numeric-condition cost (`rep * cost` + the cheapest precondition
 cost among achievers expanded so far) can undercut the operator being
 expanded, so a later pop can still lower the goal and the heap is drained.
 Without such achievers costs pop in non-decreasing order and stopping early
-is exact. Since hff's `reached_by` tie-break ("prefer the larger operator
+is exact. A precondition without OR nodes is only recomputed once all its
+distinct leaves are reached (`unreached` counter): before that its cost is
+`inf`, so skipping the recomputation changes neither pushes nor values.
+Since hff's `reached_by` tie-break ("prefer the larger operator
 id") depends on visit order, the two cores agree only because: the heap is
 ordered by the total order `(cost, op)` (Rust `QueuedOperator` with `f64::total_cmp`,
 Python `heapq` tuples), so pop order depends only on the set of entries pushed;
