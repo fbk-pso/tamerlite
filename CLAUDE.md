@@ -294,8 +294,9 @@ distinct leaves are reached (`unreached` counter): before that its cost is
 `inf`, so skipping the recomputation changes neither pushes nor values.
 Since hff's `reached_by` tie-break ("prefer the larger operator
 id") depends on visit order, the two cores agree only because: the heap is
-ordered by the total order `(cost, op)` (Rust `QueuedOperator` with `f64::total_cmp`,
-Python `heapq` tuples), so pop order depends only on the set of entries pushed;
+ordered by the total order `(cost, op)` (Rust `QueuedOperator` packs it into
+one `u128` key, cost bits then op id; Python `heapq` tuples), so pop order
+depends only on the set of entries pushed;
 operator ids are construction order in both cores (Rust `debug_assert!`s this);
 and hff's goal pseudo-operator is the goal alone while hadd/hmax use
 `AND(goal, extra_goals)`. A cid's initial cost comes only from an exact state-fact shape,

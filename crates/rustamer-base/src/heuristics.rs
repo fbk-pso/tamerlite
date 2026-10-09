@@ -17,6 +17,7 @@
 
 use im::Vector;
 use num::{BigInt, BigRational, Zero};
+use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
@@ -1586,36 +1587,30 @@ fn supporting_conditions(expr: &IndexedHeuristicExpression, costs: &[f64], out: 
     out.extend(stack.pop().unwrap().1);
 }
 
-/// Min-heap entry of the Dijkstra fix-point: `BinaryHeap` is a max-heap, so
-/// `Ord` is reversed. Ordered by `(cost, op)`, a total order, so the pop
-/// sequence depends only on the entries pushed -- the Python core's `heapq`
-/// of `(cost, op)` tuples pops in exactly the same order.
-#[derive(Clone, Copy, Debug)]
-struct QueuedOperator {
-    cost: f64,
-    op: usize,
-}
+/// Entry of the Dijkstra fix-point's heap: an operator and its precondition
+/// cost, packed into one integer key -- the cost's bits in the high 64, the
+/// operator id in the low 64 -- so a heap comparison is a single integer
+/// comparison. Pushed costs are always finite and non-negative, and for those
+/// IEEE-754 bit patterns order exactly like the values (a negative zero is
+/// normalized to `+0.0`), so the key orders entries by `(cost, op)`: a total
+/// order, so the pop sequence depends only on the entries pushed -- the
+/// Python core's `heapq` of `(cost, op)` tuples pops in exactly the same
+/// order. `BinaryHeap` is a max-heap, so entries are wrapped in `Reverse`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct QueuedOperator(u128);
 
-impl PartialEq for QueuedOperator {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == std::cmp::Ordering::Equal
+impl QueuedOperator {
+    fn new(cost: f64, op: usize) -> Self {
+        debug_assert!(cost.is_finite() && cost >= 0.0);
+        QueuedOperator((u128::from((cost + 0.0).to_bits()) << 64) | op as u128)
     }
-}
 
-impl Eq for QueuedOperator {}
-
-impl PartialOrd for QueuedOperator {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
+    fn cost(self) -> f64 {
+        f64::from_bits((self.0 >> 64) as u64)
     }
-}
 
-impl Ord for QueuedOperator {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        other
-            .cost
-            .total_cmp(&self.cost)
-            .then_with(|| other.op.cmp(&self.op))
+    fn op(self) -> usize {
+        self.0 as usize
     }
 }
 
@@ -1638,7 +1633,7 @@ struct FixpointBuffers {
     /// Per operator, how many distinct leaves of its precondition are still
     /// unreached. Reset from `distinct_leaves` by `_eval`.
     unreached: Vec<u32>,
-    heap: BinaryHeap<QueuedOperator>,
+    heap: BinaryHeap<Reverse<QueuedOperator>>,
     stack: Vec<f64>,
 }
 
@@ -2211,16 +2206,13 @@ impl DeleteRelaxationHeuristic {
             let c = expression_cost(conditions, &buffers.cond_cost, hmax, &mut buffers.stack);
             if c.is_finite() {
                 buffers.op_cost[op] = c;
-                buffers.heap.push(QueuedOperator { cost: c, op });
+                buffers.heap.push(Reverse(QueuedOperator::new(c, op)));
             }
         }
 
         let drain = reachability_analysis || self.drain_heap;
-        while let Some(QueuedOperator {
-            cost: popped_cost,
-            op,
-        }) = buffers.heap.pop()
-        {
+        while let Some(Reverse(entry)) = buffers.heap.pop() {
+            let (popped_cost, op) = (entry.cost(), entry.op());
             if buffers.closed[op] || popped_cost != buffers.op_cost[op] {
                 // stale entry, superseded by a cheaper push
                 continue;
@@ -2398,10 +2390,9 @@ impl DeleteRelaxationHeuristic {
                 );
                 if reader_cost < buffers.op_cost[reader] {
                     buffers.op_cost[reader] = reader_cost;
-                    buffers.heap.push(QueuedOperator {
-                        cost: reader_cost,
-                        op: reader,
-                    });
+                    buffers
+                        .heap
+                        .push(Reverse(QueuedOperator::new(reader_cost, reader)));
                 }
             }
         } else if hff
