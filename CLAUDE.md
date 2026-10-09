@@ -198,12 +198,15 @@ bare `int`s, and it is a deliberate trade for the runtime enforcement the
 `#[pyclass]` gives at the PyO3 boundary (a bare `int` handed to
 `make_fluent_node` raises `TypeError` there). The cost is *not* allocation --
 hoisting the per-evaluation `FluentNode` construction was measured and recovers
-~1% of it. It is hashing: the keys of `DeleteRelaxationHeuristic`'s
-`costs`/`precondition_of` are `Expression` tuples containing
-`FluentNode`/`ObjectNode`, so `hash()` on them now recurses into a Python-level
+~1% of it. It was hashing: the keys of `DeleteRelaxationHeuristic`'s
+per-evaluation cost table were `Expression` tuples containing
+`FluentNode`/`ObjectNode`, so `hash()` on them recursed into a Python-level
 `__hash__` instead of `int`'s C slot -- 3.85M calls on a mid-size logistics
-instance, 0.268s of cumulative time against 0.444s. Before optimizing anything
-here, profile first and check that number.
+instance, 0.268s of cumulative time against 0.444s. That table is now indexed
+by dense condition ids interned once at construction (see the Dijkstra
+fix-point below), which moves those hashes out of evaluation; the 5% figure
+predates that change and has not been re-measured. Before optimizing anything
+here, profile first.
 
 Rust implementation lives in [crates/rustamer-base/src/](crates/rustamer-base/src/) (core library) and [crates/rustamer/src/](crates/rustamer/src/) (PyO3 bindings).
 
@@ -273,6 +276,28 @@ first fluent's atom before the second's in each conjunct) must match
 ties in an `OR` by operand order, so a different order changes
 `expanded_states`, which `check_metrics_equality` asserts identical between
 backends.
+
+**The delete-relaxation fix-point is a Dijkstra over operators,
+and its pop order must match exactly between the two cores.**
+`DeleteRelaxationHeuristic` (both cores) interns every leaf condition read by an
+operator or the goal into a dense cid at construction, initializes each cid's cost
+from the state per evaluation, then pops operators (plus a goal
+pseudo-operator) from a min-heap and expands each exactly once, never
+reopening it. The search stops when the goal pseudo-operator pops, except for
+hmax when some operator achieves a simple numeric condition (`drain_heap`):
+there the numeric-condition cost (`rep * cost` + the cheapest precondition
+cost among achievers expanded so far) can undercut the operator being
+expanded, so a later pop can still lower the goal and the heap is drained.
+Without such achievers costs pop in non-decreasing order and stopping early
+is exact. Since hff's `reached_by` tie-break ("prefer the larger operator
+id") depends on visit order, the two cores agree only because: the heap is
+ordered by the total order `(cost, op)` (Rust `QueuedOperator` with `f64::total_cmp`,
+Python `heapq` tuples), so pop order depends only on the set of entries pushed;
+operator ids are construction order in both cores (Rust `debug_assert!`s this);
+and hff's goal pseudo-operator is the goal alone while hadd/hmax use
+`AND(goal, extra_goals)`. A cid's initial cost comes only from an exact state-fact shape,
+numeric/interpreted-function evaluation, or `state.todo`; anything else is
+reachable only through effects.
 
 Because there's no separate node kind marking object equality, the shape
 `fluent1 == fluent2` (or its negation) that `_simplify_object_equality` matches

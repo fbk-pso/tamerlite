@@ -17,6 +17,7 @@
 
 use im::Vector;
 use num::{BigInt, BigRational, Zero};
+use std::collections::BinaryHeap;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -218,7 +219,6 @@ impl Clone for CustomHeuristic {
 struct Operator {
     id: OperatorID,
     action: Action,
-    conditions: HeuristicExpression,
     effects: Vec<Expression>,
     constant_increase_effects: FxHashMap<Fluent, f64>,
     constant_assign_effects: FxHashMap<Fluent, f64>,
@@ -1397,6 +1397,264 @@ fn extract_sub_expression(
     shift_expression(&expr[i..(idx + 1)], i, true)
 }
 
+/// A `HeuristicExpression` node with its leaf replaced by a dense condition
+/// id ("cid"), so evaluating the expression indexes a `Vec<f64>` instead of
+/// hashing an `Expression`.
+#[derive(Clone, Copy, Debug)]
+enum IndexedHeuristicExpressionNode {
+    And(usize),
+    Or(usize),
+    Leaf(u32),
+}
+
+#[derive(Clone, Debug)]
+struct IndexedHeuristicExpression {
+    nodes: Vec<IndexedHeuristicExpressionNode>,
+    contains_or_node: bool,
+}
+
+/// Assigns every leaf condition read by some operator or goal a dense cid,
+/// and records which operators read it (`cond_to_ops`).
+struct CondInterner {
+    ids: FxHashMap<Expression, u32>,
+    leaves: Vec<Expression>,
+    cond_to_ops: Vec<Vec<usize>>,
+}
+
+impl CondInterner {
+    fn new() -> Self {
+        CondInterner {
+            ids: FxHashMap::with_hasher(FxBuildHasher),
+            leaves: Vec::new(),
+            cond_to_ops: Vec::new(),
+        }
+    }
+
+    fn intern(&mut self, e: Expression) -> u32 {
+        *self.ids.entry(e).or_insert_with(|| {
+            self.leaves.push(e);
+            self.cond_to_ops.push(Vec::new());
+            (self.leaves.len() - 1) as u32
+        })
+    }
+
+    /// Converts `expr` into a `IndexedHeuristicExpression`, registering `owner` (if any) as a
+    /// reader of each of its leaves.
+    fn index_expression(
+        &mut self,
+        expr: &HeuristicExpression,
+        owner: Option<usize>,
+    ) -> IndexedHeuristicExpression {
+        let nodes = expr
+            .expression
+            .iter()
+            .map(|n| match n {
+                HeuristicExpressionNode::Leaf(e) => {
+                    let cid = self.intern(*e);
+                    if let Some(op) = owner {
+                        self.add_reader(cid, op);
+                    }
+                    IndexedHeuristicExpressionNode::Leaf(cid)
+                }
+                HeuristicExpressionNode::And(n) => IndexedHeuristicExpressionNode::And(*n),
+                HeuristicExpressionNode::Or(n) => IndexedHeuristicExpressionNode::Or(*n),
+            })
+            .collect();
+        IndexedHeuristicExpression {
+            nodes,
+            contains_or_node: expr.contains_or_node,
+        }
+    }
+
+    fn add_reader(&mut self, cid: u32, op: usize) {
+        let readers = &mut self.cond_to_ops[cid as usize];
+        // A leaf repeated within one expression registers its reader once:
+        // all of an expression's leaves are registered consecutively.
+        if readers.last() != Some(&op) {
+            readers.push(op);
+        }
+    }
+}
+
+/// The conjunction of `parts`, skipping empty ones.
+fn conjunction(parts: &[&IndexedHeuristicExpression]) -> IndexedHeuristicExpression {
+    let mut nodes = Vec::with_capacity(parts.iter().map(|p| p.nodes.len()).sum::<usize>() + 1);
+    let mut num_operands = 0;
+    for p in parts.iter().filter(|p| !p.nodes.is_empty()) {
+        nodes.extend_from_slice(&p.nodes);
+        num_operands += 1;
+    }
+    if num_operands > 1 {
+        nodes.push(IndexedHeuristicExpressionNode::And(num_operands));
+    }
+    IndexedHeuristicExpression {
+        nodes,
+        contains_or_node: parts.iter().any(|p| p.contains_or_node),
+    }
+}
+
+/// Cost of `expr` given the cost of each cid: AND is the sum (`max` for
+/// hmax) and OR the minimum of its operands. `f64::INFINITY` means
+/// unreached and propagates through both. `stack` is scratch space.
+fn expression_cost(
+    expr: &IndexedHeuristicExpression,
+    costs: &[f64],
+    hmax: bool,
+    stack: &mut Vec<f64>,
+) -> f64 {
+    match expr.nodes.last() {
+        None => return 0.0,
+        Some(IndexedHeuristicExpressionNode::Leaf(cid)) => return costs[*cid as usize],
+        _ => {}
+    }
+
+    stack.clear();
+    for node in &expr.nodes {
+        match *node {
+            IndexedHeuristicExpressionNode::Leaf(cid) => stack.push(costs[cid as usize]),
+            IndexedHeuristicExpressionNode::And(n) => {
+                let mut r = 0.0;
+                for _ in 0..n {
+                    let v = stack.pop().unwrap();
+                    if hmax {
+                        r = f64::max(r, v);
+                    } else {
+                        r += v;
+                    }
+                }
+                stack.push(r);
+            }
+            IndexedHeuristicExpressionNode::Or(n) => {
+                let mut r = f64::INFINITY;
+                for _ in 0..n {
+                    let v = stack.pop().unwrap();
+                    if v < r {
+                        r = v;
+                    }
+                }
+                stack.push(r);
+            }
+        }
+    }
+    debug_assert_eq!(stack.len(), 1);
+    stack[0]
+}
+
+/// Collects into `out` the cids supporting the hff cost of `expr`, i.e. the
+/// subgoals relaxed-plan extraction backchains on: every operand of an AND,
+/// and only the cheapest operand of an OR (the first one popped, on ties).
+fn supporting_conditions(expr: &IndexedHeuristicExpression, costs: &[f64], out: &mut Vec<u32>) {
+    if !expr.contains_or_node {
+        out.extend(expr.nodes.iter().filter_map(|n| match n {
+            IndexedHeuristicExpressionNode::Leaf(cid) => Some(*cid),
+            _ => None,
+        }));
+        return;
+    }
+
+    let mut stack: Vec<(f64, Vec<u32>)> = Vec::new();
+    for node in &expr.nodes {
+        match *node {
+            IndexedHeuristicExpressionNode::Leaf(cid) => {
+                stack.push((costs[cid as usize], vec![cid]))
+            }
+            IndexedHeuristicExpressionNode::And(n) => {
+                let mut r = 0.0;
+                let mut l = Vec::new();
+                for _ in 0..n {
+                    let (v, ol) = stack.pop().unwrap();
+                    r += v;
+                    l.extend(ol);
+                }
+                stack.push((r, l));
+            }
+            IndexedHeuristicExpressionNode::Or(n) => {
+                let mut r = f64::INFINITY;
+                let mut ml = Vec::new();
+                for _ in 0..n {
+                    let (v, ol) = stack.pop().unwrap();
+                    if v < r {
+                        r = v;
+                        ml = ol;
+                    }
+                }
+                stack.push((r, ml));
+            }
+        }
+    }
+    debug_assert_eq!(stack.len(), 1);
+    out.extend(stack.pop().unwrap().1);
+}
+
+/// Min-heap entry of the Dijkstra fix-point: `BinaryHeap` is a max-heap, so
+/// `Ord` is reversed. Ordered by `(cost, op)`, a total order, so the pop
+/// sequence depends only on the entries pushed -- the Python core's `heapq`
+/// of `(cost, op)` tuples pops in exactly the same order.
+#[derive(Clone, Copy, Debug)]
+struct QueuedOperator {
+    cost: f64,
+    op: usize,
+}
+
+impl PartialEq for QueuedOperator {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+impl Eq for QueuedOperator {}
+
+impl PartialOrd for QueuedOperator {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for QueuedOperator {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        other
+            .cost
+            .total_cmp(&self.cost)
+            .then_with(|| other.op.cmp(&self.op))
+    }
+}
+
+/// `(cid, fluents, weights)` of a simple numeric condition an operator
+/// achieves, `fluents`/`weights` as in `repetitions`.
+type NumericAchievement = (u32, Vec<Fluent>, Vec<f64>);
+
+/// Per-evaluation buffers of the Dijkstra fix-point, reused across
+/// evaluations to avoid reallocating them.
+#[derive(Debug, Default)]
+struct FixpointBuffers {
+    cond_cost: Vec<f64>,
+    op_cost: Vec<f64>,
+    closed: Vec<bool>,
+    /// hmax only: per cid, the minimum precondition cost among the
+    /// operators expanded so far that achieve it numerically.
+    min_achiever_pre_cost: Vec<f64>,
+    /// hff only: per cid, the operator that achieved its current cost.
+    reached_by: Vec<Option<usize>>,
+    heap: BinaryHeap<QueuedOperator>,
+    stack: Vec<f64>,
+}
+
+impl FixpointBuffers {
+    fn reset(&mut self, n_conds: usize, n_ops: usize) {
+        self.cond_cost.clear();
+        self.cond_cost.resize(n_conds, f64::INFINITY);
+        self.op_cost.clear();
+        self.op_cost.resize(n_ops, f64::INFINITY);
+        self.closed.clear();
+        self.closed.resize(n_ops, false);
+        self.min_achiever_pre_cost.clear();
+        self.min_achiever_pre_cost.resize(n_conds, f64::INFINITY);
+        self.reached_by.clear();
+        self.reached_by.resize(n_conds, None);
+        self.heap.clear();
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct DeleteRelaxationHeuristicConfig {
     pub heuristic_kind: HeuristicKind,
@@ -1405,23 +1663,61 @@ pub struct DeleteRelaxationHeuristicConfig {
     pub disable_numeric_reasoning: bool,
 }
 
+/// The delete-relaxation heuristics hmax, hadd and hff, computed by a
+/// Dijkstra fix-point over the operators.
+///
+/// Every leaf condition read by an operator or by the goal gets a dense cid
+/// at construction; `eval` initializes the cost of each cid from the state,
+/// then pops operators from a min-heap in order of precondition cost,
+/// expanding each one exactly once (no reopening) and updating the cost of
+/// the conditions it achieves. The goal is a pseudo-operator `goal_op`, and the search stops
+/// as soon as it is popped -- except for hmax when some operator achieves a
+/// simple numeric condition (`drain_heap`). There, the condition's cost
+/// (`rep * cost` plus the cheapest precondition cost among the achievers
+/// expanded so far) can be lower than the cost of the operator being
+/// expanded, so an operator popped after the goal can still lower the goal's
+/// cost, and the heap is drained instead. Without such achievers every
+/// relaxed cost exceeds its achiever's, costs pop in non-decreasing order, and
+/// stopping at the goal is exact.
 #[derive(Clone, Debug)]
 pub struct DeleteRelaxationHeuristic {
     actions: Vec<Action>,
     events: FxHashMap<Action, usize>,
-    goals: HeuristicExpression,
-    extra_fluents: FxHashMap<Action, Vec<Expression>>,
-    extra_goals: HeuristicExpression,
     operators: Vec<Operator>,
-    precondition_of: FxHashMap<Expression, Vec<OperatorID>>,
-    empty_pre_operators: FxHashSet<OperatorID>,
-    simple_numeric_conds: FxHashMap<Expression, (Vec<Fluent>, Vec<f64>)>,
-    complex_numeric_conds: FxHashSet<Expression>,
-    if_conds: FxHashSet<Expression>,
-    achieved_simple_numeric_conds: Vec<Vec<Expression>>,
+    /// Index of the goal pseudo-operator, `operators.len()`. Its
+    /// precondition is the goal for hff, and the goal AND the bookkeeping
+    /// goal of completing every started durative action for hadd/hmax.
+    goal_op: usize,
+    /// Precondition of every operator, plus `goal_op`'s.
+    op_conditions: Vec<IndexedHeuristicExpression>,
+    /// The goal alone: hff's relaxed plan is extracted from it.
+    goals: IndexedHeuristicExpression,
+    /// cid -> operators (including `goal_op`) whose precondition reads it.
+    cond_to_ops: Vec<Vec<usize>>,
+    /// Per operator, the cids of its effects that some precondition reads.
+    op_effects: Vec<Vec<u32>>,
+    /// Per operator, `(cid, fluents, weights)` of every simple numeric
+    /// condition it achieves.
+    op_numeric_conds: Vec<Vec<NumericAchievement>>,
+    /// Whether `eval` drains the heap instead of stopping at `goal_op`: hmax
+    /// with some operator achieving a simple numeric condition.
+    drain_heap: bool,
+    /// Conditions evaluated against the state: `(cid, condition, cost if
+    /// false)`. Cost if true is 0.
+    evaluated_conds: Vec<(u32, Vec<ExpressionNode>, f64)>,
+    /// Conditions `[Fluent(f)]`: cost 0 iff `f` is true in the state.
+    true_fluent_conds: Vec<(u32, Fluent)>,
+    /// Conditions `[Fluent(f), Not(0)]`: cost 0 iff `f` is false in the state.
+    false_fluent_conds: Vec<(u32, Fluent)>,
+    /// Conditions `[Fluent(f), v, Equals(0, 1)]`: cost 0 iff `f` holds the
+    /// non-bool value `v` in the state.
+    equality_conds: Vec<(u32, Fluent, ExpressionNode)>,
+    /// Per action with events, the cid of each of its bookkeeping fluents:
+    /// the one matching the action's progress in `state.todo` has cost 0.
+    extra_fluent_cids: Vec<(Action, Vec<u32>)>,
+    buffers: Arc<Mutex<FixpointBuffers>>,
     heuristic_kind: HeuristicKind,
     internal_caching: HeuristicCache,
-    expression_manager: Arc<Mutex<ExpressionManager>>,
     inadmissible_numeric_heuristic_variant: bool,
     disable_numeric_reasoning: bool,
 }
@@ -1435,10 +1731,14 @@ impl DeleteRelaxationHeuristic {
         config: DeleteRelaxationHeuristicConfig,
     ) -> PyResult<Self> {
         let mut operators = Vec::with_capacity(events.values().map(|e| e.len()).sum());
-        let mut extra_fluents: FxHashMap<Action, Vec<Expression>> =
-            FxHashMap::with_capacity_and_hasher(events.len(), FxBuildHasher);
+        // Precondition of each operator, by operator id. Only used here, to
+        // build `op_conditions`.
+        let mut operator_conditions: Vec<HeuristicExpression> =
+            Vec::with_capacity(operators.capacity());
+        let mut extra_fluents: Vec<(Action, Vec<Expression>)> = Vec::with_capacity(events.len());
         let mut extra_goals = Vec::with_capacity(events.len() + 1);
         let mut expression_manager = ExpressionManager::new();
+        let n_real_fluents = fluent_domains.len();
         let mut num_fluents = fluent_domains.len();
         // Every bookkeeping fluent allocated below is a plain bool flag.
         // Giving them domains up front keeps `object_domain` a *total*
@@ -1566,19 +1866,19 @@ impl DeleteRelaxationHeuristic {
                     operators.push(Operator {
                         id: OperatorID::new(operators.len()),
                         action: *a,
-                        conditions,
                         effects,
                         constant_increase_effects,
                         constant_assign_effects,
                         complex_numeric_effects,
                         cost: 1.0,
                     });
+                    operator_conditions.push(conditions);
                 }
                 cond = ExpressionNode::Fluent(f);
             }
-            extra_fluents.insert(*a, a_extra_fluents);
+            extra_fluents.push((*a, a_extra_fluents));
         }
-        operators.sort_by_key(|a| a.action);
+        debug_assert!(operators.iter().enumerate().all(|(i, o)| o.id.id == i));
 
         let expr_goals = goals.into_iter().map(|e| e.v).collect::<Vec<_>>();
         let goals = convert_to_heuristic_expression(&expr_goals, &mut expression_manager)
@@ -1594,8 +1894,6 @@ impl DeleteRelaxationHeuristic {
         let extra_goals = convert_to_heuristic_expression(&extra_goals, &mut expression_manager)
             .map_err(map_to_python_exception)?;
 
-        let mut precondition_of: FxHashMap<Expression, Vec<OperatorID>> =
-            FxHashMap::with_hasher(FxBuildHasher);
         let mut simple_numeric_conds: FxHashMap<Expression, (Vec<Fluent>, Vec<f64>)> =
             FxHashMap::with_hasher(FxBuildHasher);
         let mut lt_simple_numeric_conds: FxHashSet<Expression> =
@@ -1603,28 +1901,21 @@ impl DeleteRelaxationHeuristic {
         let mut complex_numeric_conds: FxHashSet<Expression> =
             FxHashSet::with_hasher(FxBuildHasher);
         let mut if_conds: FxHashSet<Expression> = FxHashSet::with_hasher(FxBuildHasher);
-        let mut empty_pre_operators: FxHashSet<OperatorID> = FxHashSet::with_hasher(FxBuildHasher);
-        for o in &operators {
-            if o.conditions.expression.is_empty() {
-                empty_pre_operators.insert(o.id);
-            } else {
-                for node in &o.conditions.expression {
-                    if let HeuristicExpressionNode::Leaf(e) = node {
-                        let expr = expression_manager.force_get(e);
-                        if has_interpreted_function(expr) {
-                            if_conds.insert(*e);
-                        } else if is_numeric_leaf_expression(expr, &fluent_domains) {
-                            update_numeric_conditions(
-                                e,
-                                &expression_manager,
-                                &mut simple_numeric_conds,
-                                &mut lt_simple_numeric_conds,
-                                &mut complex_numeric_conds,
-                                config.disable_numeric_reasoning,
-                            );
-                        }
-
-                        precondition_of.entry(*e).or_default().push(o.id);
+        for conditions in &operator_conditions {
+            for node in &conditions.expression {
+                if let HeuristicExpressionNode::Leaf(e) = node {
+                    let expr = expression_manager.force_get(e);
+                    if has_interpreted_function(expr) {
+                        if_conds.insert(*e);
+                    } else if is_numeric_leaf_expression(expr, &fluent_domains) {
+                        update_numeric_conditions(
+                            e,
+                            &expression_manager,
+                            &mut simple_numeric_conds,
+                            &mut lt_simple_numeric_conds,
+                            &mut complex_numeric_conds,
+                            config.disable_numeric_reasoning,
+                        );
                     }
                 }
             }
@@ -1674,6 +1965,89 @@ impl DeleteRelaxationHeuristic {
             }
         }
 
+        let mut interner = CondInterner::new();
+        let mut op_conditions: Vec<IndexedHeuristicExpression> = operator_conditions
+            .iter()
+            .enumerate()
+            .map(|(op, conditions)| interner.index_expression(conditions, Some(op)))
+            .collect();
+        let goal_op = operators.len();
+        let goals = interner.index_expression(&goals, None);
+        let extra_goals = interner.index_expression(&extra_goals, None);
+        let goal_condition = if matches!(config.heuristic_kind, HeuristicKind::HFF) {
+            goals.clone()
+        } else {
+            conjunction(&[&goals, &extra_goals])
+        };
+        for node in &goal_condition.nodes {
+            if let IndexedHeuristicExpressionNode::Leaf(cid) = node {
+                interner.add_reader(*cid, goal_op);
+            }
+        }
+        op_conditions.push(goal_condition);
+
+        let op_effects: Vec<Vec<u32>> = operators
+            .iter()
+            .map(|o| {
+                o.effects
+                    .iter()
+                    .filter_map(|e| interner.ids.get(e).copied())
+                    .collect()
+            })
+            .collect();
+
+        let op_numeric_conds: Vec<Vec<NumericAchievement>> = achieved_simple_numeric_conds
+            .iter()
+            .map(|conds| {
+                conds
+                    .iter()
+                    .map(|c| {
+                        let (fluents, weights) = &simple_numeric_conds[c];
+                        (interner.ids[c], fluents.clone(), weights.clone())
+                    })
+                    .collect()
+            })
+            .collect();
+
+        let extra_fluent_cids: Vec<(Action, Vec<u32>)> = extra_fluents
+            .into_iter()
+            .map(|(a, fluents)| (a, fluents.into_iter().map(|e| interner.intern(e)).collect()))
+            .collect();
+
+        // Classify each cid by how its initial cost is computed from the
+        // state. Bookkeeping fluents are initialized from `state.todo`
+        // instead, and any other cid is reached only through effects.
+        let mut evaluated_conds = Vec::new();
+        let mut true_fluent_conds = Vec::new();
+        let mut false_fluent_conds = Vec::new();
+        let mut equality_conds = Vec::new();
+        for (cid, e) in interner.leaves.iter().enumerate() {
+            let cid = cid as u32;
+            let expr = expression_manager.force_get(e);
+            if if_conds.contains(e) || complex_numeric_conds.contains(e) {
+                evaluated_conds.push((cid, expr.clone(), 1.0));
+            } else if simple_numeric_conds.contains_key(e) {
+                evaluated_conds.push((cid, expr.clone(), f64::INFINITY));
+            } else {
+                match expr.as_slice() {
+                    [ExpressionNode::Fluent(f)] if f.idx < n_real_fluents => {
+                        true_fluent_conds.push((cid, *f));
+                    }
+                    [ExpressionNode::Fluent(f), ExpressionNode::Not(0)]
+                        if f.idx < n_real_fluents =>
+                    {
+                        false_fluent_conds.push((cid, *f));
+                    }
+                    [ExpressionNode::Fluent(f), v, ExpressionNode::Equals(0, 1)]
+                        if f.idx < n_real_fluents =>
+                    {
+                        equality_conds.push((cid, *f, v.clone()));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         let events_len: FxHashMap<Action, usize> =
             events.into_iter().map(|(a, ev)| (a, ev.len())).collect();
 
@@ -1683,22 +2057,28 @@ impl DeleteRelaxationHeuristic {
             None
         };
 
+        let drain_heap = matches!(config.heuristic_kind, HeuristicKind::HMAX)
+            && op_numeric_conds.iter().any(|conds| !conds.is_empty());
+
         let res = DeleteRelaxationHeuristic {
             actions,
             events: events_len,
-            goals,
-            extra_fluents,
-            extra_goals,
             operators,
-            precondition_of,
-            empty_pre_operators,
-            simple_numeric_conds,
-            complex_numeric_conds,
-            if_conds,
-            achieved_simple_numeric_conds,
+            goal_op,
+            op_conditions,
+            goals,
+            cond_to_ops: interner.cond_to_ops,
+            op_effects,
+            op_numeric_conds,
+            drain_heap,
+            evaluated_conds,
+            true_fluent_conds,
+            false_fluent_conds,
+            equality_conds,
+            extra_fluent_cids,
+            buffers: Arc::new(Mutex::new(FixpointBuffers::default())),
             heuristic_kind: config.heuristic_kind,
             internal_caching: Arc::new(Mutex::new(internal_caching)),
-            expression_manager: Arc::new(Mutex::new(expression_manager)),
             inadmissible_numeric_heuristic_variant: config.inadmissible_numeric_heuristic_variant,
             disable_numeric_reasoning: config.disable_numeric_reasoning,
         };
@@ -1767,7 +2147,8 @@ impl DeleteRelaxationHeuristic {
     ///
     /// If `reachability_analysis` is enabled, the method performs reachability
     /// analysis instead of computing the heuristic value and returns the set of
-    /// reachable operators.
+    /// reachable operators: the heap is then drained instead of stopping at
+    /// the goal.
     ///
     /// # Arguments
     ///
@@ -1786,189 +2167,59 @@ impl DeleteRelaxationHeuristic {
         state: &State,
         reachability_analysis: bool,
     ) -> PyResult<(Option<f64>, Option<Vec<usize>>)> {
-        let mut expression_manager = self.expression_manager.lock().unwrap();
-        let mut costs: FxHashMap<Expression, f64> = FxHashMap::with_capacity_and_hasher(
-            state.assignments.len()
-                + self.simple_numeric_conds.len()
-                + self.complex_numeric_conds.len()
-                + self.if_conds.len()
-                + self.events.len(),
-            FxBuildHasher,
-        );
+        let hmax = matches!(self.heuristic_kind, HeuristicKind::HMAX);
+        let mut buffers = self.buffers.lock().unwrap();
+        let buffers = &mut *buffers;
+        buffers.reset(self.cond_to_ops.len(), self.goal_op + 1);
+        self.init_condition_costs(state, &mut buffers.cond_cost)?;
 
-        for (f, v) in state.assignments.iter().enumerate() {
-            let f = Fluent::new(f);
-            let k = match v {
-                ExpressionNode::Bool(value) => {
-                    if *value {
-                        vec![ExpressionNode::Fluent(f)]
-                    } else {
-                        vec![ExpressionNode::Fluent(f), make_operator("not", vec![0])?]
-                    }
-                }
-                _ => {
-                    vec![
-                        ExpressionNode::Fluent(f),
-                        v.clone(),
-                        make_operator("==", vec![0, 1])?,
-                    ]
-                }
-            };
-            let k = expression_manager.put(&k);
-            costs.insert(k, 0.0);
-        }
-
-        for c in self.simple_numeric_conds.keys() {
-            if internal_evaluate(expression_manager.force_get(c), state)?
-                == ExpressionNode::Bool(true)
-            {
-                costs.insert(*c, 0.0);
+        for (op, conditions) in self.op_conditions.iter().enumerate() {
+            let c = expression_cost(conditions, &buffers.cond_cost, hmax, &mut buffers.stack);
+            if c.is_finite() {
+                buffers.op_cost[op] = c;
+                buffers.heap.push(QueuedOperator { cost: c, op });
             }
         }
 
-        for c in &self.complex_numeric_conds {
-            if internal_evaluate(expression_manager.force_get(c), state)?
-                == ExpressionNode::Bool(true)
-            {
-                costs.insert(*c, 0.0);
-            } else {
-                costs.insert(*c, 1.0);
+        let drain = reachability_analysis || self.drain_heap;
+        while let Some(QueuedOperator {
+            cost: popped_cost,
+            op,
+        }) = buffers.heap.pop()
+        {
+            if buffers.closed[op] || popped_cost != buffers.op_cost[op] {
+                // stale entry, superseded by a cheaper push
+                continue;
             }
-        }
-
-        for c in &self.if_conds {
-            if internal_evaluate(expression_manager.force_get(c), state)?
-                == ExpressionNode::Bool(true)
-            {
-                costs.insert(*c, 0.0);
-            } else {
-                costs.insert(*c, 1.0);
-            }
-        }
-
-        for a in self.events.keys() {
-            let v = match state.todo.get(a) {
-                Some((j, _)) => self.extra_fluents[a][j - 1],
-                None => *self.extra_fluents[a].last().unwrap(),
-            };
-            costs.insert(v, 0.0);
-        }
-
-        let mut lp: Vec<Expression> = costs.keys().copied().collect();
-        let mut lo: FxHashSet<OperatorID> = FxHashSet::with_hasher(FxBuildHasher);
-        let mut reached_by: FxHashMap<Expression, OperatorID> =
-            FxHashMap::with_hasher(FxBuildHasher);
-        let mut operator_cost = vec![None; self.operators.len()];
-        let mut new_costs = FxHashMap::with_hasher(FxBuildHasher);
-        let mut poss = FxHashMap::with_hasher(FxBuildHasher);
-        while !lp.is_empty() {
-            lo.extend(&self.empty_pre_operators);
-            for p in lp.iter() {
-                if let Some(po) = self.precondition_of.get(p) {
-                    lo.extend(po);
-                }
-            }
-            for oid in lo.drain() {
-                let o: &Operator = &self.operators[oid.id];
-                let op_cost = operator_cost[oid.id];
-                let Some(c) = self.cost(&o.conditions, &costs) else {
+            buffers.closed[op] = true;
+            if op == self.goal_op {
+                if drain {
                     continue;
-                };
-                if op_cost.is_none_or(|cost| cost > c) {
-                    operator_cost[oid.id] = Some(c);
-
-                    let mut achieved_expressions: Vec<_> =
-                        o.effects.iter().map(|k| (k, o.cost + c)).collect();
-
-                    for simple_cond in &self.achieved_simple_numeric_conds[oid.id] {
-                        if costs.get(simple_cond) == Some(&0.0) {
-                            // condition satisfied in state
-                            continue;
-                        }
-
-                        let (fluents, weights) = &self.simple_numeric_conds[simple_cond];
-                        let rep = repetitions(
-                            o,
-                            fluents,
-                            weights,
-                            state,
-                            self.inadmissible_numeric_heuristic_variant,
-                        )?
-                        .unwrap();
-
-                        let expr_cost = if matches!(self.heuristic_kind, HeuristicKind::HMAX) {
-                            poss.entry(simple_cond)
-                                .or_insert_with(|| FxHashSet::with_hasher(FxBuildHasher))
-                                .insert(o.id);
-
-                            let min_operator_cost = poss
-                                .get(simple_cond)
-                                .unwrap()
-                                .iter()
-                                .map(|oid| {
-                                    self.cost(&self.operators[oid.id].conditions, &costs)
-                                        .unwrap()
-                                })
-                                .reduce(f64::min);
-                            rep * o.cost + min_operator_cost.unwrap()
-                        } else {
-                            rep * o.cost + c
-                        };
-
-                        achieved_expressions.push((simple_cond, expr_cost));
-                    }
-
-                    for (expr, expr_cost) in achieved_expressions {
-                        let prev_expr_cost =
-                            new_costs.get(expr).or_else(|| costs.get(expr)).copied();
-                        if prev_expr_cost.is_none() || expr_cost < prev_expr_cost.unwrap() {
-                            if matches!(self.heuristic_kind, HeuristicKind::HFF) {
-                                reached_by.insert(*expr, oid);
-                            }
-                            new_costs.insert(*expr, expr_cost);
-                        } else if prev_expr_cost == Some(expr_cost)
-                            && matches!(self.heuristic_kind, HeuristicKind::HFF)
-                            && oid.id > reached_by[expr].id
-                        {
-                            reached_by.insert(*expr, oid);
-                        }
-                    }
                 }
+                break;
             }
-            lp.clear();
-            lp.extend(new_costs.keys());
-            costs.extend(new_costs.drain());
+            self.expand(op, state, buffers)?;
         }
 
         if reachability_analysis {
-            let reachable_operators: Vec<usize> = operator_cost
-                .iter()
-                .enumerate()
-                .filter_map(|(i, c)| c.map(|_| i))
+            let reachable_operators: Vec<usize> = (0..self.goal_op)
+                .filter(|&op| buffers.op_cost[op].is_finite())
                 .collect();
             return Ok((None, Some(reachable_operators)));
         }
 
-        let h = self.cost(&self.goals, &costs);
-        if h.is_none() {
+        let h = expression_cost(
+            &self.op_conditions[self.goal_op],
+            &buffers.cond_cost,
+            hmax,
+            &mut buffers.stack,
+        );
+        if !h.is_finite() {
             return Ok((None, None));
         }
 
-        if matches!(
-            self.heuristic_kind,
-            HeuristicKind::HADD | HeuristicKind::HMAX
-        ) {
-            return match self.cost(&self.extra_goals, &costs) {
-                Some(v) => {
-                    let res = if let HeuristicKind::HMAX = self.heuristic_kind {
-                        f64::max(h.unwrap(), v)
-                    } else {
-                        h.unwrap() + v
-                    };
-                    Ok((Some(res), None))
-                }
-                None => Ok((None, None)),
-            };
+        if !matches!(self.heuristic_kind, HeuristicKind::HFF) {
+            return Ok((Some(h), None));
         }
 
         let mut res = 0.0;
@@ -1976,190 +2227,147 @@ impl DeleteRelaxationHeuristic {
             res += (self.events[a] - j) as f64;
         }
 
-        if let Some(hv) = h {
-            if hv == 0.0 {
-                return Ok((Some(res), None));
-            }
+        if h == 0.0 {
+            return Ok((Some(res), None));
         }
 
         let mut relaxed_plan = FxHashSet::with_hasher(FxBuildHasher);
-        let mut tmp_set = FxHashSet::with_hasher(FxBuildHasher); // avoid reallocating the FxHashSet inside hff_leaves
-        let mut stack: Vec<Expression> = {
-            self.hff_leaves(&self.goals, &costs, &mut tmp_set);
-            tmp_set.drain().collect()
-        };
-        let mut visited_expressions: FxHashSet<Expression> = stack.iter().copied().collect();
-
+        let mut stack: Vec<u32> = Vec::new();
+        supporting_conditions(&self.goals, &buffers.cond_cost, &mut stack);
+        let mut visited: FxHashSet<u32> = stack.iter().copied().collect();
+        let mut leaves = Vec::new();
         while let Some(g) = stack.pop() {
-            if let Some(oid) = reached_by.get(&g) {
-                let o = &self.operators[oid.id];
-                relaxed_plan.insert(&o.action);
-
-                self.hff_leaves(&o.conditions, &costs, &mut tmp_set);
-                for expr in tmp_set.drain() {
-                    if visited_expressions.insert(expr) {
-                        stack.push(expr);
+            if let Some(op) = buffers.reached_by[g as usize] {
+                relaxed_plan.insert(self.operators[op].action);
+                supporting_conditions(&self.op_conditions[op], &buffers.cond_cost, &mut leaves);
+                for cid in leaves.drain(..) {
+                    if visited.insert(cid) {
+                        stack.push(cid);
                     }
                 }
             }
         }
         for a in relaxed_plan {
-            if !state.todo.contains_key(a) {
-                res += self.events[a] as f64;
+            if !state.todo.contains_key(&a) {
+                res += self.events[&a] as f64;
             }
         }
 
         Ok((Some(res), None))
     }
 
-    /// Collect the leaf expressions that contribute to the cost of the expression.
-    ///
-    /// Leaf expressions are collected according to the type of node:
-    /// - AND nodes: all leaf expressions from the operands are included
-    /// - OR nodes: only the leaf expressions from the operand with the minimum cost are included
-    ///
-    /// # Arguments
-    ///
-    /// * `expr` - The `HeuristicExpression` to evaluate.
-    /// * `costs` - A mapping from leaf expressions (`Expression`) to their costs (`f64`).
-    /// * `out` - A mutable `FxHashSet` where the contributing leaf expressions will be collected.
-    ///
-    /// # Notes
-    ///
-    /// - This method does not return a value; it updates the `out` set in place.
-    fn hff_leaves<'a>(
-        &'a self,
-        expr: &'a HeuristicExpression,
-        costs: &'a FxHashMap<Expression, f64>,
-        out: &mut FxHashSet<Expression>,
-    ) {
-        if !expr.contains_or_node {
-            for node in &expr.expression {
-                if let HeuristicExpressionNode::Leaf(e) = node {
-                    out.insert(*e);
-                }
-            }
-            return;
+    /// Sets the cost of every cid that holds in `state` (and of every
+    /// complex numeric or interpreted-function condition that does not, to
+    /// 1); every other cid stays unreached.
+    fn init_condition_costs(&self, state: &State, cond_cost: &mut [f64]) -> PyResult<()> {
+        for (cid, expr, false_cost) in &self.evaluated_conds {
+            cond_cost[*cid as usize] =
+                if internal_evaluate(expr, state)? == ExpressionNode::Bool(true) {
+                    0.0
+                } else {
+                    *false_cost
+                };
         }
-
-        let mut res: Vec<(Option<f64>, Vec<Expression>)> = Vec::new();
-        for node in &expr.expression {
-            match node {
-                HeuristicExpressionNode::Leaf(e) => res.push((costs.get(e).cloned(), vec![*e])),
-                HeuristicExpressionNode::And(num_operands) => {
-                    let mut r = 0.0;
-                    let mut l = Vec::new();
-                    let mut is_none = false;
-                    for i in 0..*num_operands {
-                        match &res[res.len() - i - 1] {
-                            (Some(v), ol) => {
-                                if let HeuristicKind::HMAX = self.heuristic_kind {
-                                    r = f64::max(r, *v)
-                                } else {
-                                    l.extend(ol);
-                                    r += v;
-                                }
-                            }
-                            (None, _) => {
-                                is_none = true;
-                                break;
-                            }
-                        }
-                    }
-                    res.truncate(res.len() - num_operands);
-                    if is_none {
-                        res.push((None, vec![]));
-                    } else {
-                        res.push((Some(r), l));
-                    }
-                }
-                HeuristicExpressionNode::Or(num_operands) => {
-                    let mut r = f64::MAX;
-                    let mut ml = vec![];
-                    for _ in 0..*num_operands {
-                        if let (Some(v), ol) = res.pop().unwrap() {
-                            if v < r {
-                                r = v;
-                                ml = ol;
-                            }
-                        }
-                    }
-                    if r == f64::MAX {
-                        res.push((None, ml));
-                    } else {
-                        res.push((Some(r), ml));
-                    }
-                }
+        for (cid, f) in &self.true_fluent_conds {
+            if *state.get_value(*f) == ExpressionNode::Bool(true) {
+                cond_cost[*cid as usize] = 0.0;
             }
         }
-
-        assert!(res.len() == 1);
-        out.extend(res.pop().unwrap().1);
+        for (cid, f) in &self.false_fluent_conds {
+            if *state.get_value(*f) == ExpressionNode::Bool(false) {
+                cond_cost[*cid as usize] = 0.0;
+            }
+        }
+        for (cid, f, v) in &self.equality_conds {
+            let value = state.get_value(*f);
+            if !matches!(value, ExpressionNode::Bool(_)) && value == v {
+                cond_cost[*cid as usize] = 0.0;
+            }
+        }
+        for (a, cids) in &self.extra_fluent_cids {
+            let cid = match state.todo.get(a) {
+                Some((j, _)) => cids[j - 1],
+                None => *cids.last().unwrap(),
+            };
+            cond_cost[cid as usize] = 0.0;
+        }
+        Ok(())
     }
 
-    /// Calculate the cost of an expression.
-    ///
-    /// # Arguments
-    ///
-    /// * `expr` - The `HeuristicExpression` to evaluate.
-    /// * `costs` - A mapping from leaf expressions (`Expression`) to their costs (`f64`).
-    ///
-    /// # Returns
-    ///
-    /// Returns the total cost of the expression.
-    fn cost(&self, expr: &HeuristicExpression, costs: &FxHashMap<Expression, f64>) -> Option<f64> {
-        if let HeuristicExpressionNode::Leaf(e) = expr.expression.last().unwrap() {
-            return costs.get(e).cloned();
+    /// Updates the cost of every condition achieved by operator `op`, just
+    /// closed: its effects, and the simple numeric conditions it achieves.
+    fn expand(&self, op: usize, state: &State, buffers: &mut FixpointBuffers) -> PyResult<()> {
+        let o = &self.operators[op];
+        let precondition_cost = buffers.op_cost[op];
+
+        for &cid in &self.op_effects[op] {
+            self.update_condition_cost(cid, o.cost + precondition_cost, op, buffers);
         }
 
-        let mut res: Vec<Option<f64>> = Vec::new();
-        for node in &expr.expression {
-            match node {
-                HeuristicExpressionNode::Leaf(e) => res.push(costs.get(e).cloned()),
-                HeuristicExpressionNode::And(num_operands) => {
-                    let mut r = 0.0;
-                    let mut is_none = false;
-                    for i in 0..*num_operands {
-                        match res[res.len() - i - 1] {
-                            Some(v) => {
-                                if let HeuristicKind::HMAX = self.heuristic_kind {
-                                    r = f64::max(r, v)
-                                } else {
-                                    r += v
-                                }
-                            }
-                            None => {
-                                is_none = true;
-                                break;
-                            }
-                        }
-                    }
-                    res.truncate(res.len() - num_operands);
-                    if is_none {
-                        res.push(None);
-                    } else {
-                        res.push(Some(r));
-                    }
+        for (cid, fluents, weights) in &self.op_numeric_conds[op] {
+            if buffers.cond_cost[*cid as usize] == 0.0 {
+                // condition satisfied in state
+                continue;
+            }
+
+            let rep = repetitions(
+                o,
+                fluents,
+                weights,
+                state,
+                self.inadmissible_numeric_heuristic_variant,
+            )?
+            .unwrap();
+
+            let cost = if matches!(self.heuristic_kind, HeuristicKind::HMAX) {
+                let m = &mut buffers.min_achiever_pre_cost[*cid as usize];
+                *m = f64::min(*m, precondition_cost);
+                rep * o.cost + *m
+            } else {
+                rep * o.cost + precondition_cost
+            };
+            self.update_condition_cost(*cid, cost, op, buffers);
+        }
+        Ok(())
+    }
+
+    /// Lowers the cost of `cid` to `cost`, achieved by operator `op`, if
+    /// that improves it, and updates the cost of every operator reading it
+    /// that is still open. On a tie, hff's `reached_by` prefers the operator
+    /// with the larger id.
+    fn update_condition_cost(&self, cid: u32, cost: f64, op: usize, buffers: &mut FixpointBuffers) {
+        let hff = matches!(self.heuristic_kind, HeuristicKind::HFF);
+        let c = cid as usize;
+        if cost < buffers.cond_cost[c] {
+            buffers.cond_cost[c] = cost;
+            if hff {
+                buffers.reached_by[c] = Some(op);
+            }
+            let hmax = matches!(self.heuristic_kind, HeuristicKind::HMAX);
+            for &reader in &self.cond_to_ops[c] {
+                if buffers.closed[reader] {
+                    continue;
                 }
-                HeuristicExpressionNode::Or(num_operands) => {
-                    let mut r = f64::MAX;
-                    for _ in 0..*num_operands {
-                        let operand_value = res.pop().unwrap();
-                        if let Some(v) = operand_value {
-                            r = f64::min(r, v)
-                        }
-                    }
-                    if r == f64::MAX {
-                        res.push(None);
-                    } else {
-                        res.push(Some(r));
-                    }
+                let reader_cost = expression_cost(
+                    &self.op_conditions[reader],
+                    &buffers.cond_cost,
+                    hmax,
+                    &mut buffers.stack,
+                );
+                if reader_cost < buffers.op_cost[reader] {
+                    buffers.op_cost[reader] = reader_cost;
+                    buffers.heap.push(QueuedOperator {
+                        cost: reader_cost,
+                        op: reader,
+                    });
                 }
             }
+        } else if hff
+            && cost == buffers.cond_cost[c]
+            && buffers.reached_by[c].is_none_or(|prev| op > prev)
+        {
+            buffers.reached_by[c] = Some(op);
         }
-
-        assert!(res.len() == 1);
-        res.last().copied().flatten()
     }
 
     pub fn name(&self) -> &'static str {
