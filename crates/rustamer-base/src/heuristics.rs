@@ -29,6 +29,7 @@ use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
+use radix_heap::RadixHeapMap;
 
 use super::expressions::*;
 use super::expressions_utils::*;
@@ -1587,7 +1588,8 @@ fn supporting_conditions(expr: &IndexedHeuristicExpression, costs: &[f64], out: 
     out.extend(stack.pop().unwrap().1);
 }
 
-/// Entry of the Dijkstra fix-point's heap: an operator and its precondition
+/// Entry of the Dijkstra fix-point's binary heap, used when the fix-point is
+/// not monotone (see `OperatorQueue`): an operator and its precondition
 /// cost, packed into one integer key -- the cost's bits in the high 64, the
 /// operator id in the low 64 -- so a heap comparison is a single integer
 /// comparison. Pushed costs are always finite and non-negative, and for those
@@ -1614,6 +1616,53 @@ impl QueuedOperator {
     }
 }
 
+/// The Dijkstra fix-point's queue of operators. When the fix-point is
+/// monotone -- no pushed cost below the last popped one, which holds unless
+/// `DeleteRelaxationHeuristic::drain_heap` -- it is a radix heap keyed on the
+/// cost's bit pattern: pushed costs are finite and non-negative, and for
+/// those IEEE-754 bit patterns order exactly like the values (a negative zero
+/// is normalized to `+0.0`). `RadixHeapMap` is a max-heap, so keys are
+/// wrapped in `Reverse`, and it panics on a non-monotone push. Its tie order
+/// among equal costs is arbitrary: the heuristic values do not depend on it
+/// (see `DeleteRelaxationHeuristic`). Otherwise the queue is a binary heap
+/// popping in exactly `(cost, op)` order, which the draining hmax needs: its
+/// numeric cost depends on the order achievers are expanded in.
+#[derive(Debug, Default)]
+struct OperatorQueue {
+    monotone: bool,
+    radix: RadixHeapMap<Reverse<u64>, usize>,
+    heap: BinaryHeap<Reverse<QueuedOperator>>,
+}
+
+impl OperatorQueue {
+    fn reset(&mut self, monotone: bool) {
+        self.monotone = monotone;
+        self.radix.clear_to(Reverse(0));
+        self.heap.clear();
+    }
+
+    fn push(&mut self, cost: f64, op: usize) {
+        debug_assert!(cost.is_finite() && cost >= 0.0);
+        if self.monotone {
+            self.radix.push(Reverse((cost + 0.0).to_bits()), op);
+        } else {
+            self.heap.push(Reverse(QueuedOperator::new(cost, op)));
+        }
+    }
+
+    fn pop(&mut self) -> Option<(f64, usize)> {
+        if self.monotone {
+            self.radix
+                .pop()
+                .map(|(Reverse(bits), op)| (f64::from_bits(bits), op))
+        } else {
+            self.heap
+                .pop()
+                .map(|Reverse(entry)| (entry.cost(), entry.op()))
+        }
+    }
+}
+
 /// `(cid, fluents, weights)` of a simple numeric condition an operator
 /// achieves, `fluents`/`weights` as in `repetitions`.
 type NumericAchievement = (u32, Vec<Fluent>, Vec<f64>);
@@ -1633,12 +1682,12 @@ struct FixpointBuffers {
     /// Per operator, how many distinct leaves of its precondition are still
     /// unreached. Reset from `distinct_leaves` by `_eval`.
     unreached: Vec<u32>,
-    heap: BinaryHeap<Reverse<QueuedOperator>>,
+    queue: OperatorQueue,
     stack: Vec<f64>,
 }
 
 impl FixpointBuffers {
-    fn reset(&mut self, n_conds: usize, n_ops: usize) {
+    fn reset(&mut self, n_conds: usize, n_ops: usize, monotone: bool) {
         self.cond_cost.clear();
         self.cond_cost.resize(n_conds, f64::INFINITY);
         self.op_cost.clear();
@@ -1649,7 +1698,7 @@ impl FixpointBuffers {
         self.min_achiever_pre_cost.resize(n_conds, f64::INFINITY);
         self.reached_by.clear();
         self.reached_by.resize(n_conds, None);
-        self.heap.clear();
+        self.queue.reset(monotone);
     }
 }
 
@@ -1682,6 +1731,19 @@ pub struct DeleteRelaxationHeuristicConfig {
 /// unreached, so its cost is only computed once `unreached` (per operator,
 /// counting distinct leaves) drops to 0; a precondition with an OR node is
 /// recomputed whenever one of its leaves gets cheaper.
+///
+/// Unless `drain_heap`, the fix-point is monotone: every condition update
+/// offers at least the popped cost, and a reader's cost is at least the
+/// offer. Its queue is then a radix heap, which pops equal costs in
+/// arbitrary order -- the Python core's `heapq` pops them smallest id first
+/// -- and the values do not depend on that order: condition costs are the
+/// exact fix-point under any monotone order, and hff's `reached_by` ends at
+/// the largest-id operator offering a condition's final cost whatever order
+/// the offers come in. Every condition the relaxed plan backchains through
+/// costs at most the goal's `h`, so its achievers (precondition cost at most
+/// `h - 1`) are all expanded before the goal pops. With `drain_heap`,
+/// `min_achiever_pre_cost` depends on the expansion order, so the queue is a
+/// binary heap popping in exactly `(cost, op)` order, like `heapq`.
 #[derive(Clone, Debug)]
 pub struct DeleteRelaxationHeuristic {
     actions: Vec<Action>,
@@ -2186,7 +2248,7 @@ impl DeleteRelaxationHeuristic {
         let hmax = matches!(self.heuristic_kind, HeuristicKind::HMAX);
         let mut buffers = self.buffers.lock().unwrap();
         let buffers = &mut *buffers;
-        buffers.reset(self.cond_to_ops.len(), self.goal_op + 1);
+        buffers.reset(self.cond_to_ops.len(), self.goal_op + 1, !self.drain_heap);
         self.init_condition_costs(state, &mut buffers.cond_cost)?;
 
         buffers.unreached.clear();
@@ -2206,13 +2268,12 @@ impl DeleteRelaxationHeuristic {
             let c = expression_cost(conditions, &buffers.cond_cost, hmax, &mut buffers.stack);
             if c.is_finite() {
                 buffers.op_cost[op] = c;
-                buffers.heap.push(Reverse(QueuedOperator::new(c, op)));
+                buffers.queue.push(c, op);
             }
         }
 
         let drain = reachability_analysis || self.drain_heap;
-        while let Some(Reverse(entry)) = buffers.heap.pop() {
-            let (popped_cost, op) = (entry.cost(), entry.op());
+        while let Some((popped_cost, op)) = buffers.queue.pop() {
             if buffers.closed[op] || popped_cost != buffers.op_cost[op] {
                 // stale entry, superseded by a cheaper push
                 continue;
@@ -2390,9 +2451,7 @@ impl DeleteRelaxationHeuristic {
                 );
                 if reader_cost < buffers.op_cost[reader] {
                     buffers.op_cost[reader] = reader_cost;
-                    buffers
-                        .heap
-                        .push(Reverse(QueuedOperator::new(reader_cost, reader)));
+                    buffers.queue.push(reader_cost, reader);
                 }
             }
         } else if hff

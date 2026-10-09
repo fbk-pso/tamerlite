@@ -277,8 +277,8 @@ ties in an `OR` by operand order, so a different order changes
 `expanded_states`, which `check_metrics_equality` asserts identical between
 backends.
 
-**The delete-relaxation fix-point is a Dijkstra over operators,
-and its pop order must match exactly between the two cores.**
+**The delete-relaxation fix-point is a Dijkstra over operators, and the two
+cores must agree on its values even where their pop orders differ.**
 `DeleteRelaxationHeuristic` (both cores) interns every leaf condition read by an
 operator or the goal into a dense cid at construction, initializes each cid's cost
 from the state per evaluation, then pops operators (plus a goal
@@ -292,16 +292,22 @@ Without such achievers costs pop in non-decreasing order and stopping early
 is exact. A precondition without OR nodes is only recomputed once all its
 distinct leaves are reached (`unreached` counter): before that its cost is
 `inf`, so skipping the recomputation changes neither pushes nor values.
-Since hff's `reached_by` tie-break ("prefer the larger operator
-id") depends on visit order, the two cores agree only because: the heap is
-ordered by the total order `(cost, op)` (Rust `QueuedOperator` packs it into
-one `u128` key, cost bits then op id; Python `heapq` tuples), so pop order
-depends only on the set of entries pushed;
-operator ids are construction order in both cores (Rust `debug_assert!`s this);
-and hff's goal pseudo-operator is the goal alone while hadd/hmax use
-`AND(goal, extra_goals)`. A cid's initial cost comes only from an exact state-fact shape,
-numeric/interpreted-function evaluation, or `state.todo`; anything else is
-reachable only through effects.
+Unless `drain_heap`, the fix-point is monotone (no push below the last pop),
+and the Rust core queues operators in a radix heap (`radix-heap` crate) keyed
+on the cost's bits, which pops equal costs in arbitrary order while Python's
+`heapq` pops them smallest id first. That is safe only because the values
+don't depend on tie order: condition costs are the exact fix-point under any monotone order, and
+hff's `reached_by` tie-break ("prefer the larger operator id") ends at the
+same operator whatever order offers arrive in, since every condition the
+relaxed plan uses costs at most `h` and all its achievers are expanded before
+the goal pops. With `drain_heap` the numeric `min_achiever_pre_cost` does
+depend on expansion order, so Rust keeps a binary heap there, ordered by the
+total order `(cost, op)` (`QueuedOperator` packs it into one `u128` key) to pop
+exactly like `heapq`. Either way, operator ids are construction order in both
+cores (Rust `debug_assert!`s this), and hff's goal pseudo-operator is the goal
+alone while hadd/hmax use `AND(goal, extra_goals)`. A cid's initial cost comes
+only from an exact state-fact shape, numeric/interpreted-function evaluation,
+or `state.todo`; anything else is reachable only through effects.
 
 Because there's no separate node kind marking object equality, the shape
 `fluent1 == fluent2` (or its negation) that `_simplify_object_equality` matches
