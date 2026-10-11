@@ -518,7 +518,7 @@ class SearchSpace(SearchSpaceABC):
         initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
         goal: Optional[Expression] = None,
         epsilon: Optional[Fraction] = None,
-        dfa: object | None = None,
+        pruner: object | None = None,
     ):
         self._actions_duration = actions_duration
         self._events = events
@@ -531,7 +531,7 @@ class SearchSpace(SearchSpaceABC):
         self._epsilon = Fraction(1, 100) if epsilon is None else epsilon
         self._is_temporal = any(v is not None for v in actions_duration)
         self._counter = 0
-        self._dfa = dfa
+        self._pruner = pruner
         self._soft_fallback_interval = 0
         self._monitor_vote_penalty = 0
         self._pruned_subtrees = 0
@@ -637,9 +637,9 @@ class SearchSpace(SearchSpaceABC):
         initial_state: Optional[List[Union[bool, int, Fraction, str]]] = None,
     ) -> State:
         tn = DeltaSimpleTemporalNetwork() if self._is_temporal else None
-        dfa_init = None
-        if self._dfa is not None:
-            dfa_init = self._dfa.initial_state
+        pruner_init = None
+        if self._pruner is not None:
+            pruner_init = self._pruner.initial_state
         if initial_state is not None:
             state = State(
                 initial_state,
@@ -648,7 +648,7 @@ class SearchSpace(SearchSpaceABC):
                 MultiSet(),
                 0,
                 [],
-                dfa_init,
+                pruner_init,
             )
         else:
             # `initial_state` can be None if the initial state was already provided when instantiating the class
@@ -660,7 +660,7 @@ class SearchSpace(SearchSpaceABC):
                 MultiSet(),
                 0,
                 [],
-                dfa_init,
+                pruner_init,
             )
         if not self._search_trace_records:
             self.trace_state(state, status="initial")
@@ -680,9 +680,9 @@ class SearchSpace(SearchSpaceABC):
             new_state = self._expand_event(state, new_state, e, index, id)
         else:
             new_state = self._open_action(state, new_state, action, events)
-        if new_state and self._dfa is not None:
+        if new_state and self._pruner is not None:
             assert state.pruning_state is not None
-            new_state.pruning_state = self._dfa.advance(state.pruning_state, action)
+            new_state.pruning_state = self._pruner.advance(state.pruning_state, action)
 
         return new_state
 
@@ -692,12 +692,12 @@ class SearchSpace(SearchSpaceABC):
             if new_state is None:
                 continue
 
-            if new_state.pruning_state is None and self._dfa is not None:
+            if new_state.pruning_state is None and self._pruner is not None:
                 self.trace_state(new_state, parent=state, action=action, status="monitor_rejected")
                 continue
 
-            if self._dfa is not None and self._dfa.is_prunable(new_state.pruning_state):
-                vote_count_fn = getattr(self._dfa, "pruning_vote_count", None)
+            if self._pruner is not None and self._pruner.is_prunable(new_state.pruning_state):
+                vote_count_fn = getattr(self._pruner, "pruning_vote_count", None)
                 vote_count = int(vote_count_fn(new_state.pruning_state)) if callable(vote_count_fn) else 1
                 if self._monitor_vote_penalty > 0:
                     new_state._monitor_vote_count = vote_count
@@ -711,7 +711,7 @@ class SearchSpace(SearchSpaceABC):
                     continue
                 self._pruned_subtrees += 1
                 labels: Tuple[str, ...] = ()
-                labels_fn = getattr(self._dfa, "pruning_labels", None)
+                labels_fn = getattr(self._pruner, "pruning_labels", None)
                 if callable(labels_fn):
                     labels = tuple(labels_fn(new_state.pruning_state))
                     for label in labels:

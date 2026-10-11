@@ -85,12 +85,20 @@ class SearchParams(HeuristicParams):
     early_termination: bool = False
     weak_equality: bool = False
     symmetry_breaking: bool = True
+    pruner: object = None
+    # Deprecated compatibility alias. New callers should pass ``pruner``.
     dfa: object = None
     max_len : Optional[float] = None
     incomplete_memory_bounded_search: bool = False
     max_expanded_states: Optional[int] = None
     soft_fallback_interval: int = 0
     monitor_vote_penalty: int = 0
+
+    def __post_init__(self):
+        if self.pruner is not None and self.dfa is not None:
+            raise ValueError("Specify only one of pruner and the deprecated dfa alias.")
+        if self.pruner is None and self.dfa is not None:
+            object.__setattr__(self, "pruner", self.dfa)
 
 
 @dataclass(frozen=True)
@@ -99,7 +107,15 @@ class MultiqueueParams:
     early_termination: bool = False
     weak_equality: bool = False
     symmetry_breaking: bool = True
+    pruner: object = None
+    # Deprecated compatibility alias. New callers should pass ``pruner``.
     dfa: object = None
+
+    def __post_init__(self):
+        if self.pruner is not None and self.dfa is not None:
+            raise ValueError("Specify only one of pruner and the deprecated dfa alias.")
+        if self.pruner is None and self.dfa is not None:
+            object.__setattr__(self, "pruner", self.dfa)
 
 
 class TamerLite(
@@ -285,7 +301,7 @@ class TamerLite(
                 problem,
                 map_back_action_instance,
                 self._params.symmetry_breaking,
-                self._params.dfa,
+                self._params.pruner,
             )
 
             if isinstance(self._params, MultiqueueParams):
@@ -351,13 +367,13 @@ class TamerLite(
                             )
                         kwargs["max_expanded_states"] = self._params.max_expanded_states
                     if self._params.soft_fallback_interval:
-                        if search_name != "wastar" or self._params.dfa is None:
-                            raise ValueError("soft fallback requires weighted A* and a DFA")
+                        if search_name != "wastar" or self._params.pruner is None:
+                            raise ValueError("soft fallback requires weighted A* and a pruner")
                         encoder.search_space._soft_fallback_interval = self._params.soft_fallback_interval
                         kwargs["soft_fallback_interval"] = self._params.soft_fallback_interval
                     if self._params.monitor_vote_penalty:
-                        if search_name != "wastar" or self._params.dfa is None:
-                            raise ValueError("monitor vote penalty requires weighted A* and a DFA")
+                        if search_name != "wastar" or self._params.pruner is None:
+                            raise ValueError("monitor vote penalty requires weighted A* and a pruner")
                         encoder.search_space._monitor_vote_penalty = self._params.monitor_vote_penalty
                         kwargs["monitor_vote_penalty"] = self._params.monitor_vote_penalty
                     plan, metrics = search(encoder.search_space, **kwargs)  # type: ignore
@@ -373,7 +389,7 @@ class TamerLite(
                     encoder.search_space._search_trace_records,
                     sort_keys=True,
                 )
-            if self._params.dfa is not None:
+            if self._params.pruner is not None:
                 metrics["pruned_states"] = encoder.search_space._pruned_subtrees
                 if getattr(encoder.search_space, "_pruned_subtrees_by_label", None):
                     metrics["pruned_states_by_label"] = json.dumps(
@@ -401,7 +417,7 @@ class TamerLite(
                     encoder.search_space._search_trace_records,
                     sort_keys=True,
                 )
-            if self._params.dfa is not None:
+            if self._params.pruner is not None:
                 metrics["pruned_states"] = encoder.search_space._pruned_subtrees
                 if getattr(encoder.search_space, "_pruned_subtrees_by_label", None):
                     metrics["pruned_states_by_label"] = json.dumps(

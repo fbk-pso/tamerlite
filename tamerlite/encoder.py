@@ -48,7 +48,7 @@ class Encoder:
         lifted_problem: Problem,
         map_back_action_instance: Callable[[ActionInstance], Optional[ActionInstance]],
         symmetry_breaking: bool,
-        dfa: object | None = None,
+        pruner: object | None = None,
         full: bool = True,
     ):
         self._problem = problem
@@ -59,10 +59,10 @@ class Encoder:
         else:
             self._simplifier = problem.environment.simplifier
 
-        if isinstance(dfa, Dfa):
-            self._dfa = DfaPruningModel(dfa)
+        if isinstance(pruner, Dfa):
+            self._pruner = DfaPruningModel(pruner)
         else:
-            self._dfa = dfa
+            self._pruner = pruner
 
         fluent_types = {}
         for f in problem.initial_values.keys():
@@ -115,7 +115,7 @@ class Encoder:
             self._goal = self.goals(problem.goals)
             if symmetry_breaking:
                 action_objects, obj_to_prev_actions_map = (self._compute_obj_to_prev_actions_map())
-        if self._dfa is not None:
+        if self._pruner is not None:
             self._search_space = SearchSpace(
                 actions_duration,
                 self._events,
@@ -126,7 +126,7 @@ class Encoder:
                 initial_state,  # type: ignore[arg-type]
                 self._goal,
                 problem.epsilon,
-                self._dfa,
+                self._pruner,
             )
         else:
             self._search_space = SearchSpace(
@@ -144,8 +144,8 @@ class Encoder:
         for ut in problem.user_types:
             self._objects[ut.name] = [o.name for o in problem.objects(ut)]
 
-        if self._dfa is not None:
-            self._dfa.bind_to_planner(
+        if self._pruner is not None:
+            self._pruner.bind_to_planner(
                 self._action_by_name,
                 self._objects,
                 self._problem.initial_values,
