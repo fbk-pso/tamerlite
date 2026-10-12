@@ -515,6 +515,7 @@ class TamerLite(
             is_intermediate_solution=True,
             if_cache=if_cache,
             if_wrappers=if_wrappers,
+            preserve_plan_quality=False,
         )
         if res.plan is not None:
             logger.info(
@@ -660,6 +661,7 @@ class TamerLite(
                     if_cache=if_cache,
                     if_wrappers=if_wrappers,
                     lifted_problem_kind=lifted_problem_kind,
+                    preserve_plan_quality=True,
                 )
             )
             if (
@@ -736,6 +738,7 @@ class TamerLite(
                 timeout=timeout - elapsed_time if timeout is not None else None,
                 output_stream=output_stream,
                 is_intermediate_solution=False,
+                preserve_plan_quality=False,
             )
         if res.plan is not None:
             logger.info(
@@ -764,6 +767,7 @@ class TamerLite(
         if_cache: MutableMapping[tuple[InterpretedFunction, tuple], Any] | None = None,
         if_wrappers: dict[InterpretedFunction, Callable] | None = None,
         lifted_problem_kind: ProblemKind | None = None,
+        preserve_plan_quality: bool = True,
     ) -> tuple["up.engines.results.PlanGenerationResult", bool, bool]:
         # Default to one fresh pair shared by both `Encoder(...)` sites below.
         # This path only ever runs for a standalone oneshot `_solve()` call --
@@ -804,6 +808,7 @@ class TamerLite(
                 if_cache=if_cache,
                 if_wrappers=if_wrappers,
                 lifted_problem_kind=lifted_problem_kind,
+                preserve_plan_quality=preserve_plan_quality,
             )
 
             original_encoder = encoder
@@ -847,6 +852,7 @@ class TamerLite(
                     if_cache=if_cache,
                     if_wrappers=if_wrappers,
                     lifted_problem_kind=lifted_problem_kind,
+                    preserve_plan_quality=preserve_plan_quality,
                 )
 
             if self._params.weak_equality and not encoder.search_space.is_temporal:

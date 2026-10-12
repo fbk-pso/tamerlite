@@ -2137,7 +2137,9 @@ def test_symmetry_breaking_default_value_objects():
     assert [{obj.name for obj in group} for group in groups] == [{"x"}, {"y"}, {"z"}]
 
 
-def _equivalence_groups(problem: Problem) -> list[set[str]]:
+def _equivalence_groups(
+    problem: Problem, preserve_plan_quality: bool = True
+) -> list[set[str]]:
     """The names in each equivalence class `Encoder` computes for `problem`."""
     lifted_problem, ground_problem, map_back_action_instance = (
         testing_utils.compile_problem(problem)
@@ -2149,6 +2151,7 @@ def _equivalence_groups(problem: Problem) -> list[set[str]]:
         symmetry_breaking=False,
         compression_safe_actions=False,
         relevance_analysis=False,
+        preserve_plan_quality=preserve_plan_quality,
     )
     return [
         {obj.name for obj in group} for group in encoder._compute_equivalent_objects()
@@ -2257,20 +2260,24 @@ def test_symmetry_breaking_goal_non_object_arguments():
 
 def test_symmetry_breaking_metric_objects_excluded():
     """
-    An object named in a quality metric is not interchangeable with the
-    others, even when the initial state and the goal can't tell them apart.
-    That includes the `default` of `MinimizeActionCosts`, which UP's
-    `Problem.domain_constants` doesn't collect: treating `t1` and `t2` as
-    interchangeable there makes first-use ordering refuel `t1` first, which
-    prunes every zero-cost plan, and the anytime loop then reports a cost-1
-    plan as optimal.
+    When plan quality must be preserved, an object named in a quality metric
+    is not interchangeable with the others, even when the initial state and
+    the goal can't tell them apart. That includes the `default` of
+    `MinimizeActionCosts`: treating `t1` and `t2` as interchangeable there
+    makes first-use ordering refuel `t1` first, which prunes every zero-cost
+    plan, and the anytime loop then reports a cost-1 plan as optimal.
+
+    Without that requirement the metric doesn't split them: it only ranks
+    plans, and a oneshot solve still finds one.
     """
 
-    groups = _equivalence_groups(problems_generator.get_problem_metric_object_taint())
-    assert groups == [{"t1"}, {"t2"}]
-
+    taint = problems_generator.get_problem_metric_object_taint()
     default_cost = problems_generator.get_problem_metric_default_cost_object()
-    assert _equivalence_groups(default_cost) == [{"t1"}, {"t2"}]
+    for problem in [taint, default_cost]:
+        assert _equivalence_groups(problem) == [{"t1"}, {"t2"}]
+        assert _equivalence_groups(problem, preserve_plan_quality=False) == [
+            {"t1", "t2"}
+        ]
 
     for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
@@ -2288,6 +2295,11 @@ def test_symmetry_breaking_metric_objects_excluded():
             assert val_res
             assert val_res.metric_evaluations is not None
             assert list(val_res.metric_evaluations.values()) == [0]
+        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+            res: PlanGenerationResult = planner.solve(default_cost, timeout=None)
+        assert res.status == ResultStatus.SOLVED_SATISFICING
+        with PlanValidator(problem_kind=default_cost.kind) as v:
+            assert v.validate(default_cost, res.plan)
 
 
 def test_symmetry_breaking_general_goal_shapes():
@@ -3878,6 +3890,10 @@ def test_symmetry_breaking_interpreted_function_metric_action_cost_taint():
     assert {"l1"} in group_sets
     assert {"l2"} in group_sets
     assert {"l1", "l2"} not in group_sets
+
+    # The metric only ranks plans: without plan quality to preserve, the IF
+    # call in it doesn't split `l1` and `l2`.
+    assert {"l1", "l2"} in _equivalence_groups(problem, preserve_plan_quality=False)
 
 
 def test_symmetry_breaking_interpreted_function_object_return_taint():
