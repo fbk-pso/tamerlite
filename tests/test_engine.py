@@ -84,6 +84,10 @@ def _build_problems():
         problems_generator.get_problem_if_numeric_symmetry_retained(),
         problems_generator.get_problem_if_object_argument_symmetry_unsound(),
         problems_generator.get_problem_if_hierarchical_type_argument(),
+        problems_generator.get_problem_timed_delivery(),
+        problems_generator.get_problem_timed_effects_window(),
+        problems_generator.get_problem_timed_effects_at_zero(),
+        problems_generator.get_problem_timed_effects_fluent_value(),
     ]
 
     up_example_problems = list(
@@ -116,6 +120,7 @@ def _build_problems():
 def _build_anytime_problems(problems):
     test_problems = [
         problems_generator.get_problem_temporal_flight_minimize_makespan(),
+        problems_generator.get_problem_timed_effects_window_minimize_makespan(),
         problems_generator.get_problem_temporal_flight_minimize_fuel(),
         problems_generator.get_problem_temporal_flight_maximize_fuel(),
         problems_generator.get_problem_flight_minimize_plan_length(),
@@ -626,6 +631,7 @@ def test_heuristic_values(problem, data_regression):
                         internal_caching=internal_caching,
                         cache_value_in_state=False,
                         inadmissible_numeric_heuristic_variant=inadmissible_numeric_heuristic,
+                        timed_effects_action=encoder.timed_effects_action,
                     )
                     computed_values: list[int | None] = []
                     for state in states:
@@ -1031,8 +1037,9 @@ def test_search_space(problem, relevance_analysis):
         state2 = states["rust"][i]
 
         assert len(state1.path) == len(state2.path)
-        actions1 = [encoder.get_action_name(e[0]) for e in state1.path]
-        actions2 = [encoder.get_action_name(e[0]) for e in state2.path]
+        # By id: the timed-effects action has no UP name.
+        actions1 = [e[0].idx for e in state1.path]
+        actions2 = [e[0].idx for e in state2.path]
         assert actions1 == actions2
 
         assert len(state1.todo) == len(state2.todo)
@@ -2142,6 +2149,161 @@ def test_temporal_condition_before_start_is_rejected():
                 compression_safe_actions=False,
                 relevance_analysis=False,
             )
+
+
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+@pytest.mark.parametrize("heuristic", HEURISTICS)
+def test_timed_effects_goal_undone_after_last_action(disable_rustamer, heuristic):
+    """UP checks the goal only after every timed effect has fired, including
+    the ones after the last action, so a goal that a late timed effect undoes
+    for good is unreachable."""
+    reload_tamerlite(disable_rustamer)
+    problem = problems_generator.get_problem_timed_effects_goal_undone()
+    search = tamerlite.SearchParams(heuristic=heuristic)
+    with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+        res = planner.solve(problem, timeout=60)
+    assert res.status == ResultStatus.UNSOLVABLE_INCOMPLETELY
+
+
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+def test_timed_effects_are_not_replayed_by_heuristics(disable_rustamer):
+    """Once every timed effect has fired, the relaxation must not fire them
+    again. In `timed_effects_window`, letting the dock open and close without
+    delivering anything is a dead end, which a relaxation that could reopen
+    the dock would miss."""
+    reload_tamerlite(disable_rustamer)
+    from tamerlite.core import HFF, HAdd, HMax, HMaxExplicit
+    from tamerlite.encoder import Encoder
+
+    problem = problems_generator.get_problem_timed_effects_window()
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    encoder = Encoder(
+        ground_problem,
+        lifted_problem,
+        map_back_action_instance,
+        symmetry_breaking=False,
+        compression_safe_actions=False,
+        relevance_analysis=False,
+    )
+    ss = encoder.search_space
+    timed_effects_action = encoder.timed_effects_action
+    assert timed_effects_action is not None
+
+    init_state = ss.initial_state()
+    state = init_state
+    while timed_effects_action in state.todo:
+        succ_state = ss.get_successor_state(state, timed_effects_action)
+        assert succ_state is not None
+        state = succ_state
+    # Its events have all fired, and it can't be opened again.
+    assert ss.get_successor_state(state, timed_effects_action) is None
+
+    assert encoder.goal is not None
+    heuristic_classes: list[Callable[..., Heuristic]] = [HFF, HAdd, HMax, HMaxExplicit]
+    for heuristic_class in heuristic_classes:
+        heuristic: Heuristic = heuristic_class(
+            encoder.actions,
+            encoder.fluent_domains,
+            encoder.events,
+            encoder.goal,
+            internal_caching=False,
+            cache_value_in_state=False,
+            inadmissible_numeric_heuristic_variant=False,
+            timed_effects_action=timed_effects_action,
+        )
+        assert heuristic.eval(init_state, ss) is not None
+        assert heuristic.eval(state, ss) is None
+
+
+def test_timed_effects_disable_compression_safe_actions():
+    """A compressed action runs from start to end with nothing in between,
+    so it could not straddle a timed effect: timed effects turn compression
+    off even for actions that are otherwise compression-safe."""
+    problem = problems_generator.get_problem_temporal_flight()
+    timed_problem = problem.clone()
+    connected = timed_problem.fluent("connected")
+    A = timed_problem.object("A")
+    B = timed_problem.object("B")
+    timed_problem.add_timed_effect(GlobalStartTiming(100), connected(A, B), False)
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.encoder import Encoder
+
+        compression_safe = []
+        for p in [problem, timed_problem]:
+            lifted_problem, ground_problem, map_back_action_instance = (
+                testing_utils.compile_problem(p)
+            )
+            encoder = Encoder(
+                ground_problem,
+                lifted_problem,
+                map_back_action_instance,
+                symmetry_breaking=False,
+                compression_safe_actions=True,
+                relevance_analysis=False,
+            )
+            compression_safe.append(encoder.is_any_action_compression_safe())
+        assert compression_safe == [True, False]
+
+
+def test_conditional_timed_effects_are_not_supported():
+    problem = problems_generator.get_problem_timed_effects_at_zero()
+    assert tamerlite.engine.TamerLite.supports(problem.kind)
+    ready = problem.fluent("ready")
+    bought = problem.fluent("bought")
+    problem.add_timed_effect(GlobalStartTiming(1), ready, False, condition=bought)
+    assert not tamerlite.engine.TamerLite.supports(problem.kind)
+
+
+def test_timed_goals_are_rejected():
+    """Timed goals are unsupported, and `supports` already rejects them; the
+    encoder rejects them too, since `UndefinedInitialNumericRemover` can add
+    some to a problem `supports` accepted."""
+    problem = problems_generator.get_problem_timed_effects_at_zero()
+    problem.add_timed_goal(GlobalStartTiming(1), problem.fluent("ready"))
+    assert not tamerlite.engine.TamerLite.supports(problem.kind)
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.encoder import Encoder
+
+        with pytest.raises(
+            unified_planning.exceptions.UPUnsupportedProblemTypeError,
+            match="timed goals",
+        ):
+            Encoder(
+                ground_problem,
+                lifted_problem,
+                map_back_action_instance,
+                symmetry_breaking=False,
+                compression_safe_actions=False,
+                relevance_analysis=False,
+            )
+
+
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+def test_timed_goals_from_undefined_initial_values_are_explained(disable_rustamer):
+    """A problem with no timed goals of its own can still get some from UP's
+    `UndefinedInitialNumericRemover`, when a timed effect reads a fluent with
+    no initial value. The error must say so, and name the fluent."""
+    reload_tamerlite(disable_rustamer)
+    problem = problems_generator.get_problem_timed_effects_undefined_initial_value()
+    assert not problem.timed_goals
+    assert tamerlite.engine.TamerLite.supports(problem.kind)
+    with (
+        OneshotPlanner(name="tamerlite") as planner,
+        pytest.raises(
+            unified_planning.exceptions.UPUnsupportedProblemTypeError,
+            match=r"timed effect reads a fluent with no initial value.*level",
+        ),
+    ):
+        planner.solve(problem, timeout=60)
 
 
 def test_symmetry_breaking_object_valued_fluents():

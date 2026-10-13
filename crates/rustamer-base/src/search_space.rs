@@ -180,12 +180,18 @@ pub struct SearchSpace {
     epsilon_rational: BigRational,
     is_temporal: bool,
     counter: Mutex<u32>,
+    /// The synthetic action carrying the problem's timed effects, one event
+    /// per instant they fire at (see `Encoder`). It is already running in
+    /// every initial state (`open_timed_effects_action`), can never be opened
+    /// again (`get_successor_state_with_compression`), and is left out of the
+    /// plan `build_plan` returns.
+    timed_effects_action: Option<Action>,
 }
 
 #[pymethods]
 impl SearchSpace {
     #[new]
-    #[pyo3(signature = (actions_duration, events, actions, compression_safe_actions, action_objects, obj_to_prev_actions_map, initial_state=None, goal=None, relevant_actions=None, deadline=None, epsilon=None))]
+    #[pyo3(signature = (actions_duration, events, actions, compression_safe_actions, action_objects, obj_to_prev_actions_map, initial_state=None, goal=None, relevant_actions=None, deadline=None, epsilon=None, timed_effects_action=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         actions_duration: Vec<Option<PyDurationInterval>>,
@@ -199,6 +205,7 @@ impl SearchSpace {
         relevant_actions: Option<Vec<Action>>,
         #[pyo3(from_py_with = get_option_big_rational)] deadline: Option<BigRational>,
         #[pyo3(from_py_with = get_option_big_rational)] epsilon: Option<BigRational>,
+        timed_effects_action: Option<Action>,
     ) -> PyResult<Self> {
         let relevant_actions = if let Some(relevant_actions) = relevant_actions {
             relevant_actions
@@ -302,6 +309,7 @@ impl SearchSpace {
             },
             is_temporal,
             counter: Mutex::new(0),
+            timed_effects_action,
         };
         Ok(res)
     }
@@ -416,6 +424,11 @@ impl SearchSpace {
                     }
                 }
             } else {
+                if Some(action) == self.timed_effects_action {
+                    // Already opened in the initial state; once its last event
+                    // has fired there is nothing left to apply.
+                    return Ok(None);
+                }
                 // Check if action is applicable before creating the new state
                 if !self.is_sat(&events[0].1.conditions, state)? {
                     return Ok(None);
@@ -579,51 +592,150 @@ impl SearchSpace {
             }
         }
 
+        let id = if self.is_temporal {
+            self.add_action_to_temporal_network(state, new_state, action, events, false)?
+        } else {
+            *self.counter.lock().unwrap()
+        };
+        self.expand_event(state, new_state, &events[0].1, &0, &id)
+    }
+
+    /// Adds a newly opened action's timepoints to `new_state`'s temporal
+    /// network and queues its events after the first in `todo`.
+    ///
+    /// The duration bounds are evaluated in `state`. The action starts at
+    /// `start_plan` exactly if `pin_to_plan_start`, otherwise no earlier.
+    /// Returns the instance id of the action's first event.
+    fn add_action_to_temporal_network(
+        &self,
+        state: &State,
+        new_state: &mut State,
+        action: Action,
+        events: &[(Timing, Event)],
+        pin_to_plan_start: bool,
+    ) -> PyResult<u32> {
         let mut counter = self.counter.lock().unwrap();
-        let mut id = *counter;
-        if self.is_temporal {
-            // Add temporal constraints between events of the action
-            let tn = new_state.temporal_network.as_mut().unwrap();
-            let start = self.tn_interpreter.get_action_id(action, true, *counter);
-            let end = self.tn_interpreter.get_action_id(action, false, *counter);
-            *counter += 1;
-            let duration = self.actions_duration[action.idx].as_ref();
-            let mut lb: f64 = 0.0;
-            let mut ub: f64 = 0.0;
-            if let Some(duration) = duration {
-                let d = duration;
-                lb = -expression_node_to_f64(&internal_evaluate(&d.0, state)?)?;
-                ub = expression_node_to_f64(&internal_evaluate(&d.1, state)?)?;
-                if d.2 {
-                    lb -= self.epsilon;
-                }
-                if d.3 {
-                    ub -= self.epsilon;
-                }
+        let tn = new_state.temporal_network.as_mut().unwrap();
+        let start = self.tn_interpreter.get_action_id(action, true, *counter);
+        let end = self.tn_interpreter.get_action_id(action, false, *counter);
+        *counter += 1;
+        let duration = self.actions_duration[action.idx].as_ref();
+        let mut lb: f64 = 0.0;
+        let mut ub: f64 = 0.0;
+        if let Some(duration) = duration {
+            let d = duration;
+            lb = -expression_node_to_f64(&internal_evaluate(&d.0, state)?)?;
+            ub = expression_node_to_f64(&internal_evaluate(&d.1, state)?)?;
+            if d.2 {
+                lb -= self.epsilon;
             }
-            tn.add(&start, &end, &lb);
-            tn.add(&end, &start, &ub);
-            tn.add(&self.tn_interpreter.start_plan_id, &start, &0.0);
-            tn.add(&end, &self.tn_interpreter.end_plan_id, &-self.epsilon);
-            id = *counter;
-            for (t, e) in events.iter() {
-                let ev = self.tn_interpreter.get_event_id(e.action, e.pos, *counter);
-                let b1 = -rational_to_f64(&t.delay);
-                let b2 = rational_to_f64(&t.delay);
-                if t.is_from_start() {
-                    tn.add(&start, &ev, &b1);
-                    tn.add(&ev, &start, &b2);
-                } else {
-                    tn.add(&end, &ev, &b1);
-                    tn.add(&ev, &end, &b2);
-                }
-                *counter += 1;
-            }
-            if events.len() > 1 {
-                new_state.todo.insert(action, (1, id + 1));
+            if d.3 {
+                ub -= self.epsilon;
             }
         }
-        self.expand_event(state, new_state, &events[0].1, &0, &id)
+        tn.add(&start, &end, &lb);
+        tn.add(&end, &start, &ub);
+        tn.add(&self.tn_interpreter.start_plan_id, &start, &0.0);
+        if pin_to_plan_start {
+            tn.add(&start, &self.tn_interpreter.start_plan_id, &0.0);
+        }
+        tn.add(&end, &self.tn_interpreter.end_plan_id, &-self.epsilon);
+        let id = *counter;
+        for (t, e) in events.iter() {
+            let ev = self.tn_interpreter.get_event_id(e.action, e.pos, *counter);
+            let b1 = -rational_to_f64(&t.delay);
+            let b2 = rational_to_f64(&t.delay);
+            if t.is_from_start() {
+                tn.add(&start, &ev, &b1);
+                tn.add(&ev, &start, &b2);
+            } else {
+                tn.add(&end, &ev, &b1);
+                tn.add(&ev, &end, &b2);
+            }
+            *counter += 1;
+        }
+        if events.len() > 1 {
+            new_state.todo.insert(action, (1, id + 1));
+        }
+        Ok(id)
+    }
+
+    /// Opens the timed-effects action at time 0 and fires its first event.
+    ///
+    /// Its start is pinned to `start_plan`, so every event sits exactly at the
+    /// absolute time of the timed effects it carries. Event 0 (at delay 0) is
+    /// fired right away rather than left to the search: its effects happen at
+    /// time 0 whatever the search does, and putting it in `path` orders every
+    /// later event that interferes with it strictly after it. It also keeps
+    /// every `todo` index at 1 or more, as `open_action` does, which the
+    /// heuristics rely on.
+    ///
+    /// With a deadline earlier than the last timed effect, the temporal
+    /// network is already inconsistent here: no plan can meet the deadline,
+    /// since UP's makespan includes every timed effect. The returned state is
+    /// then a dead end -- an inconsistent network stays inconsistent, so every
+    /// successor is rejected -- rather than an error. Mirrors
+    /// `SearchSpace._open_timed_effects_action` in the Python core.
+    fn open_timed_effects_action(&self, state: State, action: Action) -> PyResult<State> {
+        let events = &self.events[&action];
+        let mut new_state = state.clone_for_child();
+        let id =
+            self.add_action_to_temporal_network(&state, &mut new_state, action, events, true)?;
+        // The timed-effects events are unconditional and nothing is active
+        // yet, so this only fails on an inconsistent temporal network.
+        self.expand_event(&state, &mut new_state, &events[0].1, &0, &id)?;
+        Ok(new_state)
+    }
+
+    /// Adds a newly opened action's timepoints to `build_plan`'s temporal
+    /// network: its start and end, `state`'s duration bounds between them, and
+    /// each of its events pinned at its delay. The instance ids it uses are
+    /// taken from `counter`, which is left at the next free one.
+    ///
+    /// Returns the action's start timepoint and the instance id of its first
+    /// event. Mirrors `SearchSpace._add_action_to_plan_network` in the Python
+    /// core.
+    fn add_action_to_plan_network(
+        &self,
+        tn: &mut DeltaSTN<u64, BigRational>,
+        state: &State,
+        action: Action,
+        counter: &mut u32,
+    ) -> PyResult<(u64, u32)> {
+        let start = self.tn_interpreter.get_action_id(action, true, *counter);
+        let end = self.tn_interpreter.get_action_id(action, false, *counter);
+        *counter += 1;
+        let (lb, ub) = match self.actions_duration[action.idx].as_ref() {
+            Some(d) => {
+                let mut lb = -get_rational_from_expression_node(&internal_evaluate(&d.0, state)?)?;
+                let mut ub = get_rational_from_expression_node(&internal_evaluate(&d.1, state)?)?;
+                if d.2 {
+                    lb -= self.epsilon_rational.clone();
+                }
+                if d.3 {
+                    ub -= self.epsilon_rational.clone();
+                }
+                (lb, ub)
+            }
+            None => (mk_rational(0, 1), mk_rational(0, 1)),
+        };
+        tn.add(&start, &end, &lb);
+        tn.add(&end, &start, &ub);
+        let id = *counter;
+        for (t, e) in self.events[&action].iter() {
+            let ev = self.tn_interpreter.get_event_id(e.action, e.pos, *counter);
+            let b1 = -t.delay.clone();
+            let b2 = t.delay.clone();
+            if t.is_from_start() {
+                tn.add(&start, &ev, &b1);
+                tn.add(&ev, &start, &b2);
+            } else {
+                tn.add(&end, &ev, &b1);
+                tn.add(&ev, &end, &b2);
+            }
+            *counter += 1;
+        }
+        Ok((start, id))
     }
 }
 
@@ -670,7 +782,7 @@ impl SearchSpaceTrait for SearchSpace {
         } else {
             None
         };
-        Ok(State {
+        let state = State {
             assignments: init,
             temporal_network: tn,
             todo: FxHashMap::with_hasher(FxBuildHasher),
@@ -678,7 +790,11 @@ impl SearchSpaceTrait for SearchSpace {
             g: 0.0,
             path: PersistentList::new(),
             heuristic_cache: Mutex::new(FxHashMap::with_hasher(FxBuildHasher)),
-        })
+        };
+        match self.timed_effects_action {
+            Some(action) => self.open_timed_effects_action(state, action),
+            None => Ok(state),
+        }
     }
 
     fn get_successor_states_iter<'a>(
@@ -749,7 +865,27 @@ impl SearchSpaceTrait for SearchSpace {
         let mut event_path: Vec<(Event, u32)> = Vec::new();
         let mut counter = 0;
         let mut state = self.initial_state(None)?;
-        for action in path {
+        let til = self.timed_effects_action;
+        let mut path = path;
+        if let Some(action) = til {
+            // `initial_state` has already opened the timed-effects action and
+            // fired its first event, which therefore heads the path: replay
+            // both here, with its start pinned to time 0, and the rest of the
+            // path from there.
+            assert!(path.first() == Some(&action));
+            path = &path[1..];
+            let (start, id) =
+                self.add_action_to_plan_network(&mut tn, &state, action, &mut counter)?;
+            let start_plan = self.tn_interpreter.start_plan_id;
+            tn.add(&start_plan, &start, &mk_rational(0, 1));
+            tn.add(&start, &start_plan, &mk_rational(0, 1));
+            let events = &self.events[&action];
+            event_path.push((events[0].1.clone(), id));
+            if events.len() > 1 {
+                todo.insert(action, (1, id + 1));
+            }
+        }
+        for action in path.iter() {
             if let Some(events) = self.events.get(action).cloned() {
                 if let Some((index, id)) = todo.get(action).cloned() {
                     if let Some((_, e)) = events.get(index) {
@@ -790,43 +926,12 @@ impl SearchSpaceTrait for SearchSpace {
                         event_path.push((e.clone(), id));
                     }
                 } else {
-                    let start = self.tn_interpreter.get_action_id(*action, true, counter);
-                    let end = self.tn_interpreter.get_action_id(*action, false, counter);
-                    counter += 1;
-                    let duration = self.actions_duration[action.idx].as_ref();
-                    let (lb, ub) = match duration {
-                        Some(d) => {
-                            let mut lb = -get_rational_from_expression_node(&internal_evaluate(
-                                &d.0, &state,
-                            )?)?;
-                            let mut ub = get_rational_from_expression_node(&internal_evaluate(
-                                &d.1, &state,
-                            )?)?;
-                            if d.2 {
-                                lb -= self.epsilon_rational.clone();
-                            }
-                            if d.3 {
-                                ub -= self.epsilon_rational.clone();
-                            }
-                            (lb, ub)
-                        }
-                        None => (mk_rational(0, 1), mk_rational(0, 1)),
-                    };
-                    tn.add(&start, &end, &lb);
-                    tn.add(&end, &start, &ub);
-                    let id = counter;
-                    for (t, e) in events.iter() {
-                        let ev = self.tn_interpreter.get_event_id(e.action, e.pos, counter);
-                        let b1 = -t.delay.clone();
-                        let b2 = t.delay.clone();
-                        if t.is_from_start() {
-                            tn.add(&start, &ev, &b1);
-                            tn.add(&ev, &start, &b2);
-                        } else {
-                            tn.add(&end, &ev, &b1);
-                            tn.add(&ev, &end, &b2);
-                        }
-                        counter += 1;
+                    let (start, id) =
+                        self.add_action_to_plan_network(&mut tn, &state, *action, &mut counter)?;
+                    if til.is_some() {
+                        // Nothing starts before the timed effects' time 0.
+                        let start_plan = self.tn_interpreter.start_plan_id;
+                        tn.add(&start_plan, &start, &mk_rational(0, 1));
                     }
                     let e = events[0].1.clone();
                     let ev = self.tn_interpreter.get_event_id(e.action, e.pos, id);
@@ -876,11 +981,20 @@ impl SearchSpaceTrait for SearchSpace {
             FxHashMap::with_hasher(FxBuildHasher);
         let mut end_time: FxHashMap<(Action, u32), BigRational> =
             FxHashMap::with_hasher(FxBuildHasher);
+        let origin = match til {
+            Some(_) => tn
+                .get_model_value(&self.tn_interpreter.start_plan_id)
+                .unwrap(),
+            None => mk_rational(0, 1),
+        };
         for (a, t) in self.tn_interpreter.get_actions_timings(&tn).iter() {
+            if Some(a.0) == til {
+                continue;
+            }
             if a.1 {
-                start_time.insert((a.0, a.2), t.clone());
+                start_time.insert((a.0, a.2), t - &origin);
             } else {
-                end_time.insert((a.0, a.2), t.clone());
+                end_time.insert((a.0, a.2), t - &origin);
             }
         }
         for (a, st) in start_time {

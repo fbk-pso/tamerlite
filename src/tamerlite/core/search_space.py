@@ -800,8 +800,15 @@ class SearchSpace(SearchSpaceABC):
         relevant_actions: list[Action] | None = None,
         deadline: Fraction | None = None,
         epsilon: Fraction | None = None,
+        timed_effects_action: Action | None = None,
     ):
         self._actions_duration = actions_duration
+        # The synthetic action carrying the problem's timed effects, one event
+        # per instant they fire at (see `Encoder`). It is already running in
+        # every initial state (`_open_timed_effects_action`), can never be
+        # opened again (`get_successor_state_with_compression`), and is left
+        # out of the plan `build_plan` returns.
+        self._timed_effects_action = timed_effects_action
         self._events = events
         self._relevant_actions = (
             relevant_actions if relevant_actions is not None else list(actions)
@@ -892,13 +899,44 @@ class SearchSpace(SearchSpaceABC):
                 )
         else:
             tn = None
-        if initial_state is not None:
-            return State(initial_state, tn, {}, MultiSet(), 0, [])
-        else:
+        if initial_state is None:
             # `initial_state` can be None if the initial state was already
             # provided when instantiating the class
             assert self._initial_state is not None
-            return State(self._initial_state, tn, {}, MultiSet(), 0, [])
+            initial_state = self._initial_state
+        state = State(initial_state, tn, {}, MultiSet(), 0, [])
+        if self._timed_effects_action is None:
+            return state
+        return self._open_timed_effects_action(state)
+
+    def _open_timed_effects_action(self, state: State) -> State:
+        """Opens the timed-effects action at time 0 and fires its first event.
+
+        Its start is pinned to `start_plan`, so every event sits exactly at the
+        absolute time of the timed effects it carries. Event 0 (at delay 0) is
+        fired right away rather than left to the search: its effects happen at
+        time 0 whatever the search does, and putting it in `path` orders every
+        later event that interferes with it strictly after it. It also keeps
+        every `todo` index at 1 or more, as `_open_action` does, which the
+        heuristics rely on.
+
+        With a deadline earlier than the last timed effect, the temporal
+        network is already inconsistent here: no plan can meet the deadline,
+        since UP's makespan includes every timed effect. The returned state is
+        then a dead end -- an inconsistent network stays inconsistent, so every
+        successor is rejected -- rather than an error.
+        """
+        action = self._timed_effects_action
+        assert action is not None
+        events = self._events[action]
+        new_state: State = state.clone()
+        id = self._add_action_to_temporal_network(
+            state, new_state, action, events, True
+        )
+        # The timed-effects events are unconditional and nothing is active
+        # yet, so this only fails on an inconsistent temporal network.
+        self._expand_event(state, new_state, events[0][1], 0, id)
+        return new_state
 
     def get_successor_state(self, state: State, action: Action) -> State | None:
         return self.get_successor_state_with_compression(state, action, True)
@@ -906,6 +944,10 @@ class SearchSpace(SearchSpaceABC):
     def get_successor_state_with_compression(
         self, state: State, action: Action, enable_compression_safe_actions: bool
     ) -> State | None:
+        if action == self._timed_effects_action and action not in state.todo:
+            # Already opened in the initial state; once its last event has
+            # fired there is nothing left to apply.
+            return None
         events = self._events[action]
         new_state = state.clone()
         new_state.g = state.g + 1
@@ -1051,48 +1093,75 @@ class SearchSpace(SearchSpaceABC):
                     return None
 
         if self._is_temporal:
-            assert new_state.temporal_network is not None
-            start = (action, True, self._counter)
-            end = (action, False, self._counter)
-            self._counter += 1
-            duration = self._actions_duration[action.idx]
-            lower: int | Fraction
-            upper: int | Fraction
-            if duration is None:
-                lower, upper = 0, 0
-            else:
-                evaluated_lower = evaluate(duration[0], state)
-                assert isinstance(evaluated_lower, (int, Fraction))
-                lower = evaluated_lower
-                if duration[2]:
-                    lower += self._epsilon
-                evaluated_upper = evaluate(duration[1], state)
-                assert isinstance(evaluated_upper, (int, Fraction))
-                upper = evaluated_upper
-                if duration[3]:
-                    upper -= self._epsilon
-            new_state.temporal_network.insert_interval(
-                start, end, left_bound=lower, right_bound=upper
+            id = self._add_action_to_temporal_network(
+                state, new_state, action, events, False
             )
-            new_state.temporal_network.add(self._start_plan, start, 0)
-            new_state.temporal_network.add(end, self._end_plan, -self._epsilon)
-            id = self._counter
-            for t, e in events:
-                ev = (e.action, e.pos, self._counter)
-                if t.is_from_start():
-                    new_state.temporal_network.insert_interval(
-                        start, ev, left_bound=t.delay, right_bound=t.delay
-                    )
-                else:
-                    new_state.temporal_network.insert_interval(
-                        end, ev, left_bound=t.delay, right_bound=t.delay
-                    )
-                self._counter += 1
-            if len(events) > 1:
-                new_state.todo[action] = 1, id + 1
         else:
             id = self._counter
         return self._expand_event(state, new_state, events[0][1], 0, id)
+
+    def _add_action_to_temporal_network(
+        self,
+        state: State,
+        new_state: State,
+        action: Action,
+        events: list[tuple[Timing, Event]],
+        pin_to_plan_start: bool,
+    ) -> int:
+        """Adds a newly opened action's timepoints to `new_state`'s temporal
+        network and queues its events after the first in `todo`.
+
+        The duration bounds are evaluated in `state`. The action starts at
+        `start_plan` exactly if `pin_to_plan_start`, otherwise no earlier.
+
+        Returns:
+            int: The instance id of the action's first event.
+        """
+        assert new_state.temporal_network is not None
+        start = (action, True, self._counter)
+        end = (action, False, self._counter)
+        self._counter += 1
+        duration = self._actions_duration[action.idx]
+        lower: int | Fraction
+        upper: int | Fraction
+        if duration is None:
+            lower, upper = 0, 0
+        else:
+            evaluated_lower = evaluate(duration[0], state)
+            assert isinstance(evaluated_lower, (int, Fraction))
+            lower = evaluated_lower
+            if duration[2]:
+                lower += self._epsilon
+            evaluated_upper = evaluate(duration[1], state)
+            assert isinstance(evaluated_upper, (int, Fraction))
+            upper = evaluated_upper
+            if duration[3]:
+                upper -= self._epsilon
+        new_state.temporal_network.insert_interval(
+            start, end, left_bound=lower, right_bound=upper
+        )
+        if pin_to_plan_start:
+            new_state.temporal_network.insert_interval(
+                self._start_plan, start, left_bound=0, right_bound=0
+            )
+        else:
+            new_state.temporal_network.add(self._start_plan, start, 0)
+        new_state.temporal_network.add(end, self._end_plan, -self._epsilon)
+        id = self._counter
+        for t, e in events:
+            ev = (e.action, e.pos, self._counter)
+            if t.is_from_start():
+                new_state.temporal_network.insert_interval(
+                    start, ev, left_bound=t.delay, right_bound=t.delay
+                )
+            else:
+                new_state.temporal_network.insert_interval(
+                    end, ev, left_bound=t.delay, right_bound=t.delay
+                )
+            self._counter += 1
+        if len(events) > 1:
+            new_state.todo[action] = 1, id + 1
+        return id
 
     def build_plan(
         self, path: list[Action]
@@ -1105,6 +1174,23 @@ class SearchSpace(SearchSpaceABC):
         event_path: list[tuple[Event, int]] = []
         counter = 0
         state = self.initial_state()
+        if self._timed_effects_action is not None:
+            # `initial_state` has already opened the timed-effects action and
+            # fired its first event, which therefore heads the path: replay
+            # both here, with its start pinned to time 0, and the rest of the
+            # path from there.
+            action = self._timed_effects_action
+            assert len(path) > 0 and path[0] == action
+            path = path[1:]
+            start, id, counter = self._add_action_to_plan_network(
+                tn, state, action, counter
+            )
+            tn.add(self._start_plan, start, Fraction(0))
+            tn.add(start, self._start_plan, Fraction(0))
+            action_events = self._events[action]
+            event_path.append((action_events[0][1], id))
+            if len(action_events) > 1:
+                todo[action] = (1, id + 1)
         for action in path:
             action_events = self._events[action]
             if action in todo:
@@ -1136,41 +1222,12 @@ class SearchSpace(SearchSpaceABC):
                 event_path.append((e, id))
 
             else:
-                start = (action, True, counter)
-                end = (action, False, counter)
-                counter += 1
-                duration = self._actions_duration[action.idx]
-                lb: Fraction
-                ub: Fraction
-                if duration is None:
-                    lb = Fraction(0)
-                    ub = Fraction(0)
-                else:
-                    lower = evaluate(duration[0], state)
-                    upper = evaluate(duration[1], state)
-                    assert isinstance(lower, (int, Fraction))
-                    assert isinstance(upper, (int, Fraction))
-                    lb = Fraction(-lower)
-                    ub = Fraction(upper)
-                    if duration[2]:
-                        lb -= self._epsilon
-                    if duration[3]:
-                        ub -= self._epsilon
-
-                tn.add(start, end, lb)
-                tn.add(end, start, ub)
-                id = counter
-                for t, e in action_events:
-                    ev = (e.action, e.pos, counter)
-                    b1 = -t.delay
-                    b2 = t.delay
-                    if t.is_from_start():
-                        tn.add(start, ev, b1)
-                        tn.add(ev, start, b2)
-                    else:
-                        tn.add(end, ev, b1)
-                        tn.add(ev, end, b2)
-                    counter += 1
+                start, id, counter = self._add_action_to_plan_network(
+                    tn, state, action, counter
+                )
+                if self._timed_effects_action is not None:
+                    # Nothing starts before the timed effects' time 0.
+                    tn.add(self._start_plan, start, Fraction(0))
 
                 e = action_events[0][1]
                 ev = (e.action, e.pos, id)
@@ -1205,14 +1262,19 @@ class SearchSpace(SearchSpaceABC):
         res: list[tuple[Fraction | None, Action, Fraction | None]] = []
         start_time: dict[tuple[Action, int], Fraction] = {}
         end_time: dict[tuple[Action, int], Fraction] = {}
+        origin = (
+            -tn.distances[self._start_plan]
+            if self._timed_effects_action is not None
+            else 0
+        )
         for ev, dist in tn.distances.items():
-            if not isinstance(ev[1], bool):
+            if not isinstance(ev[1], bool) or ev[0] == self._timed_effects_action:
                 continue
 
             if ev[1]:
-                start_time[(ev[0], ev[2])] = -dist
+                start_time[(ev[0], ev[2])] = -dist - origin
             else:
-                end_time[(ev[0], ev[2])] = -dist
+                end_time[(ev[0], ev[2])] = -dist - origin
 
         for a_id, st in start_time.items():
             et = end_time[a_id]
@@ -1221,3 +1283,56 @@ class SearchSpace(SearchSpaceABC):
 
         res.sort()
         return res
+
+    def _add_action_to_plan_network(
+        self,
+        tn: DeltaSimpleTemporalNetwork,
+        state: State,
+        action: Action,
+        counter: int,
+    ) -> tuple[tuple[Action, bool, int], int, int]:
+        """Adds a newly opened action's timepoints to `build_plan`'s temporal
+        network: its start and end, `state`'s duration bounds between them,
+        and each of its events pinned at its delay. The instance ids it uses
+        start from `counter`.
+
+        Returns:
+            The action's start timepoint, the instance id of its first event,
+            and the next free instance id.
+        """
+        start = (action, True, counter)
+        end = (action, False, counter)
+        counter += 1
+        duration = self._actions_duration[action.idx]
+        lb: Fraction
+        ub: Fraction
+        if duration is None:
+            lb = Fraction(0)
+            ub = Fraction(0)
+        else:
+            lower = evaluate(duration[0], state)
+            upper = evaluate(duration[1], state)
+            assert isinstance(lower, (int, Fraction))
+            assert isinstance(upper, (int, Fraction))
+            lb = Fraction(-lower)
+            ub = Fraction(upper)
+            if duration[2]:
+                lb -= self._epsilon
+            if duration[3]:
+                ub -= self._epsilon
+
+        tn.add(start, end, lb)
+        tn.add(end, start, ub)
+        id = counter
+        for t, e in self._events[action]:
+            ev = (e.action, e.pos, counter)
+            b1 = -t.delay
+            b2 = t.delay
+            if t.is_from_start():
+                tn.add(start, ev, b1)
+                tn.add(ev, start, b2)
+            else:
+                tn.add(end, ev, b1)
+                tn.add(ev, end, b2)
+            counter += 1
+        return start, id, counter

@@ -168,6 +168,7 @@ class DeleteRelaxationHeuristic(Heuristic):
         cache_value_in_state: bool,
         inadmissible_numeric_heuristic_variant: bool,
         disable_numeric_reasoning: bool,
+        timed_effects_action: Action | None = None,
     ):
         super().__init__(cache_value_in_state)
         self._heuristic_kind = heuristic_kind
@@ -197,7 +198,7 @@ class DeleteRelaxationHeuristic(Heuristic):
             self._extra_fluents[a] = []
             f_cond = Fluent(self._num_fluents + len(le) - 1)
             cond = FluentNode(f_cond)
-            for _, e in le:
+            for i, (_, e) in enumerate(le):
                 effects: list[tuple[Fluent, bool | ObjectNode]] = []
                 constant_increase_effects: dict[Fluent, int | Fraction] = {}
                 constant_assign_effects: dict[Fluent, int | Fraction] = {}
@@ -240,7 +241,7 @@ class DeleteRelaxationHeuristic(Heuristic):
                 is_applicable, conditions = self._build_operator_condition(
                     get_event_conditions(e), cond
                 )
-                if is_applicable:
+                if is_applicable and not (i == 0 and a == timed_effects_action):
                     self._operators.append(
                         Operator(
                             len(self._operators),
@@ -1355,6 +1356,7 @@ def HFF(
     cache_value_in_state: bool,
     inadmissible_numeric_heuristic_variant: bool,
     disable_numeric_reasoning: bool = False,
+    timed_effects_action: Action | None = None,
 ) -> DeleteRelaxationHeuristic:
     return DeleteRelaxationHeuristic(
         actions,
@@ -1366,6 +1368,7 @@ def HFF(
         cache_value_in_state,
         inadmissible_numeric_heuristic_variant,
         disable_numeric_reasoning,
+        timed_effects_action,
     )
 
 
@@ -1378,6 +1381,7 @@ def HAdd(
     cache_value_in_state: bool,
     inadmissible_numeric_heuristic_variant: bool,
     disable_numeric_reasoning: bool = False,
+    timed_effects_action: Action | None = None,
 ) -> DeleteRelaxationHeuristic:
     return DeleteRelaxationHeuristic(
         actions,
@@ -1389,6 +1393,7 @@ def HAdd(
         cache_value_in_state,
         inadmissible_numeric_heuristic_variant,
         disable_numeric_reasoning,
+        timed_effects_action,
     )
 
 
@@ -1401,6 +1406,7 @@ def HMax(
     cache_value_in_state: bool,
     inadmissible_numeric_heuristic_variant: bool,
     disable_numeric_reasoning: bool = False,
+    timed_effects_action: Action | None = None,
 ) -> DeleteRelaxationHeuristic:
     return DeleteRelaxationHeuristic(
         actions,
@@ -1412,6 +1418,7 @@ def HMax(
         cache_value_in_state,
         inadmissible_numeric_heuristic_variant,
         disable_numeric_reasoning,
+        timed_effects_action,
     )
 
 
@@ -1572,6 +1579,7 @@ class HMaxExplicit(Heuristic):
         internal_caching: bool,
         cache_value_in_state: bool,
         inadmissible_numeric_heuristic_variant: bool,
+        timed_effects_action: Action | None = None,
     ):
         super().__init__(cache_value_in_state)
         self._actions = actions
@@ -1584,7 +1592,7 @@ class HMaxExplicit(Heuristic):
             self._extra_fluents[a] = []
             f_cond = Fluent(self._num_fluents + len(le) - 1)
             cond = (FluentNode(f_cond),)
-            for _, e in le:
+            for i, (_, e) in enumerate(le):
                 effects: list[tuple[Fluent, Expression | ConstantNode]] = []
                 f = Fluent(self._num_fluents)
                 self._num_fluents += 1
@@ -1605,7 +1613,9 @@ class HMaxExplicit(Heuristic):
                     if len(c) > 0 and c != (True,):
                         conditions.extend(split_expression(c))
                 cond = (FluentNode(f),)
-                if (False,) not in conditions:
+                if (False,) not in conditions and not (
+                    i == 0 and a == timed_effects_action
+                ):
                     effect_fluents = tuple(
                         _dedup_fluents(value) for _fluent, value in effects
                     )
