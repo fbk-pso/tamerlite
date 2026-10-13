@@ -34,6 +34,23 @@ from tamerlite.core.search_space import Action, ObjectNode, SearchSpaceABC, Stat
 logger = logging.getLogger(__name__)
 
 
+def extract_path(state: State) -> list[Action]:
+    return [a for a, _, _ in state.path]
+
+
+class _SearchItem(Protocol):
+    """Structural bound satisfied by `PrioritizedItem`/`NovBFSItem`: every
+    open-list item `_priority_search` handles carries the `State` it was
+    generated for and is totally ordered (required by `heapq`)."""
+
+    state: State
+
+    def __lt__(self, other: Any) -> bool: ...
+
+
+ItemT = TypeVar("ItemT", bound=_SearchItem)
+
+
 @dataclass
 class PrioritizedItem:
     heuristic: float
@@ -51,40 +68,94 @@ class PrioritizedItem:
         return self < other
 
 
-class BoundedPriorityQueue:
-    """A bounded priority queue that keeps only the top-N smallest items.
+@dataclass
+class NovBFSItem:
+    """Open-list entry for `novbfs_search`: the numeric-novelty tie-break
+    chain `(novelty, h, +-g)`, then `len(state.todo)` (fewer durative
+    actions in flight first, matching every other search's
+    `PrioritizedItem`), then an `idx` insertion-order tie-break for
+    determinism. `todo_len` is inert on classical problems -- `state.todo` is
+    only ever populated on the temporal path -- so it only breaks otherwise-
+    real ties among temporal states."""
 
-    Args:
-        bound: Maximum number of elements to keep.
-    """
+    novelty: int  # 1 (most novel) .. 3 (not novel)
+    h: float  # the search heuristic's value
+    g_key: float  # state.g, sign-flipped by `prefer_higher_g` at push time
+    idx: int
+    state: State
+    partition: int  # this state's novelty partition, needed by its children
 
-    def __init__(self, bound: int):
+    def __lt__(self, other):
+        return (
+            self.novelty,
+            self.h,
+            self.g_key,
+            len(self.state.todo),
+            self.idx,
+        ) < (
+            other.novelty,
+            other.h,
+            other.g_key,
+            len(other.state.todo),
+            other.idx,
+        )
+
+    def __le__(self, other):
+        return self < other
+
+
+class _OpenList(Protocol[ItemT]):
+    def push(self, item: ItemT) -> None: ...
+    def pop(self) -> ItemT: ...
+    def __len__(self) -> int: ...
+
+
+class _PriorityQueue(Generic[ItemT]):
+    """A `heapq`-backed, unbounded open list."""
+
+    def __init__(self) -> None:
+        self._heap: list[ItemT] = []
+
+    def push(self, item: ItemT) -> None:
+        heapq.heappush(self._heap, item)
+
+    def pop(self) -> ItemT:
+        return heapq.heappop(self._heap)
+
+    def __len__(self) -> int:
+        return len(self._heap)
+
+
+class _BoundedPriorityQueue(Generic[ItemT]):
+    """A `MinMaxHeap`-backed open list that keeps only the `bound` smallest
+    items. Holds `PrioritizedItem`s (`wastar_search_memory_bounded`) or
+    `NovBFSItem`s (`novbfs_search_memory_bounded`); only ever compares items
+    with `<`, which both define."""
+
+    def __init__(self, bound: int) -> None:
         assert bound > 0, "bound must be positive"
         self._bound = bound
         self._heap = MinMaxHeap()
 
-    def push(self, item: PrioritizedItem) -> bool:
-        """Push item if it belongs in the top-N smallest elements."""
-
+    def push(self, item: ItemT) -> None:
+        """Push item if it belongs in the top-N smallest elements, else drop it."""
         if self._heap.size() < self._bound:
             self._heap.push(item)
-            return True
-
-        # Heap is at capacity: only insert if item improves the collection.
-        current_max = self._heap.max()
-        if item < current_max:
-            self._heap.pop_max()  # evict the largest element
+        elif item < self._heap.max():
+            # At capacity: evict the largest element to make room.
+            self._heap.pop_max()
             self._heap.push(item)
-            return True
 
-        return False  # item rejected
-
-    def pop(self) -> PrioritizedItem:
-        item: PrioritizedItem = self._heap.pop_min()
+    def pop(self) -> ItemT:
+        item: ItemT = self._heap.pop_min()
         return item
 
     def __len__(self) -> int:
         return int(self._heap.size())
+
+
+# Open-list capacity shared by every `*_memory_bounded` search.
+_QUEUE_BOUND = 400_000
 
 
 @dataclass
@@ -118,70 +189,6 @@ def state_representation(state: State, weak_equality: bool) -> State | WeakEqSta
     if weak_equality:
         return WeakEqState(state)
     return state
-
-
-def extract_path(state: State) -> list[Action]:
-    return [a for a, _, _ in state.path]
-
-
-class _SearchItem(Protocol):
-    """Structural bound satisfied by `PrioritizedItem`/`NovBFSItem`: every
-    open-list item `_priority_search` handles carries the `State` it was
-    generated for and is totally ordered (required by `heapq`)."""
-
-    state: State
-
-    def __lt__(self, other: Any) -> bool: ...
-
-
-ItemT = TypeVar("ItemT", bound=_SearchItem)
-
-
-class _OpenList(Protocol[ItemT]):
-    def push(self, item: ItemT) -> None: ...
-    def pop(self) -> ItemT: ...
-    def __len__(self) -> int: ...
-
-
-class _PriorityQueue(Generic[ItemT]):
-    """A `heapq`-backed, unbounded open list."""
-
-    def __init__(self) -> None:
-        self._heap: list[ItemT] = []
-
-    def push(self, item: ItemT) -> None:
-        heapq.heappush(self._heap, item)
-
-    def pop(self) -> ItemT:
-        return heapq.heappop(self._heap)
-
-    def __len__(self) -> int:
-        return len(self._heap)
-
-
-class _BoundedPriorityQueue(Generic[ItemT]):
-    """Adapts `BoundedPriorityQueue` (the module-level, `MinMaxHeap`-backed
-    class this wraps -- not to be confused with this class itself) to
-    `_OpenList`. `push`'s accepted/rejected return value is intentionally
-    discarded. Holds `PrioritizedItem`s (`wastar_search_memory_bounded`) or
-    `NovBFSItem`s (`novbfs_search_memory_bounded`); `BoundedPriorityQueue`
-    only ever compares items with `<`, which both define."""
-
-    def __init__(self, bound: int) -> None:
-        self._queue: BoundedPriorityQueue = BoundedPriorityQueue(bound)
-
-    def push(self, item: ItemT) -> None:
-        self._queue.push(item)  # type: ignore[arg-type]
-
-    def pop(self) -> ItemT:
-        return self._queue.pop()  # type: ignore[return-value]
-
-    def __len__(self) -> int:
-        return len(self._queue)
-
-
-# Open-list capacity shared by every `*_memory_bounded` search.
-_QUEUE_BOUND = 400_000
 
 
 class _Dedup(Protocol):
@@ -257,102 +264,6 @@ class _BloomDedup:
         return True
 
 
-def _priority_search(
-    ss: SearchSpaceABC,
-    heuristic: Heuristic,
-    timeout: float | None,
-    early_termination: bool,
-    *,
-    name: str,
-    open: _OpenList[ItemT],
-    dedup: _Dedup,
-    make_root: Callable[[State, float], ItemT],
-    make_child: Callable[[ItemT, State, float, int], ItemT],
-    begin_expansion: Callable[[], None] | None = None,
-) -> tuple[list[Action] | None, dict[str, str]]:
-    """Shared skeleton for every priority-queue-based search in this module
-    (`wastar_search`, `wastar_search_memory_bounded`, `novbfs_search`,
-    `novbfs_search_memory_bounded`)."""
-
-    st = time.monotonic()
-    init = ss.initial_state()
-    dedup.is_new(init)  # seed; return discarded, the root is never re-checked
-    expanded_states = 0
-    generated_states = 1
-    if early_termination and ss.goal_reached(init):
-        return extract_path(init), {
-            "expanded_states": str(expanded_states),
-            "goal_depth": str(init.g),
-        }
-
-    init_h = heuristic.eval(init, ss)
-    if init_h is None:
-        return None, {"expanded_states": str(0)}
-    open.push(make_root(init, init_h))
-
-    while len(open) > 0:
-        if timeout is not None and time.monotonic() - st > timeout:
-            raise TimeoutError
-        item = open.pop()
-        state = item.state
-        expanded_states += 1
-        if expanded_states % 10_000 == 0:
-            logger.debug(
-                "%s: expanded=%d generated=%d open=%d",
-                name,
-                expanded_states,
-                generated_states,
-                len(open),
-            )
-        if not early_termination and ss.goal_reached(state):
-            logger.info(
-                "%s: goal found — expanded=%d depth=%s", name, expanded_states, state.g
-            )
-            return extract_path(state), {
-                "expanded_states": str(expanded_states),
-                "goal_depth": str(state.g),
-            }
-
-        candidate_states = []
-        for succ_state in ss.get_successor_states(state):
-            if early_termination and ss.goal_reached(succ_state):
-                logger.info(
-                    "%s: goal found — expanded=%d depth=%s",
-                    name,
-                    expanded_states,
-                    succ_state.g,
-                )
-                return extract_path(succ_state), {
-                    "expanded_states": str(expanded_states),
-                    "goal_depth": str(succ_state.g),
-                }
-
-            if dedup.is_new(succ_state):
-                candidate_states.append(succ_state)
-
-        if begin_expansion is not None:
-            begin_expansion()
-        for succ_state, h in heuristic.eval_gen(candidate_states, ss):
-            if h is not None:
-                open.push(make_child(item, succ_state, h, generated_states))
-            generated_states += 1
-
-    logger.info("%s: no solution found — expanded=%d", name, expanded_states)
-    return None, {"expanded_states": str(expanded_states)}
-
-
-def bfs_search(
-    ss: SearchSpaceABC, timeout: float | None = None, early_termination: bool = False
-) -> tuple[list[Action] | None, dict[str, str]]:
-    return _basic_search(ss, True, timeout, early_termination)
-
-
-def dfs_search(
-    ss: SearchSpaceABC, timeout: float | None = None, early_termination: bool = False
-) -> tuple[list[Action] | None, dict[str, str]]:
-    return _basic_search(ss, False, timeout, early_termination)
-
-
 def _basic_search(
     ss: SearchSpaceABC,
     bfs: bool,
@@ -413,109 +324,16 @@ def _basic_search(
     return None, {"expanded_states": str(expanded_states)}
 
 
-def astar_search(
-    ss: SearchSpaceABC,
-    heuristic: Heuristic,
-    timeout: float | None = None,
-    early_termination: bool = False,
-    weak_equality: bool = False,
+def bfs_search(
+    ss: SearchSpaceABC, timeout: float | None = None, early_termination: bool = False
 ) -> tuple[list[Action] | None, dict[str, str]]:
-    return wastar_search(ss, heuristic, 0.5, timeout, early_termination, weak_equality)
+    return _basic_search(ss, True, timeout, early_termination)
 
 
-def gbfs_search(
-    ss: SearchSpaceABC,
-    heuristic: Heuristic,
-    timeout: float | None = None,
-    early_termination: bool = False,
-    weak_equality: bool = False,
+def dfs_search(
+    ss: SearchSpaceABC, timeout: float | None = None, early_termination: bool = False
 ) -> tuple[list[Action] | None, dict[str, str]]:
-    return wastar_search(ss, heuristic, 1, timeout, early_termination, weak_equality)
-
-
-def wastar_search(
-    ss: SearchSpaceABC,
-    heuristic: Heuristic,
-    weight: float = 0.5,
-    timeout: float | None = None,
-    early_termination: bool = False,
-    weak_equality: bool = False,
-) -> tuple[list[Action] | None, dict[str, str]]:
-    logger.info(
-        "wastar_search: weight=%s timeout=%s early_termination=%s weak_equality=%s",
-        weight,
-        timeout,
-        early_termination,
-        weak_equality,
-    )
-    return _priority_search(
-        ss,
-        heuristic,
-        timeout,
-        early_termination,
-        name="wastar_search",
-        open=_PriorityQueue(),
-        dedup=_SetDedup(ss, weak_equality),
-        make_root=lambda init, h: PrioritizedItem(h, init, 0),
-        make_child=lambda _item, s, h, idx: PrioritizedItem(
-            (1 - weight) * s.g + weight * h, s, idx
-        ),
-    )
-
-
-def astar_search_memory_bounded(
-    ss: SearchSpaceABC,
-    heuristic: Heuristic,
-    timeout: float | None = None,
-    early_termination: bool = False,
-    weak_equality: bool = False,
-) -> tuple[list[Action] | None, dict[str, str]]:
-    return wastar_search_memory_bounded(
-        ss, heuristic, 0.5, timeout, early_termination, weak_equality
-    )
-
-
-def gbfs_search_memory_bounded(
-    ss: SearchSpaceABC,
-    heuristic: Heuristic,
-    timeout: float | None = None,
-    early_termination: bool = False,
-    weak_equality: bool = False,
-) -> tuple[list[Action] | None, dict[str, str]]:
-    return wastar_search_memory_bounded(
-        ss, heuristic, 1, timeout, early_termination, weak_equality
-    )
-
-
-def wastar_search_memory_bounded(
-    ss: SearchSpaceABC,
-    heuristic: Heuristic,
-    weight: float = 0.5,
-    timeout: float | None = None,
-    early_termination: bool = False,
-    weak_equality: bool = False,
-) -> tuple[list[Action] | None, dict[str, str]]:
-    logger.info(
-        "wastar_search_memory_bounded: weight=%s timeout=%s "
-        "early_termination=%s weak_equality=%s",
-        weight,
-        timeout,
-        early_termination,
-        weak_equality,
-    )
-    return _priority_search(
-        ss,
-        heuristic,
-        timeout,
-        early_termination,
-        name="wastar_search_memory_bounded",
-        open=_BoundedPriorityQueue(_QUEUE_BOUND),
-        dedup=_BloomDedup(ss, weak_equality),
-        make_root=lambda init, h: PrioritizedItem(h, init, 0),
-        make_child=lambda _item, s, h, idx: PrioritizedItem(
-            (1 - weight) * s.g + weight * h, s, idx
-        ),
-    )
+    return _basic_search(ss, False, timeout, early_termination)
 
 
 def ehc_search(
@@ -609,40 +427,248 @@ def ehc_search(
     return None, {"expanded_states": str(expanded_states)}
 
 
-@dataclass
-class NovBFSItem:
-    """Open-list entry for `novbfs_search`: the numeric-novelty tie-break
-    chain `(novelty, h, +-g)`, then `len(state.todo)` (fewer durative
-    actions in flight first, matching every other search's
-    `PrioritizedItem`), then an `idx` insertion-order tie-break for
-    determinism. `todo_len` is inert on classical problems -- `state.todo` is
-    only ever populated on the temporal path -- so it only breaks otherwise-
-    real ties among temporal states."""
+def _priority_search(
+    ss: SearchSpaceABC,
+    heuristic: Heuristic,
+    timeout: float | None,
+    early_termination: bool,
+    *,
+    name: str,
+    open: _OpenList[ItemT],
+    dedup: _Dedup,
+    make_root: Callable[[State, float], ItemT],
+    make_child: Callable[[ItemT, State, float, int], ItemT],
+    begin_expansion: Callable[[], None] | None = None,
+) -> tuple[list[Action] | None, dict[str, str]]:
+    """Shared skeleton for every priority-queue-based search in this module
+    (`wastar_search`, `wastar_search_memory_bounded`, `novbfs_search`,
+    `novbfs_search_memory_bounded`)."""
 
-    novelty: int  # 1 (most novel) .. 3 (not novel)
-    h: float  # the search heuristic's value
-    g_key: float  # state.g, sign-flipped by `prefer_higher_g` at push time
-    idx: int
-    state: State
-    partition: int  # this state's novelty partition, needed by its children
+    st = time.monotonic()
+    init = ss.initial_state()
+    dedup.is_new(init)  # seed; return discarded, the root is never re-checked
+    expanded_states = 0
+    generated_states = 1
+    if early_termination and ss.goal_reached(init):
+        return extract_path(init), {
+            "expanded_states": str(expanded_states),
+            "goal_depth": str(init.g),
+        }
 
-    def __lt__(self, other):
-        return (
-            self.novelty,
-            self.h,
-            self.g_key,
-            len(self.state.todo),
-            self.idx,
-        ) < (
-            other.novelty,
-            other.h,
-            other.g_key,
-            len(other.state.todo),
-            other.idx,
-        )
+    init_h = heuristic.eval(init, ss)
+    if init_h is None:
+        return None, {"expanded_states": str(0)}
+    open.push(make_root(init, init_h))
 
-    def __le__(self, other):
-        return self < other
+    while len(open) > 0:
+        if timeout is not None and time.monotonic() - st > timeout:
+            raise TimeoutError
+        item = open.pop()
+        state = item.state
+        expanded_states += 1
+        if expanded_states % 10_000 == 0:
+            logger.debug(
+                "%s: expanded=%d generated=%d open=%d",
+                name,
+                expanded_states,
+                generated_states,
+                len(open),
+            )
+        if not early_termination and ss.goal_reached(state):
+            logger.info(
+                "%s: goal found — expanded=%d depth=%s", name, expanded_states, state.g
+            )
+            return extract_path(state), {
+                "expanded_states": str(expanded_states),
+                "goal_depth": str(state.g),
+            }
+
+        candidate_states = []
+        for succ_state in ss.get_successor_states(state):
+            if early_termination and ss.goal_reached(succ_state):
+                logger.info(
+                    "%s: goal found — expanded=%d depth=%s",
+                    name,
+                    expanded_states,
+                    succ_state.g,
+                )
+                return extract_path(succ_state), {
+                    "expanded_states": str(expanded_states),
+                    "goal_depth": str(succ_state.g),
+                }
+
+            if dedup.is_new(succ_state):
+                candidate_states.append(succ_state)
+
+        if begin_expansion is not None:
+            begin_expansion()
+        for succ_state, h in heuristic.eval_gen(candidate_states, ss):
+            if h is not None:
+                open.push(make_child(item, succ_state, h, generated_states))
+            generated_states += 1
+
+    logger.info("%s: no solution found — expanded=%d", name, expanded_states)
+    return None, {"expanded_states": str(expanded_states)}
+
+
+def wastar_search(
+    ss: SearchSpaceABC,
+    heuristic: Heuristic,
+    weight: float = 0.5,
+    timeout: float | None = None,
+    early_termination: bool = False,
+    weak_equality: bool = False,
+) -> tuple[list[Action] | None, dict[str, str]]:
+    logger.info(
+        "wastar_search: weight=%s timeout=%s early_termination=%s weak_equality=%s",
+        weight,
+        timeout,
+        early_termination,
+        weak_equality,
+    )
+    return _priority_search(
+        ss,
+        heuristic,
+        timeout,
+        early_termination,
+        name="wastar_search",
+        open=_PriorityQueue(),
+        dedup=_SetDedup(ss, weak_equality),
+        make_root=lambda init, h: PrioritizedItem(h, init, 0),
+        make_child=lambda _item, s, h, idx: PrioritizedItem(
+            (1 - weight) * s.g + weight * h, s, idx
+        ),
+    )
+
+
+def astar_search(
+    ss: SearchSpaceABC,
+    heuristic: Heuristic,
+    timeout: float | None = None,
+    early_termination: bool = False,
+    weak_equality: bool = False,
+) -> tuple[list[Action] | None, dict[str, str]]:
+    return wastar_search(ss, heuristic, 0.5, timeout, early_termination, weak_equality)
+
+
+def gbfs_search(
+    ss: SearchSpaceABC,
+    heuristic: Heuristic,
+    timeout: float | None = None,
+    early_termination: bool = False,
+    weak_equality: bool = False,
+) -> tuple[list[Action] | None, dict[str, str]]:
+    return wastar_search(ss, heuristic, 1, timeout, early_termination, weak_equality)
+
+
+def wastar_search_memory_bounded(
+    ss: SearchSpaceABC,
+    heuristic: Heuristic,
+    weight: float = 0.5,
+    timeout: float | None = None,
+    early_termination: bool = False,
+    weak_equality: bool = False,
+) -> tuple[list[Action] | None, dict[str, str]]:
+    logger.info(
+        "wastar_search_memory_bounded: weight=%s timeout=%s "
+        "early_termination=%s weak_equality=%s",
+        weight,
+        timeout,
+        early_termination,
+        weak_equality,
+    )
+    return _priority_search(
+        ss,
+        heuristic,
+        timeout,
+        early_termination,
+        name="wastar_search_memory_bounded",
+        open=_BoundedPriorityQueue(_QUEUE_BOUND),
+        dedup=_BloomDedup(ss, weak_equality),
+        make_root=lambda init, h: PrioritizedItem(h, init, 0),
+        make_child=lambda _item, s, h, idx: PrioritizedItem(
+            (1 - weight) * s.g + weight * h, s, idx
+        ),
+    )
+
+
+def astar_search_memory_bounded(
+    ss: SearchSpaceABC,
+    heuristic: Heuristic,
+    timeout: float | None = None,
+    early_termination: bool = False,
+    weak_equality: bool = False,
+) -> tuple[list[Action] | None, dict[str, str]]:
+    return wastar_search_memory_bounded(
+        ss, heuristic, 0.5, timeout, early_termination, weak_equality
+    )
+
+
+def gbfs_search_memory_bounded(
+    ss: SearchSpaceABC,
+    heuristic: Heuristic,
+    timeout: float | None = None,
+    early_termination: bool = False,
+    weak_equality: bool = False,
+) -> tuple[list[Action] | None, dict[str, str]]:
+    return wastar_search_memory_bounded(
+        ss, heuristic, 1, timeout, early_termination, weak_equality
+    )
+
+
+def _novbfs(
+    ss: SearchSpaceABC,
+    heuristic: Heuristic,
+    novelty: NumericNovelty,
+    prefer_higher_g: bool,
+    timeout: float | None,
+    early_termination: bool,
+    *,
+    name: str,
+    open: _OpenList[NovBFSItem],
+    dedup: _Dedup,
+    weak_equality: bool,
+) -> tuple[list[Action] | None, dict[str, str]]:
+    """Shared body of `novbfs_search`/`novbfs_search_memory_bounded`, which
+    differ only in `open`/`dedup` (`weak_equality` is only logged here; it's
+    already baked into `dedup`)."""
+
+    logger.info(
+        "%s: prefer_higher_g=%s timeout=%s early_termination=%s weak_equality=%s",
+        name,
+        prefer_higher_g,
+        timeout,
+        early_termination,
+        weak_equality,
+    )
+
+    def g_key(g: int) -> float:
+        return -g if prefer_higher_g else g
+
+    def make_root(init: State, init_h: float) -> NovBFSItem:
+        partition = novelty.start(init_h)
+        # Seed the tables (return discarded); the root's *stored* novelty is
+        # hard-coded to 1 below regardless.
+        novelty.eval(init, partition, None, None)
+        return NovBFSItem(1, init_h, g_key(init.g), 0, init, partition)
+
+    def make_child(item: NovBFSItem, s: State, h: float, idx: int) -> NovBFSItem:
+        partition = novelty.partition_of(h)
+        nov = novelty.eval(s, partition, item.state, item.partition)
+        return NovBFSItem(nov, h, g_key(s.g), idx, s, partition)
+
+    return _priority_search(
+        ss,
+        heuristic,
+        timeout,
+        early_termination,
+        name=name,
+        open=open,
+        dedup=dedup,
+        make_root=make_root,
+        make_child=make_child,
+        begin_expansion=novelty.begin_expansion,
+    )
 
 
 def novbfs_search(
@@ -713,7 +739,7 @@ def novbfs_search_memory_bounded(
     weak_equality: bool = False,
 ) -> tuple[list[Action] | None, dict[str, str]]:
     """Memory-bounded variant of `novbfs_search`: same open-list order and
-    `novelty` contract, but the open list is a `BoundedPriorityQueue`
+    `novelty` contract, but the open list is a `_BoundedPriorityQueue`
     (capacity `_QUEUE_BOUND`, evicting the worst item once full) and dedup is
     a `_BloomDedup`. Both make the search incomplete -- an evicted state is
     never regenerated, and a Bloom false positive drops a genuinely new one.
@@ -731,59 +757,4 @@ def novbfs_search_memory_bounded(
         open=_BoundedPriorityQueue(_QUEUE_BOUND),
         dedup=_BloomDedup(ss, weak_equality),
         weak_equality=weak_equality,
-    )
-
-
-def _novbfs(
-    ss: SearchSpaceABC,
-    heuristic: Heuristic,
-    novelty: NumericNovelty,
-    prefer_higher_g: bool,
-    timeout: float | None,
-    early_termination: bool,
-    *,
-    name: str,
-    open: _OpenList[NovBFSItem],
-    dedup: _Dedup,
-    weak_equality: bool,
-) -> tuple[list[Action] | None, dict[str, str]]:
-    """Shared body of `novbfs_search`/`novbfs_search_memory_bounded`, which
-    differ only in `open`/`dedup` (`weak_equality` is only logged here; it's
-    already baked into `dedup`)."""
-
-    logger.info(
-        "%s: prefer_higher_g=%s timeout=%s early_termination=%s weak_equality=%s",
-        name,
-        prefer_higher_g,
-        timeout,
-        early_termination,
-        weak_equality,
-    )
-
-    def g_key(g: int) -> float:
-        return -g if prefer_higher_g else g
-
-    def make_root(init: State, init_h: float) -> NovBFSItem:
-        partition = novelty.start(init_h)
-        # Seed the tables (return discarded); the root's *stored* novelty is
-        # hard-coded to 1 below regardless.
-        novelty.eval(init, partition, None, None)
-        return NovBFSItem(1, init_h, g_key(init.g), 0, init, partition)
-
-    def make_child(item: NovBFSItem, s: State, h: float, idx: int) -> NovBFSItem:
-        partition = novelty.partition_of(h)
-        nov = novelty.eval(s, partition, item.state, item.partition)
-        return NovBFSItem(nov, h, g_key(s.g), idx, s, partition)
-
-    return _priority_search(
-        ss,
-        heuristic,
-        timeout,
-        early_termination,
-        name=name,
-        open=open,
-        dedup=dedup,
-        make_root=make_root,
-        make_child=make_child,
-        begin_expansion=novelty.begin_expansion,
     )
