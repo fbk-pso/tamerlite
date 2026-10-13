@@ -192,6 +192,7 @@ class _HeuristicCallable(Protocol):
         internal_caching: bool,
         cache_value_in_state: bool,
         inadmissible_numeric_heuristic_variant: bool,
+        timed_effects_action: Action | None,
     ) -> Heuristic: ...
 
 
@@ -223,6 +224,7 @@ class TamerLite(
         supported_kind.set_time("CONTINUOUS_TIME")
         supported_kind.set_time("INTERMEDIATE_CONDITIONS_AND_EFFECTS")
         supported_kind.set_time("DURATION_INEQUALITIES")
+        supported_kind.set_time("TIMED_EFFECTS")
         supported_kind.set_expression_duration("STATIC_FLUENTS_IN_DURATIONS")
         supported_kind.set_expression_duration("FLUENTS_IN_DURATIONS")
         supported_kind.set_expression_duration("INT_TYPE_DURATIONS")
@@ -351,6 +353,7 @@ class TamerLite(
                 internal_caching=internal_heuristic_cache,
                 cache_value_in_state=cache_heuristic_in_state,
                 inadmissible_numeric_heuristic_variant=inadmissible_numeric_heuristic_variant,
+                timed_effects_action=encoder.timed_effects_action,
             )
             w = 0.8 if params.weight is None else params.weight
 

@@ -363,6 +363,203 @@ def get_problem_driverlog_pfile1() -> Problem:
     return problem
 
 
+def get_problem_timed_delivery() -> Problem:
+    """
+    Timed initial literals read from PDDL: each destination only accepts a
+    delivery while it is open, and opens and closes at fixed times. The PDDL
+    reader keys these timed effects by `StartTiming`, not by the
+    `GlobalStartTiming` a problem built in Python uses.
+    """
+    reader = PDDLReader()
+    problem_directory = (
+        pathlib.Path(__file__).resolve().parent / "pddl" / "TimedDelivery"
+    )
+    domain = problem_directory / "domain.pddl"
+    instance = problem_directory / "instance.pddl"
+    problem = reader.parse_problem(str(domain), str(instance))
+    return problem
+
+
+def get_problem_timed_effects_window() -> Problem:
+    """
+    Two deliveries that need the dock open throughout, sharing one crane, while
+    the dock is only open between two timed effects: both have to fit, one
+    after the other, inside the window. The packages are interchangeable, so
+    symmetry breaking applies.
+    """
+    problem = Problem("timed_effects_window")
+    Package = UserType("Package")
+
+    dock_open = Fluent("dock_open", BoolType())
+    crane_free = Fluent("crane_free", BoolType())
+    delivered = Fluent("delivered", BoolType(), p=Package)
+
+    deliver = DurativeAction("deliver", p=Package)
+    p = deliver.parameter("p")
+    deliver.set_fixed_duration(4)
+    deliver.add_condition(StartTiming(), crane_free)
+    deliver.add_condition(ClosedTimeInterval(StartTiming(), EndTiming()), dock_open)
+    deliver.add_effect(StartTiming(), crane_free, False)
+    deliver.add_effect(EndTiming(), crane_free, True)
+    deliver.add_effect(EndTiming(), delivered(p), True)
+
+    problem.add_fluent(dock_open, default_initial_value=False)
+    problem.add_fluent(crane_free, default_initial_value=True)
+    problem.add_fluent(delivered, default_initial_value=False)
+    problem.add_action(deliver)
+
+    packages = [Object(f"p{i}", Package) for i in range(1, 3)]
+    problem.add_objects(packages)
+
+    problem.add_timed_effect(GlobalStartTiming(5), dock_open, True)
+    problem.add_timed_effect(GlobalStartTiming(15), dock_open, False)
+
+    for package in packages:
+        problem.add_goal(delivered(package))
+
+    return problem
+
+
+def get_problem_timed_effects_window_minimize_makespan() -> Problem:
+    """`get_problem_timed_effects_window` minimizing the makespan, which UP
+    stretches to the last timed effect: no plan ends before time 15."""
+    problem = get_problem_timed_effects_window()
+    problem.name = "timed_effects_window_minimize_makespan"
+    problem.add_quality_metric(MinimizeMakespan())
+    return problem
+
+
+def get_problem_timed_effects_at_zero() -> Problem:
+    """
+    Timed effects at time 0, including a numeric increase, and a second
+    increase later. An action at time 0 still sees the state from before the
+    timed effects of time 0, so `buy` can't happen until `budget` has been
+    raised twice.
+    """
+    problem = Problem("timed_effects_at_zero")
+
+    ready = Fluent("ready", BoolType())
+    budget = Fluent("budget", RealType())
+    bought = Fluent("bought", BoolType())
+
+    buy = InstantaneousAction("buy")
+    buy.add_precondition(ready)
+    buy.add_precondition(GE(budget, 10))
+    buy.add_effect(bought, True)
+    buy.add_decrease_effect(budget, 10)
+
+    problem.add_fluent(ready, default_initial_value=False)
+    problem.add_fluent(budget, default_initial_value=0)
+    problem.add_fluent(bought, default_initial_value=False)
+    problem.add_action(buy)
+
+    problem.add_timed_effect(GlobalStartTiming(0), ready, True)
+    problem.add_increase_effect(GlobalStartTiming(0), budget, 5)
+    problem.add_increase_effect(GlobalStartTiming(3), budget, 5)
+
+    problem.add_goal(bought)
+
+    return problem
+
+
+def get_problem_timed_effects_fluent_value() -> Problem:
+    """
+    A timed effect whose value reads a fluent, `snapshot := level` at time 4,
+    so it depends on what the plan did before then: `charge` has to start
+    before time 4. A later timed effect achieves part of the goal on its own.
+
+    `charge` assigns `level` a constant rather than incrementing it:
+    `hmax_explicit`'s value-set fixpoint doesn't terminate on a dead-end state
+    when an action increments a numeric fluent, and charging too late is a
+    dead end here.
+    """
+    problem = Problem("timed_effects_fluent_value")
+
+    level = Fluent("level", IntType())
+    snapshot = Fluent("snapshot", IntType())
+    charged = Fluent("charged", BoolType())
+    released = Fluent("released", BoolType())
+
+    charge = DurativeAction("charge")
+    charge.set_fixed_duration(2)
+    # Not repeatable, which keeps the search space finite even without
+    # duplicate detection.
+    charge.add_condition(StartTiming(), Not(charged))
+    charge.add_effect(StartTiming(), level, 3)
+    charge.add_effect(EndTiming(), charged, True)
+
+    problem.add_fluent(level, default_initial_value=0)
+    problem.add_fluent(snapshot, default_initial_value=0)
+    problem.add_fluent(charged, default_initial_value=False)
+    problem.add_fluent(released, default_initial_value=False)
+    problem.add_action(charge)
+
+    problem.add_timed_effect(GlobalStartTiming(4), snapshot, level)
+    problem.add_timed_effect(GlobalStartTiming(6), released, True)
+
+    problem.add_goal(GE(snapshot, 1))
+    problem.add_goal(charged)
+    problem.add_goal(released)
+
+    return problem
+
+
+def get_problem_timed_effects_undefined_initial_value() -> Problem:
+    """
+    A timed effect reading `level`, which has no initial value. UP's
+    `UndefinedInitialNumericRemover` then adds a timed goal requiring `level`
+    to be defined at time 2, which TamerLite doesn't support.
+    """
+    problem = Problem("timed_effects_undefined_initial_value")
+
+    level = Fluent("level", IntType())
+    snapshot = Fluent("snapshot", IntType())
+    done = Fluent("done", BoolType())
+
+    finish = InstantaneousAction("finish")
+    finish.add_precondition(GE(snapshot, 1))
+    finish.add_effect(done, True)
+
+    problem.add_fluent(level)
+    problem.add_fluent(snapshot, default_initial_value=0)
+    problem.add_fluent(done, default_initial_value=False)
+    problem.add_action(finish)
+
+    problem.add_timed_effect(GlobalStartTiming(2), snapshot, level)
+
+    problem.add_goal(done)
+
+    return problem
+
+
+def get_problem_timed_effects_goal_undone() -> Problem:
+    """
+    Unsolvable: `finish` is only possible while the window is open, until time
+    5, and a timed effect at time 10 undoes what it achieves. UP checks the
+    goal after every timed effect, including the ones after the last action.
+    """
+    problem = Problem("timed_effects_goal_undone")
+
+    window = Fluent("window", BoolType())
+    done = Fluent("done", BoolType())
+
+    finish = InstantaneousAction("finish")
+    finish.add_precondition(window)
+    finish.add_precondition(Not(done))
+    finish.add_effect(done, True)
+
+    problem.add_fluent(window, default_initial_value=True)
+    problem.add_fluent(done, default_initial_value=False)
+    problem.add_action(finish)
+
+    problem.add_timed_effect(GlobalStartTiming(5), window, False)
+    problem.add_timed_effect(GlobalStartTiming(10), done, False)
+
+    problem.add_goal(done)
+
+    return problem
+
+
 def get_problem_hierarchical_types() -> Problem:
     problem = Problem("hierarchical-types")
 

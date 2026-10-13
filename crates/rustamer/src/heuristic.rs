@@ -46,7 +46,7 @@ impl Heuristic {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (actions, fluent_domains, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant, disable_numeric_reasoning=false))]
+    #[pyo3(signature = (actions, fluent_domains, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant, disable_numeric_reasoning=false, timed_effects_action=None))]
     #[allow(clippy::too_many_arguments)]
     pub fn hff(
         actions: Vec<Action>,
@@ -57,6 +57,7 @@ impl Heuristic {
         cache_value_in_state: bool,
         inadmissible_numeric_heuristic_variant: bool,
         disable_numeric_reasoning: bool,
+        timed_effects_action: Option<Action>,
     ) -> PyResult<Self> {
         Ok(Heuristic {
             variant: HeuristicVariant::DeleteRelaxation(DeleteRelaxationHeuristic::new(
@@ -69,6 +70,7 @@ impl Heuristic {
                     internal_caching,
                     inadmissible_numeric_heuristic_variant,
                     disable_numeric_reasoning,
+                    timed_effects_action,
                 },
             )?),
             cache_value_in_state,
@@ -76,7 +78,7 @@ impl Heuristic {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (actions, fluent_domains, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant, disable_numeric_reasoning=false))]
+    #[pyo3(signature = (actions, fluent_domains, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant, disable_numeric_reasoning=false, timed_effects_action=None))]
     #[allow(clippy::too_many_arguments)]
     pub fn hadd(
         actions: Vec<Action>,
@@ -87,6 +89,7 @@ impl Heuristic {
         cache_value_in_state: bool,
         inadmissible_numeric_heuristic_variant: bool,
         disable_numeric_reasoning: bool,
+        timed_effects_action: Option<Action>,
     ) -> PyResult<Self> {
         Ok(Heuristic {
             variant: HeuristicVariant::DeleteRelaxation(DeleteRelaxationHeuristic::new(
@@ -99,6 +102,7 @@ impl Heuristic {
                     internal_caching,
                     inadmissible_numeric_heuristic_variant,
                     disable_numeric_reasoning,
+                    timed_effects_action,
                 },
             )?),
             cache_value_in_state,
@@ -106,7 +110,7 @@ impl Heuristic {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (actions, fluent_domains, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant, disable_numeric_reasoning=false))]
+    #[pyo3(signature = (actions, fluent_domains, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant, disable_numeric_reasoning=false, timed_effects_action=None))]
     #[allow(clippy::too_many_arguments)]
     pub fn hmax(
         actions: Vec<Action>,
@@ -117,6 +121,7 @@ impl Heuristic {
         cache_value_in_state: bool,
         inadmissible_numeric_heuristic_variant: bool,
         disable_numeric_reasoning: bool,
+        timed_effects_action: Option<Action>,
     ) -> PyResult<Self> {
         Ok(Heuristic {
             variant: HeuristicVariant::DeleteRelaxation(DeleteRelaxationHeuristic::new(
@@ -129,6 +134,7 @@ impl Heuristic {
                     internal_caching,
                     inadmissible_numeric_heuristic_variant,
                     disable_numeric_reasoning,
+                    timed_effects_action,
                 },
             )?),
             cache_value_in_state,
@@ -136,7 +142,7 @@ impl Heuristic {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (actions, fluent_domains, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant))]
+    #[pyo3(signature = (actions, fluent_domains, events, goals, internal_caching, cache_value_in_state, inadmissible_numeric_heuristic_variant, timed_effects_action=None))]
     #[allow(clippy::too_many_arguments, unused_variables)]
     pub fn hmax_explicit(
         actions: Vec<Action>,
@@ -146,6 +152,7 @@ impl Heuristic {
         internal_caching: bool,
         cache_value_in_state: bool,
         inadmissible_numeric_heuristic_variant: bool,
+        timed_effects_action: Option<Action>,
     ) -> PyResult<Self> {
         Ok(Heuristic {
             variant: HeuristicVariant::HMaxExplicit(HMaxExplicit::new(
@@ -153,6 +160,7 @@ impl Heuristic {
                 events,
                 goals,
                 internal_caching,
+                timed_effects_action,
             )?),
             cache_value_in_state,
         })
