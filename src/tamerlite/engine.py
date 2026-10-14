@@ -50,6 +50,7 @@ from tamerlite.core import (
     HAdd,
     HMax,
     HMaxExplicit,
+    NumericNovelty,
     astar_search,
     astar_search_memory_bounded,
     bfs_search,
@@ -59,6 +60,8 @@ from tamerlite.core import (
     gbfs_search_memory_bounded,
     get_fluent_value,
     multiqueue_search,
+    novbfs_search,
+    novbfs_search_memory_bounded,
     search_space,
     wastar_search,
     wastar_search_memory_bounded,
@@ -328,11 +331,11 @@ class TamerLite(
             # `encoder.fluent_domains`/`encoder.goal` already describe the
             # (possibly `relevant_equality`-compacted) encoding, so no
             # separate fluent restriction is needed here.
+            # Every considered action has an `events` entry (`SearchSpace`
+            # checks it), and both follow `Encoder._actions` order, so this
+            # is the considered-only slice of `events`, in its own order.
             considered_actions = encoder.considered_actions
-            considered_actions_set = set(considered_actions)
-            events = {
-                a: e for a, e in encoder.events.items() if a in considered_actions_set
-            }
+            events = {a: encoder.events[a] for a in considered_actions}
             h = hh_map[h_name](
                 considered_actions,
                 encoder.fluent_domains,
@@ -348,51 +351,83 @@ class TamerLite(
 
     def _get_search(
         self,
-        search_name: str,
-        heuristic: Heuristic,
-        weight: float,
-        incomplete_memory_bounded_search: bool,
-        weak_equality: bool,
-        is_temporal: bool,
+        params: SearchParams,
+        encoder: Encoder,
+        heuristic: Callable[[State], float | None] | None,
     ) -> tuple[str, _SearchCallable]:
-        if (
-            search_name in {"wastar", "astar", "gbfs"}
-            and incomplete_memory_bounded_search
-            and is_temporal
-            and weak_equality
-        ):
-            warnings.warn(
-                "Memory-bounded search does not support weak equality correctly.",
-                stacklevel=2,
-            )
+        """Selects and binds the search callable for `params.search`,
+        building the heuristic it needs along the way (`dfs`/`bfs` build one
+        too and just never read it).
+
+        `heuristic` is the optional custom heuristic *callable* passed to
+        `solve()`/`get_solutions()` -- `params.heuristic` is the separate
+        heuristic *name* string `_get_heuristic` dispatches on."""
+        search_name = params.search
+        internal_heuristic_cache = (
+            params.internal_heuristic_cache and encoder.search_space.is_temporal
+        )
+        incomplete_memory_bounded_search = params.incomplete_memory_bounded_search
+
+        h, weight = self._get_heuristic(
+            params,
+            heuristic,
+            encoder,
+            params.inadmissible_numeric_heuristic_variant,
+            internal_heuristic_cache,
+        )
 
         if search_name == "wastar":
             if incomplete_memory_bounded_search:
                 search = partial(
-                    wastar_search_memory_bounded, heuristic=heuristic, weight=weight
+                    wastar_search_memory_bounded, heuristic=h, weight=weight
                 )
             else:
-                search = partial(wastar_search, heuristic=heuristic, weight=weight)
+                search = partial(wastar_search, heuristic=h, weight=weight)
         elif search_name == "astar":
             if incomplete_memory_bounded_search:
-                search = partial(astar_search_memory_bounded, heuristic=heuristic)
+                search = partial(astar_search_memory_bounded, heuristic=h)
             else:
-                search = partial(astar_search, heuristic=heuristic)
+                search = partial(astar_search, heuristic=h)
         elif search_name == "gbfs":
             if incomplete_memory_bounded_search:
-                search = partial(gbfs_search_memory_bounded, heuristic=heuristic)
+                search = partial(gbfs_search_memory_bounded, heuristic=h)
             else:
-                search = partial(gbfs_search, heuristic=heuristic)
+                search = partial(gbfs_search, heuristic=h)
         elif search_name == "dfs":
             search = partial(dfs_search)
         elif search_name == "bfs":
             search = partial(bfs_search)
         elif search_name == "ehc":
-            search = partial(ehc_search, heuristic=heuristic)
+            search = partial(ehc_search, heuristic=h)
+        elif search_name in ("novbfs_hg", "novbfs_lg"):
+            # novbfs uses the raw heuristic value both as its novelty
+            # partition (`floor(h)`) and as the tie-break after novelty, so a
+            # weight has nothing to scale.
+            if params.weight is not None:
+                warnings.warn(
+                    "novbfs_hg/novbfs_lg do not use a heuristic weight; the "
+                    "configured weight is ignored.",
+                    stacklevel=2,
+                )
+            assert encoder.goal is not None
+            novelty_tracker = NumericNovelty(
+                {a: encoder.events[a] for a in encoder.considered_actions},
+                encoder.goal,
+                encoder.fluent_domains,
+            )
+            search = partial(
+                novbfs_search_memory_bounded
+                if incomplete_memory_bounded_search
+                else novbfs_search,
+                heuristic=h,
+                novelty=novelty_tracker,
+                prefer_higher_g=(search_name == "novbfs_hg"),
+            )
         else:
             raise NotImplementedError(
                 f"Unknown search '{search_name}'. "
-                "Supported values are: wastar, astar, gbfs, dfs, bfs, ehc."
+                "Supported values are: wastar, astar, gbfs, dfs, bfs, ehc, "
+                "novbfs_hg, novbfs_lg."
             )
 
         return search_name, search
@@ -899,24 +934,10 @@ class TamerLite(
                         weak_equality=False,
                     )
             else:
-                internal_heuristic_cache = (
-                    self._params.internal_heuristic_cache
-                    and encoder.search_space.is_temporal
-                )
-                h, w = self._get_heuristic(
-                    self._params,
-                    heuristic,
-                    encoder,
-                    self._params.inadmissible_numeric_heuristic_variant,
-                    internal_heuristic_cache,
-                )
                 search_name, search = self._get_search(
-                    self._params.search,
-                    h,
-                    w,
-                    self._params.incomplete_memory_bounded_search,
-                    self._params.weak_equality,
-                    encoder.search_space.is_temporal,
+                    self._params,
+                    encoder,
+                    heuristic,
                 )
 
                 if self._params.weak_equality and search_name not in ("dfs", "bfs"):
