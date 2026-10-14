@@ -49,7 +49,11 @@ type PyDurationInterval = (Vec<PyExpressionNode>, Vec<PyExpressionNode>, bool, b
 pub trait SearchSpaceTrait {
     fn is_temporal(&self) -> bool;
     fn tn_interpreter(&self) -> &TNInterpreter;
-    fn initial_state(&self, initial_state: Option<Vec<PyExpressionNode>>) -> PyResult<State>;
+    /// The initial state, or `None` if there is none: no plan exists.
+    fn initial_state(
+        &self,
+        initial_state: Option<Vec<PyExpressionNode>>,
+    ) -> PyResult<Option<State>>;
     fn get_successor_state(&self, state: &State, action: Action) -> PyResult<Option<State>>;
     fn get_successor_states_iter<'a>(
         &'a self,
@@ -182,16 +186,16 @@ pub struct SearchSpace {
     counter: Mutex<u32>,
     /// The synthetic action carrying the problem's timed effects, one event
     /// per instant they fire at (see `Encoder`). It is already running in
-    /// every initial state (`open_timed_effects_action`), can never be opened
+    /// every initial state (`open_timed_action`), can never be opened
     /// again (`get_successor_state_with_compression`), and is left out of the
     /// plan `build_plan` returns.
-    timed_effects_action: Option<Action>,
+    timed_action: Option<Action>,
 }
 
 #[pymethods]
 impl SearchSpace {
     #[new]
-    #[pyo3(signature = (actions_duration, events, actions, compression_safe_actions, action_objects, obj_to_prev_actions_map, initial_state=None, goal=None, relevant_actions=None, deadline=None, epsilon=None, timed_effects_action=None))]
+    #[pyo3(signature = (actions_duration, events, actions, compression_safe_actions, action_objects, obj_to_prev_actions_map, initial_state=None, goal=None, relevant_actions=None, deadline=None, epsilon=None, timed_action=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         actions_duration: Vec<Option<PyDurationInterval>>,
@@ -205,7 +209,7 @@ impl SearchSpace {
         relevant_actions: Option<Vec<Action>>,
         #[pyo3(from_py_with = get_option_big_rational)] deadline: Option<BigRational>,
         #[pyo3(from_py_with = get_option_big_rational)] epsilon: Option<BigRational>,
-        timed_effects_action: Option<Action>,
+        timed_action: Option<Action>,
     ) -> PyResult<Self> {
         let relevant_actions = if let Some(relevant_actions) = relevant_actions {
             relevant_actions
@@ -309,7 +313,7 @@ impl SearchSpace {
             },
             is_temporal,
             counter: Mutex::new(0),
-            timed_effects_action,
+            timed_action,
         };
         Ok(res)
     }
@@ -341,7 +345,7 @@ impl SearchSpace {
     pub fn py_initial_state(
         &self,
         initial_state: Option<Vec<PyExpressionNode>>,
-    ) -> PyResult<State> {
+    ) -> PyResult<Option<State>> {
         self.initial_state(initial_state)
     }
 
@@ -424,7 +428,7 @@ impl SearchSpace {
                     }
                 }
             } else {
-                if Some(action) == self.timed_effects_action {
+                if Some(action) == self.timed_action {
                     // Already opened in the initial state; once its last event
                     // has fired there is nothing left to apply.
                     return Ok(None);
@@ -660,31 +664,32 @@ impl SearchSpace {
         Ok(id)
     }
 
-    /// Opens the timed-effects action at time 0 and fires its first event.
+    /// Opens the timed action at time 0 and fires its first event.
     ///
     /// Its start is pinned to `start_plan`, so every event sits exactly at the
-    /// absolute time of the timed effects it carries. Event 0 (at delay 0) is
-    /// fired right away rather than left to the search: its effects happen at
-    /// time 0 whatever the search does, and putting it in `path` orders every
-    /// later event that interferes with it strictly after it. It also keeps
-    /// every `todo` index at 1 or more, as `open_action` does, which the
-    /// heuristics rely on.
+    /// absolute time of the timed effects and timed goals it carries. Event 0
+    /// (at delay 0) is fired right away rather than left to the search: it
+    /// happens at time 0 whatever the search does, and putting it in `path`
+    /// orders every later event that interferes with it strictly after it. It
+    /// also keeps every `todo` index at 1 or more, as `open_action` does, which
+    /// the heuristics rely on.
     ///
-    /// With a deadline earlier than the last timed effect, the temporal
-    /// network is already inconsistent here: no plan can meet the deadline,
-    /// since UP's makespan includes every timed effect. The returned state is
-    /// then a dead end -- an inconsistent network stays inconsistent, so every
-    /// successor is rejected -- rather than an error. Mirrors
-    /// `SearchSpace._open_timed_effects_action` in the Python core.
-    fn open_timed_effects_action(&self, state: State, action: Action) -> PyResult<State> {
+    /// Event 0 fails when a timed goal checked at time 0 doesn't hold, or when
+    /// a deadline earlier than the last timed event makes the temporal network
+    /// inconsistent (UP's makespan includes every timed effect and timed goal).
+    /// Nothing can happen before time 0, so then no plan exists, and it
+    /// returns `None`. Mirrors `SearchSpace._open_timed_action` in the Python
+    /// core.
+    fn open_timed_action(&self, state: State, action: Action) -> PyResult<Option<State>> {
         let events = &self.events[&action];
         let mut new_state = state.clone_for_child();
         let id =
             self.add_action_to_temporal_network(&state, &mut new_state, action, events, true)?;
-        // The timed-effects events are unconditional and nothing is active
-        // yet, so this only fails on an inconsistent temporal network.
-        self.expand_event(&state, &mut new_state, &events[0].1, &0, &id)?;
-        Ok(new_state)
+        // `expand_event` leaves checking the event's own conditions to its
+        // callers.
+        let fired = self.is_sat(&events[0].1.conditions, &state)?
+            && self.expand_event(&state, &mut new_state, &events[0].1, &0, &id)?;
+        Ok(fired.then_some(new_state))
     }
 
     /// Adds a newly opened action's timepoints to `build_plan`'s temporal
@@ -752,7 +757,10 @@ impl SearchSpaceTrait for SearchSpace {
         // DO nothing :)
     }
 
-    fn initial_state(&self, initial_state: Option<Vec<PyExpressionNode>>) -> PyResult<State> {
+    fn initial_state(
+        &self,
+        initial_state: Option<Vec<PyExpressionNode>>,
+    ) -> PyResult<Option<State>> {
         let init: Vector<ExpressionNode> = match initial_state {
             Some(v) => v.iter().map(|v| v.v.clone()).collect(),
             None => match &self.initial_state {
@@ -791,9 +799,9 @@ impl SearchSpaceTrait for SearchSpace {
             path: PersistentList::new(),
             heuristic_cache: Mutex::new(FxHashMap::with_hasher(FxBuildHasher)),
         };
-        match self.timed_effects_action {
-            Some(action) => self.open_timed_effects_action(state, action),
-            None => Ok(state),
+        match self.timed_action {
+            Some(action) => self.open_timed_action(state, action),
+            None => Ok(Some(state)),
         }
     }
 
@@ -864,11 +872,14 @@ impl SearchSpaceTrait for SearchSpace {
         let mut todo: FxHashMap<Action, (usize, u32)> = FxHashMap::with_hasher(FxBuildHasher);
         let mut event_path: Vec<(Event, u32)> = Vec::new();
         let mut counter = 0;
-        let mut state = self.initial_state(None)?;
-        let til = self.timed_effects_action;
+        // A plan was found, so there is an initial state.
+        let mut state = self
+            .initial_state(None)?
+            .expect("build_plan: a plan implies an initial state");
+        let til = self.timed_action;
         let mut path = path;
         if let Some(action) = til {
-            // `initial_state` has already opened the timed-effects action and
+            // `initial_state` has already opened the timed action and
             // fired its first event, which therefore heads the path: replay
             // both here, with its start pinned to time 0, and the rest of the
             // path from there.

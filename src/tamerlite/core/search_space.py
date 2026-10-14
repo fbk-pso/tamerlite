@@ -758,8 +758,8 @@ class SearchSpaceABC(ABC):
     def initial_state(
         self,
         initial_state: list[ConstantNode] | None = None,
-    ) -> State:
-        pass
+    ) -> State | None:
+        """The initial state, or `None` if there is none: no plan exists."""
 
     @abstractmethod
     def get_successor_state(self, state: State, action: Action) -> State | None:
@@ -800,15 +800,15 @@ class SearchSpace(SearchSpaceABC):
         relevant_actions: list[Action] | None = None,
         deadline: Fraction | None = None,
         epsilon: Fraction | None = None,
-        timed_effects_action: Action | None = None,
+        timed_action: Action | None = None,
     ):
         self._actions_duration = actions_duration
         # The synthetic action carrying the problem's timed effects, one event
         # per instant they fire at (see `Encoder`). It is already running in
-        # every initial state (`_open_timed_effects_action`), can never be
+        # every initial state (`_open_timed_action`), can never be
         # opened again (`get_successor_state_with_compression`), and is left
         # out of the plan `build_plan` returns.
-        self._timed_effects_action = timed_effects_action
+        self._timed_action = timed_action
         self._events = events
         self._relevant_actions = (
             relevant_actions if relevant_actions is not None else list(actions)
@@ -887,7 +887,7 @@ class SearchSpace(SearchSpaceABC):
     def initial_state(
         self,
         initial_state: list[ConstantNode] | None = None,
-    ) -> State:
+    ) -> State | None:
         if self._is_temporal:
             tn = DeltaSimpleTemporalNetwork()
             if self._deadline is not None:
@@ -905,38 +905,35 @@ class SearchSpace(SearchSpaceABC):
             assert self._initial_state is not None
             initial_state = self._initial_state
         state = State(initial_state, tn, {}, MultiSet(), 0, [])
-        if self._timed_effects_action is None:
+        if self._timed_action is None:
             return state
-        return self._open_timed_effects_action(state)
+        return self._open_timed_action(state)
 
-    def _open_timed_effects_action(self, state: State) -> State:
-        """Opens the timed-effects action at time 0 and fires its first event.
+    def _open_timed_action(self, state: State) -> State | None:
+        """Opens the timed action at time 0 and fires its first event.
 
         Its start is pinned to `start_plan`, so every event sits exactly at the
-        absolute time of the timed effects it carries. Event 0 (at delay 0) is
-        fired right away rather than left to the search: its effects happen at
-        time 0 whatever the search does, and putting it in `path` orders every
-        later event that interferes with it strictly after it. It also keeps
-        every `todo` index at 1 or more, as `_open_action` does, which the
-        heuristics rely on.
+        absolute time of the timed effects and timed goals it carries. Event 0
+        (at delay 0) is fired right away rather than left to the search: it
+        happens at time 0 whatever the search does, and putting it in `path`
+        orders every later event that interferes with it strictly after it.
+        It also keeps every `todo` index at 1 or more, as `_open_action` does,
+        which the heuristics rely on.
 
-        With a deadline earlier than the last timed effect, the temporal
-        network is already inconsistent here: no plan can meet the deadline,
-        since UP's makespan includes every timed effect. The returned state is
-        then a dead end -- an inconsistent network stays inconsistent, so every
-        successor is rejected -- rather than an error.
+        Returns `None` when event 0 fails: a timed goal checked at time 0
+        doesn't hold, or a deadline earlier than the last timed event makes
+        the temporal network inconsistent (UP's makespan includes every timed
+        effect and timed goal). Nothing can happen before time 0, so then no
+        plan exists.
         """
-        action = self._timed_effects_action
+        action = self._timed_action
         assert action is not None
         events = self._events[action]
         new_state: State = state.clone()
         id = self._add_action_to_temporal_network(
             state, new_state, action, events, True
         )
-        # The timed-effects events are unconditional and nothing is active
-        # yet, so this only fails on an inconsistent temporal network.
-        self._expand_event(state, new_state, events[0][1], 0, id)
-        return new_state
+        return self._expand_event(state, new_state, events[0][1], 0, id)
 
     def get_successor_state(self, state: State, action: Action) -> State | None:
         return self.get_successor_state_with_compression(state, action, True)
@@ -944,7 +941,7 @@ class SearchSpace(SearchSpaceABC):
     def get_successor_state_with_compression(
         self, state: State, action: Action, enable_compression_safe_actions: bool
     ) -> State | None:
-        if action == self._timed_effects_action and action not in state.todo:
+        if action == self._timed_action and action not in state.todo:
             # Already opened in the initial state; once its last event has
             # fired there is nothing left to apply.
             return None
@@ -1174,12 +1171,14 @@ class SearchSpace(SearchSpaceABC):
         event_path: list[tuple[Event, int]] = []
         counter = 0
         state = self.initial_state()
-        if self._timed_effects_action is not None:
-            # `initial_state` has already opened the timed-effects action and
+        # A plan was found, so there is an initial state.
+        assert state is not None
+        if self._timed_action is not None:
+            # `initial_state` has already opened the timed action and
             # fired its first event, which therefore heads the path: replay
             # both here, with its start pinned to time 0, and the rest of the
             # path from there.
-            action = self._timed_effects_action
+            action = self._timed_action
             assert len(path) > 0 and path[0] == action
             path = path[1:]
             start, id, counter = self._add_action_to_plan_network(
@@ -1225,7 +1224,7 @@ class SearchSpace(SearchSpaceABC):
                 start, id, counter = self._add_action_to_plan_network(
                     tn, state, action, counter
                 )
-                if self._timed_effects_action is not None:
+                if self._timed_action is not None:
                     # Nothing starts before the timed effects' time 0.
                     tn.add(self._start_plan, start, Fraction(0))
 
@@ -1263,12 +1262,10 @@ class SearchSpace(SearchSpaceABC):
         start_time: dict[tuple[Action, int], Fraction] = {}
         end_time: dict[tuple[Action, int], Fraction] = {}
         origin = (
-            -tn.distances[self._start_plan]
-            if self._timed_effects_action is not None
-            else 0
+            -tn.distances[self._start_plan] if self._timed_action is not None else 0
         )
         for ev, dist in tn.distances.items():
-            if not isinstance(ev[1], bool) or ev[0] == self._timed_effects_action:
+            if not isinstance(ev[1], bool) or ev[0] == self._timed_action:
                 continue
 
             if ev[1]:

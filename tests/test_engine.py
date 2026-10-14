@@ -88,6 +88,11 @@ def _build_problems():
         problems_generator.get_problem_timed_effects_window(),
         problems_generator.get_problem_timed_effects_at_zero(),
         problems_generator.get_problem_timed_effects_fluent_value(),
+        problems_generator.get_problem_timed_effects_undefined_initial_value(),
+        problems_generator.get_problem_timed_goal_point(),
+        problems_generator.get_problem_timed_goal_window(),
+        problems_generator.get_problem_timed_goal_until_end(),
+        problems_generator.get_problem_timed_goal_with_timed_effect(),
     ]
 
     up_example_problems = list(
@@ -537,6 +542,7 @@ def test_heuristic_fixed_values():
             )
             ss: SearchSpaceABC = encoder.search_space
             init_state = ss.initial_state()
+            assert init_state is not None
 
             states = [init_state]
             for action_name in path:
@@ -596,6 +602,7 @@ def test_heuristic_values(problem, data_regression):
         )
         ss: SearchSpaceABC = encoder.search_space
         init_state = ss.initial_state()
+        assert init_state is not None
 
         states = generate_states(
             ss, init_state, num_states=max_generated_states(problem)
@@ -631,7 +638,7 @@ def test_heuristic_values(problem, data_regression):
                         internal_caching=internal_caching,
                         cache_value_in_state=False,
                         inadmissible_numeric_heuristic_variant=inadmissible_numeric_heuristic,
-                        timed_effects_action=encoder.timed_effects_action,
+                        timed_action=encoder.timed_action,
                     )
                     computed_values: list[int | None] = []
                     for state in states:
@@ -691,6 +698,7 @@ def test_heuristics_empty_goal(disable_rustamer):
     assert encoder.goal is not None
     ss: SearchSpaceABC = encoder.search_space
     init_state = ss.initial_state()
+    assert init_state is not None
     for heuristic_class in (HFF, HAdd, HMax, HMaxExplicit):
         heuristic: Heuristic = heuristic_class(
             encoder.actions,
@@ -724,6 +732,7 @@ def test_heuristics_constant_leaves(disable_rustamer):
     encoder = _constant_leaves_problem(with_goal=True)
     ss: SearchSpaceABC = encoder.search_space
     init_state = ss.initial_state()
+    assert init_state is not None
     op = testing_utils._op_tree
     p = make_fluent_node(encoder.fluent_ids["p"])
     q = make_fluent_node(encoder.fluent_ids["q"])
@@ -1026,6 +1035,7 @@ def test_search_space(problem, relevance_analysis):
         ss: SearchSpaceABC = encoder.search_space
 
         init_state = ss.initial_state()
+        assert init_state is not None
         backend = "python" if disable_rustamer else "rust"
         states[backend] = generate_states(
             ss, init_state, num_states=max_generated_states(problem)
@@ -1037,7 +1047,7 @@ def test_search_space(problem, relevance_analysis):
         state2 = states["rust"][i]
 
         assert len(state1.path) == len(state2.path)
-        # By id: the timed-effects action has no UP name.
+        # By id: the timed action has no UP name.
         actions1 = [e[0].idx for e in state1.path]
         actions2 = [e[0].idx for e in state2.path]
         assert actions1 == actions2
@@ -2035,7 +2045,9 @@ def test_temporal_no_start_event():
         assert noop in encoder.applicable_actions
 
         ss: SearchSpaceABC = encoder.search_space
-        succ_state = ss.get_successor_state(ss.initial_state(), noop)
+        init_state = ss.initial_state()
+        assert init_state is not None
+        succ_state = ss.get_successor_state(init_state, noop)
         assert succ_state is not None
 
         scheduled = ss.build_plan([noop])
@@ -2188,17 +2200,18 @@ def test_timed_effects_are_not_replayed_by_heuristics(disable_rustamer):
         relevance_analysis=False,
     )
     ss = encoder.search_space
-    timed_effects_action = encoder.timed_effects_action
-    assert timed_effects_action is not None
+    timed_action = encoder.timed_action
+    assert timed_action is not None
 
     init_state = ss.initial_state()
+    assert init_state is not None
     state = init_state
-    while timed_effects_action in state.todo:
-        succ_state = ss.get_successor_state(state, timed_effects_action)
+    while timed_action in state.todo:
+        succ_state = ss.get_successor_state(state, timed_action)
         assert succ_state is not None
         state = succ_state
     # Its events have all fired, and it can't be opened again.
-    assert ss.get_successor_state(state, timed_effects_action) is None
+    assert ss.get_successor_state(state, timed_action) is None
 
     assert encoder.goal is not None
     heuristic_classes: list[Callable[..., Heuristic]] = [HFF, HAdd, HMax, HMaxExplicit]
@@ -2211,7 +2224,7 @@ def test_timed_effects_are_not_replayed_by_heuristics(disable_rustamer):
             internal_caching=False,
             cache_value_in_state=False,
             inadmissible_numeric_heuristic_variant=False,
-            timed_effects_action=timed_effects_action,
+            timed_action=timed_action,
         )
         assert heuristic.eval(init_state, ss) is not None
         assert heuristic.eval(state, ss) is None
@@ -2258,13 +2271,69 @@ def test_conditional_timed_effects_are_not_supported():
     assert not tamerlite.engine.TamerLite.supports(problem.kind)
 
 
-def test_timed_goals_are_rejected():
-    """Timed goals are unsupported, and `supports` already rejects them; the
-    encoder rejects them too, since `UndefinedInitialNumericRemover` can add
-    some to a problem `supports` accepted."""
-    problem = problems_generator.get_problem_timed_effects_at_zero()
-    problem.add_timed_goal(GlobalStartTiming(1), problem.fluent("ready"))
-    assert not tamerlite.engine.TamerLite.supports(problem.kind)
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+@pytest.mark.parametrize("heuristic", HEURISTICS)
+@pytest.mark.parametrize(
+    "problem_factory",
+    [
+        problems_generator.get_problem_timed_goal_at_start_unsatisfied,
+        problems_generator.get_problem_timed_goal_window_too_early,
+        partial(
+            problems_generator.get_problem_timed_effects_undefined_initial_value,
+            measurable=False,
+        ),
+    ],
+    ids=["at_start_unsatisfied", "window_too_early", "undefined_unmeasurable"],
+)
+def test_timed_goals_unsatisfiable(disable_rustamer, heuristic, problem_factory):
+    """Timed goals that no plan can satisfy: one checked at time 0 against an
+    initial state that falsifies it (no valid initial state, with a single-event
+    timed action), a window opening before the goal can possibly hold, and
+    the timed goal `UndefinedInitialNumericRemover` adds for a fluent that
+    never gets a value."""
+    reload_tamerlite(disable_rustamer)
+    problem = problem_factory()
+    assert tamerlite.engine.TamerLite.supports(problem.kind)
+    search = tamerlite.SearchParams(heuristic=heuristic)
+    with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+        res = planner.solve(problem, timeout=60)
+    assert res.status == ResultStatus.UNSOLVABLE_INCOMPLETELY
+
+
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+def test_no_initial_state_when_a_goal_at_time_0_fails(disable_rustamer):
+    """A timed goal checked at time 0 that the initial state falsifies leaves
+    no valid initial state: `initial_state` returns `None`, and the search
+    reports no plan without expanding anything."""
+    reload_tamerlite(disable_rustamer)
+    from tamerlite.encoder import Encoder
+
+    problem = problems_generator.get_problem_timed_goal_at_start_unsatisfied()
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    encoder = Encoder(
+        ground_problem,
+        lifted_problem,
+        map_back_action_instance,
+        symmetry_breaking=False,
+        compression_safe_actions=False,
+        relevance_analysis=False,
+    )
+    assert encoder.search_space.initial_state() is None
+
+    with OneshotPlanner(name="tamerlite") as planner:
+        res = planner.solve(problem, timeout=60)
+    assert res.status == ResultStatus.UNSOLVABLE_INCOMPLETELY
+    assert res.metrics["expanded_states"] == "0"
+
+
+def test_timed_goals_starting_at_the_end_are_rejected():
+    """A timed goal whose interval starts at the end of the plan is not
+    supported (UP's own validator can't check one either): it is just a
+    goal."""
+    problem = problems_generator.get_problem_timed_goal_point()
+    problem.add_timed_goal(GlobalEndTiming(), problem.fluent("shipped"))
     lifted_problem, ground_problem, map_back_action_instance = (
         testing_utils.compile_problem(problem)
     )
@@ -2275,7 +2344,7 @@ def test_timed_goals_are_rejected():
 
         with pytest.raises(
             unified_planning.exceptions.UPUnsupportedProblemTypeError,
-            match="timed goals",
+            match="starting at the end of the plan",
         ):
             Encoder(
                 ground_problem,
@@ -2285,25 +2354,6 @@ def test_timed_goals_are_rejected():
                 compression_safe_actions=False,
                 relevance_analysis=False,
             )
-
-
-@pytest.mark.parametrize("disable_rustamer", [True, False])
-def test_timed_goals_from_undefined_initial_values_are_explained(disable_rustamer):
-    """A problem with no timed goals of its own can still get some from UP's
-    `UndefinedInitialNumericRemover`, when a timed effect reads a fluent with
-    no initial value. The error must say so, and name the fluent."""
-    reload_tamerlite(disable_rustamer)
-    problem = problems_generator.get_problem_timed_effects_undefined_initial_value()
-    assert not problem.timed_goals
-    assert tamerlite.engine.TamerLite.supports(problem.kind)
-    with (
-        OneshotPlanner(name="tamerlite") as planner,
-        pytest.raises(
-            unified_planning.exceptions.UPUnsupportedProblemTypeError,
-            match=r"timed effect reads a fluent with no initial value.*level",
-        ),
-    ):
-        planner.solve(problem, timeout=60)
 
 
 def test_symmetry_breaking_object_valued_fluents():
@@ -2878,6 +2928,7 @@ def test_interpreted_function_registry_reuses_func_id_for_shared_wrapper():
         )
         ss: SearchSpaceABC = encoder.search_space
         state = ss.initial_state()
+        assert state is not None
         # `f` reads `IF_int_to_int(ithree)`, evaluated once per encoding;
         # if a stale/aliased `func_id` were ever resolved this would raise
         # or evaluate against the wrong callable instead of quietly working.
@@ -3070,6 +3121,7 @@ def test_hmax_explicit_partial_callable_can_raise():
         )
         ss: SearchSpaceABC = encoder.search_space
         init_state = ss.initial_state()
+        assert init_state is not None
 
         heuristic_classes: list[Callable[..., Heuristic]] = [HFF, HAdd, HMax]
         for heuristic_class in heuristic_classes:
@@ -3232,6 +3284,7 @@ def test_interpreted_functions_real_return_backend_normalization():
             relevant_equality=False,
         )
         init_state = encoder.search_space.initial_state()
+        assert init_state is not None
         converter = Converter(
             ground_problem,
             fluent_ids=encoder.fluent_ids,
@@ -3796,6 +3849,7 @@ def test_interpreted_function_real_arg_int_normalization():
             relevance_analysis=False,
         )
         state = encoder.search_space.initial_state()
+        assert state is not None
 
         three_int = make_int_constant_node(3)
         three_real = make_rational_constant_node(3, 1)

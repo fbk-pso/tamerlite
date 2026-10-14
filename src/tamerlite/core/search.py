@@ -274,6 +274,9 @@ def _basic_search(
     logger.info("%s: timeout=%s early_termination=%s", name, timeout, early_termination)
     st = time.monotonic()
     init = ss.initial_state()
+    if init is None:
+        # No valid initial state (see `SearchSpace.initial_state`).
+        return None, {"expanded_states": str(0)}
     open: deque[State] = deque()
     expanded_states = 0
     generated_states = 1
@@ -351,6 +354,9 @@ def ehc_search(
     )
     st = time.monotonic()
     init = ss.initial_state()
+    if init is None:
+        # No valid initial state (see `SearchSpace.initial_state`).
+        return None, {"expanded_states": str(0)}
     expanded_states = 0
     generated_states = 1
     if early_termination and ss.goal_reached(init):
@@ -446,6 +452,9 @@ def _priority_search(
 
     st = time.monotonic()
     init = ss.initial_state()
+    if init is None:
+        # No valid initial state (see `SearchSpace.initial_state`).
+        return None, {"expanded_states": str(0)}
     dedup.is_new(init)  # seed; return discarded, the root is never re-checked
     expanded_states = 0
     generated_states = 1
