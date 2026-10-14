@@ -1766,7 +1766,7 @@ pub struct DeleteRelaxationHeuristicConfig {
     pub internal_caching: bool,
     pub inadmissible_numeric_heuristic_variant: bool,
     pub disable_numeric_reasoning: bool,
-    pub timed_effects_action: Option<Action>,
+    pub timed_action: Option<Action>,
 }
 
 /// The delete-relaxation heuristics hmax, hadd and hff, computed by a
@@ -1995,7 +1995,7 @@ impl DeleteRelaxationHeuristic {
                 )
                 .map_err(map_to_python_exception)?
                 {
-                    if i == 0 && Some(*a) == config.timed_effects_action {
+                    if i == 0 && Some(*a) == config.timed_action {
                         cond = ExpressionNode::Fluent(f);
                         continue;
                     }
@@ -2755,7 +2755,7 @@ impl HMaxExplicit {
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
-        timed_effects_action: Option<Action>,
+        timed_action: Option<Action>,
     ) -> PyResult<Self> {
         let mut operators = Vec::new();
         let mut extra_fluents = FxHashMap::with_hasher(FxBuildHasher);
@@ -2788,7 +2788,7 @@ impl HMaxExplicit {
                     }
                 }
                 if !conditions.contains(&vec![ExpressionNode::Bool(false)])
-                    && !(i == 0 && Some(*a) == timed_effects_action)
+                    && !(i == 0 && Some(*a) == timed_action)
                 {
                     let condition_expressions: Vec<Expression> = conditions
                         .iter()

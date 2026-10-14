@@ -504,30 +504,230 @@ def get_problem_timed_effects_fluent_value() -> Problem:
     return problem
 
 
-def get_problem_timed_effects_undefined_initial_value() -> Problem:
+def get_problem_timed_effects_undefined_initial_value(
+    measurable: bool = True,
+) -> Problem:
     """
     A timed effect reading `level`, which has no initial value. UP's
     `UndefinedInitialNumericRemover` then adds a timed goal requiring `level`
-    to be defined at time 2, which TamerLite doesn't support.
+    to be defined at time 2, so `measure` must happen before then. Without
+    `measure` (`measurable=False`), `level` never gets a value and the
+    problem is unsolvable.
     """
-    problem = Problem("timed_effects_undefined_initial_value")
+    problem = Problem(
+        "timed_effects_undefined_initial_value"
+        if measurable
+        else "timed_effects_undefined_initial_value_unmeasurable"
+    )
 
     level = Fluent("level", IntType())
     snapshot = Fluent("snapshot", IntType())
     done = Fluent("done", BoolType())
 
+    measured = Fluent("measured", BoolType())
+
+    # Neither action can repeat, which keeps the search space finite even
+    # without duplicate detection.
     finish = InstantaneousAction("finish")
     finish.add_precondition(GE(snapshot, 1))
+    finish.add_precondition(Not(done))
     finish.add_effect(done, True)
 
     problem.add_fluent(level)
     problem.add_fluent(snapshot, default_initial_value=0)
     problem.add_fluent(done, default_initial_value=False)
+    problem.add_fluent(measured, default_initial_value=False)
     problem.add_action(finish)
+
+    if measurable:
+        measure = InstantaneousAction("measure")
+        measure.add_precondition(Not(measured))
+        measure.add_effect(level, 3)
+        measure.add_effect(measured, True)
+        problem.add_action(measure)
 
     problem.add_timed_effect(GlobalStartTiming(2), snapshot, level)
 
     problem.add_goal(done)
+
+    return problem
+
+
+def get_problem_timed_goal_point() -> Problem:
+    """
+    A goal checked at one instant: the order must be `ready` at time 5, and
+    only `prepare`, which takes 3, makes it so. `ship` needs it ready too.
+    """
+    problem = Problem("timed_goal_point")
+
+    ready = Fluent("ready", BoolType())
+    shipped = Fluent("shipped", BoolType())
+
+    # Neither action can repeat, which keeps the search space finite even
+    # without duplicate detection.
+    prepare = DurativeAction("prepare")
+    prepare.set_fixed_duration(3)
+    prepare.add_condition(StartTiming(), Not(ready))
+    prepare.add_effect(EndTiming(), ready, True)
+
+    ship = InstantaneousAction("ship")
+    ship.add_precondition(ready)
+    ship.add_precondition(Not(shipped))
+    ship.add_effect(shipped, True)
+
+    problem.add_fluent(ready, default_initial_value=False)
+    problem.add_fluent(shipped, default_initial_value=False)
+    problem.add_action(prepare)
+    problem.add_action(ship)
+
+    problem.add_timed_goal(GlobalStartTiming(5), ready)
+    problem.add_goal(shipped)
+
+    return problem
+
+
+def get_problem_timed_goal_window() -> Problem:
+    """
+    A goal that must hold over a closed window, `[4, 9] powered`, while the
+    only way to the final goal, `maintain`, switches the power off while it
+    runs: it has to fit entirely before or after the window.
+    """
+    problem = Problem("timed_goal_window")
+
+    powered = Fluent("powered", BoolType())
+    maintained = Fluent("maintained", BoolType())
+
+    # Not repeatable, which keeps the search space finite even without
+    # duplicate detection.
+    maintain = DurativeAction("maintain")
+    maintain.set_fixed_duration(3)
+    maintain.add_condition(StartTiming(), Not(maintained))
+    maintain.add_effect(StartTiming(), powered, False)
+    maintain.add_effect(EndTiming(), powered, True)
+    maintain.add_effect(EndTiming(), maintained, True)
+
+    problem.add_fluent(powered, default_initial_value=True)
+    problem.add_fluent(maintained, default_initial_value=False)
+    problem.add_action(maintain)
+
+    problem.add_timed_goal(
+        ClosedTimeInterval(GlobalStartTiming(4), GlobalStartTiming(9)), powered
+    )
+    problem.add_goal(maintained)
+
+    return problem
+
+
+def get_problem_timed_goal_until_end() -> Problem:
+    """
+    A goal that must hold from time 1 until the end of the plan,
+    `[1, end] safe`. `rush` delivers at once but leaves things unsafe for
+    good, so the plan must use the slower `deliver` instead.
+    """
+    problem = Problem("timed_goal_until_end")
+
+    safe = Fluent("safe", BoolType())
+    delivered = Fluent("delivered", BoolType())
+
+    # Neither action can repeat, which keeps the search space finite even
+    # without duplicate detection.
+    rush = InstantaneousAction("rush")
+    rush.add_precondition(Not(delivered))
+    rush.add_effect(delivered, True)
+    rush.add_effect(safe, False)
+
+    deliver = DurativeAction("deliver")
+    deliver.set_fixed_duration(4)
+    deliver.add_condition(StartTiming(), Not(delivered))
+    deliver.add_effect(EndTiming(), delivered, True)
+
+    problem.add_fluent(safe, default_initial_value=True)
+    problem.add_fluent(delivered, default_initial_value=False)
+    problem.add_action(rush)
+    problem.add_action(deliver)
+
+    problem.add_timed_goal(
+        ClosedTimeInterval(GlobalStartTiming(1), GlobalEndTiming()), safe
+    )
+    problem.add_goal(delivered)
+
+    return problem
+
+
+def get_problem_timed_goal_with_timed_effect() -> Problem:
+    """
+    A goal and a timed effect at the same instant: `[5] lit` is checked on
+    the state before the timed effect switches the light off at 5, so the
+    light must be switched on before then, and the goal still holds.
+    """
+    problem = Problem("timed_goal_with_timed_effect")
+
+    lit = Fluent("lit", BoolType())
+    switched = Fluent("switched", BoolType())
+
+    # Not repeatable, which keeps the search space finite even without
+    # duplicate detection.
+    switch_on = DurativeAction("switch_on")
+    switch_on.set_fixed_duration(2)
+    switch_on.add_condition(StartTiming(), Not(switched))
+    switch_on.add_effect(StartTiming(), switched, True)
+    switch_on.add_effect(EndTiming(), lit, True)
+
+    problem.add_fluent(lit, default_initial_value=False)
+    problem.add_fluent(switched, default_initial_value=False)
+    problem.add_action(switch_on)
+
+    problem.add_timed_effect(GlobalStartTiming(5), lit, False)
+    problem.add_timed_goal(GlobalStartTiming(5), lit)
+
+    return problem
+
+
+def get_problem_timed_goal_at_start_unsatisfied() -> Problem:
+    """
+    Unsolvable: a goal checked at time 0, before anything can happen, that
+    the initial state doesn't satisfy. The timed action has a single event.
+    """
+    problem = Problem("timed_goal_at_start_unsatisfied")
+
+    ready = Fluent("ready", BoolType())
+    done = Fluent("done", BoolType())
+
+    finish = InstantaneousAction("finish")
+    finish.add_precondition(Not(done))
+    finish.add_effect(done, True)
+    finish.add_effect(ready, True)
+
+    problem.add_fluent(ready, default_initial_value=False)
+    problem.add_fluent(done, default_initial_value=False)
+    problem.add_action(finish)
+
+    problem.add_timed_goal(GlobalStartTiming(0), ready)
+    problem.add_goal(done)
+
+    return problem
+
+
+def get_problem_timed_goal_window_too_early() -> Problem:
+    """
+    Unsolvable: `[2, 4] ready` must hold over a window that starts before
+    `prepare`, which takes 5, can possibly have finished.
+    """
+    problem = Problem("timed_goal_window_too_early")
+
+    ready = Fluent("ready", BoolType())
+
+    prepare = DurativeAction("prepare")
+    prepare.set_fixed_duration(5)
+    prepare.add_condition(StartTiming(), Not(ready))
+    prepare.add_effect(EndTiming(), ready, True)
+
+    problem.add_fluent(ready, default_initial_value=False)
+    problem.add_action(prepare)
+
+    problem.add_timed_goal(
+        ClosedTimeInterval(GlobalStartTiming(2), GlobalStartTiming(4)), ready
+    )
 
     return problem
 
