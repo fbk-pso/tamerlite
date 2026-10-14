@@ -111,6 +111,9 @@ def _multiqueue_search(
     st = time.monotonic()
     opens = []
     init = ss.initial_state()
+    if init is None:
+        # No valid initial state (see `SearchSpace.initial_state`).
+        return None, {"expanded_states": str(0)}
     visited_states = VisitedStates(ss, weak_equality)
     visited_states.insert(init)
     states_expanded = 0

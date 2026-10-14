@@ -591,7 +591,11 @@ fn basic_search<S: SearchSpaceTrait>(
     );
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
     let start = SystemTime::now();
-    let init = ss.initial_state(None)?;
+    let Some(init) = ss.initial_state(None)? else {
+        // No valid initial state (see `SearchSpaceTrait::initial_state`).
+        metrics.insert("expanded_states", 0.to_string());
+        return Ok((None, metrics));
+    };
     let mut open = VecDeque::new();
     let mut expanded_states = 0;
     let mut generated_states = 1;
@@ -686,7 +690,12 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     );
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
     let start = SystemTime::now();
-    let init = Rc::new(ss.initial_state(None)?);
+    let Some(init) = ss.initial_state(None)? else {
+        // No valid initial state (see `SearchSpaceTrait::initial_state`).
+        metrics.insert("expanded_states", 0.to_string());
+        return Ok((None, metrics));
+    };
+    let init = Rc::new(init);
     let mut expanded_states = 0;
     let mut generated_states = 1;
 
@@ -844,7 +853,12 @@ where
 {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
     let start = SystemTime::now();
-    let init = <St::Payload as StatePayload>::wrap(ss.initial_state(None)?);
+    let Some(init) = ss.initial_state(None)? else {
+        // No valid initial state (see `SearchSpaceTrait::initial_state`).
+        metrics.insert("expanded_states", 0.to_string());
+        return Ok((None, metrics));
+    };
+    let init = <St::Payload as StatePayload>::wrap(init);
     let mut expanded_states: usize = 0;
     let mut generated_states: usize = 1;
 
