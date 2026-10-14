@@ -15,6 +15,7 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 
+import heapq
 import itertools
 import math
 from abc import ABC, abstractmethod
@@ -68,12 +69,93 @@ class LeafNode:
 HeuristicExpressionNode = AndNode | OrNode | LeafNode
 HeuristicExpression = tuple[HeuristicExpressionNode, ...]
 
+# A `HeuristicExpression` with its leaves replaced by dense condition ids
+# ("cids"), so evaluating it indexes a list instead of hashing an
+# `Expression`. A node is `(_LEAF, cid)`, `(_AND, num_operands)` or
+# `(_OR, num_operands)`.
+_LEAF = 0
+_AND = 1
+_OR = 2
+IndexedHeuristicExpression = tuple[tuple[int, int], ...]
+
+
+def _conjunction(*parts: IndexedHeuristicExpression) -> IndexedHeuristicExpression:
+    """The conjunction of `parts`, skipping empty ones."""
+    non_empty = [p for p in parts if len(p) > 0]
+    nodes = tuple(n for p in non_empty for n in p)
+    if len(non_empty) > 1:
+        nodes += ((_AND, len(non_empty)),)
+    return nodes
+
+
+def _expression_cost(
+    expr: IndexedHeuristicExpression, costs: list[float], hmax: bool
+) -> float:
+    """Cost of `expr` given the cost of each cid: AND is the sum (`max` for
+    hmax) and OR the minimum of its operands. `math.inf` means unreached and
+    propagates through both."""
+    if len(expr) == 0:
+        return 0.0
+    kind, v = expr[-1]
+    if kind == _LEAF:
+        return costs[v]
+
+    stack: list[float] = []
+    for kind, v in expr:
+        if kind == _LEAF:
+            stack.append(costs[v])
+        elif kind == _AND:
+            r = 0.0
+            for _ in range(v):
+                x = stack.pop()
+                r = max(r, x) if hmax else r + x
+            stack.append(r)
+        else:
+            r = math.inf
+            for _ in range(v):
+                x = stack.pop()
+                if x < r:
+                    r = x
+            stack.append(r)
+    assert len(stack) == 1
+    return stack[0]
+
+
+def _supporting_conditions(
+    expr: IndexedHeuristicExpression, costs: list[float]
+) -> list[int]:
+    """The cids supporting the hff cost of `expr`, i.e. the subgoals
+    relaxed-plan extraction backchains on: every operand of an AND, and only
+    the cheapest operand of an OR (the first one popped, on ties)."""
+    stack: list[tuple[float, list[int]]] = []
+    for kind, v in expr:
+        if kind == _LEAF:
+            stack.append((costs[v], [v]))
+        elif kind == _AND:
+            r = 0.0
+            leaves: list[int] = []
+            for _ in range(v):
+                x, ol = stack.pop()
+                r += x
+                leaves.extend(ol)
+            stack.append((r, leaves))
+        else:
+            r = math.inf
+            min_leaves: list[int] = []
+            for _ in range(v):
+                x, ol = stack.pop()
+                if x < r:
+                    r = x
+                    min_leaves = ol
+            stack.append((r, min_leaves))
+    assert len(stack) == 1
+    return stack[0][1]
+
 
 @dataclass(eq=True, frozen=True)
 class Operator:
     id: int
     action: Action = field(compare=False)
-    conditions: HeuristicExpression = field(compare=False)
     effects: tuple[tuple[Fluent, bool | ObjectNode], ...] = field(compare=False)
     constant_increase_effects: dict[Fluent, int | Fraction] = field(compare=False)
     constant_assign_effects: dict[Fluent, int | Fraction] = field(compare=False)
@@ -156,6 +238,29 @@ def get_event_conditions(event: Event) -> list[Expression]:
 
 
 class DeleteRelaxationHeuristic(Heuristic):
+    """The delete-relaxation heuristics hmax, hadd and hff, computed by a
+    Dijkstra fix-point over the operators.
+
+    Every leaf condition read by an operator or by the goal gets a dense cid
+    at construction; `_eval_core` initializes the cost of each cid from the
+    state, then pops operators from a min-heap in order of precondition cost,
+    expanding each one exactly once (no reopening) and updating the cost of
+    the conditions it achieves. The goal is a pseudo-operator `_goal_op`, and
+    the search stops as soon as it is popped -- except for hmax when some
+    operator achieves a simple numeric condition (`_drain_heap`). There, the
+    condition's cost (`rep * cost` plus the cheapest precondition cost among
+    the achievers expanded so far) can be lower than the cost of the operator
+    being expanded, so an operator popped after the goal can still lower the
+    goal's cost, and the heap is drained instead. Without such achievers
+    every relaxed cost exceeds its achiever's, costs pop in non-decreasing
+    order, and stopping at the goal is exact.
+
+    A precondition without OR nodes costs `math.inf` while any of its leaves
+    is unreached, so its cost is only computed once `unreached` (per
+    operator, counting distinct leaves) drops to 0; a precondition with an OR
+    node is recomputed whenever one of its leaves gets cheaper.
+    """
+
     def __init__(
         self,
         actions: list[Action],
@@ -174,6 +279,7 @@ class DeleteRelaxationHeuristic(Heuristic):
         self._events = events
         self._operators: list[Operator] = []
         self._extra_fluents: dict[Action, list[Fluent]] = {}
+        self._num_real_fluents = len(fluent_domains)
         self._num_fluents = len(fluent_domains)
         # Every bookkeeping fluent allocated below is a plain bool flag.
         # Giving them domains up front keeps `_object_domain` a *total*
@@ -189,6 +295,9 @@ class DeleteRelaxationHeuristic(Heuristic):
         )
         self._disable_numeric_reasoning = disable_numeric_reasoning
 
+        # Precondition of each operator, by operator id. Only used here, to
+        # build `_op_conditions`.
+        operator_conditions: list[HeuristicExpression] = []
         for a in actions:
             if a not in events:
                 continue
@@ -244,7 +353,6 @@ class DeleteRelaxationHeuristic(Heuristic):
                         Operator(
                             len(self._operators),
                             a,
-                            conditions,
                             tuple(effects),
                             constant_increase_effects,
                             constant_assign_effects,
@@ -252,40 +360,32 @@ class DeleteRelaxationHeuristic(Heuristic):
                             1.0,
                         )
                     )
+                    operator_conditions.append(conditions)
                 cond = FluentNode(f)
-        self._goals = self._simplify_condition(
+        goal_conditions = self._simplify_condition(
             self._convert_to_heuristic_expression(goals)
         )
         extra_goals: Expression = tuple(
             FluentNode(fe[-1]) for fe in self._extra_fluents.values()
         )
         extra_goals += (Op("and", tuple(range(len(extra_goals)))),)
-        self._extra_goals = self._convert_to_heuristic_expression(extra_goals)
+        extra_goal_conditions = self._convert_to_heuristic_expression(extra_goals)
 
-        self._precondition_of: dict[Expression, list[Operator]] = {}
         self._simple_numeric_conds: dict[
             Expression, tuple[list[Fluent], list[float]]
         ] = {}
         self._lt_simple_numeric_conds: set[Expression] = set()
         self._complex_numeric_conds: set[Expression] = set()
         self._if_conds: set[Expression] = set()
-        self._empty_pre_operators: list[Operator] = []
-        for o in self._operators:
-            if len(o.conditions) == 0:
-                self._empty_pre_operators.append(o)
-            else:
-                for node in o.conditions:
-                    if isinstance(node, LeafNode):
-                        if has_interpreted_function(node.expression):
-                            self._if_conds.add(node.expression)
-                        elif self._is_numeric_leaf_expression(node):
-                            self._update_numeric_conditions(node)
+        for conditions in operator_conditions:
+            for node in conditions:
+                if isinstance(node, LeafNode):
+                    if has_interpreted_function(node.expression):
+                        self._if_conds.add(node.expression)
+                    elif self._is_numeric_leaf_expression(node):
+                        self._update_numeric_conditions(node)
 
-                        if node.expression not in self._precondition_of:
-                            self._precondition_of[node.expression] = []
-                        self._precondition_of[node.expression].append(o)
-
-        for node in self._goals:
+        for node in goal_conditions:
             if isinstance(node, LeafNode):
                 if has_interpreted_function(node.expression):
                     self._if_conds.add(node.expression)
@@ -306,9 +406,156 @@ class DeleteRelaxationHeuristic(Heuristic):
             _, weights = self._simple_numeric_conds[simple_cond]
             weights[-1] += epsilon
 
+        self._build_indexed_structures(
+            operator_conditions, goal_conditions, extra_goal_conditions
+        )
+
         self._internal_caching: (
             dict[tuple[ConstantNode | None, ...], float | None] | None
         ) = {} if internal_caching else None
+
+    def _build_indexed_structures(
+        self,
+        operator_conditions: list[HeuristicExpression],
+        goal_conditions: HeuristicExpression,
+        extra_goal_conditions: HeuristicExpression,
+    ) -> None:
+        """Assign every leaf condition read by an operator or by the goal a
+        dense cid, and build the structures `_eval_core` indexes by it.
+
+        Args:
+            operator_conditions: The precondition of each operator, by id.
+            goal_conditions: The goal.
+            extra_goal_conditions: The bookkeeping goal of completing every
+                started durative action.
+        """
+        cids: dict[Expression, int] = {}
+        leaves: list[Expression] = []
+        cond_to_ops: list[list[int]] = []
+
+        def intern(e: Expression) -> int:
+            cid = cids.get(e)
+            if cid is None:
+                cid = len(leaves)
+                cids[e] = cid
+                leaves.append(e)
+                cond_to_ops.append([])
+            return cid
+
+        def add_reader(cid: int, op: int) -> None:
+            readers = cond_to_ops[cid]
+            # A leaf repeated within one expression registers its reader
+            # once: all of an expression's leaves are registered consecutively.
+            if len(readers) == 0 or readers[-1] != op:
+                readers.append(op)
+
+        def index_expression(
+            expr: HeuristicExpression, owner: int | None
+        ) -> IndexedHeuristicExpression:
+            nodes: list[tuple[int, int]] = []
+            for n in expr:
+                if isinstance(n, LeafNode):
+                    cid = intern(n.expression)
+                    if owner is not None:
+                        add_reader(cid, owner)
+                    nodes.append((_LEAF, cid))
+                elif isinstance(n, AndNode):
+                    nodes.append((_AND, n.num_operands))
+                else:
+                    nodes.append((_OR, n.num_operands))
+            return tuple(nodes)
+
+        # Precondition of every operator, plus the goal pseudo-operator's:
+        # the goal for hff, and the goal AND the bookkeeping goal of
+        # completing every started durative action for hadd/hmax.
+        self._op_conditions: list[IndexedHeuristicExpression] = [
+            index_expression(conditions, op)
+            for op, conditions in enumerate(operator_conditions)
+        ]
+        self._goal_op = len(self._operators)
+        self._indexed_goals = index_expression(goal_conditions, None)
+        extra_goals = index_expression(extra_goal_conditions, None)
+        if self._heuristic_kind == HeuristicKind.HFF:
+            goal_condition = self._indexed_goals
+        else:
+            goal_condition = _conjunction(self._indexed_goals, extra_goals)
+        for kind, v in goal_condition:
+            if kind == _LEAF:
+                add_reader(v, self._goal_op)
+        self._op_conditions.append(goal_condition)
+
+        # Per operator, the cids of its effects that some precondition reads.
+        self._op_effects: list[list[int]] = []
+        for o in self._operators:
+            effects = []
+            for f, e in o.effects:
+                if e is True:
+                    k: Expression = (FluentNode(f),)
+                elif e is False:
+                    k = (FluentNode(f), Op("not", (0,)))
+                else:
+                    k = (FluentNode(f), e, Op("==", (0, 1)))
+                if k in cids:
+                    effects.append(cids[k])
+            self._op_effects.append(effects)
+
+        # Per operator, `(cid, fluents, weights)` of every simple numeric
+        # condition it achieves.
+        self._op_numeric_conds: list[list[tuple[int, list[Fluent], list[float]]]] = [
+            [(cids[c], *self._simple_numeric_conds[c]) for c in conds]
+            for conds in self._achieved_simple_numeric_conds
+        ]
+        # Whether `_eval_core` drains the heap instead of stopping at
+        # `_goal_op`: hmax with some operator achieving a simple numeric
+        # condition.
+        self._drain_heap = self._heuristic_kind == HeuristicKind.HMAX and any(
+            len(conds) > 0 for conds in self._op_numeric_conds
+        )
+
+        # Per action with events, the cid of each of its bookkeeping fluents:
+        # the one matching the action's progress in `state.todo` has cost 0.
+        self._extra_fluent_cids: list[tuple[Action, list[int]]] = [
+            (a, [intern((FluentNode(f),)) for f in fluents])
+            for a, fluents in self._extra_fluents.items()
+        ]
+
+        # Classify each cid by how its initial cost is computed from the
+        # state. Bookkeeping fluents are initialized from `state.todo`
+        # instead, and any other cid is reached only through effects.
+        self._evaluated_conds: list[tuple[int, Expression, float]] = []
+        self._true_fluent_conds: list[tuple[int, int]] = []
+        self._false_fluent_conds: list[tuple[int, int]] = []
+        self._equality_conds: list[tuple[int, int, ExpressionNode]] = []
+        for cid, leaf in enumerate(leaves):
+            if leaf in self._if_conds or leaf in self._complex_numeric_conds:
+                self._evaluated_conds.append((cid, leaf, 1.0))
+            elif leaf in self._simple_numeric_conds:
+                self._evaluated_conds.append((cid, leaf, math.inf))
+            elif (
+                isinstance(leaf[0], FluentNode)
+                and leaf[0].fluent.idx < self._num_real_fluents
+            ):
+                idx = leaf[0].fluent.idx
+                if len(leaf) == 1:
+                    self._true_fluent_conds.append((cid, idx))
+                elif len(leaf) == 2 and leaf[1] == Op("not", (0,)):
+                    self._false_fluent_conds.append((cid, idx))
+                elif len(leaf) == 3 and leaf[2] == Op("==", (0, 1)):
+                    self._equality_conds.append((cid, idx, leaf[1]))
+
+        self._cond_to_ops = cond_to_ops
+        self._num_conds = len(leaves)
+        # Per operator (including `_goal_op`): the number of distinct leaves
+        # of its precondition -- `add_reader` registers each (cid, operator)
+        # pair once -- and whether the precondition has an OR node.
+        self._op_distinct_leaves = [0] * len(self._op_conditions)
+        for readers in cond_to_ops:
+            for op in readers:
+                self._op_distinct_leaves[op] += 1
+        self._op_contains_or_node = [
+            any(kind == _OR for kind, _ in conditions)
+            for conditions in self._op_conditions
+        ]
 
     @property
     def name(self) -> str:
@@ -1018,7 +1265,8 @@ class DeleteRelaxationHeuristic(Heuristic):
                 action_operators[o.action] += 1
 
         action_reachable_operators = {}
-        for o in reachable_operators:
+        for op in reachable_operators:
+            o = self._operators[op]
             if o.action not in action_reachable_operators:
                 action_reachable_operators[o.action] = 1
             else:
@@ -1048,7 +1296,7 @@ class DeleteRelaxationHeuristic(Heuristic):
 
     def _eval_core(
         self, state: State, reachability_analysis: bool = False
-    ) -> tuple[float | None, list[Operator] | None]:
+    ) -> tuple[float | None, list[int] | None]:
         """Compute the heuristic value for a given state.
 
         This method evaluates the state using the selected delete-relaxation heuristic,
@@ -1057,7 +1305,8 @@ class DeleteRelaxationHeuristic(Heuristic):
 
         If `reachability_analysis` is enabled, the method performs reachability
         analysis instead of computing the heuristic value and returns the set of
-        reachable operators.
+        reachable operators: the heap is then drained instead of stopping at
+        the goal.
 
         Args:
             state: The state to evaluate.
@@ -1067,134 +1316,111 @@ class DeleteRelaxationHeuristic(Heuristic):
         Returns:
             A tuple containing:
                 - heuristic: The heuristic value as a float, or `None` if not computed.
-                - reachable_operators: A list of reachable `Operator` instances if
+                - reachable_operators: The indices of the reachable operators if
                     `reachability_analysis` is True; otherwise `None`.
         """
 
-        costs: dict[Expression, float] = {}
-        for idx, v in enumerate(state.assignments):
-            f = Fluent(idx)
-            if v is True:
-                k: Expression = (FluentNode(f),)
-            elif v is False:
-                k = (FluentNode(f), Op("not", (0,)))
-            else:
-                k = (FluentNode(f), v, Op("==", (0, 1)))
-            costs[k] = 0.0
+        hmax = self._heuristic_kind == HeuristicKind.HMAX
+        hff = self._heuristic_kind == HeuristicKind.HFF
+        cond_cost = self._initial_condition_costs(state)
+        num_ops = self._goal_op + 1
+        op_cost = [math.inf] * num_ops
+        closed = [False] * num_ops
+        # hmax only: per cid, the minimum precondition cost among the
+        # operators expanded so far that achieve it numerically.
+        min_achiever_pre_cost = [math.inf] * self._num_conds if hmax else []
+        # hff only: per cid, the operator that achieved its current cost.
+        reached_by = [-1] * self._num_conds if hff else []
 
-        for cond in self._simple_numeric_conds:
-            if evaluate(cond, state):
-                costs[cond] = 0.0
-        for cond in self._complex_numeric_conds:
-            if evaluate(cond, state):
-                costs[cond] = 0.0
-            else:
-                costs[cond] = 1.0
-        for cond in self._if_conds:
-            if evaluate(cond, state):
-                costs[cond] = 0.0
-            else:
-                costs[cond] = 1.0
+        # Ordered by `(cost, op)`, a total order, so the pop sequence depends
+        # only on the entries pushed.
+        heap: list[tuple[float, int]] = []
+        # Per operator, how many distinct leaves of its precondition are
+        # still unreached.
+        unreached = self._op_distinct_leaves.copy()
+        for cid, readers in enumerate(self._cond_to_ops):
+            if cond_cost[cid] < math.inf:
+                for reader in readers:
+                    unreached[reader] -= 1
+        for op, conditions in enumerate(self._op_conditions):
+            if not self._op_contains_or_node[op] and unreached[op] > 0:
+                continue
+            c = _expression_cost(conditions, cond_cost, hmax)
+            if c < math.inf:
+                op_cost[op] = c
+                heap.append((c, op))
+        heapq.heapify(heap)
 
-        for a in self._events:
-            j, _ = state.todo.get(a, (None, None))
-            if j is None:
-                f = self._extra_fluents[a][-1]
-            else:
-                f = self._extra_fluents[a][j - 1]
-            x = (FluentNode(f),)
-            costs[x] = 0.0
+        def update_condition_cost(cid: int, cost: float, op: int) -> None:
+            """Lower the cost of `cid` to `cost`, achieved by operator `op`,
+            if that improves it, and update the cost of every operator
+            reading it that is still open. On a tie, hff's `reached_by`
+            prefers the operator with the larger id."""
+            if cost < cond_cost[cid]:
+                first_reach = cond_cost[cid] == math.inf
+                cond_cost[cid] = cost
+                if hff:
+                    reached_by[cid] = op
+                for reader in self._cond_to_ops[cid]:
+                    if closed[reader]:
+                        continue
+                    if first_reach:
+                        unreached[reader] -= 1
+                    if not self._op_contains_or_node[reader] and unreached[reader] > 0:
+                        # still `math.inf`: some other leaf is unreached
+                        continue
+                    reader_cost = _expression_cost(
+                        self._op_conditions[reader], cond_cost, hmax
+                    )
+                    if reader_cost < op_cost[reader]:
+                        op_cost[reader] = reader_cost
+                        heapq.heappush(heap, (reader_cost, reader))
+            elif hff and cost == cond_cost[cid] and op > reached_by[cid]:
+                reached_by[cid] = op
 
-        lp = list(costs.keys())
-        reached_by: dict[Expression, tuple[Operator, list[Expression]]] = {}
-        operator_cost: dict[Operator, float] = {}
-        poss: dict[Expression, set[Operator]] = {}
-        while len(lp) > 0:
-            lo = list(self._empty_pre_operators)
-            for p in lp:
-                if p in self._precondition_of:
-                    lo.extend(self._precondition_of[p])
-            lp = []
-            new_costs: dict[Expression, float] = {}
-            for o in set(lo):
-                c, leaves = self._cost(o.conditions, costs)
-                if c is not None and (o not in operator_cost or operator_cost[o] > c):
-                    operator_cost[o] = c
+        drain = reachability_analysis or self._drain_heap
+        while len(heap) > 0:
+            popped_cost, op = heapq.heappop(heap)
+            if closed[op] or popped_cost != op_cost[op]:
+                # stale entry, superseded by a cheaper push
+                continue
+            closed[op] = True
+            if op == self._goal_op:
+                if drain:
+                    continue
+                break
 
-                    achieved_expressions = []
-                    for f, e in o.effects:
-                        if e is True:
-                            k: Expression = (FluentNode(f),)
-                        elif e is False:
-                            k = (FluentNode(f), Op("not", (0,)))
-                        else:
-                            k = (FluentNode(f), e, Op("==", (0, 1)))
-                        achieved_expressions.append((k, o.cost + c))
+            # Update the cost of every condition achieved by `op`: its
+            # effects, and the simple numeric conditions it achieves.
+            o = self._operators[op]
+            precondition_cost = op_cost[op]
+            for cid in self._op_effects[op]:
+                update_condition_cost(cid, o.cost + precondition_cost, op)
+            for cid, fluents, weights in self._op_numeric_conds[op]:
+                if cond_cost[cid] == 0.0:
+                    # condition satisfied in state
+                    continue
 
-                    for simple_cond in self._achieved_simple_numeric_conds[o.id]:
-                        if costs.get(simple_cond) == 0.0:
-                            # condition satisfied in state
-                            continue
+                rep = self._repetitions(o, fluents, weights, state)
+                assert rep is not None
 
-                        rep = self._repetitions(o, simple_cond, state)
-                        assert rep is not None
-
-                        if self._heuristic_kind == HeuristicKind.HMAX:
-                            if simple_cond not in poss:
-                                poss[simple_cond] = set()
-                            poss[simple_cond].add(o)
-
-                            exp_cost = float(rep) * o.cost + min(  # type: ignore[operator,type-var]
-                                self._cost(o.conditions, costs)[0]
-                                for o in poss[simple_cond]
-                            )
-                        else:
-                            exp_cost = float(rep) * o.cost + c
-                        achieved_expressions.append((simple_cond, exp_cost))
-
-                    for exp, exp_cost in achieved_expressions:
-                        if exp in new_costs:
-                            prev_exp_cost = new_costs[exp]
-                        elif exp in costs:
-                            prev_exp_cost = costs[exp]
-                        else:
-                            prev_exp_cost = None
-
-                        if prev_exp_cost is None or exp_cost < prev_exp_cost:
-                            if self._heuristic_kind == HeuristicKind.HFF:
-                                reached_by[exp] = (o, leaves)
-                            new_costs[exp] = exp_cost
-                        elif (
-                            prev_exp_cost == exp_cost
-                            and self._heuristic_kind == HeuristicKind.HFF
-                            and o.id > reached_by[exp][0].id
-                        ):
-                            reached_by[exp] = (o, leaves)
-
-            lp = list(new_costs.keys())
-            costs.update(new_costs)
+                if hmax:
+                    if precondition_cost < min_achiever_pre_cost[cid]:
+                        min_achiever_pre_cost[cid] = precondition_cost
+                    cost = float(rep) * o.cost + min_achiever_pre_cost[cid]
+                else:
+                    cost = float(rep) * o.cost + precondition_cost
+                update_condition_cost(cid, cost, op)
 
         if reachability_analysis:
-            return None, list(operator_cost.keys())
+            return None, [op for op in range(self._goal_op) if op_cost[op] < math.inf]
 
-        h, _ = self._cost(self._goals, costs)
-        if h is None:
+        h = _expression_cost(self._op_conditions[self._goal_op], cond_cost, hmax)
+        if h == math.inf:
             return None, None
 
-        if self._heuristic_kind != HeuristicKind.HFF:
-            eh, _ = self._cost(self._extra_goals, costs)
-            if eh is None:
-                # A started-but-unfinished action's remaining events require
-                # a condition that the relaxation can never achieve (e.g. a
-                # numeric condition on a fluent no effect can increase
-                # enough) -- this action can never be completed even in the
-                # relaxed problem, so, like an unreachable goal, the state is
-                # a genuine dead end.
-                return None, None
-
-            res = max(h, eh) if self._heuristic_kind == HeuristicKind.HMAX else h + eh
-
-            return res, None
+        if not hff:
+            return h, None
 
         res = 0
         for a, (j, _) in state.todo.items():
@@ -1204,24 +1430,47 @@ class DeleteRelaxationHeuristic(Heuristic):
             return float(res), None
 
         relaxed_plan = set()
-        stack = list(set(self._cost(self._goals, costs)[1]))
-        visited_expressions = set()
+        stack = _supporting_conditions(self._indexed_goals, cond_cost)
+        visited = set(stack)
         while len(stack) > 0:
             g = stack.pop()
-            if g not in reached_by:
+            op = reached_by[g]
+            if op < 0:
                 continue
-            o, leaves = reached_by[g]
-            relaxed_plan.add(o.action)
-            for exp in leaves:
-                if exp not in visited_expressions:
-                    visited_expressions.add(exp)
-                    stack.append(exp)
+            relaxed_plan.add(self._operators[op].action)
+            for cid in _supporting_conditions(self._op_conditions[op], cond_cost):
+                if cid not in visited:
+                    visited.add(cid)
+                    stack.append(cid)
 
         for a in relaxed_plan:
             if a not in state.todo:
                 res += len(self._events[a])
 
         return float(res), None
+
+    def _initial_condition_costs(self, state: State) -> list[float]:
+        """The cost of every cid in `state`: 0 if it holds there (1 for a
+        complex numeric or interpreted-function condition that does not), and
+        `math.inf` (unreached) otherwise."""
+        cond_cost = [math.inf] * self._num_conds
+        for cid, cond, false_cost in self._evaluated_conds:
+            cond_cost[cid] = 0.0 if evaluate(cond, state) else false_cost
+        assignments = state.assignments
+        for cid, idx in self._true_fluent_conds:
+            if assignments[idx] is True:
+                cond_cost[cid] = 0.0
+        for cid, idx in self._false_fluent_conds:
+            if assignments[idx] is False:
+                cond_cost[cid] = 0.0
+        for cid, idx, v in self._equality_conds:
+            value = assignments[idx]
+            if not isinstance(value, bool) and value == v:
+                cond_cost[cid] = 0.0
+        for a, cids in self._extra_fluent_cids:
+            j, _ = state.todo.get(a, (None, None))
+            cond_cost[cids[-1] if j is None else cids[j - 1]] = 0.0
+        return cond_cost
 
     def _achieves(self, operator: Operator, simple_condition: Expression) -> bool:
         """Check whether an operator achieves a given simple numeric condition.
@@ -1264,7 +1513,11 @@ class DeleteRelaxationHeuristic(Heuristic):
         return net_effect < 0.0
 
     def _repetitions(
-        self, operator: Operator, simple_condition: Expression, state: State
+        self,
+        operator: Operator,
+        fluents: list[Fluent],
+        weights: list[float],
+        state: State,
     ) -> int | None:
         """Estimate operator applications needed to satisfy a simple numeric condition.
 
@@ -1279,7 +1532,8 @@ class DeleteRelaxationHeuristic(Heuristic):
 
         Args:
             operator: The operator whose effects are being evaluated.
-            simple_condition: A simple numeric condition expression.
+            fluents: The fluents of a simple numeric condition.
+            weights: The weight of each of `fluents`, with the constant term last.
             state: The state on which the condition is evaluated.
 
         Returns:
@@ -1288,7 +1542,6 @@ class DeleteRelaxationHeuristic(Heuristic):
             or `None` if the condition cannot be satisfied.
         """
 
-        fluents, weights = self._simple_numeric_conds[simple_condition]
         v = weights[-1]
         for f, w in zip(fluents, weights, strict=False):
             v += w * state.get_value(f)  # type: ignore[operator]
@@ -1320,71 +1573,6 @@ class DeleteRelaxationHeuristic(Heuristic):
             return None
 
         return math.ceil(-v / net_effect)
-
-    def _cost(
-        self, exp: HeuristicExpression, costs: dict[Expression, float]
-    ) -> tuple[float | None, list[Expression]]:
-        """
-        Calculate the cost of an expression along with the leaf expressions that
-        contributed to the computed cost.
-
-        Leaf expressions are collected according to the type of node:
-        - AND nodes: all leaf expressions from the operands are included
-        - OR nodes: only the leaf expressions from the operand with the minimum cost
-          are included
-
-        Args:
-            exp (HeuristicExpression): The expression to evaluate.
-            costs (Dict[Expression, float]): A mapping from leaf expressions to their
-                costs.
-
-        Returns:
-            Tuple[Optional[float], List[Expression]]:
-                - The total cost of the expression
-                - A list of leaf expressions that were considered in computing the cost
-        """
-
-        if isinstance(exp[-1], LeafNode):
-            return costs.get(exp[-1].expression), [exp[-1].expression]
-
-        res: list[tuple[float | None, list[Expression]]] = []
-        for node in exp:
-            if isinstance(node, LeafNode):
-                res.append((costs.get(node.expression), [node.expression]))
-            elif isinstance(node, AndNode):
-                v = 0.0
-                leaves = []
-                all_defined = True
-                operands_values = [res.pop() for i in range(node.num_operands)]
-                for ov, ol in operands_values:
-                    if ov is not None:
-                        if self._heuristic_kind == HeuristicKind.HMAX:
-                            v = max(v, ov)
-                        else:
-                            v += ov
-                            leaves.extend(ol)
-                    else:
-                        all_defined = False
-                        leaves = []
-                        break
-                res.append((v if all_defined else None, leaves))
-            elif isinstance(node, OrNode):
-                operands_values = [res.pop() for _ in range(node.num_operands)]
-                operands_values = [
-                    (ov, ol) for ov, ol in operands_values if ov is not None
-                ]
-                if len(operands_values) > 0:
-                    mv, ml = operands_values[0]
-                    for ov, ol in operands_values:
-                        if ov < mv:  # type: ignore[operator]
-                            mv = ov
-                            ml = ol
-                    res.append((mv, ml))
-                else:
-                    res.append((None, []))
-
-        assert len(res) == 1
-        return res[-1]
 
 
 def HFF(
