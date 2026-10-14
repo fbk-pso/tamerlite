@@ -383,7 +383,12 @@ fn convert_to_heuristic_expression(
 
     while let Some((idx, processed)) = stack.pop() {
         match &expr[idx] {
-            ExpressionNode::Bool(_)
+            // `true` is not a fact the cost table can hold, so as a leaf it
+            // would cost `None`: it is the empty conjunction (cost 0). A
+            // `false` leaf is never in the table either, which is correct.
+            // Mirrors `_convert_to_heuristic_expression` in the Python core.
+            ExpressionNode::Bool(true) => result.push(HeuristicExpressionNode::And(0)),
+            ExpressionNode::Bool(false)
             | ExpressionNode::Int(_)
             | ExpressionNode::Rational(_)
             | ExpressionNode::Object(_)

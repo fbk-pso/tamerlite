@@ -697,6 +697,109 @@ def test_heuristic_values(problem, data_regression):
     data_regression.check(values)
 
 
+def _constant_leaves_problem(with_goal: bool) -> Encoder:
+    """Bool fluents `p` (false, no achiever), `q` (false, achieved by `a`) and
+    `r`, encoded without relevance analysis so every fluent keeps a slot."""
+    p = Fluent("p", BoolType())
+    q = Fluent("q", BoolType())
+    r = Fluent("r", BoolType())
+    a = InstantaneousAction("a")
+    a.add_effect(q, True)
+    problem = Problem("constant_leaves")
+    for f in (p, q, r):
+        problem.add_fluent(f, default_initial_value=False)
+    problem.add_action(a)
+    if with_goal:
+        problem.add_goal(q)
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    return Encoder(
+        ground_problem,
+        lifted_problem,
+        map_back_action_instance,
+        symmetry_breaking=False,
+        compression_safe_actions=False,
+        relevance_analysis=False,
+        relevant_equality=False,
+    )
+
+
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+def test_heuristics_empty_goal(disable_rustamer):
+    """A problem with no goals has the constant `True` as goal, which must cost
+    0 (not "unreachable") for every heuristic on both backends."""
+
+    reload_tamerlite(disable_rustamer)
+    from tamerlite.core import HFF, HAdd, HMax, HMaxExplicit
+
+    encoder = _constant_leaves_problem(with_goal=False)
+    assert encoder.goal is not None
+    ss: SearchSpaceABC = encoder.search_space
+    init_state = ss.initial_state()
+    for heuristic_class in (HFF, HAdd, HMax, HMaxExplicit):
+        heuristic: Heuristic = heuristic_class(
+            encoder.actions,
+            encoder.fluent_domains,
+            encoder.events,
+            encoder.goal,
+            internal_caching=False,
+            cache_value_in_state=False,
+            inadmissible_numeric_heuristic_variant=False,
+        )
+        assert heuristic.eval(init_state, ss) == 0, heuristic_class.__name__
+
+
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+def test_heuristics_constant_leaves(disable_rustamer):
+    """Boolean constants nested in a goal handed directly to the
+    delete-relaxation heuristics (bypassing the encoder's constant folding)
+    cost like the empty conjunction (`True`) and disjunction (`False`), not
+    like a fact that is never in the cost table."""
+
+    reload_tamerlite(disable_rustamer)
+    from tamerlite.core import (
+        HFF,
+        HAdd,
+        HMax,
+        make_bool_constant_node,
+        make_fluent_node,
+        make_operator_node,
+    )
+
+    encoder = _constant_leaves_problem(with_goal=True)
+    ss: SearchSpaceABC = encoder.search_space
+    init_state = ss.initial_state()
+    op = testing_utils._op_tree
+    p = make_fluent_node(encoder.fluent_ids["p"])
+    q = make_fluent_node(encoder.fluent_ids["q"])
+    true = make_bool_constant_node(True)
+    false = make_bool_constant_node(False)
+
+    def h(heuristic_class, tree):
+        goal = testing_utils._flatten_expression_tree(tree, make_operator_node)
+        heuristic: Heuristic = heuristic_class(
+            encoder.actions,
+            encoder.fluent_domains,
+            encoder.events,
+            goal,
+            internal_caching=False,
+            cache_value_in_state=False,
+            inadmissible_numeric_heuristic_variant=False,
+        )
+        return heuristic.eval(init_state, ss)
+
+    for heuristic_class in (HFF, HAdd, HMax):
+        name = heuristic_class.__name__
+        h_q = h(heuristic_class, q)
+        assert h_q == 1, name
+        assert h(heuristic_class, true) == 0, name
+        assert h(heuristic_class, op("or", p, true)) == 0, name
+        assert h(heuristic_class, op("and", q, true)) == h_q, name
+        assert h(heuristic_class, op("or", p, false)) is None, name
+        assert h(heuristic_class, false) is None, name
+
+
 def _weak_sym_compression_cases():
     """(problem, weak_equality, symmetry_breaking, compression_safe_actions) tuples;
     temporal problems additionally vary weak_equality and compression_safe_actions."""
