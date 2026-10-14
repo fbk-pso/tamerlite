@@ -345,6 +345,19 @@ The invariant is exercised by `problems_generator.get_problem_object_equality_fl
 the empty-domain-intersection case) via `tests/test_engine.py`'s
 cross-backend/cross-heuristic parametrization.
 
+**The constant `True` never becomes a leaf of a `HeuristicExpression`.** The
+delete relaxation's per-evaluation cost table only holds *facts* (current
+literals, satisfied numeric/interpreted-function conditions, action-progress
+flags, operator achievements), so a `True` leaf would cost `None`
+("unreachable") -- which made a goal-less problem (goal `(True,)`) a dead end
+for `hff`/`hadd`/`hmax`. `_convert_to_heuristic_expression`/
+`convert_to_heuristic_expression` therefore map `True` to an empty `And` (cost
+0). A `False` leaf stays a leaf: it is never in the table either, so it
+already costs `None`, which is correct. This is construction-time only --
+don't seed `(True,)` into `costs` per evaluation instead, that puts work on
+the hot path. Pinned by
+`tests/test_engine.py::test_heuristics_empty_goal`/`test_heuristics_constant_leaves`.
+
 ### Problem encoding ([src/tamerlite/encoder.py](src/tamerlite/encoder.py))
 
 `Encoder` bridges Unified Planning and TamerLite's internal search space:

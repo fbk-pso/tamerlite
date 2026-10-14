@@ -678,7 +678,12 @@ class DeleteRelaxationHeuristic(Heuristic):
             idx, processed = stack.pop()
             e = exp[idx]
 
-            if isinstance(e, (bool, int, Fraction, ObjectNode, FluentNode)):
+            if e is True:
+                # `True` is not a fact the cost table can hold, so as a leaf it
+                # would cost `None`: it is the empty conjunction (cost 0). A
+                # `False` leaf is never in the table either, which is correct.
+                result.append(AndNode(0))
+            elif isinstance(e, (bool, int, Fraction, ObjectNode, FluentNode)):
                 result.append(LeafNode((e,)))
             elif isinstance(e, Op) and e.kind == "and":
                 if not processed:
