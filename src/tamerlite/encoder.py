@@ -127,9 +127,14 @@ class Encoder:
         if_cache: MutableMapping[tuple[InterpretedFunction, tuple], Any] | None = None,
         if_wrappers: dict[InterpretedFunction, Callable] | None = None,
         lifted_problem_kind: up.model.ProblemKind | None = None,
+        preserve_plan_quality: bool = True,
     ):
         self._problem = problem
         self._lifted_problem = lifted_problem
+        # Whether symmetry breaking must keep an optimal plan rather than just
+        # some plan: when set, objects the quality metric tells apart are
+        # never equivalent.
+        self._preserve_plan_quality = preserve_plan_quality
         self._map_back_action_instance = map_back_action_instance
         self._lifted_problem_kind = lifted_problem_kind
         if full:
@@ -802,20 +807,22 @@ class Encoder:
 
     def _extract_domain_objects(self) -> set[UPObject]:
         """
-        Extract all objects that appear in the problem's domain or in its
-        quality metrics.
+        Extract all objects that appear in the problem's lifted actions and,
+        when `preserve_plan_quality` is set, in its quality metrics.
 
-        `domain_constants` covers the metrics too, except the `default` of
-        `MinimizeActionCosts`, so the metric expressions are scanned here as
-        well.
+        A metric only ranks plans, so it matters only when symmetry breaking
+        must keep an optimal plan; it can't make a swapped plan invalid.
 
         Returns:
-            Set[UPObject]: A set of all objects that appear in the domain or
-            in a quality metric.
+            Set[UPObject]: A set of all objects that appear in a lifted
+            action, or in a quality metric if those are considered.
         """
 
-        objects = set(self._lifted_problem.domain_constants)
-        for exp in self._iter_metric_expressions():
+        expressions: list[FNode] = list(self._iter_lifted_action_expressions())
+        if self._preserve_plan_quality:
+            expressions.extend(self._iter_metric_expressions())
+        objects: set[UPObject] = set()
+        for exp in expressions:
             objects.update(extract_objects(exp))
         return objects
 
@@ -844,7 +851,8 @@ class Encoder:
         ifun_calls: set[FNode] = set()
         extractor = self._lifted_problem.environment.interpreted_functions_extractor
         expressions: list[FNode] = list(self._iter_lifted_action_expressions())
-        expressions.extend(self._iter_metric_expressions())
+        if self._preserve_plan_quality:
+            expressions.extend(self._iter_metric_expressions())
         expressions.extend(self._lifted_problem.goals)
         for goals in self._lifted_problem.timed_goals.values():
             expressions.extend(goals)
