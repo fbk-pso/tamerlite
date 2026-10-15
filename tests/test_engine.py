@@ -1259,6 +1259,81 @@ def test_anytime_planner(problem, weak_equality, symmetry_breaking, disable_rust
                 break
 
 
+def _incomplete_search_cases():
+    """`(id, params factory, expected final status)`; factories, since
+    `reload_tamerlite` replaces the `tamerlite` module the params must come
+    from."""
+    cases: list[tuple[str, Callable[[], Any], ResultStatus]] = [
+        (
+            "complete-wastar",
+            lambda: tamerlite.SearchParams(),
+            ResultStatus.SOLVED_OPTIMALLY,
+        ),
+        (
+            "inadmissible-wastar",
+            lambda: tamerlite.SearchParams(inadmissible_numeric_heuristic_variant=True),
+            ResultStatus.SOLVED_OPTIMALLY,
+        ),
+        (
+            "inadmissible-multiqueue",
+            lambda: tamerlite.engine.MultiqueueParams(
+                queues=[
+                    tamerlite.HeuristicParams(heuristic="hff"),
+                    tamerlite.HeuristicParams(heuristic="hadd"),
+                ],
+                inadmissible_numeric_heuristic_variant=True,
+            ),
+            ResultStatus.SOLVED_OPTIMALLY,
+        ),
+    ]
+    cases.extend(
+        (
+            f"memory-bounded-{search}",
+            partial(
+                lambda s: tamerlite.SearchParams(
+                    search=s, incomplete_memory_bounded_search=True
+                ),
+                search,
+            ),
+            ResultStatus.SOLVED_SATISFICING,
+        )
+        for search in ["wastar", "astar", "gbfs", "novbfs_hg"]
+    )
+    return [
+        pytest.param(
+            make_params,
+            expected,
+            disable_rustamer,
+            id=f"{case_id}-{'py' if disable_rustamer else 'rs'}",
+        )
+        for case_id, make_params, expected in cases
+        for disable_rustamer in [True, False]
+    ]
+
+
+@pytest.mark.parametrize(
+    "make_params,expected_status,disable_rustamer", _incomplete_search_cases()
+)
+def test_anytime_incomplete_search_never_claims_optimality(
+    make_params, expected_status, disable_rustamer
+):
+    """An improvement search that finds no plan proves the incumbent optimal
+    only if that search is complete. A memory-bounded search (open-list
+    eviction, Bloom-filter dedup) is not, so the run must end
+    `SOLVED_SATISFICING` even when no better plan exists. The
+    `SOLVED_OPTIMALLY` cases check that this problem does reach the
+    optimality branch, including under the inadmissible numeric heuristic
+    variant, which changes heuristic values but never reports a dead end the
+    default variant wouldn't."""
+    reload_tamerlite(disable_rustamer)
+    problem = problems_generator.get_problem_flight_minimize_plan_length()
+    with AnytimePlanner(name="tamerlite", params={"search": make_params()}) as planner:
+        results = list(planner.get_solutions(problem, timeout=60))
+
+    assert results[-1].status == expected_status
+    assert results[-1].plan is not None
+
+
 def test_simplify():
     num_expressions = 100
     results: dict[bool, list] = {
