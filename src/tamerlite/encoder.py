@@ -802,13 +802,22 @@ class Encoder:
 
     def _extract_domain_objects(self) -> set[UPObject]:
         """
-        Extract all objects that appear in the problem's domain.
+        Extract all objects that appear in the problem's domain or in its
+        quality metrics.
+
+        `domain_constants` covers the metrics too, except the `default` of
+        `MinimizeActionCosts`, so the metric expressions are scanned here as
+        well.
 
         Returns:
-            Set[UPObject]: A set of all objects that appear in the domain.
+            Set[UPObject]: A set of all objects that appear in the domain or
+            in a quality metric.
         """
 
-        return set(self._lifted_problem.domain_constants)
+        objects = set(self._lifted_problem.domain_constants)
+        for exp in self._iter_metric_expressions():
+            objects.update(extract_objects(exp))
+        return objects
 
     def _extract_interpreted_function_tainted_objects(self) -> set[UPObject]:
         """

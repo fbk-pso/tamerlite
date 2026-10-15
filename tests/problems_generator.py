@@ -1830,3 +1830,48 @@ def get_problem_if_counting_chain(name: str, calls: list) -> Problem:
     problem.add_action(inc)
     problem.add_goal(GE(n, 3))
     return problem
+
+
+def get_problem_metric_object_taint() -> Problem:
+    T = UserType("T")
+    t1, t2 = Object("t1", T), Object("t2", T)
+    fuel = Fluent("fuel", IntType(0, 10), t=T)
+    done = Fluent("done", BoolType())
+
+    refuel = InstantaneousAction("refuel", t=T)
+    refuel.add_increase_effect(fuel(refuel.parameter("t")), 1)
+    refuel.add_effect(done, True)
+
+    problem = Problem("metric_object_taint")
+    problem.add_objects([t1, t2])
+    problem.add_fluent(fuel, default_initial_value=0)
+    problem.add_fluent(done, default_initial_value=False)
+    problem.add_action(refuel)
+    problem.add_goal(done)
+    # The metric is the only thing that tells `t1` and `t2` apart.
+    problem.add_quality_metric(MinimizeExpressionOnFinalState(fuel(t1)))
+    return problem
+
+
+def get_problem_metric_default_cost_object() -> Problem:
+    T = UserType("T")
+    t1, t2 = Object("t1", T), Object("t2", T)
+    fuel = Fluent("fuel", IntType(), t=T)
+    n = Fluent("n", IntType())
+
+    refuel = InstantaneousAction("refuel", t=T)
+    refuel.add_precondition(LT(n, 2))
+    refuel.add_increase_effect(fuel(refuel.parameter("t")), 1)
+    refuel.add_increase_effect(n, 1)
+
+    problem = Problem("metric_default_cost_object")
+    problem.add_objects([t1, t2])
+    problem.add_fluent(fuel, default_initial_value=0)
+    problem.add_fluent(n, default_initial_value=0)
+    problem.add_action(refuel)
+    problem.add_goal(Equals(n, 2))
+    # Every action costs `t1`'s current fuel, so the only zero-cost plans
+    # never refuel `t1` before the last step. Only the metric's `default`
+    # tells `t1` and `t2` apart.
+    problem.add_quality_metric(MinimizeActionCosts({}, default=fuel(t1)))
+    return problem
