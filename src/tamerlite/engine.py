@@ -282,6 +282,16 @@ class TamerLite(
     def ensures(anytime_guarantee: up.engines.AnytimeGuarantee) -> bool:
         return bool(anytime_guarantee == up.engines.AnytimeGuarantee.INCREASING_QUALITY)
 
+    @staticmethod
+    def _heuristic_name(
+        params: HeuristicParams, heuristic: Callable[[State], float | None] | None
+    ) -> str:
+        """The heuristic `params` selects: its explicit name, else `custom`
+        when a heuristic callable is given, else `hff`."""
+        if params.heuristic is None:
+            return "custom" if heuristic is not None else "hff"
+        return params.heuristic
+
     def _get_heuristic(
         self,
         params: HeuristicParams,
@@ -292,10 +302,7 @@ class TamerLite(
         cache_heuristic_in_state: bool = False,
     ) -> tuple[Heuristic, float]:
         assert encoder.goal is not None
-        if params.heuristic is None:
-            h_name = "custom" if heuristic is not None else "hff"
-        else:
-            h_name = params.heuristic
+        h_name = self._heuristic_name(params, heuristic)
 
         if h_name == "custom":
             assert heuristic is not None
@@ -786,6 +793,55 @@ class TamerLite(
             )
         return res
 
+    def _heuristic_may_prune_solvable(
+        self,
+        params: HeuristicParams,
+        heuristic: Callable[[State], float | None] | None,
+    ) -> bool:
+        """Whether the heuristic `params` selects can return `None` -- a dead
+        end, which every search prunes -- on a state a plan exists from.
+
+        Only a custom heuristic can: it is an arbitrary callable, free to
+        return `None`. The built-in ones report a dead end only when the goal
+        is unreachable in their relaxation, under either numeric variant.
+        """
+        return self._heuristic_name(params, heuristic) == "custom"
+
+    def _search_is_complete(
+        self,
+        search_name: str,
+        heuristic: Callable[[State], float | None] | None,
+    ) -> bool:
+        """Whether `search_name`, run with `self._params`, proves that no plan
+        exists when it returns none -- what lets `_anytime_solutions` report
+        the incumbent as `SOLVED_OPTIMALLY` after an empty improvement search.
+
+        - `dfs`/`bfs` read no heuristic and neither bound nor dedup their
+          open list, so they only give up once the space is exhausted.
+        - A heuristic that may prune a solvable state
+          (`_heuristic_may_prune_solvable`) makes any other search
+          incomplete. For multiqueue it takes just one such queue:
+          `multiqueue_search` stops as soon as any queue runs empty, so a
+          state that queue pruned can be left unexpanded in the others.
+        - `ehc` discards its open list whenever a successor improves the best
+          heuristic value, so states it dropped are never revisited.
+        - `incomplete_memory_bounded_search` evicts open-list items once the
+          queue is full and dedups through a Bloom filter, whose false
+          positives drop unvisited states (`dfs`/`bfs`/`ehc` ignore it).
+        """
+        if search_name in ("dfs", "bfs"):
+            return True
+        if isinstance(self._params, MultiqueueParams):
+            return not any(
+                self._heuristic_may_prune_solvable(q, heuristic)
+                for q in self._params.queues
+            )
+        if self._heuristic_may_prune_solvable(self._params, heuristic):
+            return False
+        return (
+            search_name != "ehc" and not self._params.incomplete_memory_bounded_search
+        )
+
     def _solve_ground_problem(
         self,
         problem: "up.model.Problem",
@@ -990,7 +1046,9 @@ class TamerLite(
             else:
                 plan = None
                 status = up.engines.PlanGenerationResultStatus.UNSOLVABLE_INCOMPLETELY
-                solution_might_exist = search_name == "ehc"
+                solution_might_exist = not self._search_is_complete(
+                    search_name, heuristic
+                )
             return (
                 up.engines.PlanGenerationResult(status, plan, self.name, metrics),
                 solution_might_exist,
