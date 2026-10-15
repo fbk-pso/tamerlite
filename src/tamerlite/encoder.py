@@ -543,7 +543,8 @@ class Encoder:
             actions outside this set can never contribute to a plan.
         """
         assert self.goal is not None
-        events = {a: e for a, e in self.events.items() if a in self.applicable_actions}
+        applicable_actions = set(self.applicable_actions)
+        events = {a: e for a, e in self.events.items() if a in applicable_actions}
         heuristic = HMax(
             self.actions,
             self.fluent_domains,
