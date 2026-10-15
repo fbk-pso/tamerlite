@@ -673,6 +673,133 @@ def _constant_leaves_problem(with_goal: bool) -> Encoder:
     )
 
 
+def _encode_without_preprocessing(problem: Problem) -> Encoder:
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    return Encoder(
+        ground_problem,
+        lifted_problem,
+        map_back_action_instance,
+        symmetry_breaking=False,
+        compression_safe_actions=False,
+        relevance_analysis=False,
+        relevant_equality=False,
+    )
+
+
+def _assign_cancelled_problem(with_enabler: bool) -> Problem:
+    """`x = 5`, `y = 0`, goal `x <= y`, achieved by one `a`: `y := 100,
+    x += 2`. Under the inadmissible variant the assignment's -1 and the
+    increase's +2 cancel into a non-negative net effect. With `with_enabler`,
+    `a` first needs `p`, set by `b`."""
+    x = Fluent("x", RealType())
+    y = Fluent("y", RealType())
+    a = InstantaneousAction("a")
+    a.add_effect(y, 100)
+    a.add_increase_effect(x, 2)
+    problem = Problem("assign_cancelled")
+    problem.add_fluent(x, default_initial_value=5)
+    problem.add_fluent(y, default_initial_value=0)
+    problem.add_action(a)
+    if with_enabler:
+        p = Fluent("p", BoolType())
+        problem.add_fluent(p, default_initial_value=False)
+        a.add_precondition(p)
+        b = InstantaneousAction("b")
+        b.add_effect(p, True)
+        problem.add_action(b)
+    problem.add_goal(LE(x, y))
+    return problem
+
+
+def _complex_progress_problem() -> Problem:
+    """`x = 0`, `s = 1`, goal `x >= 5`, achieved by `a`: `x += s`, a complex
+    (state-dependent) effect -- `b`: `s += 1` keeps `s` from being folded
+    into a constant."""
+    x = Fluent("x", RealType())
+    s = Fluent("s", RealType())
+    a = InstantaneousAction("a")
+    a.add_increase_effect(x, s)
+    b = InstantaneousAction("b")
+    b.add_increase_effect(s, 1)
+    problem = Problem("complex_progress")
+    problem.add_fluent(x, default_initial_value=0)
+    problem.add_fluent(s, default_initial_value=1)
+    problem.add_action(a)
+    problem.add_action(b)
+    problem.add_goal(GE(x, 5))
+    return problem
+
+
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+def test_inadmissible_numeric_variant_keeps_assign_and_complex_achievers(
+    disable_rustamer,
+):
+    """The inadmissible numeric variant only changes how many applications an
+    assignment/complex-effect achiever needs, never whether it is one: a net
+    effect its -1 estimate leaves non-negative falls back to one application,
+    like the default variant, instead of reporting a dead end. Where the
+    estimate is negative it still differs from the default."""
+
+    reload_tamerlite(disable_rustamer)
+    from tamerlite.core import HFF, HAdd, HMax
+
+    def h(encoder: Encoder, heuristic_class, inadmissible: bool) -> float | None:
+        assert encoder.goal is not None
+        heuristic: Heuristic = heuristic_class(
+            encoder.actions,
+            encoder.fluent_domains,
+            encoder.events,
+            encoder.goal,
+            internal_caching=False,
+            cache_value_in_state=False,
+            inadmissible_numeric_heuristic_variant=inadmissible,
+        )
+        ss: SearchSpaceABC = encoder.search_space
+        return heuristic.eval(ss.initial_state(), ss)
+
+    cancelled = _encode_without_preprocessing(_assign_cancelled_problem(False))
+    for heuristic_class in (HFF, HAdd, HMax):
+        name = heuristic_class.__name__
+        default = h(cancelled, heuristic_class, inadmissible=False)
+        assert default is not None, name
+        assert h(cancelled, heuristic_class, inadmissible=True) == default, name
+
+    progress = _encode_without_preprocessing(_complex_progress_problem())
+    for heuristic_class in (HAdd, HMax):
+        name = heuristic_class.__name__
+        assert h(progress, heuristic_class, inadmissible=False) == 1, name
+        assert h(progress, heuristic_class, inadmissible=True) == 5, name
+
+
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+@pytest.mark.parametrize("multiqueue", [False, True])
+def test_inadmissible_numeric_variant_solves_assign_cancelled(
+    multiqueue, disable_rustamer
+):
+    """End to end: the state after `b` (and with `multiqueue`, the run as a
+    whole, which stops once any queue is empty) is not pruned."""
+    reload_tamerlite(disable_rustamer)
+    if multiqueue:
+        search: Any = tamerlite.engine.MultiqueueParams(
+            queues=[
+                tamerlite.HeuristicParams(heuristic="hff"),
+                tamerlite.HeuristicParams(heuristic="blind"),
+            ],
+            inadmissible_numeric_heuristic_variant=True,
+        )
+    else:
+        search = tamerlite.SearchParams(inadmissible_numeric_heuristic_variant=True)
+
+    problem = _assign_cancelled_problem(with_enabler=True)
+    with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+        res = planner.solve(problem, timeout=60)
+    assert res.status == ResultStatus.SOLVED_SATISFICING
+    with PlanValidator(problem_kind=problem.kind) as v:
+        assert v.validate(problem, res.plan)
+
+
 @pytest.mark.parametrize("disable_rustamer", [True, False])
 def test_heuristics_empty_goal(disable_rustamer):
     """A problem with no goals has the constant `True` as goal, which must cost

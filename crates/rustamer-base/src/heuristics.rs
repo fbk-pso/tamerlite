@@ -1249,7 +1249,11 @@ fn simplify_polynomial(polynomial: &mut FxHashMap<Option<Fluent>, BigRational>) 
 ///
 /// The check considers:
 /// - If the operator has a constant assignment or complex effect on any of the
-///   fluents, the condition is considered achieved.
+///   fluents, the condition is considered achieved. This holds under the
+///   inadmissible variant too: its -1 per such effect is only an estimate of
+///   the operator's progress, which its constant increases can cancel, so it
+///   must not decide that the operator can't achieve the condition -- that
+///   would prune states a plan exists from.
 /// - Otherwise, the net effect of the operator on the condition is
 ///   computed. If the net effect is negative, the condition is considered
 ///   potentially achieved.
@@ -1271,18 +1275,48 @@ fn simplify_polynomial(polynomial: &mut FxHashMap<Option<Fluent>, BigRational>) 
 fn achieves(
     operator: &Operator,
     fluents: &[Fluent],
-    weights: &Vec<f64>,
+    weights: &[f64],
     max_net_effect: &mut f64,
     inadmissible_numeric_heuristic_variant: bool,
 ) -> bool {
+    let has_assign_or_complex = has_assign_or_complex_effect(operator, fluents);
+    if has_assign_or_complex && !inadmissible_numeric_heuristic_variant {
+        return true;
+    }
+    let net_effect = net_effect(
+        operator,
+        fluents,
+        weights,
+        inadmissible_numeric_heuristic_variant,
+    );
+    if net_effect < 0.0 && net_effect > *max_net_effect {
+        *max_net_effect = net_effect;
+    }
+    net_effect < 0.0 || has_assign_or_complex
+}
+
+/// Whether `operator` has a constant assignment or a complex numeric effect
+/// on any of `fluents`: an effect no constant per-application change
+/// describes, so it may set the fluent to any value.
+fn has_assign_or_complex_effect(operator: &Operator, fluents: &[Fluent]) -> bool {
+    fluents.iter().any(|f| {
+        operator.constant_assign_effects.contains_key(f)
+            || operator.complex_numeric_effects.contains_key(f)
+    })
+}
+
+/// Per-application change `operator` makes to the left-hand side of a simple
+/// numeric condition `sum(w * f) + k <= 0`: the weighted sum of its constant
+/// increases, plus, under the inadmissible variant, -1 for each constant
+/// assignment or complex effect on one of `fluents`.
+fn net_effect(
+    operator: &Operator,
+    fluents: &[Fluent],
+    weights: &[f64],
+    inadmissible_numeric_heuristic_variant: bool,
+) -> f64 {
     let mut net_effect = 0.0;
     for (f, w) in fluents.iter().zip(weights) {
-        if !inadmissible_numeric_heuristic_variant
-            && (operator.constant_assign_effects.contains_key(f)
-                || operator.complex_numeric_effects.contains_key(f))
-        {
-            return true;
-        }
         if let Some(k) = operator.constant_increase_effects.get(f) {
             net_effect += w * k;
         } else if inadmissible_numeric_heuristic_variant
@@ -1292,10 +1326,7 @@ fn achieves(
             net_effect -= 1.0;
         }
     }
-    if net_effect < 0.0 && net_effect > *max_net_effect {
-        *max_net_effect = net_effect;
-    }
-    net_effect < 0.0
+    net_effect
 }
 
 /// Estimates the number of applications of an operator needed to satisfy a simple numeric condition.
@@ -1307,7 +1338,9 @@ fn achieves(
 /// The computation follows these rules:
 /// - If the condition is already satisfied in the state, returns 0.
 /// - If the operator has a constant assignment or complex effect on any fluent
-///   in the condition, returns 1, assuming one application is sufficient.
+///   in the condition, returns 1, assuming one application is sufficient --
+///   except under the inadmissible variant, which first tries the rule below
+///   and falls back to 1 only if its net effect isn't negative.
 /// - Otherwise, computes the net effect of the operator on the condition and
 ///   return the minimum number of repetitions needed.
 ///
@@ -1327,8 +1360,8 @@ fn achieves(
 /// effect applies, or `Ok(None)` if the condition cannot be satisfied.
 fn repetitions(
     operator: &Operator,
-    fluents: &Vec<Fluent>,
-    weights: &Vec<f64>,
+    fluents: &[Fluent],
+    weights: &[f64],
     state: &State,
     inadmissible_numeric_heuristic_variant: bool,
 ) -> PyResult<Option<f64>> {
@@ -1343,33 +1376,22 @@ fn repetitions(
         return Ok(Some(0.0));
     }
 
-    if !inadmissible_numeric_heuristic_variant {
-        for f in fluents {
-            if operator.constant_assign_effects.contains_key(f)
-                || operator.complex_numeric_effects.contains_key(f)
-            {
-                return Ok(Some(1.0));
-            }
-        }
+    let has_assign_or_complex = has_assign_or_complex_effect(operator, fluents);
+    if has_assign_or_complex && !inadmissible_numeric_heuristic_variant {
+        return Ok(Some(1.0));
     }
 
-    let mut net_effect = 0.0;
-    for (f, w) in fluents.iter().zip(weights) {
-        if let Some(k) = operator.constant_increase_effects.get(f) {
-            net_effect += w * k;
-        } else if inadmissible_numeric_heuristic_variant
-            && (operator.constant_assign_effects.contains_key(f)
-                || operator.complex_numeric_effects.contains_key(f))
-        {
-            net_effect -= 1.0;
-        }
+    let net_effect = net_effect(
+        operator,
+        fluents,
+        weights,
+        inadmissible_numeric_heuristic_variant,
+    );
+    if net_effect < 0.0 {
+        return Ok(Some((-v / net_effect).ceil()));
     }
 
-    if net_effect >= 0.0 {
-        return Ok(None);
-    }
-
-    Ok(Some((-v / net_effect).ceil()))
+    Ok(has_assign_or_complex.then_some(1.0))
 }
 
 /// Extract the sub-expression from a given expression rooted at a specified index.

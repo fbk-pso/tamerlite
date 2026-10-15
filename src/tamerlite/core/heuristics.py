@@ -1182,15 +1182,54 @@ class DeleteRelaxationHeuristic(Heuristic):
 
         return float(res), None
 
+    @staticmethod
+    def _has_assign_or_complex_effect(
+        operator: Operator, fluents: list[Fluent]
+    ) -> bool:
+        """Whether `operator` has a constant assignment or a complex numeric
+        effect on any of `fluents`: an effect no constant per-application
+        change describes, so it may set the fluent to any value."""
+        return any(
+            f in operator.constant_assign_effects
+            or f in operator.complex_numeric_effects
+            for f in fluents
+        )
+
+    def _net_effect(
+        self, operator: Operator, fluents: list[Fluent], weights: list[float]
+    ) -> float:
+        """Per-application change `operator` makes to the left-hand side of a
+        simple numeric condition `sum(w * f) + k <= 0`: the weighted sum of
+        its constant increases, plus, under the inadmissible variant, -1 for
+        each constant assignment or complex effect on one of `fluents`."""
+        net_effect = 0.0
+        for f, w in zip(fluents, weights, strict=False):
+            if f in operator.constant_increase_effects:
+                k = operator.constant_increase_effects[f]
+                net_effect += w * k
+            elif self._inadmissible_numeric_heuristic_variant and (
+                f in operator.constant_assign_effects
+                or f in operator.complex_numeric_effects
+            ):
+                net_effect -= 1.0
+        return net_effect
+
     def _achieves(self, operator: Operator, simple_condition: Expression) -> bool:
         """Check whether an operator achieves a given simple numeric condition.
 
         The check considers:
-        - If the operator has a constant assignment or complex effect on any of the
-        condition's fluents, the condition is considered achieved.
+        - If the operator has a constant assignment or complex effect on any of
+        the condition's fluents, the condition is considered achieved. This
+        holds under the inadmissible variant too: its -1 per such effect is
+        only an estimate of the operator's progress, which its constant
+        increases can cancel, so it must not decide that the operator can't
+        achieve the condition -- that would prune states a plan exists from.
         - Otherwise, it computes the net effect of the operator on the
         condition. If the net effect is negative, the condition is potentially
         achieved.
+
+        `_max_net_effect` is updated from operators whose net effect is
+        negative.
 
         Args:
             operator: The operator whose effects are being evaluated.
@@ -1201,26 +1240,15 @@ class DeleteRelaxationHeuristic(Heuristic):
         """
 
         fluents, weights = self._simple_numeric_conds[simple_condition]
-        net_effect = 0.0
-        for f, w in zip(fluents, weights, strict=False):
-            if not self._inadmissible_numeric_heuristic_variant and (
-                f in operator.constant_assign_effects
-                or f in operator.complex_numeric_effects
-            ):
-                return True
-            if f in operator.constant_increase_effects:
-                k = operator.constant_increase_effects[f]
-                net_effect += w * k
-            elif self._inadmissible_numeric_heuristic_variant and (
-                f in operator.constant_assign_effects
-                or f in operator.complex_numeric_effects
-            ):
-                net_effect -= 1.0
+        has_assign_or_complex = self._has_assign_or_complex_effect(operator, fluents)
+        if has_assign_or_complex and not self._inadmissible_numeric_heuristic_variant:
+            return True
 
+        net_effect = self._net_effect(operator, fluents, weights)
         if net_effect < 0.0 and net_effect > self._max_net_effect:
             self._max_net_effect = net_effect
 
-        return net_effect < 0.0
+        return net_effect < 0.0 or has_assign_or_complex
 
     def _repetitions(
         self, operator: Operator, simple_condition: Expression, state: State
@@ -1232,7 +1260,9 @@ class DeleteRelaxationHeuristic(Heuristic):
 
         The computation follows these rules:
         - If the operator has a constant assignment or complex effect on any fluent
-        in the condition, return 1, assuming one application is sufficient.
+        in the condition, return 1, assuming one application is sufficient --
+        except under the inadmissible variant, which first tries the rule below
+        and falls back to 1 only if its net effect isn't negative.
         - Otherwise, compute the net effect of the operator on the condition and
         return the minimum number of repetitions needed.
 
@@ -1256,29 +1286,15 @@ class DeleteRelaxationHeuristic(Heuristic):
             # condition satisfied in state
             return 0
 
-        if not self._inadmissible_numeric_heuristic_variant:
-            for f in fluents:
-                if (
-                    f in operator.constant_assign_effects
-                    or f in operator.complex_numeric_effects
-                ):
-                    return 1
+        has_assign_or_complex = self._has_assign_or_complex_effect(operator, fluents)
+        if has_assign_or_complex and not self._inadmissible_numeric_heuristic_variant:
+            return 1
 
-        net_effect = 0.0
-        for f, w in zip(fluents, weights, strict=False):
-            if f in operator.constant_increase_effects:
-                k = operator.constant_increase_effects[f]
-                net_effect += w * k
-            elif self._inadmissible_numeric_heuristic_variant and (
-                f in operator.constant_assign_effects
-                or f in operator.complex_numeric_effects
-            ):
-                net_effect -= 1.0
+        net_effect = self._net_effect(operator, fluents, weights)
+        if net_effect < 0.0:
+            return math.ceil(-v / net_effect)
 
-        if net_effect >= 0.0:
-            return None
-
-        return math.ceil(-v / net_effect)
+        return 1 if has_assign_or_complex else None
 
     def _cost(
         self, exp: HeuristicExpression, costs: dict[Expression, float]
