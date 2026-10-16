@@ -310,10 +310,52 @@ impl<T: Ord> OpenList<T> for BoundedPriorityQueue<T> {
     }
 }
 
+/// Which states take part in visited-state dedup, and how -- shared by every
+/// dedup site (`VisitedStates`, `BloomDedup`), mirrored by `DedupPolicy` in
+/// `search.py`.
+///
+/// - `All`: a classical problem, or `weak_equality` on a temporal one.
+/// - `TodoEmpty`: a temporal problem without `weak_equality` and without a
+///   deadline dedups only states with an empty `todo`. With no durative action
+///   in progress there are no active conditions and no pending events, so any
+///   continuation of one such state can be scheduled from any other with the
+///   same `assignments`: sound for plan existence, only makespan can differ.
+/// - `Dominance`: the same states, but the problem has a deadline. It pins
+///   `end_plan - start_plan`, so a state may be pruned only by one that is
+///   at least `epsilon` earlier (`Frontier::dominates`): pruning the later
+///   of two can't lose a plan that meets the deadline, pruning the earlier one
+///   can (the anytime makespan-improvement loop is what sets it).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum DedupPolicy {
+    All,
+    TodoEmpty,
+    Dominance,
+}
+
+impl DedupPolicy {
+    pub(crate) fn new<S: SearchSpaceTrait>(ss: &S, weak_equality: bool) -> Self {
+        if !ss.is_temporal() || weak_equality {
+            DedupPolicy::All
+        } else if ss.has_deadline() {
+            DedupPolicy::Dominance
+        } else {
+            DedupPolicy::TodoEmpty
+        }
+    }
+
+    pub(crate) fn applies(&self, s: &State) -> bool {
+        match self {
+            DedupPolicy::All => true,
+            DedupPolicy::TodoEmpty | DedupPolicy::Dominance => s.todo.is_empty(),
+        }
+    }
+}
+
 /// Wraps a state so the visited-state dedup set also compares `todo` (durative actions
 /// in progress), which is what the temporal `weak_equality` dedup path needs on top of
-/// the full `assignments` compare/hash. On the classical (`!is_temporal()`) dedup path
-/// `todo` is always empty, so that comparison is a no-op there.
+/// the full `assignments` compare/hash. On the classical (`!is_temporal()`),
+/// `DedupPolicy::TodoEmpty` and `DedupPolicy::Dominance` dedup paths `todo` is always
+/// empty, so that comparison is a no-op there.
 pub struct WeakEqState {
     pub state: Rc<State>,
 }
@@ -348,20 +390,27 @@ pub fn weak_eq(state1: &State, state2: &State) -> bool {
     true
 }
 
-/// The visited-state dedup store: a `FxHashSet<WeakEqState>`
-/// (`wastar_search`, `novbfs_search`) or a lossy `BloomFilter`
+/// The visited-state dedup store of the priority-search driver: a
+/// `VisitedStates` (`wastar_search`, `novbfs_search`) or a lossy `BloomFilter`
 /// (`wastar_search_memory_bounded`, `novbfs_search_memory_bounded`),
 /// keyed on the same equivalence as
 /// `WeakEqState` (`assignments` plus each `todo` action's event index).
 /// `insert_new` mirrors `HashSet::insert`'s "newly inserted"
-/// polarity regardless of backing store; a disabled store (non-temporal
-/// dedup gate off) must always report "new" without recording anything.
+/// polarity regardless of backing store; a state its `DedupPolicy` doesn't
+/// apply to must always report "new" without recording anything.
 trait DedupStore<P> {
     fn insert_new(&mut self, p: &P) -> bool;
 }
 
-struct HashSetDedup {
-    enabled: bool,
+/// The visited-state store of every non-memory-bounded search (the
+/// priority-search driver, `ehc_search`, `multiqueue_search`), keyed by
+/// `WeakEqState` and gated on `DedupPolicy`: a state the policy doesn't apply
+/// to is never recorded and never pruned. Under `DedupPolicy::Dominance` each
+/// key keeps the earliest `Frontier` recorded for it, and a state is pruned
+/// only if that one dominates it. Mirrored by `VisitedStates` in `search.py`.
+pub(crate) struct VisitedStates<'a, S: SearchSpaceTrait> {
+    ss: &'a S,
+    policy: DedupPolicy,
     // `State::heuristic_cache` is a `Mutex`, which is what trips this lint on
     // `Rc<State>` -- but `WeakEqState`'s `Hash`/`PartialEq` impls only ever
     // read `assignments`/`todo`, never `heuristic_cache`, so mutating the
@@ -369,29 +418,75 @@ struct HashSetDedup {
     // set.
     #[allow(clippy::mutable_key_type)]
     seen: FxHashSet<WeakEqState>,
+    #[allow(clippy::mutable_key_type)]
+    frontiers: FxHashMap<WeakEqState, Frontier>,
 }
 
-impl HashSetDedup {
-    fn new<S: SearchSpaceTrait>(ss: &S, weak_equality: bool) -> Self {
+impl<'a, S: SearchSpaceTrait> VisitedStates<'a, S> {
+    pub(crate) fn new(ss: &'a S, weak_equality: bool) -> Self {
         Self {
-            enabled: !ss.is_temporal() || weak_equality,
+            ss,
+            policy: DedupPolicy::new(ss, weak_equality),
             seen: FxHashSet::with_hasher(FxBuildHasher),
+            frontiers: FxHashMap::with_hasher(FxBuildHasher),
         }
+    }
+
+    /// Whether a recorded state makes `s` redundant.
+    pub(crate) fn contains(&self, s: &Rc<State>) -> bool {
+        if !self.policy.applies(s) {
+            return false;
+        }
+        let key = WeakEqState {
+            state: Rc::clone(s),
+        };
+        if self.policy != DedupPolicy::Dominance {
+            return self.seen.contains(&key);
+        }
+        self.frontiers
+            .get(&key)
+            .is_some_and(|recorded| recorded.dominates(&self.ss.frontier(s)))
+    }
+
+    /// Records `s` unless a recorded state makes it redundant, and returns
+    /// whether it was recorded.
+    pub(crate) fn insert(&mut self, s: &Rc<State>) -> bool {
+        if !self.policy.applies(s) {
+            return true;
+        }
+        let key = WeakEqState {
+            state: Rc::clone(s),
+        };
+        if self.policy != DedupPolicy::Dominance {
+            return self.seen.insert(key);
+        }
+        let frontier = self.ss.frontier(s);
+        if let Some(recorded) = self.frontiers.get(&key) {
+            if recorded.dominates(&frontier) {
+                return false;
+            }
+            if recorded.time <= frontier.time + recorded.tolerance {
+                return true;
+            }
+        }
+        self.frontiers.insert(key, frontier);
+        true
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.seen.clear();
+        self.frontiers.clear();
     }
 }
 
-impl DedupStore<Rc<State>> for HashSetDedup {
+impl<S: SearchSpaceTrait> DedupStore<Rc<State>> for VisitedStates<'_, S> {
     fn insert_new(&mut self, s: &Rc<State>) -> bool {
-        if !self.enabled {
-            return true;
-        }
-        self.seen.insert(WeakEqState {
-            state: Rc::clone(s),
-        })
+        self.insert(s)
     }
 }
 
 struct BloomDedup {
+    policy: DedupPolicy,
     filter: Option<BloomFilter<RandomState>>,
 }
 
@@ -399,17 +494,23 @@ impl BloomDedup {
     fn new<S: SearchSpaceTrait>(ss: &S, weak_equality: bool) -> Self {
         const BLOOM_ITEMS: usize = 20_000_000;
         const BLOOM_FP_RATE: f64 = 1e-4;
-        let filter = (!ss.is_temporal() || weak_equality).then(|| {
+        let policy = DedupPolicy::new(ss, weak_equality);
+        // A Bloom filter can't keep a `Frontier` per key, so under
+        // `DedupPolicy::Dominance` it dedups nothing.
+        let filter = (policy != DedupPolicy::Dominance).then(|| {
             BloomFilter::with_false_pos(BLOOM_FP_RATE)
                 .hasher(RandomState::default())
                 .expected_items(BLOOM_ITEMS)
         });
-        Self { filter }
+        Self { policy, filter }
     }
 }
 
 impl DedupStore<State> for BloomDedup {
     fn insert_new(&mut self, s: &State) -> bool {
+        if !self.policy.applies(s) {
+            return true;
+        }
         match &mut self.filter {
             None => true,
             // `BloomFilter::insert` returns "may have been previously
@@ -560,12 +661,7 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     let mut open = VecDeque::new();
     open.push_back(init);
 
-    let dedup = !ss.is_temporal() || weak_equality;
-    // State and WeakEqState contain interior mutability only for heuristic
-    // caches. The mutable fields are ignored by Hash/Eq, so using them as HashSet keys is
-    // safe.
-    #[allow(clippy::mutable_key_type)]
-    let mut closed = FxHashSet::with_hasher(FxBuildHasher);
+    let mut closed = VisitedStates::new(ss, weak_equality);
     while let Some(state) = open.pop_front() {
         if let Some(t) = timeout {
             if start.elapsed().unwrap().as_secs_f32() > t {
@@ -583,23 +679,14 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
             metrics.insert("goal_depth", state.g.to_string());
             return Ok((Some(extract_path(&state)), metrics));
         } else {
-            if dedup {
-                closed.insert(WeakEqState {
-                    state: Rc::clone(&state),
-                });
-            }
+            closed.insert(&state);
 
             let successors_iter = ss
                 .get_successor_states_iter(&state)
                 .filter_map(|rs| match rs {
                     Ok(s) => {
                         let s = Rc::new(s);
-                        if dedup {
-                            let weak_eq_state = WeakEqState { state: s };
-                            (!closed.contains(&weak_eq_state)).then_some(Ok(weak_eq_state.state))
-                        } else {
-                            Some(Ok(s))
-                        }
+                        (!closed.contains(&s)).then_some(Ok(s))
                     }
                     Err(e) => Some(Err(e)),
                 });
@@ -856,7 +943,7 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     );
     let mut strategy = WAStarStrategy::<Rc<State>>::new(weight);
     let mut open: BinaryHeap<PrioritizedItem<Rc<State>>> = BinaryHeap::new();
-    let mut dedup = HashSetDedup::new(ss, weak_equality);
+    let mut dedup = VisitedStates::new(ss, weak_equality);
     priority_search(
         ss,
         heuristic,
@@ -1011,7 +1098,7 @@ pub fn novbfs_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     );
     let mut strategy = NovBFSStrategy::<Rc<State>>::new(novelty, prefer_higher_g);
     let mut open: BinaryHeap<NovBFSItem<Rc<State>>> = BinaryHeap::new();
-    let mut dedup = HashSetDedup::new(ss, weak_equality);
+    let mut dedup = VisitedStates::new(ss, weak_equality);
     priority_search(
         ss,
         heuristic,

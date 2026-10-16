@@ -744,11 +744,51 @@ def simplify(
     return tuple(final_res)
 
 
+@dataclass(frozen=True)
+class Frontier:
+    """How far into the plan a temporal state already reaches, for the
+    `DedupPolicy.DOMINANCE` makespan dominance check (`search.py`), mirrored by
+    `Frontier` in `search_space.rs`.
+
+    `time` is the earliest time, relative to `start_plan`, of the state's last
+    `path` event. `_expand_event` orders every new event after every event
+    already in `path` (by `epsilon` if the two are mutex, by 0 otherwise), so
+    `path` is totally ordered and its last event is the latest one. The STN's
+    `distances` are its minimal solution, so that time is a lower bound on the
+    event's offset from `start_plan` in every schedule.
+    """
+
+    time: Fraction | int
+    epsilon: Fraction
+
+    def dominates(self, other: "Frontier") -> bool:
+        """Whether every continuation `other` can schedule, `self` can too.
+
+        A future event must come after each past event by `epsilon` if the two
+        are mutex and by 0 otherwise, and with an empty `todo` that is the
+        only way a state's past constrains its future. So `self` forces any
+        future event no later than `self.time + epsilon`, and `other` forces
+        it no earlier than `other.time`: `self` can take over `other`'s
+        schedule of any continuation once it is ahead by at least `epsilon`.
+        Being ahead by less is not enough, because the mutex gap depends on
+        which past events sit near `time`, not on the state's fluent values."""
+        return self.time + self.epsilon <= other.time
+
+
 class SearchSpaceABC(ABC):
     @property
     @abstractmethod
     def is_temporal(self) -> bool:
         pass
+
+    @property
+    @abstractmethod
+    def has_deadline(self) -> bool:
+        """Whether a makespan deadline pins `end_plan - start_plan`."""
+
+    @abstractmethod
+    def frontier(self, state: State) -> Frontier:
+        """The `Frontier` of a state of a temporal problem."""
 
     @abstractmethod
     def reset(self):
@@ -865,6 +905,20 @@ class SearchSpace(SearchSpaceABC):
     @property
     def is_temporal(self) -> bool:
         return self._is_temporal
+
+    @property
+    def has_deadline(self) -> bool:
+        return self._deadline is not None
+
+    def frontier(self, state: State) -> Frontier:
+        tn = state.temporal_network
+        assert tn is not None
+        if not state.path:
+            return Frontier(0, self._epsilon)
+        distances = tn.distances
+        origin = -distances.get(self._start_plan, 0)
+        last = state.path[-1]
+        return Frontier(-distances[last] - origin, self._epsilon)
 
     @property
     def relevant_actions(self) -> list[Action]:

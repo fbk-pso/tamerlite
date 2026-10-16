@@ -21,7 +21,7 @@ use std::rc::Rc;
 use std::time::SystemTime;
 use std::{collections::BinaryHeap, vec::Vec};
 
-use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
+use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use pyo3::exceptions::PyTimeoutError;
 use pyo3::prelude::*;
@@ -169,17 +169,8 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
         },
     };
 
-    let dedup = !ss.is_temporal() || weak_equality;
-    // State and WeakEqState contain interior mutability only for heuristic
-    // caches. The mutable fields are ignored by Hash/Eq, so using them as HashSet keys is
-    // safe.
-    #[allow(clippy::mutable_key_type)]
-    let mut visited_states = FxHashSet::with_hasher(FxBuildHasher);
-    if dedup {
-        visited_states.insert(WeakEqState {
-            state: Rc::clone(&item.state_container.state),
-        });
-    }
+    let mut visited_states = VisitedStates::new(ss, weak_equality);
+    visited_states.insert(&item.state_container.state);
 
     let mut opens = Vec::with_capacity(heuristics.len());
     for (i, _) in heuristics.iter().enumerate() {
@@ -242,11 +233,7 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
                     return Ok((Some(extract_path(&s)), metrics));
                 }
                 let s = Rc::new(s);
-                let keep = !dedup
-                    || visited_states.insert(WeakEqState {
-                        state: Rc::clone(&s),
-                    });
-                if keep {
+                if visited_states.insert(&s) {
                     let sc = StateContainer {
                         state: s,
                         expanded: Rc::new(RefCell::new(false)),

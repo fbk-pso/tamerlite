@@ -22,6 +22,7 @@ import warnings
 import weakref
 from collections import OrderedDict
 from collections.abc import Callable
+from fractions import Fraction
 from functools import partial
 from typing import Any, NamedTuple, cast
 
@@ -1169,6 +1170,105 @@ def test_search_space(problem, relevance_analysis):
             assert state1.todo[k][0] == todo2[k.idx][0]
 
         assert state1.g == state2.g
+
+
+def _solve_temporal(problem: Problem, deadline: Fraction | None) -> tuple[bool, int]:
+    from tamerlite.core import CustomHeuristic, wastar_search
+    from tamerlite.encoder import Encoder
+
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    encoder = Encoder(
+        ground_problem,
+        lifted_problem,
+        map_back_action_instance,
+        symmetry_breaking=False,
+        compression_safe_actions=False,
+        relevance_analysis=False,
+        deadline=deadline,
+    )
+    path, metrics = wastar_search(
+        encoder.search_space,
+        CustomHeuristic(lambda _: 0.0, False),
+        0.0,
+        weak_equality=False,
+    )
+    return path is not None, int(metrics["expanded_states"])
+
+
+# The three actions of `get_problem_temporal_commuting` can all run at once,
+# so its optimal makespan is the longest duration, 5; `end_plan` must
+# additionally follow the last end by `epsilon` (1/100).
+_COMMUTING_DEADLINES = [None, Fraction(100), Fraction(501, 100), Fraction(5)]
+
+
+def test_temporal_todo_empty_dedup():
+    """Without `weak_equality`, a temporal search still dedups states with no
+    durative action in progress: by equality without a deadline
+    (`DedupPolicy.TODO_EMPTY`), by `Frontier` dominance with one
+    (`DedupPolicy.DOMINANCE`) -- which must keep every deadline that has a plan
+    solvable, down to the tightest one, on both backends identically."""
+    results: dict[tuple[bool, Fraction | None], tuple[bool, int]] = {}
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        for deadline in _COMMUTING_DEADLINES:
+            results[disable_rustamer, deadline] = _solve_temporal(
+                problems_generator.get_problem_temporal_commuting(), deadline
+            )
+
+    for disable_rustamer in [True, False]:
+        solved = {d: results[disable_rustamer, d][0] for d in _COMMUTING_DEADLINES}
+        assert solved == {
+            None: True,
+            Fraction(100): True,
+            Fraction(501, 100): True,
+            Fraction(5): False,
+        }
+        # Dominance only prunes a state no earlier than one already seen, so
+        # it can never prune more than equality does.
+        assert (
+            results[disable_rustamer, None][1]
+            < results[disable_rustamer, Fraction(100)][1]
+        )
+    for deadline in _COMMUTING_DEADLINES:
+        assert results[True, deadline] == results[False, deadline]
+
+
+def test_temporal_dominance_dedup_prunes(monkeypatch):
+    """`DedupPolicy.DOMINANCE` does prune: with `Frontier.dominates` stubbed
+    out to never hold, the same deadline-constrained searches expand strictly
+    more states and still agree on solvability -- including at the tightest
+    deadline that has a plan (`c` alongside `a`'s first half is impossible,
+    so the optimum is `a` then `c`, or `c` then `a`, plus `b` after `x`)."""
+    reload_tamerlite(True)
+    import tamerlite.core.search_space as search_space
+
+    problem = problems_generator.get_problem_temporal_token_chain()
+    deadlines = [Fraction(100), Fraction(251, 50)]
+    with_dominance = [_solve_temporal(problem, d) for d in deadlines]
+    monkeypatch.setattr(search_space.Frontier, "dominates", lambda self, other: False)
+    without_dominance = [_solve_temporal(problem, d) for d in deadlines]
+    for (solved, expanded), (solved_off, expanded_off) in zip(
+        with_dominance, without_dominance, strict=True
+    ):
+        assert solved and solved_off
+        assert expanded < expanded_off
+
+
+def test_frontier_dominates():
+    """`Frontier.dominates`: a frontier dominates another only when ahead of
+    it by at least `epsilon` -- a future event mutex with a past event near
+    `time` must follow it by `epsilon`, so a smaller lead could still force
+    that event later."""
+    from tamerlite.core.search_space import Frontier
+
+    eps = Fraction(1, 100)
+    assert Frontier(2, eps).dominates(Frontier(3, eps))
+    assert Frontier(3 - eps, eps).dominates(Frontier(3, eps))
+    assert not Frontier(3 - eps / 2, eps).dominates(Frontier(3, eps))
+    assert not Frontier(3, eps).dominates(Frontier(3, eps))
+    assert not Frontier(3, eps).dominates(Frontier(2, eps))
 
 
 def _anytime_cases():
