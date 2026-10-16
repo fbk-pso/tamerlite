@@ -149,7 +149,6 @@ impl Heuristic {
     ) -> PyResult<Self> {
         Ok(Heuristic {
             variant: HeuristicVariant::HMaxExplicit(HMaxExplicit::new(
-                actions,
                 fluent_domains,
                 events,
                 goals,
