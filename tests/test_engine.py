@@ -2444,6 +2444,26 @@ def test_symmetry_breaking_default_value_objects():
     assert [{obj.name for obj in group} for group in groups] == [{"x"}, {"y"}, {"z"}]
 
 
+def _equivalence_groups(problem: Problem, **encoder_kwargs: Any) -> list[set[str]]:
+    """The names in each equivalence class `Encoder` computes for `problem`,
+    built with `encoder_kwargs` on top of the defaults below."""
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    encoder = Encoder(
+        ground_problem,
+        lifted_problem,
+        map_back_action_instance,
+        symmetry_breaking=False,
+        compression_safe_actions=False,
+        relevance_analysis=False,
+        **encoder_kwargs,
+    )
+    return [
+        {obj.name for obj in group} for group in encoder._compute_equivalent_objects()
+    ]
+
+
 def test_symmetry_breaking_goal_taint_is_per_object():
     """
     An unrecognized goal conjunct (one _extract_goal_obj_to_fluent_map doesn't
@@ -4074,6 +4094,54 @@ def test_symmetry_breaking_interpreted_function_metric_action_cost_taint():
     assert {"l1"} in group_sets
     assert {"l2"} in group_sets
     assert {"l1", "l2"} not in group_sets
+
+    # The metric only ranks plans: without plan quality to preserve, the IF
+    # call in it doesn't split `l1` and `l2`.
+    assert {"l1", "l2"} in _equivalence_groups(problem, preserve_plan_quality=False)
+
+
+def test_symmetry_breaking_metric_objects_excluded():
+    """
+    When plan quality must be preserved, an object named in a quality metric
+    is not interchangeable with the others, even when the initial state and
+    the goal can't tell them apart. That includes the `default` of
+    `MinimizeActionCosts`: treating `t1` and `t2` as interchangeable there
+    makes first-use ordering refuel `t1` first, which prunes every zero-cost
+    plan, and the anytime loop then reports a cost-1 plan as optimal.
+
+    Without that requirement the metric doesn't split them: it only ranks
+    plans, and a oneshot solve still finds one.
+    """
+
+    taint = problems_generator.get_problem_metric_object_taint()
+    default_cost = problems_generator.get_problem_metric_default_cost_object()
+    for problem in [taint, default_cost]:
+        assert _equivalence_groups(problem) == [{"t1"}, {"t2"}]
+        assert _equivalence_groups(problem, preserve_plan_quality=False) == [
+            {"t1", "t2"}
+        ]
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        search = tamerlite.SearchParams(
+            search="wastar",
+            heuristic="hadd",
+            symmetry_breaking=True,
+            compression_safe_actions=False,
+        )
+        with AnytimePlanner(name="tamerlite", params={"search": search}) as planner:
+            results = list(planner.get_solutions(default_cost, timeout=None))
+        assert results[-1].status == ResultStatus.SOLVED_OPTIMALLY
+        with PlanValidator(problem_kind=default_cost.kind) as v:
+            val_res: ValidationResult = v.validate(default_cost, results[-1].plan)
+            assert val_res
+            assert val_res.metric_evaluations is not None
+            assert list(val_res.metric_evaluations.values()) == [0]
+        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+            res: PlanGenerationResult = planner.solve(default_cost, timeout=None)
+        assert res.status == ResultStatus.SOLVED_SATISFICING
+        with PlanValidator(problem_kind=default_cost.kind) as v:
+            assert v.validate(default_cost, res.plan)
 
 
 def test_symmetry_breaking_interpreted_function_object_return_taint():
