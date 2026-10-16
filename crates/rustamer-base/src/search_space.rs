@@ -19,7 +19,10 @@ use im::Vector;
 use num_rational::BigRational;
 use pyo3::{exceptions::PyException, prelude::*};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
-use std::{sync::Mutex, vec::Vec};
+use std::{
+    sync::{Arc, Mutex},
+    vec::Vec,
+};
 
 use super::expressions::*;
 use super::expressions_utils::*;
@@ -30,6 +33,9 @@ use super::structures::*;
 use super::tn_interpreter::TNInterpreter;
 use super::utils::*;
 
+/// Per action index, `(symmetry class, count)` pairs; see
+/// `SearchSpace::open_action`.
+type SymmetryConstraints = Vec<Vec<(usize, u32)>>;
 type ScheduledAction = (Option<BigRational>, Action, Option<BigRational>);
 type PyScheduledAction<'py> = (Option<Bound<'py, PyAny>>, Action, Option<Bound<'py, PyAny>>);
 type MutexCache = Mutex<FxHashMap<((Action, usize), (Action, usize)), bool>>;
@@ -170,8 +176,9 @@ pub struct SearchSpace {
     event_fluents: EventFluents,
     mutex: MutexChecker,
     precedence: PrecedenceChecker,
-    action_objects: Option<Vec<Vec<Object>>>,
-    obj_to_prev_actions_map: Option<Vec<FxHashSet<Action>>>,
+    symmetry_requires: Option<SymmetryConstraints>,
+    symmetry_advances: Option<SymmetryConstraints>,
+    symmetry_classes: usize,
     initial_state: Option<Vec<ExpressionNode>>,
     goal: Option<Vec<ExpressionNode>>,
     tn_interpreter: TNInterpreter,
@@ -185,15 +192,15 @@ pub struct SearchSpace {
 #[pymethods]
 impl SearchSpace {
     #[new]
-    #[pyo3(signature = (actions_duration, events, actions, compression_safe_actions, action_objects, obj_to_prev_actions_map, initial_state=None, goal=None, relevant_actions=None, deadline=None, epsilon=None))]
+    #[pyo3(signature = (actions_duration, events, actions, compression_safe_actions, symmetry_requires, symmetry_advances, initial_state=None, goal=None, relevant_actions=None, deadline=None, epsilon=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         actions_duration: Vec<Option<PyDurationInterval>>,
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         actions: Vec<Action>,
         compression_safe_actions: Option<Vec<bool>>,
-        action_objects: Option<Vec<Vec<Object>>>,
-        obj_to_prev_actions_map: Option<Vec<FxHashSet<Action>>>,
+        symmetry_requires: Option<SymmetryConstraints>,
+        symmetry_advances: Option<SymmetryConstraints>,
         initial_state: Option<Vec<PyExpressionNode>>,
         goal: Option<Vec<PyExpressionNode>>,
         relevant_actions: Option<Vec<Action>>,
@@ -277,6 +284,16 @@ impl SearchSpace {
 
         let tn_interpreter = TNInterpreter::new(&actions, &events);
 
+        // Every symmetry class has an object some action uses, so the
+        // classes are exactly the ones `symmetry_advances` mentions.
+        let symmetry_classes = symmetry_advances
+            .iter()
+            .flatten()
+            .flatten()
+            .map(|&(class, _)| class + 1)
+            .max()
+            .unwrap_or(0);
+
         let res = SearchSpace {
             actions_duration: converted_actions_duration,
             events,
@@ -285,8 +302,9 @@ impl SearchSpace {
             event_fluents,
             mutex: MutexChecker::new(),
             precedence: PrecedenceChecker::new(),
-            action_objects,
-            obj_to_prev_actions_map,
+            symmetry_requires,
+            symmetry_advances,
+            symmetry_classes,
             initial_state: initial_state
                 .map(|inner_vec| inner_vec.into_iter().map(|v| v.v).collect()),
             goal: goal.map(|inner_vec| inner_vec.into_iter().map(|e| e.v).collect()),
@@ -562,20 +580,29 @@ impl SearchSpace {
         action: Action,
         events: &[(Timing, Event)],
     ) -> PyResult<bool> {
-        if let (Some(action_objects), Some(obj_to_prev_actions_map)) =
-            (&self.action_objects, &self.obj_to_prev_actions_map)
-        {
-            for obj in &action_objects[action.idx] {
-                let prev_actions = &obj_to_prev_actions_map[obj.idx];
-
-                if prev_actions.is_empty() || prev_actions.contains(&action) {
-                    continue;
+        // Symmetry breaking: the objects of each class are first used in
+        // class order, so the used ones are always the first
+        // `symmetry_used[class]`. An object needs its predecessor in the class
+        // to be used already or to be a parameter of this action too.
+        if let Some(requires) = &self.symmetry_requires {
+            if requires[action.idx]
+                .iter()
+                .any(|&(class, k)| state.symmetry_used[class] < k)
+            {
+                return Ok(false);
+            }
+        }
+        if let Some(advances) = &self.symmetry_advances {
+            let advances = &advances[action.idx];
+            if advances
+                .iter()
+                .any(|&(class, used)| new_state.symmetry_used[class] < used)
+            {
+                let mut symmetry_used = new_state.symmetry_used.to_vec();
+                for &(class, used) in advances {
+                    symmetry_used[class] = symmetry_used[class].max(used);
                 }
-
-                if !PersistentList::iter_rev(&state.path).any(|(a, _, _)| prev_actions.contains(a))
-                {
-                    return Ok(false);
-                }
+                new_state.symmetry_used = Arc::from(symmetry_used);
             }
         }
 
@@ -677,6 +704,7 @@ impl SearchSpaceTrait for SearchSpace {
             active_conditions: HashMultiSet::new(),
             g: 0.0,
             path: PersistentList::new(),
+            symmetry_used: Arc::from(vec![0; self.symmetry_classes]),
             heuristic_cache: Mutex::new(FxHashMap::with_hasher(FxBuildHasher)),
         })
     }

@@ -40,6 +40,7 @@ pub struct State {
     pub active_conditions: HashMultiSet<Vec<ExpressionNode>>,
     pub g: f64,
     pub path: Option<Arc<PersistentList<(Action, usize, u32)>>>,
+    pub symmetry_used: Arc<[u32]>,
     pub heuristic_cache: Mutex<FxHashMap<&'static str, Option<f64>>>,
 }
 
@@ -87,6 +88,7 @@ impl State {
             active_conditions: self.active_conditions.clone(),
             g: self.g,
             path: self.path.clone(),
+            symmetry_used: self.symmetry_used.clone(),
             heuristic_cache: Mutex::new(FxHashMap::with_hasher(FxBuildHasher)), // Cloning erases the cache
         }
     }
@@ -100,6 +102,7 @@ impl State {
             active_conditions: self.active_conditions.clone(),
             g: self.g,
             path: self.path.clone(),
+            symmetry_used: self.symmetry_used.clone(),
             heuristic_cache: Mutex::new(self.heuristic_cache.lock().unwrap().clone()),
         }
     }
