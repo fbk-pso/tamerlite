@@ -46,9 +46,44 @@ type EventFluents = Vec<
 type DurationInterval = (Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool);
 type PyDurationInterval = (Vec<PyExpressionNode>, Vec<PyExpressionNode>, bool, bool);
 
+/// How far into the plan a temporal state already reaches, for the
+/// `DedupPolicy::Dominance` makespan dominance check (`search.rs`), mirrored by
+/// `Frontier` in `search_space.py`.
+///
+/// `time` is the earliest time, relative to `start_plan`, of the state's last
+/// `path` event. `expand_event` orders every new event after every event
+/// already in `path` (by `epsilon` if the two are mutex, by 0 otherwise), so
+/// `path` is totally ordered and its last event is the latest one. The STN's
+/// `distances` are its minimal solution, so that time is a lower bound on the
+/// event's offset from `start_plan` in every schedule. Times are `f64`s, so
+/// every comparison allows the STN's own `tolerance`.
+pub struct Frontier {
+    pub time: f64,
+    epsilon: f64,
+    pub(crate) tolerance: f64,
+}
+
+impl Frontier {
+    /// Whether every continuation `other` can schedule, `self` can too.
+    ///
+    /// A future event must come after each past event by `epsilon` if the two
+    /// are mutex and by 0 otherwise, and with an empty `todo` that is the only
+    /// way a state's past constrains its future. So `self` forces any future
+    /// event no later than `self.time + epsilon`, and `other` forces it no
+    /// earlier than `other.time`: `self` can take over `other`'s schedule of
+    /// any continuation once it is ahead by at least `epsilon`. Being ahead by
+    /// less is not enough, because the mutex gap depends on which past events
+    /// sit near `time`, not on the state's fluent values.
+    pub fn dominates(&self, other: &Frontier) -> bool {
+        self.time + self.epsilon <= other.time + self.tolerance
+    }
+}
+
 pub trait SearchSpaceTrait {
     fn is_temporal(&self) -> bool;
     fn has_deadline(&self) -> bool;
+    /// The `Frontier` of a state of a temporal problem.
+    fn frontier(&self, state: &State) -> Frontier;
     fn tn_interpreter(&self) -> &TNInterpreter;
     fn initial_state(&self, initial_state: Option<Vec<PyExpressionNode>>) -> PyResult<State>;
     fn get_successor_state(&self, state: &State, action: Action) -> PyResult<Option<State>>;
@@ -635,6 +670,30 @@ impl SearchSpaceTrait for SearchSpace {
 
     fn has_deadline(&self) -> bool {
         self.deadline.is_some()
+    }
+
+    fn frontier(&self, state: &State) -> Frontier {
+        let tn = state
+            .temporal_network
+            .as_ref()
+            .expect("a temporal state has a temporal network");
+        let time = match PersistentList::iter_rev(&state.path).next() {
+            None => 0.0,
+            Some((action, pos, id)) => {
+                let origin = tn
+                    .get_model_value(&self.tn_interpreter.start_plan_id)
+                    .unwrap_or(0.0);
+                self.tn_interpreter
+                    .get_event_timing(tn, *action, *pos, *id)
+                    .expect("every path event is in the temporal network")
+                    - origin
+            }
+        };
+        Frontier {
+            time,
+            epsilon: self.epsilon,
+            tolerance: tn.tolerance,
+        }
     }
 
     fn tn_interpreter(&self) -> &TNInterpreter {

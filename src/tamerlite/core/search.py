@@ -30,7 +30,13 @@ from min_max_heap import MinMaxHeap
 
 from tamerlite.core.heuristics import Heuristic
 from tamerlite.core.novelty import NumericNovelty
-from tamerlite.core.search_space import Action, ObjectNode, SearchSpaceABC, State
+from tamerlite.core.search_space import (
+    Action,
+    Frontier,
+    ObjectNode,
+    SearchSpaceABC,
+    State,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -160,9 +166,9 @@ _QUEUE_BOUND = 400_000
 
 
 class DedupPolicy(Enum):
-    """Which states take part in visited-state dedup -- shared by every dedup
-    site (`_SetDedup`, `_BloomDedup`, `ehc_search`, `multiqueue_search`),
-    mirrored by `DedupPolicy` in `search.rs`.
+    """Which states take part in visited-state dedup, and how -- shared by
+    every dedup site (`VisitedStates`, `_BloomDedup`), mirrored by
+    `DedupPolicy` in `search.rs`.
 
     - `ALL`: a classical problem, or `weak_equality` on a temporal one.
     - `TODO_EMPTY`: a temporal problem without `weak_equality` and without a
@@ -170,30 +176,29 @@ class DedupPolicy(Enum):
       in progress there are no active conditions and no pending events, so any
       continuation of one such state can be scheduled from any other with the
       same `assignments`: sound for plan existence, only makespan can differ.
-    - `OFF`: a temporal problem without `weak_equality`, but with a deadline.
-      It pins `end_plan - start_plan`, so pruning the faster of two such states
-      can lose a plan that meets it (the anytime makespan-improvement loop is
-      what sets it).
+    - `DOMINANCE`: the same states, but the problem has a deadline. It pins
+      `end_plan - start_plan`, so a state may be pruned only by one that is
+      at least `epsilon` earlier (`Frontier.dominates`): pruning the later
+      of two can't lose a plan that meets the deadline, pruning the earlier one
+      can (the anytime makespan-improvement loop is what sets it).
     """
 
     ALL = auto()
     TODO_EMPTY = auto()
-    OFF = auto()
+    DOMINANCE = auto()
 
     @staticmethod
     def of(ss: SearchSpaceABC, weak_equality: bool) -> "DedupPolicy":
         if not ss.is_temporal or weak_equality:
             return DedupPolicy.ALL
         if ss.has_deadline:
-            return DedupPolicy.OFF
+            return DedupPolicy.DOMINANCE
         return DedupPolicy.TODO_EMPTY
 
     def applies(self, state: State) -> bool:
         if self is DedupPolicy.ALL:
             return True
-        if self is DedupPolicy.TODO_EMPTY:
-            return len(state.todo) == 0
-        return False
+        return len(state.todo) == 0
 
 
 @dataclass
@@ -201,8 +206,8 @@ class WeakEqState:
     """Wraps a State so the visited-state dedup set also compares `todo` (the
     durative actions currently in progress), which is what the temporal
     `weak_equality` dedup path needs on top of the full `assignments` compare/hash.
-    It is also the key on the `DedupPolicy.TODO_EMPTY` path, where `todo` is always
-    empty: `State.__eq__` is always `False` on a temporal problem.
+    It is also the key on the `DedupPolicy.TODO_EMPTY`/`DOMINANCE` paths, where `todo`
+    is always empty: `State.__eq__` is always `False` on a temporal problem.
     """
 
     state: State
@@ -238,23 +243,57 @@ class _Dedup(Protocol):
     def is_new(self, state: State) -> bool: ...
 
 
-class _SetDedup:
-    """Set-backed dedup keyed by `state_representation`, gated on
-    `DedupPolicy` -- a state the policy doesn't apply to is always new."""
+class VisitedStates:
+    """The visited-state store of every non-memory-bounded search (the
+    priority-search driver, `ehc_search`, `multiqueue_search`), keyed by
+    `state_representation` and gated on `DedupPolicy`: a state the policy
+    doesn't apply to is never recorded and never pruned. Under
+    `DedupPolicy.DOMINANCE` each key keeps the earliest `Frontier` recorded
+    for it, and a state is pruned only if that one dominates it."""
 
     def __init__(self, ss: SearchSpaceABC, weak_equality: bool) -> None:
         self._ss = ss
         self._policy = DedupPolicy.of(ss, weak_equality)
         self._seen: set[State | WeakEqState] = set()
+        self._frontiers: dict[State | WeakEqState, Frontier] = {}
+
+    def contains(self, state: State) -> bool:
+        """Whether a recorded state makes `state` redundant."""
+        if not self._policy.applies(state):
+            return False
+        repr_ = state_representation(state, self._ss)
+        if self._policy is not DedupPolicy.DOMINANCE:
+            return repr_ in self._seen
+        recorded = self._frontiers.get(repr_)
+        return recorded is not None and recorded.dominates(self._ss.frontier(state))
+
+    def add(self, state: State) -> None:
+        self.is_new(state)
 
     def is_new(self, state: State) -> bool:
+        """Records `state` unless a recorded state makes it redundant, and
+        returns whether it was recorded."""
         if not self._policy.applies(state):
             return True
         repr_ = state_representation(state, self._ss)
-        if repr_ in self._seen:
-            return False
-        self._seen.add(repr_)
+        if self._policy is not DedupPolicy.DOMINANCE:
+            if repr_ in self._seen:
+                return False
+            self._seen.add(repr_)
+            return True
+        frontier = self._ss.frontier(state)
+        recorded = self._frontiers.get(repr_)
+        if recorded is not None:
+            if recorded.dominates(frontier):
+                return False
+            if recorded.time <= frontier.time:
+                return True
+        self._frontiers[repr_] = frontier
         return True
+
+    def clear(self) -> None:
+        self._seen.clear()
+        self._frontiers.clear()
 
 
 def _bloom_key(state: State) -> bytes:
@@ -284,7 +323,8 @@ class _BloomDedup:
     `todo` event index) -- used only by `wastar_search_memory_bounded` and
     `novbfs_search_memory_bounded`.
     False positives make it strictly more aggressive (and incomplete) than
-    `_SetDedup`; the two are not interchangeable."""
+    `VisitedStates`; the two are not interchangeable. It can't keep a
+    `Frontier` per key, so under `DedupPolicy.DOMINANCE` it dedups nothing."""
 
     BLOOM_ITEMS = 20_000_000
     BLOOM_FP_RATE = 1e-4
@@ -293,7 +333,7 @@ class _BloomDedup:
         self._policy = DedupPolicy.of(ss, weak_equality)
         self._filter: BloomFilter | None = (
             BloomFilter(max_elements=self.BLOOM_ITEMS, error_rate=self.BLOOM_FP_RATE)
-            if self._policy is not DedupPolicy.OFF
+            if self._policy is not DedupPolicy.DOMINANCE
             else None
         )
 
@@ -409,15 +449,13 @@ def ehc_search(
         return None, {"expanded_states": str(0)}
     logger.debug("ehc_search: initial h=%.4g", best_h)
 
-    policy = DedupPolicy.of(ss, weak_equality)
-    closed = set()
+    closed = VisitedStates(ss, weak_equality)
     while len(open) > 0:
         if timeout is not None and time.monotonic() - st > timeout:
             raise TimeoutError
         state = open.popleft()
         expanded_states += 1
-        if policy.applies(state):
-            closed.add(state_representation(state, ss))
+        closed.add(state)
 
         if not early_termination and ss.goal_reached(state):
             logger.info(
@@ -443,11 +481,7 @@ def ehc_search(
                     "goal_depth": str(succ_state.g),
                 }
 
-            if policy.applies(succ_state):
-                state_repr = state_representation(succ_state, ss)
-                if state_repr not in closed:
-                    candidate_states.append(succ_state)
-            else:
+            if not closed.contains(succ_state):
                 candidate_states.append(succ_state)
 
         for succ_state, h in heuristic.eval_gen(candidate_states, ss):
@@ -577,7 +611,7 @@ def wastar_search(
         early_termination,
         name="wastar_search",
         open=_PriorityQueue(),
-        dedup=_SetDedup(ss, weak_equality),
+        dedup=VisitedStates(ss, weak_equality),
         make_root=lambda init, h: PrioritizedItem(h, init, 0),
         make_child=lambda _item, s, h, idx: PrioritizedItem(
             (1 - weight) * s.g + weight * h, s, idx
@@ -768,7 +802,7 @@ def novbfs_search(
         early_termination,
         name="novbfs_search",
         open=_PriorityQueue(),
-        dedup=_SetDedup(ss, weak_equality),
+        dedup=VisitedStates(ss, weak_equality),
         weak_equality=weak_equality,
     )
 

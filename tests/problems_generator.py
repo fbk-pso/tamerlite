@@ -897,6 +897,40 @@ def get_problem_temporal_commuting() -> Problem:
     return problem
 
 
+def get_problem_temporal_token_chain() -> Problem:
+    """`a` (duration 4) holds a token for its whole run and enables `b`
+    halfway through; `c` (duration 1) needs the token too. Goal: `b` and `c`
+    done. Running `c` before or after `a` reaches the same no-action-in-progress
+    states at times at least `epsilon` apart, which is what
+    `DedupPolicy.DOMINANCE` (`Frontier.dominates`) prunes under a deadline."""
+    problem = Problem("temporal_token_chain")
+    x, y, z, tok = Fluent("x"), Fluent("y"), Fluent("z"), Fluent("tok")
+    for f in (x, y, z):
+        problem.add_fluent(f, default_initial_value=False)
+    problem.add_fluent(tok, default_initial_value=True)
+    a = DurativeAction("a")
+    a.set_fixed_duration(4)
+    a.add_condition(StartTiming(), tok)
+    a.add_effect(StartTiming(), tok, False)
+    a.add_effect(StartTiming(2), x, True)
+    a.add_effect(EndTiming(), tok, True)
+    b = DurativeAction("b")
+    b.set_fixed_duration(3)
+    b.add_condition(StartTiming(), x)
+    b.add_effect(EndTiming(), y, True)
+    c = DurativeAction("c")
+    c.set_fixed_duration(1)
+    c.add_condition(StartTiming(), tok)
+    c.add_effect(StartTiming(), tok, False)
+    c.add_effect(EndTiming(), tok, True)
+    c.add_effect(EndTiming(), z, True)
+    for action in (a, b, c):
+        problem.add_action(action)
+    problem.add_goal(y)
+    problem.add_goal(z)
+    return problem
+
+
 def get_problem_quantified_false_precondition() -> Problem:
     """A problem whose single action's precondition is quantified, and whose
     grounder leaves most groundings' `Exists` statically unsatisfiable.
