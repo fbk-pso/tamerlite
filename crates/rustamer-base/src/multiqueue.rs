@@ -152,7 +152,12 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
     );
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
     let start = SystemTime::now();
-    let init = Rc::new(ss.initial_state(None)?);
+    let Some(init) = ss.initial_state(None)? else {
+        // No valid initial state (see `SearchSpaceTrait::initial_state`).
+        metrics.insert("expanded_states", 0.to_string());
+        return Ok((None, metrics));
+    };
+    let init = Rc::new(init);
     let mut expanded_states = 0;
     let mut generated_states = 1;
     if early_termination && ss.goal_reached(&init, None)? {

@@ -1,0 +1,70 @@
+hadd:
+- 2
+- 3
+- null
+- 1
+- null
+- 2
+- 2
+- 0
+- 0
+hadd_no_numbers:
+- 2
+- 3
+- null
+- 1
+- null
+- 2
+- 2
+- 0
+- 0
+hff:
+- 2
+- 3
+- null
+- 1
+- null
+- 2
+- 2
+- 0
+- 0
+hff_no_numbers:
+- 2
+- 3
+- null
+- 1
+- null
+- 2
+- 2
+- 0
+- 0
+hmax:
+- 1
+- 1
+- null
+- 1
+- null
+- 1
+- 1
+- 0
+- 0
+hmax_explicit:
+- 1
+- 1
+- null
+- 1
+- null
+- 1
+- 1
+- 0
+- 0
+hmax_no_numbers:
+- 1
+- 1
+- null
+- 1
+- null
+- 1
+- 1
+- 0
+- 0
