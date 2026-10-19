@@ -773,6 +773,92 @@ def test_inadmissible_numeric_variant_keeps_assign_and_complex_achievers(
         assert h(progress, heuristic_class, inadmissible=True) == 5, name
 
 
+def _initial_h(encoder: Encoder, heuristic_class) -> float | None:
+    assert encoder.goal is not None
+    heuristic: Heuristic = heuristic_class(
+        encoder.actions,
+        encoder.fluent_domains,
+        encoder.events,
+        encoder.goal,
+        internal_caching=False,
+        cache_value_in_state=False,
+        inadmissible_numeric_heuristic_variant=False,
+    )
+    ss: SearchSpaceABC = encoder.search_space
+    return heuristic.eval(ss.initial_state(), ss)
+
+
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+def test_zero_weight_fluent_is_not_an_achiever(disable_rustamer):
+    """`x = 0`, goal `x + y - y >= 5`: `y`'s coefficient cancels to 0, so `a`:
+    `y := 3` must not count as an achiever of the goal -- only `b`: `x += 1`,
+    applied 5 times, does."""
+
+    reload_tamerlite(disable_rustamer)
+    from tamerlite.core import HAdd, HMax
+
+    x = Fluent("x", RealType())
+    y = Fluent("y", RealType())
+    a = InstantaneousAction("a")
+    a.add_effect(y, 3)
+    b = InstantaneousAction("b")
+    b.add_increase_effect(x, 1)
+    problem = Problem("zero_weight_achiever")
+    problem.add_fluent(x, default_initial_value=0)
+    problem.add_fluent(y, default_initial_value=0)
+    problem.add_action(a)
+    problem.add_action(b)
+    problem.add_goal(GE(Minus(Plus(x, y), y), 5))
+
+    encoder = _encode_without_preprocessing(problem)
+    for heuristic_class in (HAdd, HMax):
+        assert _initial_h(encoder, heuristic_class) == 5, heuristic_class.__name__
+
+
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+@pytest.mark.parametrize("zero_term", ["cancelled_fluent", "zero_multiplier"])
+def test_zero_weight_term_keeps_constant_increase(zero_term, disable_rustamer):
+    """`x = 0`, goal `x >= 5`, achieved by `b`: `x := x + <zero> + 1`, where
+    `<zero>` is a term whose coefficients all cancel to 0 -- a constant
+    increase of 1, applied 5 times, not a complex effect applied once. With
+    `zero_multiplier`, `<zero>` is `(0 * z / 2) * w`, linear only if the
+    zero-multiplied `z` term folds into the constant 0. `c` writes the
+    fluents in `<zero>` so they aren't folded into constants."""
+
+    reload_tamerlite(disable_rustamer)
+    from tamerlite.core import HAdd, HMax
+
+    x = Fluent("x", RealType())
+    y = Fluent("y", RealType())
+    z = Fluent("z", RealType())
+    w = Fluent("w", RealType())
+    if zero_term == "cancelled_fluent":
+        zero = Minus(Plus(x, y), y)
+        value = Plus(zero, 1)
+    else:
+        zero_times_z = Times(Minus(Minus(Plus(y, 1), y), 1), z)
+        zero = Times(Div(zero_times_z, 2), w)
+        value = Plus(x, zero, 1)
+    b = InstantaneousAction("b")
+    b.add_effect(x, value)
+    c = InstantaneousAction("c")
+    c.add_increase_effect(y, 1)
+    c.add_increase_effect(z, 1)
+    c.add_increase_effect(w, 1)
+    problem = Problem("zero_weight_effect")
+    problem.add_fluent(x, default_initial_value=0)
+    problem.add_fluent(y, default_initial_value=0)
+    problem.add_fluent(z, default_initial_value=0)
+    problem.add_fluent(w, default_initial_value=0)
+    problem.add_action(b)
+    problem.add_action(c)
+    problem.add_goal(GE(x, 5))
+
+    encoder = _encode_without_preprocessing(problem)
+    for heuristic_class in (HAdd, HMax):
+        assert _initial_h(encoder, heuristic_class) == 5, heuristic_class.__name__
+
+
 @pytest.mark.parametrize("disable_rustamer", [True, False])
 @pytest.mark.parametrize("multiqueue", [False, True])
 def test_inadmissible_numeric_variant_solves_assign_cancelled(

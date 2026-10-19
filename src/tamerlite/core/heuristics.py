@@ -931,14 +931,14 @@ class DeleteRelaxationHeuristic(Heuristic):
                     result = operands[1]
                     for f, w in operands[0].items():
                         result[f] = result.get(f, 0) - w
-                    simplify(result)
+                    result = simplify(result)
 
                 elif node.kind == "+":
                     result = {}
                     for operand in operands:
                         for f, w in operand.items():
                             result[f] = result.get(f, 0) + w
-                    simplify(result)
+                    result = simplify(result)
 
                 elif node.kind == "/":
                     dividend = operands[1]
@@ -964,7 +964,7 @@ class DeleteRelaxationHeuristic(Heuristic):
                         else:
                             polynomial = operand
 
-                    if polynomial is None:
+                    if polynomial is None or const_multiplier == 0:
                         result = {None: const_multiplier}
                     else:
                         for f in polynomial:
