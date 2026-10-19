@@ -755,6 +755,27 @@ class SearchSpaceABC(ABC):
     def has_deadline(self) -> bool:
         """Whether a makespan deadline pins `end_plan - start_plan`."""
 
+    @property
+    @abstractmethod
+    def epsilon(self) -> Fraction:
+        """The minimal separation between two mutex events."""
+
+    @abstractmethod
+    def makespan(self, state: State) -> Fraction | int:
+        """How far into the plan a temporal state already reaches: a lower
+        bound on the makespan of any plan through it, for the
+        `DedupPolicy.DOMINANCE` makespan dominance check (`search.py`).
+
+        It is the earliest time of the state's last `path` event.
+        `_expand_event` orders every new event after every event already in
+        `path` (by `epsilon` if the two are mutex, by 0 otherwise), so `path`
+        is totally ordered and its last event is the latest one. The STN's
+        `distances` are its minimal solution, so that time is a lower bound
+        on the event's time in every schedule. `start_plan` always sits at 0:
+        the deadline's is the only constraint that could pull it later, and
+        every event follows `start_plan`, so it can't without making the STN
+        inconsistent."""
+
     @abstractmethod
     def reset(self):
         pass
@@ -874,6 +895,18 @@ class SearchSpace(SearchSpaceABC):
     @property
     def has_deadline(self) -> bool:
         return self._deadline is not None
+
+    @property
+    def epsilon(self) -> Fraction:
+        return self._epsilon
+
+    def makespan(self, state: State) -> Fraction | int:
+        tn = state.temporal_network
+        assert tn is not None
+        if not state.path:
+            return 0
+        bound: Fraction | int = -tn.distances[state.path[-1]]
+        return bound
 
     @property
     def relevant_actions(self) -> list[Action]:

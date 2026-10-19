@@ -46,9 +46,31 @@ type EventFluents = Vec<
 type DurationInterval = (Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool);
 type PyDurationInterval = (Vec<PyExpressionNode>, Vec<PyExpressionNode>, bool, bool);
 
+/// The `DeltaSTN` tolerance of a search space with minimal mutex separation
+/// `epsilon`.
+pub(crate) fn stn_tolerance(epsilon: f64) -> f64 {
+    epsilon / 1000.0
+}
+
 pub trait SearchSpaceTrait {
     fn is_temporal(&self) -> bool;
     fn has_deadline(&self) -> bool;
+    /// The minimal separation between two mutex events.
+    fn epsilon(&self) -> f64;
+    /// How far into the plan a temporal state already reaches: a lower bound
+    /// on the makespan of any plan through it, for the
+    /// `DedupPolicy::Dominance` makespan dominance check (`search.rs`).
+    ///
+    /// It is the earliest time of the state's last `path` event.
+    /// `expand_event` orders every new event after every event already in
+    /// `path` (by `epsilon` if the two are mutex, by 0 otherwise), so `path` is
+    /// totally ordered and its last event is the latest one. The STN's
+    /// `distances` are its minimal solution, so that time is a lower bound on
+    /// the event's time in every schedule. `start_plan` always sits at 0: the
+    /// deadline's is the only constraint that could pull it later, and every
+    /// event follows `start_plan`, so it can't without making the STN
+    /// inconsistent.
+    fn makespan(&self, state: &State) -> f64;
     fn tn_interpreter(&self) -> &TNInterpreter;
     fn initial_state(&self, initial_state: Option<Vec<PyExpressionNode>>) -> PyResult<State>;
     fn get_successor_state(&self, state: &State, action: Action) -> PyResult<Option<State>>;
@@ -657,6 +679,24 @@ impl SearchSpaceTrait for SearchSpace {
         self.deadline.is_some()
     }
 
+    fn epsilon(&self) -> f64 {
+        self.epsilon
+    }
+
+    fn makespan(&self, state: &State) -> f64 {
+        let tn = state
+            .temporal_network
+            .as_ref()
+            .expect("a temporal state has a temporal network");
+        match PersistentList::iter_rev(&state.path).next() {
+            None => 0.0,
+            Some((action, pos, id)) => self
+                .tn_interpreter
+                .get_event_timing(tn, *action, *pos, *id)
+                .expect("every path event is in the temporal network"),
+        }
+    }
+
     fn tn_interpreter(&self) -> &TNInterpreter {
         &self.tn_interpreter
     }
@@ -678,7 +718,7 @@ impl SearchSpaceTrait for SearchSpace {
             },
         };
         let tn: Option<DeltaSTN<u64, f64>> = if self.is_temporal {
-            let mut tn = DeltaSTN::new(self.epsilon / 1000.0);
+            let mut tn = DeltaSTN::new(stn_tolerance(self.epsilon));
             if let Some(deadline) = &self.deadline {
                 tn.add(
                     &self.tn_interpreter.end_plan_id,
