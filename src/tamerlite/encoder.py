@@ -1035,15 +1035,24 @@ class Encoder:
             bool: True if the objects are equivalent; False otherwise.
         """
 
-        em = self._problem.environment.expression_manager
-        obj1_exp = em.ObjectExp(obj1)
-        obj2_exp = em.ObjectExp(obj2)
-
-        swap_goal: dict[Any, Any] = {obj1_exp: obj2_exp, obj2_exp: obj1_exp}
+        # The goal comes from the grounded problem, the initial state from the
+        # lifted one: each half builds its expressions in its own problem's
+        # environment.
+        problem_em = self._problem.environment.expression_manager
+        goal_obj1_exp = problem_em.ObjectExp(obj1)
+        goal_obj2_exp = problem_em.ObjectExp(obj2)
+        swap_goal: dict[Any, Any] = {
+            goal_obj1_exp: goal_obj2_exp,
+            goal_obj2_exp: goal_obj1_exp,
+        }
         substituter = self._problem.environment.substituter
         for c in obj_to_conjuncts.get(obj1, []) + obj_to_conjuncts.get(obj2, []):
             if canonicalizer.walk(substituter.substitute(c, swap_goal)) not in goal:
                 return False
+
+        lifted_problem_em = self._lifted_problem.environment.expression_manager
+        obj1_exp = lifted_problem_em.ObjectExp(obj1)
+        obj2_exp = lifted_problem_em.ObjectExp(obj2)
 
         def swap_exp(exp: FNode) -> FNode:
             if exp == obj1_exp:
@@ -1073,7 +1082,7 @@ class Encoder:
             if fluent_exp in seen_fluent_exps:
                 continue
             seen_fluent_exps.add(fluent_exp)
-            swapped = em.FluentExp(
+            swapped = lifted_problem_em.FluentExp(
                 fluent_exp.fluent(), [swap_exp(arg) for arg in fluent_exp.args]
             )
             if self._lifted_problem.initial_value(swapped) != swap_exp(value_exp):
