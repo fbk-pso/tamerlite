@@ -260,14 +260,16 @@ class DeleteRelaxationHeuristic(Heuristic):
     Every leaf condition read by an operator or by the goal gets a dense cid
     at construction; `_eval_core` initializes the cost of each cid from the
     state, then pops operators from a min-heap in order of precondition cost,
-    expanding each one exactly once (no reopening) and updating the cost of
-    the conditions it achieves. The goal is a pseudo-operator `_goal_op`, and
-    the search stops as soon as it is popped -- except for hmax when some
-    operator achieves a simple numeric condition (`_drain_heap`). There, the
+    expanding each one and updating the cost of the conditions it achieves.
+    The goal is a pseudo-operator `_goal_op`, and the search stops as soon as
+    it is popped -- except for hmax when some operator achieves a simple
+    numeric condition (`_drain_heap`). There, the
     condition's cost (`rep * cost` plus the cheapest precondition cost among
     the achievers expanded so far) can be lower than the cost of the operator
     being expanded, so an operator popped after the goal can still lower the
-    goal's cost, and the heap is drained instead. Without such achievers
+    goal's cost, and the heap is drained instead; an operator already
+    expanded whose precondition gets cheaper is reopened and expanded again.
+    Without such achievers every operator is expanded exactly once:
     every relaxed cost exceeds its achiever's, costs pop in non-decreasing
     order, and stopping at the goal is exact.
 
@@ -1325,15 +1327,17 @@ class DeleteRelaxationHeuristic(Heuristic):
         def update_condition_cost(cid: int, cost: float, op: int) -> None:
             """Lower the cost of `cid` to `cost`, achieved by operator `op`,
             if that improves it, and update the cost of every operator
-            reading it that is still open. On a tie, hff's `reached_by`
-            prefers the operator with the larger id."""
+            reading it that is still open -- or, with `_drain_heap`, also
+            reopen a closed reader whose cost drops. On a tie, hff's
+            `reached_by` prefers the operator with the larger id."""
             if cost < cond_cost[cid]:
                 first_reach = cond_cost[cid] == math.inf
                 cond_cost[cid] = cost
                 if hff:
                     reached_by[cid] = op
                 for reader in self._cond_to_ops[cid]:
-                    if closed[reader]:
+                    if closed[reader] and not self._drain_heap:
+                        # monotone fix-point: a closed operator cannot get cheaper
                         continue
                     if first_reach:
                         unreached[reader] -= 1
@@ -1345,6 +1349,7 @@ class DeleteRelaxationHeuristic(Heuristic):
                     )
                     if reader_cost < op_cost[reader]:
                         op_cost[reader] = reader_cost
+                        closed[reader] = False
                         heapq.heappush(heap, (reader_cost, reader))
             elif hff and cost == cond_cost[cid] and op > reached_by[cid]:
                 reached_by[cid] = op

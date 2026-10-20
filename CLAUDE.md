@@ -342,14 +342,17 @@ cores must agree on its values even where their pop orders differ.**
 `DeleteRelaxationHeuristic` (both cores) interns every leaf condition read by an
 operator or the goal into a dense cid at construction, initializes each cid's cost
 from the state per evaluation, then pops operators (plus a goal
-pseudo-operator) from a min-heap and expands each exactly once, never
-reopening it. The search stops when the goal pseudo-operator pops, except for
-hmax when some operator achieves a simple numeric condition (`drain_heap`):
-there the numeric-condition cost (`rep * cost` + the cheapest precondition
-cost among achievers expanded so far) can undercut the operator being
-expanded, so a later pop can still lower the goal and the heap is drained.
-Without such achievers costs pop in non-decreasing order and stopping early
-is exact. A precondition without OR nodes is only recomputed once all its
+pseudo-operator) from a min-heap and expands them. The search stops when the
+goal pseudo-operator pops, except for hmax when some operator achieves a
+simple numeric condition (`drain_heap`): there the numeric-condition cost
+(`rep * cost` + the cheapest precondition cost among achievers expanded so
+far) can undercut the operator being expanded, so a later pop can still lower
+the goal and the heap is drained -- and `update_condition_cost` reopens an
+already-closed operator whose precondition gets cheaper, so the drop reaches
+the goal through it (`test_heuristic_values[HMaxNumericReopening]`).
+Without such achievers costs pop in non-decreasing order, each operator is
+expanded exactly once, closed readers are skipped, and stopping early is
+exact. A precondition without OR nodes is only recomputed once all its
 distinct leaves are reached (`unreached` counter): before that its cost is
 `inf`, so skipping the recomputation changes neither pushes nor values.
 Unless `drain_heap`, the fix-point is monotone (no push below the last pop),

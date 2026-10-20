@@ -1769,16 +1769,18 @@ pub struct DeleteRelaxationHeuristicConfig {
 /// Every leaf condition read by an operator or by the goal gets a dense cid
 /// at construction; `eval` initializes the cost of each cid from the state,
 /// then pops operators from a min-heap in order of precondition cost,
-/// expanding each one exactly once (no reopening) and updating the cost of
-/// the conditions it achieves. The goal is a pseudo-operator `goal_op`, and
-/// the search stops as soon as it is popped -- except for hmax when some
-/// operator achieves a simple numeric condition (`drain_heap`). There, the
-/// condition's cost (`rep * cost` plus the cheapest precondition cost among
-/// the achievers expanded so far) can be lower than the cost of the operator
-/// being expanded, so an operator popped after the goal can still lower the
-/// goal's cost, and the heap is drained instead. Without such achievers every
-/// relaxed cost exceeds its achiever's, costs pop in non-decreasing order, and
-/// stopping at the goal is exact.
+/// expanding each one and updating the cost of the conditions it achieves.
+/// The goal is a pseudo-operator `goal_op`, and the search stops as soon as
+/// it is popped -- except for hmax when some operator achieves a simple
+/// numeric condition (`drain_heap`). There, the condition's cost
+/// (`rep * cost` plus the cheapest precondition cost among the achievers
+/// expanded so far) can be lower than the cost of the operator being
+/// expanded, so an operator popped after the goal can still lower the goal's
+/// cost, and the heap is drained instead; an operator already expanded whose
+/// precondition gets cheaper is reopened and expanded again. Without such
+/// achievers every operator is expanded exactly once: every relaxed cost
+/// exceeds its achiever's, costs pop in non-decreasing order, and stopping at
+/// the goal is exact.
 ///
 /// A precondition without OR nodes costs `inf` while any of its leaves is
 /// unreached, so its cost is only computed once `unreached` (per operator,
@@ -2466,8 +2468,9 @@ impl DeleteRelaxationHeuristic {
 
     /// Lowers the cost of `cid` to `cost`, achieved by operator `op`, if
     /// that improves it, and updates the cost of every operator reading it
-    /// that is still open. On a tie, hff's `reached_by` prefers the operator
-    /// with the larger id.
+    /// that is still open -- or, with `drain_heap`, also reopens a closed
+    /// reader whose cost drops. On a tie, hff's `reached_by` prefers the
+    /// operator with the larger id.
     fn update_condition_cost(&self, cid: u32, cost: f64, op: usize, buffers: &mut FixpointBuffers) {
         let hff = matches!(self.heuristic_kind, HeuristicKind::HFF);
         let c = cid as usize;
@@ -2479,7 +2482,8 @@ impl DeleteRelaxationHeuristic {
             }
             let hmax = matches!(self.heuristic_kind, HeuristicKind::HMAX);
             for &reader in &self.cond_to_ops[c] {
-                if buffers.closed[reader] {
+                if buffers.closed[reader] && !self.drain_heap {
+                    // monotone fix-point: a closed operator cannot get cheaper
                     continue;
                 }
                 if first_reach {
@@ -2497,6 +2501,7 @@ impl DeleteRelaxationHeuristic {
                 );
                 if reader_cost < buffers.op_cost[reader] {
                     buffers.op_cost[reader] = reader_cost;
+                    buffers.closed[reader] = false;
                     buffers.queue.push(reader_cost, reader);
                 }
             }
