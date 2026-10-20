@@ -175,7 +175,7 @@ class Encoder:
         # neither result depends on fluent numbering.
         self._fluent_name_cache: dict[FNode, str] = {}
         self._normalized_expression_cache: dict[FNode, FNode] = {}
-        # See `_compute_obj_to_all_init_assignments_map`.
+        # See `_are_equivalent_objects`.
         self._obj_to_all_init_assignments: (
             dict[UPObject, list[tuple[FNode, FNode]]] | None
         ) = None
@@ -762,7 +762,15 @@ class Encoder:
         for c in conjuncts:
             for obj in set(extract_objects(c)):
                 obj_to_conjuncts.setdefault(obj, []).append(c)
-        obj_to_init_assignments = self._compute_obj_to_init_assignments_map()
+        # An explicit assignment to the fluent's default value is left out: it
+        # is indistinguishable from an implicit one.
+        explicit = self._lifted_problem.explicit_initial_values
+        defaults = self._lifted_problem.fluents_defaults
+        obj_to_init_assignments = self._compute_obj_to_assignments_map(
+            (fluent_exp, value_exp)
+            for fluent_exp, value_exp in explicit.items()
+            if defaults.get(fluent_exp.fluent()) != value_exp
+        )
         # Objects that are some fluent's default value make the initial state
         # depend on which groundings are implicit; see `_are_equivalent_objects`.
         default_objects = {
@@ -955,57 +963,31 @@ class Encoder:
                 tainted_objects.update(self._problem.objects(ifun.return_type))
         return tainted_objects
 
-    def _compute_obj_to_init_assignments_map(
-        self,
+    @staticmethod
+    def _compute_obj_to_assignments_map(
+        assignments: Iterable[tuple[FNode, FNode]],
     ) -> dict[UPObject, list[tuple[FNode, FNode]]]:
         """
-        Build a mapping from each object to the explicit initial-value
-        assignments it participates in, either as a fluent argument or as the
-        assigned value. An assignment to the fluent's default value is left
-        out: it is indistinguishable from an implicit one.
+        Build a mapping from each object to the initial-value assignments it
+        participates in, either as a fluent argument or as the assigned value.
+
+        Args:
+            assignments (Iterable[Tuple[FNode, FNode]]): The (fluent
+                expression, value expression) assignments to index.
 
         Returns:
             Dict[UPObject, List[Tuple[FNode, FNode]]]: Mapping from objects to
-            the list of (fluent expression, value expression) assignments they
-            appear in.
+            the list of assignments they appear in.
         """
 
-        defaults = self._lifted_problem.fluents_defaults
         obj_to_assignments: dict[UPObject, list[tuple[FNode, FNode]]] = {}
-        for (
-            fluent_exp,
-            value_exp,
-        ) in self._lifted_problem.explicit_initial_values.items():
-            if defaults.get(fluent_exp.fluent()) == value_exp:
-                continue
+        for fluent_exp, value_exp in assignments:
             objs = {arg.object() for arg in fluent_exp.args if arg.is_object_exp()}
             if value_exp.is_object_exp():
                 objs.add(value_exp.object())
             for obj in objs:
                 obj_to_assignments.setdefault(obj, []).append((fluent_exp, value_exp))
         return obj_to_assignments
-
-    def _compute_obj_to_all_init_assignments_map(
-        self,
-    ) -> dict[UPObject, list[tuple[FNode, FNode]]]:
-        """
-        Like `_compute_obj_to_init_assignments_map`, but over every grounding
-        of every fluent (`initial_values`, defaults included). Computed once,
-        on first use.
-        """
-
-        if self._obj_to_all_init_assignments is None:
-            obj_to_assignments: dict[UPObject, list[tuple[FNode, FNode]]] = {}
-            for fluent_exp, value_exp in self._lifted_problem.initial_values.items():
-                objs = {arg.object() for arg in fluent_exp.args if arg.is_object_exp()}
-                if value_exp.is_object_exp():
-                    objs.add(value_exp.object())
-                for obj in objs:
-                    obj_to_assignments.setdefault(obj, []).append(
-                        (fluent_exp, value_exp)
-                    )
-            self._obj_to_all_init_assignments = obj_to_assignments
-        return self._obj_to_all_init_assignments
 
     def _are_equivalent_objects(
         self,
@@ -1071,21 +1053,18 @@ class Encoder:
             return exp
 
         every_grounding = obj1 in default_objects or obj2 in default_objects
-        assignments = (
-            self._compute_obj_to_all_init_assignments_map()
-            if every_grounding
-            else obj_to_init_assignments
-        )
-        explicit = self._lifted_problem.explicit_initial_values
-        defaults = self._lifted_problem.fluents_defaults
-
-        def initial_value(fluent_exp: FNode) -> FNode | None:
-            if every_grounding:
-                return self._lifted_problem.initial_value(fluent_exp)
-            value = explicit.get(fluent_exp)
-            if value is None:
-                return defaults.get(fluent_exp.fluent())
-            return value
+        if not every_grounding:
+            assignments = obj_to_init_assignments
+        else:
+            # Every grounding of every fluent, defaults included: computed
+            # once, on first use.
+            if self._obj_to_all_init_assignments is None:
+                self._obj_to_all_init_assignments = (
+                    self._compute_obj_to_assignments_map(
+                        self._lifted_problem.initial_values.items()
+                    )
+                )
+            assignments = self._obj_to_all_init_assignments
 
         seen_fluent_exps: set[FNode] = set()
         for fluent_exp, value_exp in assignments.get(obj1, []) + assignments.get(
@@ -1097,7 +1076,7 @@ class Encoder:
             swapped = em.FluentExp(
                 fluent_exp.fluent(), [swap_exp(arg) for arg in fluent_exp.args]
             )
-            if initial_value(swapped) != swap_exp(value_exp):
+            if self._lifted_problem.initial_value(swapped) != swap_exp(value_exp):
                 return False
 
         return True

@@ -2825,20 +2825,13 @@ def test_symmetry_breaking_compression_safe_prunes_witness_fluent():
     # Confirm the fixture reproduces the bug: an `Encoder` that reads the
     # *compiled* problem's own (pruned) initial state, as it did before the
     # fix, must wrongly merge p1-0/p1-2.
-    orig_init_assignments = Encoder._compute_obj_to_init_assignments_map
+    orig_assignments_map = Encoder._compute_obj_to_assignments_map
 
-    def pre_fix_init_assignments(self):
-        obj_to_assignments: dict = {}
-        for fluent_exp, value_exp in self._problem_initial_values.items():
-            objs = {arg.object() for arg in fluent_exp.args if arg.is_object_exp()}
-            if value_exp.is_object_exp():
-                objs.add(value_exp.object())
-            for obj in objs:
-                obj_to_assignments.setdefault(obj, []).append((fluent_exp, value_exp))
-        return obj_to_assignments
+    def pre_fix_assignments_map(assignments):
+        return orig_assignments_map(compiled_problem.initial_values.items())
 
-    Encoder._compute_obj_to_init_assignments_map = (  # type: ignore[method-assign]
-        pre_fix_init_assignments
+    Encoder._compute_obj_to_assignments_map = staticmethod(  # type: ignore[method-assign]
+        pre_fix_assignments_map
     )
     try:
         pre_fix_encoder = Encoder(
@@ -2854,7 +2847,9 @@ def test_symmetry_breaking_compression_safe_prunes_witness_fluent():
             for group in pre_fix_encoder._compute_equivalent_objects()
         ]
     finally:
-        Encoder._compute_obj_to_init_assignments_map = orig_init_assignments  # type: ignore[method-assign]
+        Encoder._compute_obj_to_assignments_map = staticmethod(  # type: ignore[method-assign]
+            orig_assignments_map
+        )
     assert {"p1-0", "p1-2"} in pre_fix_groups
 
     # With the fix, the same compiled problem's equivalence classes must
