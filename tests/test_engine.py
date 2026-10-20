@@ -107,6 +107,9 @@ def _build_problems():
         problems_generator.get_problem_if_numeric_symmetry_retained(),
         problems_generator.get_problem_if_object_argument_symmetry_unsound(),
         problems_generator.get_problem_if_hierarchical_type_argument(),
+        problems_generator.get_problem_metric_object_taint(),
+        problems_generator.get_problem_metric_action_cost_object(in_default=True),
+        problems_generator.get_problem_metric_action_cost_object(in_default=False),
     ]
 
     up_example_problems = list(
@@ -4104,6 +4107,45 @@ def test_symmetry_breaking_interpreted_function_metric_action_cost_taint():
     assert {"l1"} in group_sets
     assert {"l2"} in group_sets
     assert {"l1", "l2"} not in group_sets
+
+
+def test_symmetry_breaking_metric_objects_excluded():
+    """
+    An object named in a quality metric is not interchangeable with the
+    others, even when the initial state and the goal can't tell them apart --
+    wherever in the metric it appears: a `MinimizeExpressionOnFinalState`
+    expression, the `default` of `MinimizeActionCosts`, or one of its `costs`.
+    Treating `t1` and `t2` as interchangeable makes first-use ordering refuel
+    `t1` first, which prunes every zero-valued plan, and the anytime loop then
+    reports a worse plan as optimal.
+    """
+
+    for problem in [
+        problems_generator.get_problem_metric_object_taint(),
+        problems_generator.get_problem_metric_action_cost_object(in_default=True),
+        problems_generator.get_problem_metric_action_cost_object(in_default=False),
+    ]:
+        groups = _equivalence_groups(problem)
+        assert {"t1"} in groups
+        assert {"t2"} in groups
+        assert {"t1", "t2"} not in groups
+
+        for disable_rustamer in [True, False]:
+            reload_tamerlite(disable_rustamer)
+            search = tamerlite.SearchParams(
+                search="wastar",
+                heuristic="hadd",
+                symmetry_breaking=True,
+                compression_safe_actions=False,
+            )
+            with AnytimePlanner(name="tamerlite", params={"search": search}) as planner:
+                results = list(planner.get_solutions(problem, timeout=None))
+            assert results[-1].status == ResultStatus.SOLVED_OPTIMALLY
+            with PlanValidator(problem_kind=problem.kind) as v:
+                val_res: ValidationResult = v.validate(problem, results[-1].plan)
+                assert val_res
+                assert val_res.metric_evaluations is not None
+                assert list(val_res.metric_evaluations.values()) == [0]
 
 
 def test_symmetry_breaking_interpreted_function_object_return_taint():
