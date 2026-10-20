@@ -175,10 +175,6 @@ class Encoder:
         # neither result depends on fluent numbering.
         self._fluent_name_cache: dict[FNode, str] = {}
         self._normalized_expression_cache: dict[FNode, FNode] = {}
-        # See `_are_equivalent_objects`.
-        self._obj_to_all_init_assignments: (
-            dict[UPObject, list[tuple[FNode, FNode]]] | None
-        ) = None
 
         self._problem_initial_values = problem.initial_values
 
@@ -751,15 +747,12 @@ class Encoder:
         canonicalizer = _CommutativeCanonicalizer(self._problem.environment)
         # The goal's distinct conjuncts in canonical form: a conjunct stated
         # twice, possibly with commutative arguments reordered, counts once.
-        conjuncts = list(
-            dict.fromkeys(
-                canonicalizer.walk(c)
-                for c in extract_and_arguments(list(self._problem.goals))
-            )
-        )
-        goal = set(conjuncts)
+        goal = {
+            canonicalizer.walk(c)
+            for c in extract_and_arguments(list(self._problem.goals))
+        }
         obj_to_conjuncts: dict[UPObject, list[FNode]] = {}
-        for c in conjuncts:
+        for c in goal:
             for obj in set(extract_objects(c)):
                 obj_to_conjuncts.setdefault(obj, []).append(c)
         # An explicit assignment to the fluent's default value is left out: it
@@ -771,13 +764,15 @@ class Encoder:
             for fluent_exp, value_exp in explicit.items()
             if defaults.get(fluent_exp.fluent()) != value_exp
         )
-        # Objects that are some fluent's default value make the initial state
-        # depend on which groundings are implicit; see `_are_equivalent_objects`.
-        default_objects = {
-            d.object()
-            for d in self._lifted_problem.fluents_defaults.values()
-            if d.is_object_exp()
-        }
+        # The explicit non-default assignments are enough to compare two
+        # objects unless one of them is some fluent's default value: an
+        # implicit assignment's value is the default, which the swap leaves
+        # unchanged only if neither object is that default. Otherwise every
+        # grounding is compared, from a map built on first use.
+        default_objects = {d.object() for d in defaults.values() if d.is_object_exp()}
+        obj_to_all_init_assignments: (
+            dict[UPObject, list[tuple[FNode, FNode]]] | None
+        ) = None
 
         objects: dict[Type, list[UPObject]] = {}
         for obj in self._problem.all_objects:
@@ -801,14 +796,24 @@ class Encoder:
                 )
                 candidates = buckets.setdefault(signature, [])
                 for i in candidates:
+                    representative = groups[i][0]
+                    if representative in default_objects or obj in default_objects:
+                        if obj_to_all_init_assignments is None:
+                            obj_to_all_init_assignments = (
+                                self._compute_obj_to_assignments_map(
+                                    self._lifted_problem.initial_values.items()
+                                )
+                            )
+                        init_assignments = obj_to_all_init_assignments
+                    else:
+                        init_assignments = obj_to_init_assignments
                     if self._are_equivalent_objects(
-                        groups[i][0],
+                        representative,
                         obj,
                         goal,
                         obj_to_conjuncts,
                         canonicalizer,
-                        obj_to_init_assignments,
-                        default_objects,
+                        init_assignments,
                     ):
                         groups[i].append(obj)
                         break
@@ -997,7 +1002,6 @@ class Encoder:
         obj_to_conjuncts: dict[UPObject, list[FNode]],
         canonicalizer: _CommutativeCanonicalizer,
         obj_to_init_assignments: dict[UPObject, list[tuple[FNode, FNode]]],
-        default_objects: set[UPObject],
     ) -> bool:
         """
         Determine whether swapping `obj1` and `obj2` everywhere (as fluent
@@ -1010,12 +1014,9 @@ class Encoder:
         arguments doesn't matter; any other difference in form only makes the
         objects look different.
 
-        The initial state holds if every assignment involving either object,
-        swapped, is again an assignment of the initial state. When neither
-        object is a fluent's default value, the explicit non-default
-        assignments are enough: an implicit assignment's value is the
-        default, which the swap leaves unchanged. Otherwise every grounding
-        is checked.
+        The initial state holds if every assignment in
+        `obj_to_init_assignments` involving either object, swapped, is again
+        an assignment of the initial state.
 
         Args:
             obj1 (UPObject): The first object to compare.
@@ -1026,10 +1027,11 @@ class Encoder:
             canonicalizer (_CommutativeCanonicalizer): The walker that built
                 `goal`.
             obj_to_init_assignments (Dict[UPObject, List[Tuple[FNode, FNode]]]):
-                Mapping from objects to the explicit non-default initial-value
-                assignments they appear in (as an argument or as the value).
-            default_objects (Set[UPObject]): The objects that are some
-                fluent's default value.
+                Mapping from objects to the initial-value assignments they
+                appear in (as an argument or as the value). It must include
+                every assignment the swap could change: the explicit
+                non-default ones, plus the implicit ones if either object is
+                some fluent's default value.
 
         Returns:
             bool: True if the objects are equivalent; False otherwise.
@@ -1059,24 +1061,10 @@ class Encoder:
             }
         )
 
-        every_grounding = obj1 in default_objects or obj2 in default_objects
-        if not every_grounding:
-            assignments = obj_to_init_assignments
-        else:
-            # Every grounding of every fluent, defaults included: computed
-            # once, on first use.
-            if self._obj_to_all_init_assignments is None:
-                self._obj_to_all_init_assignments = (
-                    self._compute_obj_to_assignments_map(
-                        self._lifted_problem.initial_values.items()
-                    )
-                )
-            assignments = self._obj_to_all_init_assignments
-
         seen_fluent_exps: set[FNode] = set()
-        for fluent_exp, value_exp in assignments.get(obj1, []) + assignments.get(
-            obj2, []
-        ):
+        for fluent_exp, value_exp in obj_to_init_assignments.get(
+            obj1, []
+        ) + obj_to_init_assignments.get(obj2, []):
             if fluent_exp in seen_fluent_exps:
                 continue
             seen_fluent_exps.add(fluent_exp)
