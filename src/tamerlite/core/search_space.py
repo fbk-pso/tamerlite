@@ -999,10 +999,8 @@ class SearchSpace(SearchSpaceABC):
                 _, id = new_state.todo.pop(action)
                 for index in range(1, len(events)):
                     _, e = events[index]
-                    # `_expand_event` relies on these checks having been made
-                    if not evaluate(
-                        e.conditions, new_state
-                    ) or not self._effect_independent_start_conditions_hold(
+                    # `_expand_event` relies on this check having been made
+                    if not self._effect_independent_start_conditions_hold(
                         action, index, new_state
                     ):
                         return None
