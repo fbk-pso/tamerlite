@@ -1036,30 +1036,28 @@ class Encoder:
         """
 
         # The goal comes from the grounded problem, the initial state from the
-        # lifted one: each half builds its expressions in its own problem's
-        # environment.
+        # lifted one: each half swaps with its own problem's substituter.
         problem_em = self._problem.environment.expression_manager
-        goal_obj1_exp = problem_em.ObjectExp(obj1)
-        goal_obj2_exp = problem_em.ObjectExp(obj2)
-        swap_goal: dict[Any, Any] = {
-            goal_obj1_exp: goal_obj2_exp,
-            goal_obj2_exp: goal_obj1_exp,
-        }
-        substituter = self._problem.environment.substituter
+        goal_substituter = self._problem.environment.substituter
+        swap_goal = goal_substituter.normalize_substitutions(
+            {
+                problem_em.ObjectExp(obj1): problem_em.ObjectExp(obj2),
+                problem_em.ObjectExp(obj2): problem_em.ObjectExp(obj1),
+            }
+        )
         for c in obj_to_conjuncts.get(obj1, []) + obj_to_conjuncts.get(obj2, []):
-            if canonicalizer.walk(substituter.substitute(c, swap_goal)) not in goal:
+            swapped_c = goal_substituter.substitute_normalized(c, swap_goal)
+            if canonicalizer.walk(swapped_c) not in goal:
                 return False
 
         lifted_problem_em = self._lifted_problem.environment.expression_manager
-        obj1_exp = lifted_problem_em.ObjectExp(obj1)
-        obj2_exp = lifted_problem_em.ObjectExp(obj2)
-
-        def swap_exp(exp: FNode) -> FNode:
-            if exp == obj1_exp:
-                return obj2_exp
-            if exp == obj2_exp:
-                return obj1_exp
-            return exp
+        init_substituter = self._lifted_problem.environment.substituter
+        swap_init = init_substituter.normalize_substitutions(
+            {
+                lifted_problem_em.ObjectExp(obj1): lifted_problem_em.ObjectExp(obj2),
+                lifted_problem_em.ObjectExp(obj2): lifted_problem_em.ObjectExp(obj1),
+            }
+        )
 
         every_grounding = obj1 in default_objects or obj2 in default_objects
         if not every_grounding:
@@ -1082,10 +1080,12 @@ class Encoder:
             if fluent_exp in seen_fluent_exps:
                 continue
             seen_fluent_exps.add(fluent_exp)
-            swapped = lifted_problem_em.FluentExp(
-                fluent_exp.fluent(), [swap_exp(arg) for arg in fluent_exp.args]
+            swapped_fluent_exp, swapped_value_exp = (
+                init_substituter.substitute_normalized(exp, swap_init)
+                for exp in (fluent_exp, value_exp)
             )
-            if self._lifted_problem.initial_value(swapped) != swap_exp(value_exp):
+            initial_value = self._lifted_problem.initial_value(swapped_fluent_exp)
+            if initial_value != swapped_value_exp:
                 return False
 
         return True
