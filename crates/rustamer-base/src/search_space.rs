@@ -453,6 +453,9 @@ impl SearchSpace {
                     }
                 }
             } else {
+                if !self.symmetry_allows_opening(state, action) {
+                    return Ok(None);
+                }
                 // Check if action is applicable before creating the new state
                 if !self.is_sat(&events[0].1.conditions, state)?
                     || !self.effect_independent_start_conditions_hold(
@@ -462,9 +465,6 @@ impl SearchSpace {
                         state,
                     )?
                 {
-                    return Ok(None);
-                }
-                if !self.symmetry_allows_opening(state, action) {
                     return Ok(None);
                 }
 
