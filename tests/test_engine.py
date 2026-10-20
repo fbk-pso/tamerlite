@@ -107,6 +107,9 @@ def _build_problems():
         problems_generator.get_problem_if_numeric_symmetry_retained(),
         problems_generator.get_problem_if_object_argument_symmetry_unsound(),
         problems_generator.get_problem_if_hierarchical_type_argument(),
+        problems_generator.get_problem_metric_object_taint(),
+        problems_generator.get_problem_metric_action_cost_object(in_default=True),
+        problems_generator.get_problem_metric_action_cost_object(in_default=False),
     ]
 
     up_example_problems = list(
@@ -709,6 +712,16 @@ def _encode_without_preprocessing(problem: Problem) -> Encoder:
         relevance_analysis=False,
         relevant_equality=False,
     )
+
+
+def _equivalence_groups(problem: Problem) -> list[set[str]]:
+    """The names in each equivalence class `Encoder` computes for `problem`."""
+    return [
+        {obj.name for obj in group}
+        for group in _encode_without_preprocessing(
+            problem
+        )._compute_equivalent_objects()
+    ]
 
 
 def _assign_cancelled_problem(with_enabler: bool) -> Problem:
@@ -2594,19 +2607,7 @@ def test_symmetry_breaking_retains_legitimate_symmetry():
     """
 
     problem = problems_generator.get_problem_object_value_symmetry_retained()
-    lifted_problem, ground_problem, map_back_action_instance = (
-        testing_utils.compile_problem(problem)
-    )
-    encoder = Encoder(
-        ground_problem,
-        lifted_problem,
-        map_back_action_instance,
-        symmetry_breaking=False,
-        compression_safe_actions=False,
-        relevance_analysis=False,
-    )
-    groups = encoder._compute_equivalent_objects()
-    assert {"a", "b"} in [{obj.name for obj in group} for group in groups]
+    assert {"a", "b"} in _equivalence_groups(problem)
 
 
 def test_symmetry_breaking_default_value_objects():
@@ -2622,34 +2623,10 @@ def test_symmetry_breaking_default_value_objects():
     """
 
     problem = problems_generator.get_problem_default_value_object_symmetry()
-    lifted_problem, ground_problem, map_back_action_instance = (
-        testing_utils.compile_problem(problem)
-    )
-    encoder = Encoder(
-        ground_problem,
-        lifted_problem,
-        map_back_action_instance,
-        symmetry_breaking=False,
-        compression_safe_actions=False,
-        relevance_analysis=False,
-    )
-    groups = encoder._compute_equivalent_objects()
-    assert {"o1", "o2"} in [{obj.name for obj in group} for group in groups]
+    assert {"o1", "o2"} in _equivalence_groups(problem)
 
     asymmetric_problem = problems_generator.get_problem_default_value_object_asymmetry()
-    lifted_problem, ground_problem, map_back_action_instance = (
-        testing_utils.compile_problem(asymmetric_problem)
-    )
-    encoder = Encoder(
-        ground_problem,
-        lifted_problem,
-        map_back_action_instance,
-        symmetry_breaking=False,
-        compression_safe_actions=False,
-        relevance_analysis=False,
-    )
-    groups = encoder._compute_equivalent_objects()
-    assert [{obj.name for obj in group} for group in groups] == [{"x"}, {"y"}, {"z"}]
+    assert _equivalence_groups(asymmetric_problem) == [{"x"}, {"y"}, {"z"}]
 
 
 def test_symmetry_breaking_goal_taint_is_per_object():
@@ -2664,28 +2641,11 @@ def test_symmetry_breaking_goal_taint_is_per_object():
     MinimizeSequentialPlanLength metric).
     """
 
-    def groups_for(problem):
-        lifted_problem, ground_problem, map_back_action_instance = (
-            testing_utils.compile_problem(problem)
-        )
-        encoder = Encoder(
-            ground_problem,
-            lifted_problem,
-            map_back_action_instance,
-            symmetry_breaking=False,
-            compression_safe_actions=False,
-            relevance_analysis=False,
-        )
-        return [
-            {obj.name for obj in group}
-            for group in encoder._compute_equivalent_objects()
-        ]
-
     # Partial taint: an Or(...) goal conjunct is unrecognized and taints the
     # objects it references (p1, p4), but must not affect p2/p3, which only
     # appear in recognized (plain fluent) goal conjuncts and remain
     # genuinely symmetric.
-    groups = groups_for(problems_generator.get_problem_goal_taint_partial())
+    groups = _equivalence_groups(problems_generator.get_problem_goal_taint_partial())
     assert {"p2", "p3"} in groups
     assert {"p1"} in groups
     assert {"p4"} in groups
@@ -2696,7 +2656,7 @@ def test_symmetry_breaking_goal_taint_is_per_object():
     # assign the wrong meaning (Equals(fl(a), fr(b)) only requires the two
     # values to match, e.g. both zero; it does not require either to hold
     # any specific value on its own).
-    groups = groups_for(
+    groups = _equivalence_groups(
         problems_generator.get_problem_goal_taint_equals_fluent_fluent()
     )
     assert groups == [{"a"}, {"b"}]
@@ -4190,19 +4150,7 @@ def test_symmetry_breaking_interpreted_function_numeric_is_retained():
     legitimate equivalence class."""
 
     problem = problems_generator.get_problem_if_numeric_symmetry_retained()
-    lifted_problem, ground_problem, map_back_action_instance = (
-        testing_utils.compile_problem(problem)
-    )
-    encoder = Encoder(
-        ground_problem,
-        lifted_problem,
-        map_back_action_instance,
-        symmetry_breaking=False,
-        compression_safe_actions=False,
-        relevance_analysis=False,
-    )
-    groups = encoder._compute_equivalent_objects()
-    assert {"s1", "s2"} in [{obj.name for obj in group} for group in groups]
+    assert {"s1", "s2"} in _equivalence_groups(problem)
 
 
 def test_symmetry_breaking_interpreted_function_object_argument_taint():
@@ -4222,19 +4170,7 @@ def test_symmetry_breaking_interpreted_function_object_argument_taint():
     """
 
     problem = problems_generator.get_problem_if_object_argument_symmetry_unsound()
-    lifted_problem, ground_problem, map_back_action_instance = (
-        testing_utils.compile_problem(problem)
-    )
-    encoder = Encoder(
-        ground_problem,
-        lifted_problem,
-        map_back_action_instance,
-        symmetry_breaking=False,
-        compression_safe_actions=False,
-        relevance_analysis=False,
-    )
-    groups = encoder._compute_equivalent_objects()
-    group_sets = [{obj.name for obj in group} for group in groups]
+    group_sets = _equivalence_groups(problem)
     assert {"l1"} in group_sets
     assert {"l2"} in group_sets
     assert {"l1", "l2"} not in group_sets
@@ -4266,22 +4202,49 @@ def test_symmetry_breaking_interpreted_function_metric_action_cost_taint():
     problem = (
         problems_generator.get_problem_if_metric_action_cost_object_argument_taint()
     )
-    lifted_problem, ground_problem, map_back_action_instance = (
-        testing_utils.compile_problem(problem)
-    )
-    encoder = Encoder(
-        ground_problem,
-        lifted_problem,
-        map_back_action_instance,
-        symmetry_breaking=False,
-        compression_safe_actions=False,
-        relevance_analysis=False,
-    )
-    groups = encoder._compute_equivalent_objects()
-    group_sets = [{obj.name for obj in group} for group in groups]
+    group_sets = _equivalence_groups(problem)
     assert {"l1"} in group_sets
     assert {"l2"} in group_sets
     assert {"l1", "l2"} not in group_sets
+
+
+def test_symmetry_breaking_metric_objects_excluded():
+    """
+    An object named in a quality metric is not interchangeable with the
+    others, even when the initial state and the goal can't tell them apart --
+    wherever in the metric it appears: a `MinimizeExpressionOnFinalState`
+    expression, the `default` of `MinimizeActionCosts`, or one of its `costs`.
+    Treating `t1` and `t2` as interchangeable makes first-use ordering refuel
+    `t1` first, which prunes every zero-valued plan, and the anytime loop then
+    reports a worse plan as optimal.
+    """
+
+    for problem in [
+        problems_generator.get_problem_metric_object_taint(),
+        problems_generator.get_problem_metric_action_cost_object(in_default=True),
+        problems_generator.get_problem_metric_action_cost_object(in_default=False),
+    ]:
+        groups = _equivalence_groups(problem)
+        assert {"t1"} in groups
+        assert {"t2"} in groups
+        assert {"t1", "t2"} not in groups
+
+        for disable_rustamer in [True, False]:
+            reload_tamerlite(disable_rustamer)
+            search = tamerlite.SearchParams(
+                search="wastar",
+                heuristic="hadd",
+                symmetry_breaking=True,
+                compression_safe_actions=False,
+            )
+            with AnytimePlanner(name="tamerlite", params={"search": search}) as planner:
+                results = list(planner.get_solutions(problem, timeout=None))
+            assert results[-1].status == ResultStatus.SOLVED_OPTIMALLY
+            with PlanValidator(problem_kind=problem.kind) as v:
+                val_res: ValidationResult = v.validate(problem, results[-1].plan)
+                assert val_res
+                assert val_res.metric_evaluations is not None
+                assert list(val_res.metric_evaluations.values()) == [0]
 
 
 def test_symmetry_breaking_interpreted_function_object_return_taint():
@@ -4292,19 +4255,7 @@ def test_symmetry_breaking_interpreted_function_object_return_taint():
     produce, not a blanket effect on the whole problem."""
 
     problem = problems_generator.get_problem_if_object_return_symmetry()
-    lifted_problem, ground_problem, map_back_action_instance = (
-        testing_utils.compile_problem(problem)
-    )
-    encoder = Encoder(
-        ground_problem,
-        lifted_problem,
-        map_back_action_instance,
-        symmetry_breaking=False,
-        compression_safe_actions=False,
-        relevance_analysis=False,
-    )
-    groups = encoder._compute_equivalent_objects()
-    group_sets = [{obj.name for obj in group} for group in groups]
+    group_sets = _equivalence_groups(problem)
     assert {"l1"} in group_sets
     assert {"l2"} in group_sets
     assert {"i1", "i2"} in group_sets
@@ -4317,19 +4268,7 @@ def test_symmetry_breaking_interpreted_function_hierarchical_type_argument_taint
     a subtype of `Vehicle`) the same way it taints `c1` (a plain `Vehicle`)."""
 
     problem = problems_generator.get_problem_if_hierarchical_type_argument()
-    lifted_problem, ground_problem, map_back_action_instance = (
-        testing_utils.compile_problem(problem)
-    )
-    encoder = Encoder(
-        ground_problem,
-        lifted_problem,
-        map_back_action_instance,
-        symmetry_breaking=False,
-        compression_safe_actions=False,
-        relevance_analysis=False,
-    )
-    groups = encoder._compute_equivalent_objects()
-    group_sets = [{obj.name for obj in group} for group in groups]
+    group_sets = _equivalence_groups(problem)
     assert {"c1"} in group_sets
     assert {"v1"} in group_sets
     assert {"c1", "v1"} not in group_sets
