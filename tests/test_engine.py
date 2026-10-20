@@ -2631,43 +2631,37 @@ def test_symmetry_breaking_default_value_objects():
 
 def test_symmetry_breaking_goal_taint_is_per_object():
     """
-    An unrecognized goal conjunct (one _extract_goal_obj_to_fluent_map doesn't
-    know how to precisely reason about) must only exclude the objects it
-    actually references from equivalence, not every object in the problem.
-    This is what makes symmetry breaking still useful when the goal contains
-    e.g. an injected quality-bound literal that doesn't mention the objects
-    being compared, as happens on every re-solve of TamerLite's anytime loop
-    (e.g. LT(plan_length, v) for the auto-added
-    MinimizeSequentialPlanLength metric).
+    A goal conjunct that tells two objects apart must only keep those two
+    apart, not every object in the problem: the swap test only looks at the
+    conjuncts that mention the swapped objects. This is what makes symmetry
+    breaking still useful when the goal contains e.g. an injected
+    quality-bound literal that doesn't mention the objects being compared, as
+    happens on every re-solve of TamerLite's anytime loop (e.g.
+    LT(plan_length, v) for the auto-added MinimizeSequentialPlanLength
+    metric).
     """
 
-    # Partial taint: an Or(...) goal conjunct is unrecognized and taints the
-    # objects it references (p1, p4), but must not affect p2/p3, which only
-    # appear in recognized (plain fluent) goal conjuncts and remain
-    # genuinely symmetric.
+    # Or(f(p1), g(p4)) swapped is not a goal conjunct, so p1 and p4 (and any
+    # other object swapped with one of them) stay apart, but p2/p3, which only
+    # appear in h(p2)/h(p3), remain genuinely symmetric.
     groups = _equivalence_groups(problems_generator.get_problem_goal_taint_partial())
     assert {"p2", "p3"} in groups
     assert {"p1"} in groups
     assert {"p4"} in groups
 
-    # Equals(fluent, fluent) (neither side a constant) is also an
-    # unrecognized shape and must taint its objects as one opaque unit, not
-    # be decomposed into independent per-fluent literals -- doing so would
-    # assign the wrong meaning (Equals(fl(a), fr(b)) only requires the two
-    # values to match, e.g. both zero; it does not require either to hold
-    # any specific value on its own).
+    # Equals(fl(a), fr(b)) is compared as a whole: swapped, it becomes
+    # Equals(fl(b), fr(a)), which is not a goal conjunct, so a and b stay
+    # apart. (It only requires the two values to match, e.g. both zero; it
+    # does not require either to hold any specific value on its own.)
     groups = _equivalence_groups(
         problems_generator.get_problem_goal_taint_equals_fluent_fluent()
     )
     assert groups == [{"a"}, {"b"}]
 
     # End-to-end regression: TamerLite's anytime loop injects a quality-bound
-    # literal into the goal on every re-solve after the first. Before the
-    # per-object taint fix, that single unrecognized literal flipped a global
-    # "is the goal a conjunction of recognized literals" flag, which made
-    # every object in the problem -- even ones nowhere near the injected
-    # literal -- ineligible for equivalence. Verify the equivalence classes
-    # for genuinely symmetric objects survive across a real anytime re-solve.
+    # literal into the goal on every re-solve after the first. Verify the
+    # equivalence classes for genuinely symmetric objects survive across a
+    # real anytime re-solve.
     orig_compute_equivalent_objects = (
         tamerlite.encoder.Encoder._compute_equivalent_objects
     )
@@ -2701,6 +2695,88 @@ def test_symmetry_breaking_goal_taint_is_per_object():
     assert len(observed_groups) >= 2
     for pkg_groups in observed_groups[:2]:
         assert {"p1", "p2", "p3"} in pkg_groups
+
+
+def test_symmetry_breaking_goal_non_object_arguments():
+    """
+    Goal fluents are compared on all their arguments, not just the objects:
+    `o1` and `o2` below have goals that differ only in an int argument of `f`,
+    so they are not interchangeable, and treating them as such makes the
+    first-use ordering prune the only plans (which must use `o2` first).
+    The same goals without the extra `f(o2, 2)` keep the symmetry.
+    """
+
+    asymmetric = problems_generator.get_problem_goal_int_argument(symmetric=False)
+    assert tamerlite.engine.TamerLite.supports(asymmetric.kind)
+    assert _equivalence_groups(asymmetric) == [{"o1"}, {"o2"}]
+    assert {"o1", "o2"} in _equivalence_groups(
+        problems_generator.get_problem_goal_int_argument(symmetric=True)
+    )
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+
+        for symmetry_breaking in [True, False]:
+            search = tamerlite.SearchParams(
+                search="wastar",
+                heuristic="hadd",
+                symmetry_breaking=symmetry_breaking,
+                compression_safe_actions=False,
+            )
+            with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+                res: PlanGenerationResult = planner.solve(asymmetric, timeout=None)
+                assert res.status == ResultStatus.SOLVED_SATISFICING
+                with PlanValidator(problem_kind=asymmetric.kind) as v:
+                    assert v.validate(asymmetric, res.plan)
+
+
+def test_symmetry_breaking_general_goal_shapes():
+    """
+    The goal is checked by applying the swap to each conjunct, whatever its
+    shape: numeric comparisons, disjunctions and sums keep two objects
+    interchangeable when swapping them leaves the set of conjuncts unchanged,
+    up to the order of commutative arguments (`fuel(t1) + fuel(t2)` becomes
+    `fuel(t2) + fuel(t1)`). Goals that tell the objects apart still do.
+    """
+
+    symmetric = [
+        (problems_generator.get_problem_goal_numeric_symmetry(), {"t1", "t2", "t3"}),
+        (problems_generator.get_problem_goal_commutative_sum_symmetry(), {"t1", "t2"}),
+        (problems_generator.get_problem_goal_disjunction_symmetry(), {"t1", "t2"}),
+    ]
+    for problem, expected in symmetric:
+        assert expected in _equivalence_groups(problem), problem.name
+    assert _equivalence_groups(
+        problems_generator.get_problem_goal_numeric_asymmetry()
+    ) == [{"t1"}, {"t2"}]
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        search = tamerlite.SearchParams(
+            search="wastar",
+            heuristic="hadd",
+            symmetry_breaking=True,
+            compression_safe_actions=False,
+        )
+        for problem, _ in symmetric:
+            with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+                res: PlanGenerationResult = planner.solve(problem, timeout=None)
+                assert res.status == ResultStatus.SOLVED_SATISFICING, problem.name
+                with PlanValidator(problem_kind=problem.kind) as v:
+                    assert v.validate(problem, res.plan), problem.name
+
+
+def test_symmetry_breaking_repeated_goal_conjuncts():
+    """
+    A goal condition stated twice, identically or with commutative arguments
+    reordered, counts once: `t1` and `t2` stay interchangeable.
+    """
+
+    for reordered in [False, True]:
+        problem = problems_generator.get_problem_goal_repeated_conjunct_symmetry(
+            reordered
+        )
+        assert {"t1", "t2"} in _equivalence_groups(problem), problem.name
 
 
 def test_symmetry_breaking_compression_safe_prunes_witness_fluent():
@@ -2750,20 +2826,13 @@ def test_symmetry_breaking_compression_safe_prunes_witness_fluent():
     # Confirm the fixture reproduces the bug: an `Encoder` that reads the
     # *compiled* problem's own (pruned) initial state, as it did before the
     # fix, must wrongly merge p1-0/p1-2.
-    orig_init_assignments = Encoder._compute_obj_to_init_assignments_map
+    orig_assignments_map = Encoder._compute_obj_to_assignments_map
 
-    def pre_fix_init_assignments(self):
-        obj_to_assignments: dict = {}
-        for fluent_exp, value_exp in self._problem_initial_values.items():
-            objs = {arg.object() for arg in fluent_exp.args if arg.is_object_exp()}
-            if value_exp.is_object_exp():
-                objs.add(value_exp.object())
-            for obj in objs:
-                obj_to_assignments.setdefault(obj, []).append((fluent_exp, value_exp))
-        return obj_to_assignments
+    def pre_fix_assignments_map(assignments):
+        return orig_assignments_map(compiled_problem.initial_values.items())
 
-    Encoder._compute_obj_to_init_assignments_map = (  # type: ignore[method-assign]
-        pre_fix_init_assignments
+    Encoder._compute_obj_to_assignments_map = staticmethod(  # type: ignore[method-assign]
+        pre_fix_assignments_map
     )
     try:
         pre_fix_encoder = Encoder(
@@ -2779,7 +2848,9 @@ def test_symmetry_breaking_compression_safe_prunes_witness_fluent():
             for group in pre_fix_encoder._compute_equivalent_objects()
         ]
     finally:
-        Encoder._compute_obj_to_init_assignments_map = orig_init_assignments  # type: ignore[method-assign]
+        Encoder._compute_obj_to_assignments_map = staticmethod(  # type: ignore[method-assign]
+            orig_assignments_map
+        )
     assert {"p1-0", "p1-2"} in pre_fix_groups
 
     # With the fix, the same compiled problem's equivalence classes must
