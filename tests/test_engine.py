@@ -22,6 +22,7 @@ import warnings
 import weakref
 from collections import OrderedDict
 from collections.abc import Callable
+from fractions import Fraction
 from functools import partial
 from typing import Any, NamedTuple, cast
 
@@ -35,7 +36,29 @@ from unified_planning.engines import PlanGenerationResultStatus as ResultStatus
 from unified_planning.engines.compilers.timed_to_sequential import TimedToSequential
 from unified_planning.exceptions import UPStateMissingFluentError
 from unified_planning.plans import TimeTriggeredPlan
-from unified_planning.shortcuts import *
+from unified_planning.shortcuts import (
+    GE,
+    LE,
+    AnytimePlanner,
+    BoolType,
+    Div,
+    Equals,
+    Fluent,
+    InstantaneousAction,
+    InterpretedFunction,
+    IntType,
+    Minus,
+    Object,
+    OneshotPlanner,
+    PlanValidator,
+    Plus,
+    Problem,
+    RealType,
+    State,
+    Times,
+    UserType,
+    get_environment,
+)
 
 import problems_generator
 import tamerlite
