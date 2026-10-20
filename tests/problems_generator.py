@@ -1164,7 +1164,7 @@ def get_problem_goal_int_argument(symmetric: bool) -> Problem:
     T = UserType("T")
     o1, o2 = Object("o1", T), Object("o2", T)
     f = Fluent("f", BoolType(), o=T, k=IntType(1, 2))
-    step = Fluent("step", IntType(0, 2))
+    step = Fluent("step", IntType())
 
     # Only one `do2` can ever run, so with the asymmetric goal it must be
     # `do2(o2)`, and it must come first.

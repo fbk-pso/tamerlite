@@ -2707,6 +2707,7 @@ def test_symmetry_breaking_goal_non_object_arguments():
     """
 
     asymmetric = problems_generator.get_problem_goal_int_argument(symmetric=False)
+    assert tamerlite.engine.TamerLite.supports(asymmetric.kind)
     assert _equivalence_groups(asymmetric) == [{"o1"}, {"o2"}]
     assert {"o1", "o2"} in _equivalence_groups(
         problems_generator.get_problem_goal_int_argument(symmetric=True)
