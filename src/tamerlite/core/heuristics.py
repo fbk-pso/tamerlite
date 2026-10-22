@@ -262,16 +262,20 @@ class DeleteRelaxationHeuristic(Heuristic):
     state, then pops operators from a min-heap in order of precondition cost,
     expanding each one and updating the cost of the conditions it achieves.
     The goal is a pseudo-operator `_goal_op`, and the search stops as soon as
-    it is popped -- except for hmax when some operator achieves a simple
-    numeric condition (`_drain_heap`). There, the
+    it is popped -- except for hmax when some simple numeric condition has
+    two or more numeric achievers (`_drain_heap`). There, the
     condition's cost (`rep * cost` plus the cheapest precondition cost among
     the achievers expanded so far) can be lower than the cost of the operator
     being expanded, so an operator popped after the goal can still lower the
     goal's cost, and the heap is drained instead; an operator already
     expanded whose precondition gets cheaper is reopened and expanded again.
-    Without such achievers every operator is expanded exactly once:
-    every relaxed cost exceeds its achiever's, costs pop in non-decreasing
-    order, and stopping at the goal is exact.
+    With a single achiever, the cheapest precondition cost is the achiever's
+    own, so its offer is never below it. Without such conditions every
+    operator is expanded exactly once: every relaxed cost exceeds its
+    achiever's, costs pop in non-decreasing order, and stopping at the goal
+    is exact. Reachability analysis always drains the heap, but never
+    reopens: only whether an operator's cost is finite matters there, and
+    expanding it again can only lower costs that are already finite.
 
     A precondition without OR nodes costs `math.inf` while any of its leaves
     is unreached, so its cost is only computed once `unreached` (per
@@ -523,11 +527,20 @@ class DeleteRelaxationHeuristic(Heuristic):
             for conds in self._achieved_simple_numeric_conds
         ]
         # Whether `_eval_core` drains the heap instead of stopping at
-        # `_goal_op`: hmax with some operator achieving a simple numeric
-        # condition.
-        self._drain_heap = self._heuristic_kind == HeuristicKind.HMAX and any(
-            len(conds) > 0 for conds in self._op_numeric_conds
-        )
+        # `_goal_op`: hmax with some simple numeric condition achieved by two
+        # or more operators. Each operator lists a cid at most once, so a cid
+        # seen twice has two distinct achievers.
+        self._drain_heap = False
+        if self._heuristic_kind == HeuristicKind.HMAX:
+            achieved: set[int] = set()
+            for conds in self._op_numeric_conds:
+                for cid, _, _ in conds:
+                    if cid in achieved:
+                        self._drain_heap = True
+                        break
+                    achieved.add(cid)
+                if self._drain_heap:
+                    break
 
         # Per action with events, the cid of each of its bookkeeping fluents:
         # the one matching the action's progress in `state.todo` has cost 0.
@@ -1323,11 +1336,14 @@ class DeleteRelaxationHeuristic(Heuristic):
                 op_cost[op] = c
                 heap.append((c, op))
         heapq.heapify(heap)
+        # Reachability analysis only reads whether `op_cost` is finite, which
+        # an operator's first expansion already settles.
+        reopen = self._drain_heap and not reachability_analysis
 
         def update_condition_cost(cid: int, cost: float, op: int) -> None:
             """Lower the cost of `cid` to `cost`, achieved by operator `op`,
             if that improves it, and update the cost of every operator
-            reading it that is still open -- or, with `_drain_heap`, also
+            reading it that is still open -- or, with `reopen`, also
             reopen a closed reader whose cost drops. On a tie, hff's
             `reached_by` prefers the operator with the larger id."""
             if cost < cond_cost[cid]:
@@ -1336,8 +1352,9 @@ class DeleteRelaxationHeuristic(Heuristic):
                 if hff:
                     reached_by[cid] = op
                 for reader in self._cond_to_ops[cid]:
-                    if closed[reader] and not self._drain_heap:
-                        # monotone fix-point: a closed operator cannot get cheaper
+                    if closed[reader] and not reopen:
+                        # monotone fix-point: a closed operator cannot get
+                        # cheaper; reachability: it is already reachable
                         continue
                     if first_reach:
                         unreached[reader] -= 1

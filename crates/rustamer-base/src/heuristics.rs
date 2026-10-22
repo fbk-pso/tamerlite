@@ -1735,12 +1735,16 @@ struct FixpointBuffers {
     /// Per operator, how many distinct leaves of its precondition are still
     /// unreached. Reset from `distinct_leaves` by `_eval`.
     unreached: Vec<u32>,
+    /// Whether `update_condition_cost` reopens a closed operator whose
+    /// precondition gets cheaper: `drain_heap`, outside reachability
+    /// analysis.
+    reopen: bool,
     queue: OperatorQueue,
     stack: Vec<f64>,
 }
 
 impl FixpointBuffers {
-    fn reset(&mut self, n_conds: usize, n_ops: usize, monotone: bool) {
+    fn reset(&mut self, n_conds: usize, n_ops: usize, monotone: bool, reopen: bool) {
         self.cond_cost.clear();
         self.cond_cost.resize(n_conds, f64::INFINITY);
         self.op_cost.clear();
@@ -1751,6 +1755,7 @@ impl FixpointBuffers {
         self.min_achiever_pre_cost.resize(n_conds, f64::INFINITY);
         self.reached_by.clear();
         self.reached_by.resize(n_conds, None);
+        self.reopen = reopen;
         self.queue.reset(monotone);
     }
 }
@@ -1771,16 +1776,20 @@ pub struct DeleteRelaxationHeuristicConfig {
 /// then pops operators from a min-heap in order of precondition cost,
 /// expanding each one and updating the cost of the conditions it achieves.
 /// The goal is a pseudo-operator `goal_op`, and the search stops as soon as
-/// it is popped -- except for hmax when some operator achieves a simple
-/// numeric condition (`drain_heap`). There, the condition's cost
+/// it is popped -- except for hmax when some simple numeric condition has two
+/// or more numeric achievers (`drain_heap`). There, the condition's cost
 /// (`rep * cost` plus the cheapest precondition cost among the achievers
 /// expanded so far) can be lower than the cost of the operator being
 /// expanded, so an operator popped after the goal can still lower the goal's
 /// cost, and the heap is drained instead; an operator already expanded whose
-/// precondition gets cheaper is reopened and expanded again. Without such
-/// achievers every operator is expanded exactly once: every relaxed cost
-/// exceeds its achiever's, costs pop in non-decreasing order, and stopping at
-/// the goal is exact.
+/// precondition gets cheaper is reopened and expanded again. With a single
+/// achiever, the cheapest precondition cost is the achiever's own, so its
+/// offer is never below it. Without such conditions every operator is
+/// expanded exactly once: every relaxed cost exceeds its achiever's, costs
+/// pop in non-decreasing order, and stopping at the goal is exact.
+/// Reachability analysis always drains the heap, but never reopens: only
+/// whether an operator's cost is finite matters there, and expanding it again
+/// can only lower costs that are already finite.
 ///
 /// A precondition without OR nodes costs `inf` while any of its leaves is
 /// unreached, so its cost is only computed once `unreached` (per operator,
@@ -1822,7 +1831,7 @@ pub struct DeleteRelaxationHeuristic {
     /// condition it achieves.
     op_numeric_conds: Vec<Vec<NumericAchievement>>,
     /// Whether `eval` drains the heap instead of stopping at `goal_op`: hmax
-    /// with some operator achieving a simple numeric condition.
+    /// with some simple numeric condition achieved by two or more operators.
     drain_heap: bool,
     /// Conditions evaluated against the state: `(cid, condition, cost if
     /// false)`. Cost if true is 0.
@@ -2179,8 +2188,14 @@ impl DeleteRelaxationHeuristic {
             None
         };
 
+        // Each operator lists a cid at most once (`simple_numeric_conds`'
+        // keys are distinct), so a cid seen twice has two distinct achievers.
+        let mut achieved = vec![false; interner.cond_to_ops.len()];
         let drain_heap = matches!(config.heuristic_kind, HeuristicKind::HMAX)
-            && op_numeric_conds.iter().any(|conds| !conds.is_empty());
+            && op_numeric_conds
+                .iter()
+                .flatten()
+                .any(|(cid, _, _)| std::mem::replace(&mut achieved[*cid as usize], true));
 
         // `add_reader` registers each (cid, operator) pair once, so this
         // counts each operator's distinct leaves.
@@ -2296,7 +2311,14 @@ impl DeleteRelaxationHeuristic {
         let hmax = matches!(self.heuristic_kind, HeuristicKind::HMAX);
         let mut buffers = self.buffers.lock().unwrap();
         let buffers = &mut *buffers;
-        buffers.reset(self.cond_to_ops.len(), self.goal_op + 1, !self.drain_heap);
+        // Reachability analysis only reads whether `op_cost` is finite, which
+        // an operator's first expansion already settles.
+        buffers.reset(
+            self.cond_to_ops.len(),
+            self.goal_op + 1,
+            !self.drain_heap,
+            self.drain_heap && !reachability_analysis,
+        );
         self.init_condition_costs(state, &mut buffers.cond_cost)?;
 
         buffers.unreached.clear();
@@ -2468,7 +2490,7 @@ impl DeleteRelaxationHeuristic {
 
     /// Lowers the cost of `cid` to `cost`, achieved by operator `op`, if
     /// that improves it, and updates the cost of every operator reading it
-    /// that is still open -- or, with `drain_heap`, also reopens a closed
+    /// that is still open -- or, with `buffers.reopen`, also reopens a closed
     /// reader whose cost drops. On a tie, hff's `reached_by` prefers the
     /// operator with the larger id.
     fn update_condition_cost(&self, cid: u32, cost: f64, op: usize, buffers: &mut FixpointBuffers) {
@@ -2482,8 +2504,9 @@ impl DeleteRelaxationHeuristic {
             }
             let hmax = matches!(self.heuristic_kind, HeuristicKind::HMAX);
             for &reader in &self.cond_to_ops[c] {
-                if buffers.closed[reader] && !self.drain_heap {
-                    // monotone fix-point: a closed operator cannot get cheaper
+                if buffers.closed[reader] && !buffers.reopen {
+                    // monotone fix-point: a closed operator cannot get
+                    // cheaper; reachability: it is already reachable
                     continue;
                 }
                 if first_reach {

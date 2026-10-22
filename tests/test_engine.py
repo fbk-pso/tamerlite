@@ -630,6 +630,52 @@ def test_heuristic_fixed_values():
                         assert values[heuristic_name][i] == h_val
 
 
+def _hmax_on(problem):
+    """Encode `problem` without preprocessing and build an hmax over it with
+    whichever backend is loaded; return the heuristic and the search space."""
+    from tamerlite.core import HMax
+
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    encoder = Encoder(
+        ground_problem,
+        lifted_problem,
+        map_back_action_instance,
+        symmetry_breaking=False,
+        compression_safe_actions=False,
+        relevance_analysis=False,
+    )
+    assert encoder.goal is not None
+    heuristic = HMax(
+        encoder.actions,
+        encoder.fluent_domains,
+        encoder.events,
+        encoder.goal,
+        internal_caching=False,
+        cache_value_in_state=False,
+        inadmissible_numeric_heuristic_variant=False,
+    )
+    return heuristic, encoder.search_space
+
+
+def test_hmax_single_numeric_achiever_does_not_drain():
+    """hmax only drains the heap when some simple numeric condition has two
+    or more numeric achievers: with `inc1` alone, `x >= 2`'s cheapest
+    achiever precondition is `inc1`'s own and the fix-point is monotone, so
+    `get_problem_hmax_numeric_single_achiever` does not drain while
+    `get_problem_hmax_numeric_reopening` does. Only the Python core exposes
+    the flag; both cores' values on the two problems are pinned by
+    `test_heuristic_values`."""
+    reload_tamerlite(True)
+    heuristic, _ = _hmax_on(
+        problems_generator.get_problem_hmax_numeric_single_achiever()
+    )
+    assert heuristic._drain_heap is False
+    reopening, _ = _hmax_on(problems_generator.get_problem_hmax_numeric_reopening())
+    assert reopening._drain_heap is True
+
+
 @pytest.mark.parametrize(
     "problem",
     HEURISTIC_VALUE_PROBLEMS,
