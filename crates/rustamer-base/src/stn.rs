@@ -54,6 +54,7 @@ pub struct DeltaSTN<T, Q> {
     pub distances: FxHashMap<T, Q>,
     is_sat: bool,
     pub tolerance: Q,
+    subsumption: bool,
 }
 
 impl<T, Q> DeltaSTN<T, Q>
@@ -67,6 +68,20 @@ where
             distances: FxHashMap::with_hasher(FxBuildHasher),
             is_sat: true,
             tolerance,
+            subsumption: true,
+        }
+    }
+
+    /// A network whose `add` never checks for subsumption and always prepends
+    /// the new edge. Meant for a network where each (x, y) pair is added about
+    /// once, like `SearchSpace::build_plan`'s, so the walk almost always
+    /// misses. Skipping it changes neither the verdict nor the schedule, since an
+    /// implied edge never lowers a distance; it only leaves a redundant edge
+    /// in the out-list.
+    pub fn new_without_subsumption(tolerance: Q) -> Self {
+        DeltaSTN {
+            subsumption: false,
+            ..Self::new(tolerance)
         }
     }
 
@@ -80,7 +95,7 @@ where
                 self.distances.insert(*y, Q::zero());
                 self.constraints.insert(*y, DeltaNeighbors::mk_empty());
             }
-            if !self.is_subsumed(x, y, b) {
+            if !self.subsumption || !self.is_subsumed(x, y, b) {
                 let old_x = self.constraints.get(x).unwrap();
                 self.constraints
                     .insert(*x, DeltaNeighbors::add(y, b, old_x));
