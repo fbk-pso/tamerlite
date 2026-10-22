@@ -158,6 +158,38 @@ def _build_anytime_problems(problems):
 PROBLEMS = _build_problems()
 ANYTIME_PROBLEMS = _build_anytime_problems(PROBLEMS)
 
+# Small hand-built problems targeting the delete-relaxation heuristics' corner
+# cases (ties, unreachable leaves, costs dropping after first being set,
+# numeric achievers, actions in progress). Only their heuristic values are
+# pinned (`test_heuristic_values`, `test_heuristic_reachable_actions`): several
+# are unsolvable, so they stay out of `PROBLEMS` and its solve matrices.
+HEURISTIC_EDGE_CASE_PROBLEMS = [
+    problems_generator.get_problem_goal_satisfied_initially(),
+    problems_generator.get_problem_unreachable_goal(),
+    problems_generator.get_problem_unreachable_or_branch(),
+    problems_generator.get_problem_self_supporting_and_noop(),
+    problems_generator.get_problem_cheaper_path_found_late(),
+    problems_generator.get_problem_hff_tie_break(swap=False),
+    problems_generator.get_problem_hff_tie_break(swap=True),
+    problems_generator.get_problem_hff_or_operand_tie(swap=False),
+    problems_generator.get_problem_hff_or_operand_tie(swap=True),
+    problems_generator.get_problem_diamond_shared_subgoals(),
+    problems_generator.get_problem_duplicate_and_nested_leaves(),
+    problems_generator.get_problem_negative_and_object_conditions(),
+    problems_generator.get_problem_hmax_numeric_reopening(),
+    problems_generator.get_problem_hmax_numeric_single_achiever(),
+    problems_generator.get_problem_numeric_multi_achievers(),
+    problems_generator.get_problem_numeric_chained(),
+    problems_generator.get_problem_numeric_strict_and_decrease(),
+    problems_generator.get_problem_numeric_assign_and_complex(),
+    problems_generator.get_problem_numeric_unreachable(),
+    problems_generator.get_problem_temporal_in_progress(reachable_end=True),
+    problems_generator.get_problem_temporal_in_progress(reachable_end=False),
+    problems_generator.get_problem_wide_equal_costs(),
+]
+assert not {p.name for p in HEURISTIC_EDGE_CASE_PROBLEMS} & {p.name for p in PROBLEMS}
+HEURISTIC_VALUE_PROBLEMS = PROBLEMS + HEURISTIC_EDGE_CASE_PROBLEMS
+
 # depots_pfile1 is by far the largest instance in the set; its unbounded
 # (timeout=None) solves run for minutes each and used to dominate the suite's
 # wall-clock. We exclude it from the full-solve tests but deliberately KEEP it
@@ -323,6 +355,12 @@ PERFORMANCE_PRUNES: list[
         "farmland_2_100_1229",
         lambda c: c.search in {"dfs", "bfs", "ehc"} or c.heuristic == "hmax_explicit",
         "uninformed search / hmax_explicit time out on this instance",
+    ),
+    (
+        ("numeric_unreachable", "numeric_strict_and_decrease"),
+        lambda c: c.heuristic == "hmax_explicit",
+        "hmax_explicit enumerates values forever once a numeric goal is "
+        "unreachable by monotone effects",
     ),
     (
         "depots_pfile1",
@@ -592,12 +630,17 @@ def test_heuristic_fixed_values():
                         assert values[heuristic_name][i] == h_val
 
 
-@pytest.mark.parametrize("problem", PROBLEMS, ids=[p.name for p in PROBLEMS])
+@pytest.mark.parametrize(
+    "problem",
+    HEURISTIC_VALUE_PROBLEMS,
+    ids=[p.name for p in HEURISTIC_VALUE_PROBLEMS],
+)
 def test_heuristic_values(problem, data_regression):
     """Regression-pins the heuristic values every heuristic (and its
     `_no_numbers`/`_inadmissible` variants where applicable) computes on
-    generated states of every problem in `PROBLEMS`, asserting the two
-    backends agree exactly."""
+    generated states of every problem in `PROBLEMS` and
+    `HEURISTIC_EDGE_CASE_PROBLEMS`, asserting the two backends agree
+    exactly."""
 
     values: dict[str, list[int | None]] = {}
     for disable_rustamer in [True, False]:
@@ -669,6 +712,55 @@ def test_heuristic_values(problem, data_regression):
                         assert computed_values == values[values_key]
 
     data_regression.check(values)
+
+
+@pytest.mark.parametrize(
+    "problem",
+    HEURISTIC_EDGE_CASE_PROBLEMS,
+    ids=[p.name for p in HEURISTIC_EDGE_CASE_PROBLEMS],
+)
+def test_heuristic_reachable_actions(problem, data_regression):
+    """Regression-pins the actions `reachable_actions` reports, per
+    delete-relaxation heuristic, on the first generated states of every
+    problem in `HEURISTIC_EDGE_CASE_PROBLEMS`, asserting the two backends
+    agree exactly."""
+    num_states = 20
+    reachable: dict[str, list[list[str]]] = {}
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.core import HFF, HAdd, HMax
+
+        encoder = _encode_without_preprocessing(problem)
+        ss: SearchSpaceABC = encoder.search_space
+        states = generate_states(ss, ss.initial_state(), num_states=num_states)
+        assert encoder.goal is not None
+        for heuristic_class, heuristic_name in [
+            (HFF, "hff"),
+            (HAdd, "hadd"),
+            (HMax, "hmax"),
+        ]:
+            heuristic = heuristic_class(
+                encoder.actions,
+                encoder.fluent_domains,
+                encoder.events,
+                encoder.goal,
+                internal_caching=False,
+                cache_value_in_state=False,
+                inadmissible_numeric_heuristic_variant=False,
+            )
+            computed = [
+                sorted(
+                    encoder.get_action_name(a)
+                    for a in heuristic.reachable_actions(state)
+                )
+                for state in states[:num_states]
+            ]
+            if heuristic_name not in reachable:
+                reachable[heuristic_name] = computed
+            else:
+                assert computed == reachable[heuristic_name]
+
+    data_regression.check(reachable)
 
 
 def _constant_leaves_problem(with_goal: bool) -> Encoder:
