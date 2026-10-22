@@ -240,6 +240,98 @@ def get_problem_numeric() -> Problem:
     return problem
 
 
+def get_problem_hmax_numeric_reopening() -> Problem:
+    """
+    Two achievers of the simple numeric condition `x >= 2`: `inc1` needs no
+    precondition but two repetitions, `inc2` needs one repetition but sits
+    after the chain `a1 -> a2 -> a3`. hmax prices `x >= 2` at
+    `rep * cost + min pre` over the achievers expanded so far: 2 after `inc1`
+    (closing `r` at 2), then 1 after `inc2`, popped at 3, so `r` must be
+    reopened for the goal to drop from 3 to 2.
+    """
+    problem = Problem("HMaxNumericReopening")
+
+    x = Fluent("x", RealType())
+    p1 = Fluent("p1", BoolType())
+    p2 = Fluent("p2", BoolType())
+    p3 = Fluent("p3", BoolType())
+    g = Fluent("g", BoolType())
+
+    problem.add_fluent(x, default_initial_value=0)
+    for f in [p1, p2, p3, g]:
+        problem.add_fluent(f, default_initial_value=False)
+
+    inc1 = InstantaneousAction("inc1")
+    inc1.add_increase_effect(x, 1)
+
+    a1 = InstantaneousAction("a1")
+    a1.add_effect(p1, True)
+
+    a2 = InstantaneousAction("a2")
+    a2.add_precondition(p1)
+    a2.add_effect(p2, True)
+
+    a3 = InstantaneousAction("a3")
+    a3.add_precondition(p2)
+    a3.add_effect(p3, True)
+
+    inc2 = InstantaneousAction("inc2")
+    inc2.add_precondition(p3)
+    inc2.add_increase_effect(x, 2)
+
+    r = InstantaneousAction("r")
+    r.add_precondition(GE(x, 2))
+    r.add_effect(g, True)
+
+    problem.add_actions([inc1, a1, a2, a3, inc2, r])
+    problem.add_goal(g)
+
+    return problem
+
+
+def get_problem_hmax_numeric_single_achiever() -> Problem:
+    """
+    `get_problem_hmax_numeric_reopening` without `inc2`: `inc1` is the only
+    achiever of `x >= 2`, so hmax's cheapest precondition among its achievers
+    is always `inc1`'s own, the fix-point is monotone and the heap is not
+    drained. hmax prices `x >= 2` at 2, so the goal `g` costs 3.
+    """
+    problem = Problem("HMaxNumericSingleAchiever")
+
+    x = Fluent("x", RealType())
+    p1 = Fluent("p1", BoolType())
+    p2 = Fluent("p2", BoolType())
+    p3 = Fluent("p3", BoolType())
+    g = Fluent("g", BoolType())
+
+    problem.add_fluent(x, default_initial_value=0)
+    for f in [p1, p2, p3, g]:
+        problem.add_fluent(f, default_initial_value=False)
+
+    inc1 = InstantaneousAction("inc1")
+    inc1.add_increase_effect(x, 1)
+
+    a1 = InstantaneousAction("a1")
+    a1.add_effect(p1, True)
+
+    a2 = InstantaneousAction("a2")
+    a2.add_precondition(p1)
+    a2.add_effect(p2, True)
+
+    a3 = InstantaneousAction("a3")
+    a3.add_precondition(p2)
+    a3.add_effect(p3, True)
+
+    r = InstantaneousAction("r")
+    r.add_precondition(GE(x, 2))
+    r.add_effect(g, True)
+
+    problem.add_actions([inc1, a1, a2, a3, r])
+    problem.add_goal(g)
+
+    return problem
+
+
 def get_problem_satellite() -> Problem:
     reader = PDDLReader()
     problem_directory = pathlib.Path(__file__).resolve().parent / "pddl" / "Satellite"
@@ -2044,4 +2136,464 @@ def get_problem_metric_action_cost_object(in_default: bool) -> Problem:
         problem.add_quality_metric(MinimizeActionCosts({}, default=fuel(t1)))
     else:
         problem.add_quality_metric(MinimizeActionCosts({refuel: fuel(t1)}))
+    return problem
+
+
+# Edge cases for the delete-relaxation heuristics (`hff`/`hadd`/`hmax`),
+# regression-pinned by `test_engine.py::test_heuristic_values` over
+# `HEURISTIC_EDGE_CASE_PROBLEMS`. Encoder operator ids follow the *sorted*
+# action names, so where a tie-break depends on ids the names are chosen to
+# fix the order. The initial-state values in the docstrings assume one unit
+# of cost per operator.
+
+
+def _bool_fluents(problem: Problem, *names: str, initial: bool = False) -> list:
+    fluents = [Fluent(name, BoolType()) for name in names]
+    for f in fluents:
+        problem.add_fluent(f, default_initial_value=initial)
+    return fluents
+
+
+def _achiever(name: str, effect, *preconditions) -> InstantaneousAction:
+    action = InstantaneousAction(name)
+    for pre in preconditions:
+        action.add_precondition(pre)
+    action.add_effect(effect, True)
+    return action
+
+
+def get_problem_goal_satisfied_initially() -> Problem:
+    """The goal `p` holds initially (h = 0 for every heuristic, hff's relaxed
+    plan is empty). `clear_p` falsifies it and `set_p` restores it through
+    `q`, so successors have a non-zero value."""
+    problem = Problem("goal_satisfied_initially")
+    (p,) = _bool_fluents(problem, "p", initial=True)
+    (q,) = _bool_fluents(problem, "q")
+
+    clear_p = InstantaneousAction("clear_p")
+    clear_p.add_precondition(p)
+    clear_p.add_effect(p, False)
+
+    problem.add_actions([clear_p, _achiever("get_q", q), _achiever("set_p", p, q)])
+    problem.add_goal(p)
+    return problem
+
+
+def get_problem_unreachable_goal() -> Problem:
+    """`g` is only achieved by `unlock`, which needs `lock`, and `lock` is
+    only achieved by `relock`, which needs `lock` itself: neither is ever
+    reachable, so every heuristic reports a dead end (None), even though the
+    other goal `s` is reachable."""
+    problem = Problem("unreachable_goal")
+    g, lock, s = _bool_fluents(problem, "g", "lock", "s")
+    problem.add_actions(
+        [
+            _achiever("unlock", g, lock),
+            _achiever("relock", lock, lock),
+            _achiever("step", s),
+        ]
+    )
+    problem.add_goal(g)
+    problem.add_goal(s)
+    return problem
+
+
+def get_problem_unreachable_or_branch() -> Problem:
+    """Goal `Or(g, h)`: `g` is unreachable (as in
+    `get_problem_unreachable_goal`), `h` sits after the chain
+    `a1 -> a2`. An OR must ignore its unreached operand: hff = hadd = hmax =
+    2."""
+    problem = Problem("unreachable_or_branch")
+    g, h, lock, p1 = _bool_fluents(problem, "g", "h", "lock", "p1")
+    problem.add_actions(
+        [
+            _achiever("unlock", g, lock),
+            _achiever("relock", lock, lock),
+            _achiever("a1", p1),
+            _achiever("a2", h, p1),
+        ]
+    )
+    problem.add_goal(Or(g, h))
+    return problem
+
+
+def get_problem_self_supporting_and_noop() -> Problem:
+    """`loop` needs its own effect `p` and is never reachable; `noop` has no
+    precondition and no effect; `get_q`/`get_r` have no precondition. Goal
+    `Or(p, q)` and `r`: hadd = 2, hmax = 1, hff = 2."""
+    problem = Problem("self_supporting_and_noop")
+    p, q, r = _bool_fluents(problem, "p", "q", "r")
+    noop = InstantaneousAction("noop")
+    problem.add_actions(
+        [
+            _achiever("loop", p, p),
+            noop,
+            _achiever("get_q", q),
+            _achiever("get_r", r),
+        ]
+    )
+    problem.add_goal(Or(p, q))
+    problem.add_goal(r)
+    return problem
+
+
+def get_problem_cheaper_path_found_late() -> Problem:
+    """`g` is achieved either by `big`, which needs the four facts `f1..f4`
+    (each one zero-precondition action away), or by the chain
+    `c1 -> c2 -> c3`. A layered sweep first prices `g` through `big`
+    (hadd 5, two layers deep) and only later through the chain (hadd 3), so
+    the cost of `g` drops after it is first set. hadd = 3, hmax = 2 (through
+    `big`), hff = 3 (the chain)."""
+    problem = Problem("cheaper_path_found_late")
+    fs = _bool_fluents(problem, "f1", "f2", "f3", "f4")
+    g, q1, q2 = _bool_fluents(problem, "g", "q1", "q2")
+    problem.add_actions([_achiever(f"get_{f.name}", f) for f in fs])
+    problem.add_actions(
+        [
+            _achiever("big", g, *fs),
+            _achiever("c1", q1),
+            _achiever("c2", q2, q1),
+            _achiever("c3", g, q2),
+        ]
+    )
+    problem.add_goal(g)
+    return problem
+
+
+def get_problem_hff_tie_break(swap: bool) -> Problem:
+    """Goals `g1` and `g2`. `g2` needs `s`; `g1` has two achievers of equal
+    hadd cost 2, one through `s` (shared with `g2`) and one through `t`.
+    hff breaks the tie by the larger operator id, i.e. the later action name:
+    `g1_x1` reads `t` (hff = 4) unless `swap`, where it reads `s` (hff = 3).
+    hadd = 4 and hmax = 2 either way."""
+    problem = Problem(f"hff_tie_break_{'swap' if swap else 'noswap'}")
+    g1, g2, s, t = _bool_fluents(problem, "g1", "g2", "s", "t")
+    first, second = (t, s) if swap else (s, t)
+    problem.add_actions(
+        [
+            _achiever("get_s", s),
+            _achiever("get_t", t),
+            _achiever("g2_from_s", g2, s),
+            _achiever("g1_x0", g1, first),
+            _achiever("g1_x1", g1, second),
+        ]
+    )
+    problem.add_goal(g1)
+    problem.add_goal(g2)
+    return problem
+
+
+def get_problem_hff_or_operand_tie(swap: bool) -> Problem:
+    """Like `get_problem_hff_tie_break`, but the tie is between the operands
+    of one OR precondition, `Or(s, t)` (or `Or(t, s)` if `swap`), both of
+    cost 1: which operand the relaxed plan follows decides whether `get_t`
+    joins it. The first operand wins the tie: hff = 3 for `Or(s, t)`, 4 for
+    `Or(t, s)`. hadd = 4, hmax = 2."""
+    problem = Problem(f"hff_or_operand_tie_{'swap' if swap else 'noswap'}")
+    g1, g2, s, t = _bool_fluents(problem, "g1", "g2", "s", "t")
+    problem.add_actions(
+        [
+            _achiever("get_s", s),
+            _achiever("get_t", t),
+            _achiever("g2_from_s", g2, s),
+            _achiever("fin", g1, Or(t, s) if swap else Or(s, t)),
+        ]
+    )
+    problem.add_goal(g1)
+    problem.add_goal(g2)
+    return problem
+
+
+def get_problem_diamond_shared_subgoals() -> Problem:
+    """`s` feeds both `left` and `right`, which `top` joins into `g`; the goal
+    is `g` and `s`, so `s` is a goal leaf and a precondition at once. hadd
+    counts `s` three times (6), hmax = 3, hff counts each action once (4)."""
+    problem = Problem("diamond_shared_subgoals")
+    g, s, left, right = _bool_fluents(problem, "g", "s", "l", "r")
+    problem.add_actions(
+        [
+            _achiever("get_s", s),
+            _achiever("left", left, s),
+            _achiever("right", right, s),
+            _achiever("top", g, left, right),
+        ]
+    )
+    problem.add_goal(g)
+    problem.add_goal(s)
+    return problem
+
+
+def get_problem_duplicate_and_nested_leaves() -> Problem:
+    """Preconditions that repeat a leaf (`p` twice in `a1`, `p` also in the
+    goal) and nest AND/OR/AND (`a2`), i.e. the shapes where a counter of
+    distinct unreached leaves and the OR recomputation path matter. `r`
+    needs `p`, so `a2`'s cheaper disjunct changes as costs settle."""
+    problem = Problem("duplicate_and_nested_leaves")
+    p, q, r, g1, g2 = _bool_fluents(problem, "p", "q", "r", "g1", "g2")
+    a1 = InstantaneousAction("a1")
+    a1.add_precondition(And(p, q, p))
+    a1.add_precondition(p)
+    a1.add_effect(g1, True)
+    problem.add_actions(
+        [
+            _achiever("get_p", p),
+            _achiever("get_q", q),
+            _achiever("get_r", r, p),
+            a1,
+            _achiever("a2", g2, Or(And(p, r), And(q, Or(p, r)))),
+        ]
+    )
+    problem.add_goal(g1)
+    problem.add_goal(g2)
+    problem.add_goal(p)
+    return problem
+
+
+def get_problem_negative_and_object_conditions() -> Problem:
+    """Negative and object-valued leaves: `pass_closed` needs `not door`
+    (initially `door`, so it needs the deleter `close`) and `at != l1`;
+    `meet` needs `at == other` and `split` needs `not(at == other)`
+    (fluent-vs-fluent, rewritten into ORs over the shared domain). Goal: all
+    three done and `at == l3`."""
+    problem = Problem("negative_and_object_conditions")
+    Location = UserType("Location")
+    l1, l2, l3 = (Object(f"l{i}", Location) for i in (1, 2, 3))
+    problem.add_objects([l1, l2, l3])
+    at = Fluent("at", Location)
+    other = Fluent("other", Location)
+    problem.add_fluent(at, default_initial_value=l1)
+    problem.add_fluent(other, default_initial_value=l2)
+    (door,) = _bool_fluents(problem, "door", initial=True)
+    g1, g2, g3 = _bool_fluents(problem, "g1", "g2", "g3")
+
+    move = InstantaneousAction("move", src=Location, dst=Location)
+    move.add_precondition(Equals(at, move.src))
+    move.add_precondition(Not(Equals(move.src, move.dst)))
+    move.add_effect(at, move.dst)
+
+    move_other = InstantaneousAction("move_other", dst=Location)
+    move_other.add_effect(other, move_other.dst)
+
+    close = InstantaneousAction("close")
+    close.add_precondition(door)
+    close.add_effect(door, False)
+
+    problem.add_actions(
+        [
+            move,
+            move_other,
+            close,
+            _achiever("pass_closed", g1, Not(door), Not(Equals(at, l1))),
+            _achiever("meet", g2, Equals(at, other)),
+            _achiever("split", g3, Not(Equals(at, other))),
+        ]
+    )
+    for g in (g1, g2, g3):
+        problem.add_goal(g)
+    problem.add_goal(Equals(at, l3))
+    return problem
+
+
+def get_problem_numeric_multi_achievers() -> Problem:
+    """Three achievers of `x >= 6`, the cheapest with the largest operator
+    id: `inc_a` (+1, no precondition: 6 repetitions), `inc_b` (+3, after
+    `get_p1`: 2 repetitions) and `inc_c` (+6, after the chain
+    `c1 -> c2 -> c3`: 1 repetition). hadd prices `x >= 6` at
+    `min(6 + 0, 2 + 1, 1 + 3) = 3` (g: 4); hmax at `rep` plus the cheapest
+    precondition among the achievers, `1 + 0` (g: 2)."""
+    problem = Problem("numeric_multi_achievers")
+    x = Fluent("x", RealType())
+    problem.add_fluent(x, default_initial_value=0)
+    g, p1, q1, q2, q3 = _bool_fluents(problem, "g", "p1", "q1", "q2", "q3")
+
+    inc_a = InstantaneousAction("inc_a")
+    inc_a.add_increase_effect(x, 1)
+    inc_b = InstantaneousAction("inc_b")
+    inc_b.add_precondition(p1)
+    inc_b.add_increase_effect(x, 3)
+    inc_c = InstantaneousAction("inc_c")
+    inc_c.add_precondition(q3)
+    inc_c.add_increase_effect(x, 6)
+
+    problem.add_actions(
+        [
+            inc_a,
+            inc_b,
+            inc_c,
+            _achiever("get_p1", p1),
+            _achiever("c1", q1),
+            _achiever("c2", q2, q1),
+            _achiever("c3", q3, q2),
+            _achiever("r", g, GE(x, 6)),
+        ]
+    )
+    problem.add_goal(g)
+    return problem
+
+
+def get_problem_numeric_chained() -> Problem:
+    """A numeric condition reached through another one: `inc_y` needs
+    `x >= 2`, `r` needs `y >= 3`. hadd = hmax = `1 + (3 + 2)` = 6, hff = 3."""
+    problem = Problem("numeric_chained")
+    x = Fluent("x", RealType())
+    y = Fluent("y", RealType())
+    problem.add_fluent(x, default_initial_value=0)
+    problem.add_fluent(y, default_initial_value=0)
+    (g,) = _bool_fluents(problem, "g")
+
+    inc_x = InstantaneousAction("inc_x")
+    inc_x.add_increase_effect(x, 1)
+    inc_y = InstantaneousAction("inc_y")
+    inc_y.add_precondition(GE(x, 2))
+    inc_y.add_increase_effect(y, 1)
+
+    problem.add_actions([inc_x, inc_y, _achiever("r", g, GE(y, 3))])
+    problem.add_goal(g)
+    return problem
+
+
+def get_problem_numeric_strict_and_decrease() -> Problem:
+    """A strict `x < 0` reached by decreasing (`x` starts at 5, `dec_x`
+    subtracts 2: the epsilon-shifted weight decides between 3 and 2
+    repetitions), and a numeric equality `y == 3` (rewritten into a pair of
+    inequalities) with two increase achievers of different step."""
+    problem = Problem("numeric_strict_and_decrease")
+    x = Fluent("x", RealType())
+    y = Fluent("y", IntType())
+    problem.add_fluent(x, default_initial_value=5)
+    problem.add_fluent(y, default_initial_value=0)
+    g1, g2 = _bool_fluents(problem, "g1", "g2")
+
+    dec_x = InstantaneousAction("dec_x")
+    dec_x.add_decrease_effect(x, 2)
+    inc_y = InstantaneousAction("inc_y")
+    inc_y.add_increase_effect(y, 1)
+    inc_y2 = InstantaneousAction("inc_y2")
+    inc_y2.add_increase_effect(y, 2)
+
+    problem.add_actions(
+        [
+            dec_x,
+            inc_y,
+            inc_y2,
+            _achiever("r1", g1, LT(x, 0)),
+            _achiever("r2", g2, Equals(y, 3)),
+        ]
+    )
+    problem.add_goal(g1)
+    problem.add_goal(g2)
+    return problem
+
+
+def get_problem_numeric_assign_and_complex() -> Problem:
+    """Achievers that are not constant increases: `set_x` assigns `x := 5`,
+    `grow_y` doubles `y` (a complex effect), both counted as one repetition
+    (under the inadmissible variant, -1 each, which `inc_x`'s +1 can cancel
+    on `x`). `r3` needs the nonlinear `x * y >= 20`, priced 0/1 by
+    evaluation."""
+    problem = Problem("numeric_assign_and_complex")
+    x = Fluent("x", RealType())
+    y = Fluent("y", RealType())
+    problem.add_fluent(x, default_initial_value=1)
+    problem.add_fluent(y, default_initial_value=1)
+    g1, g2, g3 = _bool_fluents(problem, "g1", "g2", "g3")
+
+    set_x = InstantaneousAction("set_x")
+    set_x.add_effect(x, 5)
+    grow_y = InstantaneousAction("grow_y")
+    grow_y.add_effect(y, Times(y, 2))
+    inc_x = InstantaneousAction("inc_x")
+    inc_x.add_increase_effect(x, 1)
+
+    problem.add_actions(
+        [
+            set_x,
+            grow_y,
+            inc_x,
+            _achiever("r1", g1, GE(x, 4)),
+            _achiever("r2", g2, GE(y, 3)),
+            _achiever("r3", g3, GE(Times(x, y), 20)),
+        ]
+    )
+    for g in (g1, g2, g3):
+        problem.add_goal(g)
+    return problem
+
+
+def get_problem_numeric_unreachable() -> Problem:
+    """`x >= 1` only has a wrong-direction writer (`dec_x`), so the goal is
+    a dead end (None) though the other goal `s` is one action away."""
+    problem = Problem("numeric_unreachable")
+    x = Fluent("x", RealType())
+    problem.add_fluent(x, default_initial_value=0)
+    g, s = _bool_fluents(problem, "g", "s")
+
+    dec_x = InstantaneousAction("dec_x")
+    dec_x.add_decrease_effect(x, 1)
+
+    problem.add_actions([dec_x, _achiever("r", g, GE(x, 1)), _achiever("get_s", s)])
+    problem.add_goal(g)
+    problem.add_goal(s)
+    return problem
+
+
+def get_problem_temporal_in_progress(reachable_end: bool) -> Problem:
+    """`work` (start, start + 2, end events) needs `ready` at its end, which
+    `prep` provides; `alt` achieves the goal `done` on its own. States reached
+    by BFS have `work`/`prep` in progress, exercising the extra goals of
+    hadd/hmax and hff's count of remaining events. Unless `reachable_end`,
+    `prep` needs `lock`, which nothing reachable achieves: once `work` has
+    started, hadd/hmax report a dead end while hff (which ignores the extra
+    goals) does not."""
+    problem = Problem(
+        f"temporal_in_progress_{'reachable' if reachable_end else 'unreachable'}"
+    )
+    busy, half, ready, done, lock = _bool_fluents(
+        problem, "busy", "half", "ready", "done", "lock"
+    )
+
+    work = DurativeAction("work")
+    work.set_fixed_duration(5)
+    work.add_effect(StartTiming(), busy, True)
+    work.add_effect(StartTiming(2), half, True)
+    work.add_condition(EndTiming(), ready)
+    work.add_effect(EndTiming(), done, True)
+
+    prep = DurativeAction("prep")
+    prep.set_fixed_duration(2)
+    if not reachable_end:
+        prep.add_condition(StartTiming(), lock)
+    prep.add_effect(EndTiming(), ready, True)
+
+    alt = DurativeAction("alt")
+    alt.set_fixed_duration(9)
+    alt.add_condition(StartTiming(), Not(busy))
+    alt.add_effect(EndTiming(), done, True)
+
+    problem.add_actions([work, prep, alt, _achiever("relock", lock, lock)])
+    problem.add_goal(done)
+    return problem
+
+
+def get_problem_wide_equal_costs(n: int = 10) -> Problem:
+    """`n` facts `f_i`, each one zero-precondition action away, and `n` goals
+    `g_j`, each with two equal-cost achievers (from `f_j` and from
+    `f_(3j+1) mod n`), plus `n` goals `h_j` needing two facts. Many operators
+    pop at each cost, so this stresses that hff's relaxed plan does not
+    depend on the order equal-cost operators are expanded in."""
+    problem = Problem(f"wide_equal_costs_{n}")
+    fs = _bool_fluents(problem, *(f"f{i}" for i in range(n)))
+    gs = _bool_fluents(problem, *(f"g{j}" for j in range(n)))
+    hs = _bool_fluents(problem, *(f"h{j}" for j in range(n)))
+    problem.add_actions([_achiever(f"get_f{i}", f) for i, f in enumerate(fs)])
+    for j in range(n):
+        problem.add_actions(
+            [
+                _achiever(f"ga_{j}", gs[j], fs[j]),
+                _achiever(f"gb_{j}", gs[j], fs[(3 * j + 1) % n]),
+                _achiever(f"h_{j}", hs[j], fs[(j + 2) % n], fs[(5 * j) % n]),
+            ]
+        )
+    for g in gs + hs:
+        problem.add_goal(g)
     return problem
