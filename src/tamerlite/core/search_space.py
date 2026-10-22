@@ -1157,48 +1157,60 @@ class SearchSpace(SearchSpaceABC):
         events: list[tuple[Timing, Event]],
     ) -> State | None:
         if self._is_temporal:
-            assert new_state.temporal_network is not None
-            start = (action, True, self._counter)
-            end = (action, False, self._counter)
-            self._counter += 1
-            duration = self._actions_duration[action.idx]
-            lower: int | Fraction
-            upper: int | Fraction
-            if duration is None:
-                lower, upper = 0, 0
-            else:
-                evaluated_lower = evaluate(duration[0], state)
-                assert isinstance(evaluated_lower, (int, Fraction))
-                lower = evaluated_lower
-                if duration[2]:
-                    lower += self._epsilon
-                evaluated_upper = evaluate(duration[1], state)
-                assert isinstance(evaluated_upper, (int, Fraction))
-                upper = evaluated_upper
-                if duration[3]:
-                    upper -= self._epsilon
-            new_state.temporal_network.insert_interval(
-                start, end, left_bound=lower, right_bound=upper
+            self._add_opening_constraints(
+                state, new_state, action, self._counter, events
             )
-            new_state.temporal_network.add(self._start_plan, start, 0)
-            new_state.temporal_network.add(end, self._end_plan, -self._epsilon)
+            self._counter += 1
             id = self._counter
-            for t, e in events:
-                ev = (e.action, e.pos, self._counter)
-                if t.is_from_start():
-                    new_state.temporal_network.insert_interval(
-                        start, ev, left_bound=t.delay, right_bound=t.delay
-                    )
-                else:
-                    new_state.temporal_network.insert_interval(
-                        end, ev, left_bound=t.delay, right_bound=t.delay
-                    )
-                self._counter += 1
+            self._counter += len(events)
             if len(events) > 1:
                 new_state.todo[action] = 1, id + 1
         else:
             id = self._counter
         return self._expand_event(state, new_state, events[0][1], 0, id)
+
+    def _add_opening_constraints(
+        self,
+        state: State,
+        new_state: State,
+        action: Action,
+        action_instance_id: int,
+        events: list[tuple[Timing, Event]],
+    ) -> None:
+        """Adds the constraints of an action opened by `_open_action`: the
+        duration bounds, the plan-start/plan-end edges and the rigid edges tying
+        each event to its anchor. `action_instance_id` identifies this instance
+        of the action (its start/end timepoints) and event `k` gets instance id
+        `action_instance_id + 1 + k`."""
+        tn = new_state.temporal_network
+        assert tn is not None
+        start = (action, True, action_instance_id)
+        end = (action, False, action_instance_id)
+        duration = self._actions_duration[action.idx]
+        lower: int | Fraction
+        upper: int | Fraction
+        if duration is None:
+            lower, upper = 0, 0
+        else:
+            evaluated_lower = evaluate(duration[0], state)
+            assert isinstance(evaluated_lower, (int, Fraction))
+            lower = evaluated_lower
+            if duration[2]:
+                lower += self._epsilon
+            evaluated_upper = evaluate(duration[1], state)
+            assert isinstance(evaluated_upper, (int, Fraction))
+            upper = evaluated_upper
+            if duration[3]:
+                upper -= self._epsilon
+        tn.insert_interval(start, end, left_bound=lower, right_bound=upper)
+        tn.add(self._start_plan, start, 0)
+        tn.add(end, self._end_plan, -self._epsilon)
+        for id, (t, e) in enumerate(events, start=action_instance_id + 1):
+            ev = (e.action, e.pos, id)
+            if t.is_from_start():
+                tn.insert_interval(start, ev, left_bound=t.delay, right_bound=t.delay)
+            else:
+                tn.insert_interval(end, ev, left_bound=t.delay, right_bound=t.delay)
 
     def build_plan(
         self, path: list[Action]

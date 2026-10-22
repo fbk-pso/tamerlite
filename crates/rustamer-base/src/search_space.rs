@@ -183,6 +183,10 @@ fn get_fluents<'a>(expr: &'a [ExpressionNode]) -> impl Iterator<Item = Fluent> +
     })
 }
 
+/// An action being opened by `open_action`: the action, its
+/// `action_instance_id` and its events
+type PendingOpening<'a> = (Action, u32, &'a [(Timing, Event)]);
+
 #[pyclass(name = "SearchSpace")]
 #[derive(Debug)]
 pub struct SearchSpace {
@@ -666,48 +670,66 @@ impl SearchSpace {
         let mut counter = self.counter.lock().unwrap();
         let mut id = *counter;
         if self.is_temporal {
-            // Add temporal constraints between events of the action
             let tn = new_state.temporal_network.as_mut().unwrap();
-            let start = self.tn_interpreter.get_action_id(action, true, *counter);
-            let end = self.tn_interpreter.get_action_id(action, false, *counter);
+            self.add_opening_constraints(state, tn, (action, *counter, events))?;
             *counter += 1;
-            let duration = self.actions_duration[action.idx].as_ref();
-            let mut lb: f64 = 0.0;
-            let mut ub: f64 = 0.0;
-            if let Some(duration) = duration {
-                let d = duration;
-                lb = -expression_node_to_f64(&internal_evaluate(&d.0, state)?)?;
-                ub = expression_node_to_f64(&internal_evaluate(&d.1, state)?)?;
-                if d.2 {
-                    lb -= self.epsilon;
-                }
-                if d.3 {
-                    ub -= self.epsilon;
-                }
-            }
-            tn.add(&start, &end, &lb);
-            tn.add(&end, &start, &ub);
-            tn.add(&self.tn_interpreter.start_plan_id, &start, &0.0);
-            tn.add(&end, &self.tn_interpreter.end_plan_id, &-self.epsilon);
             id = *counter;
-            for (t, e) in events.iter() {
-                let ev = self.tn_interpreter.get_event_id(e.action, e.pos, *counter);
-                let b1 = -rational_to_f64(&t.delay);
-                let b2 = rational_to_f64(&t.delay);
-                if t.is_from_start() {
-                    tn.add(&start, &ev, &b1);
-                    tn.add(&ev, &start, &b2);
-                } else {
-                    tn.add(&end, &ev, &b1);
-                    tn.add(&ev, &end, &b2);
-                }
-                *counter += 1;
-            }
+            *counter += events.len() as u32;
             if events.len() > 1 {
                 new_state.todo.insert(action, (1, id + 1));
             }
         }
         self.expand_event(state, new_state, &events[0].1, &0, &id)
+    }
+
+    /// Adds the constraints of an action opened by `open_action`: the duration
+    /// bounds, the plan-start/plan-end edges and the rigid edges tying each
+    /// event to its anchor. `action_instance_id` identifies this instance of
+    /// the action (its start/end timepoints) and event `k` gets instance id
+    /// `action_instance_id + 1 + k`.
+    fn add_opening_constraints(
+        &self,
+        state: &State,
+        tn: &mut DeltaSTN<u64, f64>,
+        (action, action_instance_id, events): PendingOpening,
+    ) -> PyResult<()> {
+        let start = self
+            .tn_interpreter
+            .get_action_id(action, true, action_instance_id);
+        let end = self
+            .tn_interpreter
+            .get_action_id(action, false, action_instance_id);
+        let duration = self.actions_duration[action.idx].as_ref();
+        let mut lb: f64 = 0.0;
+        let mut ub: f64 = 0.0;
+        if let Some(duration) = duration {
+            let d = duration;
+            lb = -expression_node_to_f64(&internal_evaluate(&d.0, state)?)?;
+            ub = expression_node_to_f64(&internal_evaluate(&d.1, state)?)?;
+            if d.2 {
+                lb -= self.epsilon;
+            }
+            if d.3 {
+                ub -= self.epsilon;
+            }
+        }
+        tn.add(&start, &end, &lb);
+        tn.add(&end, &start, &ub);
+        tn.add(&self.tn_interpreter.start_plan_id, &start, &0.0);
+        tn.add(&end, &self.tn_interpreter.end_plan_id, &-self.epsilon);
+        for (id, (t, e)) in (action_instance_id + 1..).zip(events.iter()) {
+            let ev = self.tn_interpreter.get_event_id(e.action, e.pos, id);
+            let b1 = -rational_to_f64(&t.delay);
+            let b2 = rational_to_f64(&t.delay);
+            if t.is_from_start() {
+                tn.add(&start, &ev, &b1);
+                tn.add(&ev, &start, &b2);
+            } else {
+                tn.add(&end, &ev, &b1);
+                tn.add(&ev, &end, &b2);
+            }
+        }
+        Ok(())
     }
 }
 
