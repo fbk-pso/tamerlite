@@ -1011,15 +1011,7 @@ class SearchSpace(SearchSpaceABC):
     def get_successor_state_with_compression(
         self, state: State, action: Action, enable_compression_safe_actions: bool
     ) -> State | None:
-        if action == self._timed_action and action not in state.todo:
-            # Already opened in the initial state; once its last event has
-            # fired there is nothing left to apply.
-            return None
         events = self._events[action]
-        if action not in state.todo and not self._symmetry_allows_opening(
-            state, action
-        ):
-            return None
         if action in state.todo:
             index, id = state.todo[action]
             _, e = events[index]
@@ -1038,6 +1030,12 @@ class SearchSpace(SearchSpaceABC):
                 new_state.todo[action] = index + 1, id + 1
             new_state = self._expand_event(state, new_state, e, index, id)
         else:
+            if action == self._timed_action:
+                # Already opened in the initial state; once its last event has
+                # fired there is nothing left to apply.
+                return None
+            if not self._symmetry_allows_opening(state, action):
+                return None
             # Check if the action is applicable before creating the new state
             if not evaluate(
                 events[0][1].conditions, state
