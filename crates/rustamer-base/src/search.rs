@@ -310,20 +310,41 @@ impl<T: Ord> OpenList<T> for BoundedPriorityQueue<T> {
     }
 }
 
-/// Which states take part in visited-state dedup, and how -- shared by every
-/// dedup site (`VisitedStates`, `BloomDedup`).
+/// How one state is deduped (`DedupPolicy::rule`): by equality of its
+/// `WeakEqState`, or by `makespan` dominance among states with an equal one
+/// (`makespan_dominates`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum DedupRule {
+    Equal,
+    Dominance,
+}
+
+/// Which states take part in visited-state dedup, and how (`rule`) -- shared
+/// by every dedup site (`VisitedStates`, `BloomDedup`).
 ///
 /// - `All`: a classical problem, or `weak_equality` on a temporal one.
 /// - `TodoEmpty`: a temporal problem without `weak_equality` and without a
-///   deadline dedups only states with an empty `todo`. With no durative action
-///   in progress there are no active conditions and no pending events, so any
-///   continuation of one such state can be scheduled from any other with the
-///   same `assignments`: sound for plan existence, only makespan can differ.
+///   deadline dedups only states with an empty `todo`. With no action in
+///   progress -- not even the timed action, so every timed effect and timed
+///   goal bound has already fired -- there are no pending events, and the only
+///   active conditions are the timed goals holding until the end of the plan,
+///   the same in every such state; so any continuation of one such state can
+///   be scheduled from any other with the same `assignments`: sound for plan
+///   existence, only makespan can differ.
 /// - `Dominance`: the same states, but the problem has a deadline. It pins
 ///   `end_plan - start_plan`, so a state may be pruned only by one that is
 ///   at least `epsilon` earlier (`makespan_dominates`): pruning the later
 ///   of two can't lose a plan that meets the deadline, pruning the earlier one
 ///   can (the anytime makespan-improvement loop is what sets it).
+///
+/// Under `TodoEmpty` and `Dominance`, a state whose only action in progress is
+/// the timed action (`SearchSpaceTrait::timed_action`) is deduped too, always
+/// by dominance, even without a deadline. Its pending events are pinned to
+/// `start_plan`, so unlike any other action's they constrain the future by the
+/// same absolute times in every state, and the active conditions -- the timed
+/// goals whose interval is open -- depend only on its next event index, which
+/// `WeakEqState` compares. Equality would not do: a later state can miss a
+/// timed window an earlier one makes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum DedupPolicy {
     All,
@@ -342,19 +363,32 @@ impl DedupPolicy {
         }
     }
 
-    pub(crate) fn applies(&self, s: &State) -> bool {
-        match self {
-            DedupPolicy::All => true,
-            DedupPolicy::TodoEmpty | DedupPolicy::Dominance => s.todo.is_empty(),
+    /// How `s` is deduped, or `None` if it isn't.
+    pub(crate) fn rule(&self, s: &State, timed_action: Option<Action>) -> Option<DedupRule> {
+        if *self == DedupPolicy::All {
+            return Some(DedupRule::Equal);
+        }
+        if s.todo.is_empty() {
+            if *self == DedupPolicy::Dominance {
+                return Some(DedupRule::Dominance);
+            }
+            return Some(DedupRule::Equal);
+        }
+        match timed_action {
+            Some(timed) if s.todo.len() == 1 && s.todo.contains_key(&timed) => {
+                Some(DedupRule::Dominance)
+            }
+            _ => None,
         }
     }
 }
 
 /// Wraps a state so the visited-state dedup set also compares `todo` (durative actions
 /// in progress), which is what the temporal `weak_equality` dedup path needs on top of
-/// the full `assignments` compare/hash. On the classical (`!is_temporal()`),
-/// `DedupPolicy::TodoEmpty` and `DedupPolicy::Dominance` dedup paths `todo` is always
-/// empty, so that comparison is a no-op there.
+/// the full `assignments` compare/hash. On the classical (`!is_temporal()`) dedup
+/// path `todo` is always empty, so that comparison is a no-op there; on the
+/// `DedupPolicy::TodoEmpty` and `DedupPolicy::Dominance` paths it is empty or holds
+/// only the timed action.
 pub struct WeakEqState {
     pub state: Rc<State>,
 }
@@ -406,7 +440,9 @@ trait DedupStore<P> {
 ///
 /// A future event must come after each past event by `epsilon` if the two are
 /// mutex and by 0 otherwise, and with an empty `todo` that is the only way a
-/// state's past constrains its future. So the recorded state forces any future
+/// state's past constrains its future. With only the timed action in `todo`,
+/// its pending events add constraints too, but at fixed times from
+/// `start_plan`, the same in both states. So the recorded state forces any future
 /// event no later than `recorded + epsilon`, and the new one forces it no
 /// earlier than `new`: the recorded state can take over the new one's schedule
 /// of any continuation once it is ahead by at least `epsilon`. Being ahead by
@@ -417,71 +453,56 @@ fn makespan_dominates(recorded: f64, new: f64, epsilon: f64, tolerance: f64) -> 
     recorded + epsilon <= new + tolerance
 }
 
-/// What `VisitedStates` records per key, by `DedupPolicy`.
+/// The visited-state store of every non-memory-bounded search (the
+/// priority-search driver, `ehc_search`, `multiqueue_search`), keyed by
+/// `WeakEqState` and gated per state by `DedupPolicy::rule`: a state it
+/// excludes is never recorded and never pruned. A state deduped by dominance
+/// keeps the smallest `makespan` recorded for its key, and is pruned only if
+/// that one dominates it.
 // `State::heuristic_cache` is a `Mutex`, which is what trips this lint on
 // `Rc<State>` -- but `WeakEqState`'s `Hash`/`PartialEq` impls only ever read
 // `assignments`/`todo`, never `heuristic_cache`, so mutating the cache after
 // insertion can't change a key's hash/eq out from under the set/map.
 #[allow(clippy::mutable_key_type)]
-enum Visited {
-    /// `DedupPolicy::All`/`DedupPolicy::TodoEmpty`: the keys seen.
-    Seen(FxHashSet<WeakEqState>),
-    /// `DedupPolicy::Dominance`: the smallest `makespan` recorded per key.
-    Makespans {
-        makespans: FxHashMap<WeakEqState, f64>,
-        epsilon: f64,
-        tolerance: f64,
-    },
-}
-
-/// The visited-state store of every non-memory-bounded search (the
-/// priority-search driver, `ehc_search`, `multiqueue_search`), keyed by
-/// `WeakEqState` and gated on `DedupPolicy`: a state the policy doesn't apply
-/// to is never recorded and never pruned. Under `DedupPolicy::Dominance` each
-/// key keeps the smallest `makespan` recorded for it, and a state is pruned
-/// only if that one dominates it.
 pub(crate) struct VisitedStates<'a, S: SearchSpaceTrait> {
     ss: &'a S,
     policy: DedupPolicy,
-    visited: Visited,
+    timed_action: Option<Action>,
+    /// The keys of the states deduped by equality.
+    seen: FxHashSet<WeakEqState>,
+    /// The smallest `makespan` recorded per key of the states deduped by
+    /// dominance.
+    makespans: FxHashMap<WeakEqState, f64>,
+    epsilon: f64,
+    tolerance: f64,
 }
 
 impl<'a, S: SearchSpaceTrait> VisitedStates<'a, S> {
     pub(crate) fn new(ss: &'a S, weak_equality: bool) -> Self {
-        let policy = DedupPolicy::new(ss, weak_equality);
-        let visited = if policy == DedupPolicy::Dominance {
-            let epsilon = ss.epsilon();
-            Visited::Makespans {
-                makespans: FxHashMap::with_hasher(FxBuildHasher),
-                epsilon,
-                tolerance: stn_tolerance(epsilon),
-            }
-        } else {
-            Visited::Seen(FxHashSet::with_hasher(FxBuildHasher))
-        };
+        let epsilon = ss.epsilon();
         Self {
             ss,
-            policy,
-            visited,
+            policy: DedupPolicy::new(ss, weak_equality),
+            timed_action: ss.timed_action(),
+            seen: FxHashSet::with_hasher(FxBuildHasher),
+            makespans: FxHashMap::with_hasher(FxBuildHasher),
+            epsilon,
+            tolerance: stn_tolerance(epsilon),
         }
     }
 
     /// Whether a recorded state makes `s` redundant.
     pub(crate) fn is_redundant(&self, s: &Rc<State>) -> bool {
-        if !self.policy.applies(s) {
+        let Some(rule) = self.policy.rule(s, self.timed_action) else {
             return false;
-        }
+        };
         let key = WeakEqState {
             state: Rc::clone(s),
         };
-        match &self.visited {
-            Visited::Seen(seen) => seen.contains(&key),
-            Visited::Makespans {
-                makespans,
-                epsilon,
-                tolerance,
-            } => makespans.get(&key).is_some_and(|&recorded| {
-                makespan_dominates(recorded, self.ss.makespan(s), *epsilon, *tolerance)
+        match rule {
+            DedupRule::Equal => self.seen.contains(&key),
+            DedupRule::Dominance => self.makespans.get(&key).is_some_and(|&recorded| {
+                makespan_dominates(recorded, self.ss.makespan(s), self.epsilon, self.tolerance)
             }),
         }
     }
@@ -489,39 +510,33 @@ impl<'a, S: SearchSpaceTrait> VisitedStates<'a, S> {
     /// Records `s` unless a recorded state makes it redundant, and returns
     /// whether it was recorded.
     pub(crate) fn insert(&mut self, s: &Rc<State>) -> bool {
-        if !self.policy.applies(s) {
+        let Some(rule) = self.policy.rule(s, self.timed_action) else {
             return true;
-        }
+        };
         let key = WeakEqState {
             state: Rc::clone(s),
         };
-        match &mut self.visited {
-            Visited::Seen(seen) => seen.insert(key),
-            Visited::Makespans {
-                makespans,
-                epsilon,
-                tolerance,
-            } => {
+        match rule {
+            DedupRule::Equal => self.seen.insert(key),
+            DedupRule::Dominance => {
                 let makespan = self.ss.makespan(s);
-                if let Some(&recorded) = makespans.get(&key) {
-                    if makespan_dominates(recorded, makespan, *epsilon, *tolerance) {
+                if let Some(&recorded) = self.makespans.get(&key) {
+                    if makespan_dominates(recorded, makespan, self.epsilon, self.tolerance) {
                         return false;
                     }
-                    if recorded <= makespan + *tolerance {
+                    if recorded <= makespan + self.tolerance {
                         return true;
                     }
                 }
-                makespans.insert(key, makespan);
+                self.makespans.insert(key, makespan);
                 true
             }
         }
     }
 
     pub(crate) fn clear(&mut self) {
-        match &mut self.visited {
-            Visited::Seen(seen) => seen.clear(),
-            Visited::Makespans { makespans, .. } => makespans.clear(),
-        }
+        self.seen.clear();
+        self.makespans.clear();
     }
 }
 
@@ -533,6 +548,7 @@ impl<S: SearchSpaceTrait> DedupStore<Rc<State>> for VisitedStates<'_, S> {
 
 struct BloomDedup {
     policy: DedupPolicy,
+    timed_action: Option<Action>,
     filter: Option<BloomFilter<RandomState>>,
 }
 
@@ -541,20 +557,25 @@ impl BloomDedup {
         const BLOOM_ITEMS: usize = 20_000_000;
         const BLOOM_FP_RATE: f64 = 1e-4;
         let policy = DedupPolicy::new(ss, weak_equality);
-        // A Bloom filter can't keep a `makespan` per key, so under
-        // `DedupPolicy::Dominance` it dedups nothing.
+        // A Bloom filter can't keep a `makespan` per key, so it dedups only
+        // the states `DedupPolicy::rule` dedups by equality -- none under
+        // `DedupPolicy::Dominance`, where the filter isn't allocated at all.
         let filter = (policy != DedupPolicy::Dominance).then(|| {
             BloomFilter::with_false_pos(BLOOM_FP_RATE)
                 .hasher(RandomState::default())
                 .expected_items(BLOOM_ITEMS)
         });
-        Self { policy, filter }
+        Self {
+            policy,
+            timed_action: ss.timed_action(),
+            filter,
+        }
     }
 }
 
 impl DedupStore<State> for BloomDedup {
     fn insert_new(&mut self, s: &State) -> bool {
-        if !self.policy.applies(s) {
+        if self.policy.rule(s, self.timed_action) != Some(DedupRule::Equal) {
             return true;
         }
         match &mut self.filter {
@@ -591,7 +612,11 @@ fn basic_search<S: SearchSpaceTrait>(
     );
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
     let start = SystemTime::now();
-    let init = ss.initial_state(None)?;
+    let Some(init) = ss.initial_state(None)? else {
+        // No valid initial state (see `SearchSpaceTrait::initial_state`).
+        metrics.insert("expanded_states", 0.to_string());
+        return Ok((None, metrics));
+    };
     let mut open = VecDeque::new();
     let mut expanded_states = 0;
     let mut generated_states = 1;
@@ -686,7 +711,12 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     );
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
     let start = SystemTime::now();
-    let init = Rc::new(ss.initial_state(None)?);
+    let Some(init) = ss.initial_state(None)? else {
+        // No valid initial state (see `SearchSpaceTrait::initial_state`).
+        metrics.insert("expanded_states", 0.to_string());
+        return Ok((None, metrics));
+    };
+    let init = Rc::new(init);
     let mut expanded_states = 0;
     let mut generated_states = 1;
 
@@ -844,7 +874,12 @@ where
 {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
     let start = SystemTime::now();
-    let init = <St::Payload as StatePayload>::wrap(ss.initial_state(None)?);
+    let Some(init) = ss.initial_state(None)? else {
+        // No valid initial state (see `SearchSpaceTrait::initial_state`).
+        metrics.insert("expanded_states", 0.to_string());
+        return Ok((None, metrics));
+    };
+    let init = <St::Payload as StatePayload>::wrap(init);
     let mut expanded_states: usize = 0;
     let mut generated_states: usize = 1;
 

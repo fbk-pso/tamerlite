@@ -363,6 +363,403 @@ def get_problem_driverlog_pfile1() -> Problem:
     return problem
 
 
+def get_problem_timed_delivery() -> Problem:
+    """
+    Timed initial literals read from PDDL: each destination only accepts a
+    delivery while it is open, and opens and closes at fixed times. The PDDL
+    reader keys these timed effects by `StartTiming`, not by the
+    `GlobalStartTiming` a problem built in Python uses.
+    """
+    reader = PDDLReader()
+    problem_directory = (
+        pathlib.Path(__file__).resolve().parent / "pddl" / "TimedDelivery"
+    )
+    domain = problem_directory / "domain.pddl"
+    instance = problem_directory / "instance.pddl"
+    problem = reader.parse_problem(str(domain), str(instance))
+    return problem
+
+
+def get_problem_timed_effects_window() -> Problem:
+    """
+    Two deliveries that need the dock open throughout, sharing one crane, while
+    the dock is only open between two timed effects: both have to fit, one
+    after the other, inside the window. The packages are interchangeable, so
+    symmetry breaking applies.
+    """
+    problem = Problem("timed_effects_window")
+    Package = UserType("Package")
+
+    dock_open = Fluent("dock_open", BoolType())
+    crane_free = Fluent("crane_free", BoolType())
+    delivered = Fluent("delivered", BoolType(), p=Package)
+
+    deliver = DurativeAction("deliver", p=Package)
+    p = deliver.parameter("p")
+    deliver.set_fixed_duration(4)
+    deliver.add_condition(StartTiming(), crane_free)
+    deliver.add_condition(ClosedTimeInterval(StartTiming(), EndTiming()), dock_open)
+    deliver.add_effect(StartTiming(), crane_free, False)
+    deliver.add_effect(EndTiming(), crane_free, True)
+    deliver.add_effect(EndTiming(), delivered(p), True)
+
+    problem.add_fluent(dock_open, default_initial_value=False)
+    problem.add_fluent(crane_free, default_initial_value=True)
+    problem.add_fluent(delivered, default_initial_value=False)
+    problem.add_action(deliver)
+
+    packages = [Object(f"p{i}", Package) for i in range(1, 3)]
+    problem.add_objects(packages)
+
+    problem.add_timed_effect(GlobalStartTiming(5), dock_open, True)
+    problem.add_timed_effect(GlobalStartTiming(15), dock_open, False)
+
+    for package in packages:
+        problem.add_goal(delivered(package))
+
+    return problem
+
+
+def get_problem_timed_effects_window_minimize_makespan() -> Problem:
+    """`get_problem_timed_effects_window` minimizing the makespan, which UP
+    stretches to the last timed effect: no plan ends before time 15."""
+    problem = get_problem_timed_effects_window()
+    problem.name = "timed_effects_window_minimize_makespan"
+    problem.add_quality_metric(MinimizeMakespan())
+    return problem
+
+
+def get_problem_timed_effects_at_zero() -> Problem:
+    """
+    Timed effects at time 0, including a numeric increase, and a second
+    increase later. An action at time 0 still sees the state from before the
+    timed effects of time 0, so `buy` can't happen until `budget` has been
+    raised twice.
+    """
+    problem = Problem("timed_effects_at_zero")
+
+    ready = Fluent("ready", BoolType())
+    budget = Fluent("budget", RealType())
+    bought = Fluent("bought", BoolType())
+
+    buy = InstantaneousAction("buy")
+    buy.add_precondition(ready)
+    buy.add_precondition(GE(budget, 10))
+    buy.add_effect(bought, True)
+    buy.add_decrease_effect(budget, 10)
+
+    problem.add_fluent(ready, default_initial_value=False)
+    problem.add_fluent(budget, default_initial_value=0)
+    problem.add_fluent(bought, default_initial_value=False)
+    problem.add_action(buy)
+
+    problem.add_timed_effect(GlobalStartTiming(0), ready, True)
+    problem.add_increase_effect(GlobalStartTiming(0), budget, 5)
+    problem.add_increase_effect(GlobalStartTiming(3), budget, 5)
+
+    problem.add_goal(bought)
+
+    return problem
+
+
+def get_problem_timed_effects_fluent_value() -> Problem:
+    """
+    A timed effect whose value reads a fluent, `snapshot := level` at time 4,
+    so it depends on what the plan did before then: `charge` has to start
+    before time 4. A later timed effect achieves part of the goal on its own.
+
+    `charge` assigns `level` a constant rather than incrementing it:
+    `hmax_explicit`'s value-set fixpoint doesn't terminate on a dead-end state
+    when an action increments a numeric fluent, and charging too late is a
+    dead end here.
+    """
+    problem = Problem("timed_effects_fluent_value")
+
+    level = Fluent("level", IntType())
+    snapshot = Fluent("snapshot", IntType())
+    charged = Fluent("charged", BoolType())
+    released = Fluent("released", BoolType())
+
+    charge = DurativeAction("charge")
+    charge.set_fixed_duration(2)
+    # Not repeatable, which keeps the search space finite even without
+    # duplicate detection.
+    charge.add_condition(StartTiming(), Not(charged))
+    charge.add_effect(StartTiming(), level, 3)
+    charge.add_effect(EndTiming(), charged, True)
+
+    problem.add_fluent(level, default_initial_value=0)
+    problem.add_fluent(snapshot, default_initial_value=0)
+    problem.add_fluent(charged, default_initial_value=False)
+    problem.add_fluent(released, default_initial_value=False)
+    problem.add_action(charge)
+
+    problem.add_timed_effect(GlobalStartTiming(4), snapshot, level)
+    problem.add_timed_effect(GlobalStartTiming(6), released, True)
+
+    problem.add_goal(GE(snapshot, 1))
+    problem.add_goal(charged)
+    problem.add_goal(released)
+
+    return problem
+
+
+def get_problem_timed_effects_undefined_initial_value(
+    measurable: bool = True,
+) -> Problem:
+    """
+    A timed effect reading `level`, which has no initial value. UP's
+    `UndefinedInitialNumericRemover` then adds a timed goal requiring `level`
+    to be defined at time 2, so `measure` must happen before then. Without
+    `measure` (`measurable=False`), `level` never gets a value and the
+    problem is unsolvable.
+    """
+    problem = Problem(
+        "timed_effects_undefined_initial_value"
+        if measurable
+        else "timed_effects_undefined_initial_value_unmeasurable"
+    )
+
+    level = Fluent("level", IntType())
+    snapshot = Fluent("snapshot", IntType())
+    done = Fluent("done", BoolType())
+
+    measured = Fluent("measured", BoolType())
+
+    # Neither action can repeat, which keeps the search space finite even
+    # without duplicate detection.
+    finish = InstantaneousAction("finish")
+    finish.add_precondition(GE(snapshot, 1))
+    finish.add_precondition(Not(done))
+    finish.add_effect(done, True)
+
+    problem.add_fluent(level)
+    problem.add_fluent(snapshot, default_initial_value=0)
+    problem.add_fluent(done, default_initial_value=False)
+    problem.add_fluent(measured, default_initial_value=False)
+    problem.add_action(finish)
+
+    if measurable:
+        measure = InstantaneousAction("measure")
+        measure.add_precondition(Not(measured))
+        measure.add_effect(level, 3)
+        measure.add_effect(measured, True)
+        problem.add_action(measure)
+
+    problem.add_timed_effect(GlobalStartTiming(2), snapshot, level)
+
+    problem.add_goal(done)
+
+    return problem
+
+
+def get_problem_timed_goal_point() -> Problem:
+    """
+    A goal checked at one instant: the order must be `ready` at time 5, and
+    only `prepare`, which takes 3, makes it so. `ship` needs it ready too.
+    """
+    problem = Problem("timed_goal_point")
+
+    ready = Fluent("ready", BoolType())
+    shipped = Fluent("shipped", BoolType())
+
+    # Neither action can repeat, which keeps the search space finite even
+    # without duplicate detection.
+    prepare = DurativeAction("prepare")
+    prepare.set_fixed_duration(3)
+    prepare.add_condition(StartTiming(), Not(ready))
+    prepare.add_effect(EndTiming(), ready, True)
+
+    ship = InstantaneousAction("ship")
+    ship.add_precondition(ready)
+    ship.add_precondition(Not(shipped))
+    ship.add_effect(shipped, True)
+
+    problem.add_fluent(ready, default_initial_value=False)
+    problem.add_fluent(shipped, default_initial_value=False)
+    problem.add_action(prepare)
+    problem.add_action(ship)
+
+    problem.add_timed_goal(GlobalStartTiming(5), ready)
+    problem.add_goal(shipped)
+
+    return problem
+
+
+def get_problem_timed_goal_window() -> Problem:
+    """
+    A goal that must hold over a closed window, `[4, 9] powered`, while the
+    only way to the final goal, `maintain`, switches the power off while it
+    runs: it has to fit entirely before or after the window.
+    """
+    problem = Problem("timed_goal_window")
+
+    powered = Fluent("powered", BoolType())
+    maintained = Fluent("maintained", BoolType())
+
+    # Not repeatable, which keeps the search space finite even without
+    # duplicate detection.
+    maintain = DurativeAction("maintain")
+    maintain.set_fixed_duration(3)
+    maintain.add_condition(StartTiming(), Not(maintained))
+    maintain.add_effect(StartTiming(), powered, False)
+    maintain.add_effect(EndTiming(), powered, True)
+    maintain.add_effect(EndTiming(), maintained, True)
+
+    problem.add_fluent(powered, default_initial_value=True)
+    problem.add_fluent(maintained, default_initial_value=False)
+    problem.add_action(maintain)
+
+    problem.add_timed_goal(
+        ClosedTimeInterval(GlobalStartTiming(4), GlobalStartTiming(9)), powered
+    )
+    problem.add_goal(maintained)
+
+    return problem
+
+
+def get_problem_timed_goal_until_end() -> Problem:
+    """
+    A goal that must hold from time 1 until the end of the plan,
+    `[1, end] safe`. `rush` delivers at once but leaves things unsafe for
+    good, so the plan must use the slower `deliver` instead.
+    """
+    problem = Problem("timed_goal_until_end")
+
+    safe = Fluent("safe", BoolType())
+    delivered = Fluent("delivered", BoolType())
+
+    # Neither action can repeat, which keeps the search space finite even
+    # without duplicate detection.
+    rush = InstantaneousAction("rush")
+    rush.add_precondition(Not(delivered))
+    rush.add_effect(delivered, True)
+    rush.add_effect(safe, False)
+
+    deliver = DurativeAction("deliver")
+    deliver.set_fixed_duration(4)
+    deliver.add_condition(StartTiming(), Not(delivered))
+    deliver.add_effect(EndTiming(), delivered, True)
+
+    problem.add_fluent(safe, default_initial_value=True)
+    problem.add_fluent(delivered, default_initial_value=False)
+    problem.add_action(rush)
+    problem.add_action(deliver)
+
+    problem.add_timed_goal(
+        ClosedTimeInterval(GlobalStartTiming(1), GlobalEndTiming()), safe
+    )
+    problem.add_goal(delivered)
+
+    return problem
+
+
+def get_problem_timed_goal_with_timed_effect() -> Problem:
+    """
+    A goal and a timed effect at the same instant: `[5] lit` is checked on
+    the state before the timed effect switches the light off at 5, so the
+    light must be switched on before then, and the goal still holds.
+    """
+    problem = Problem("timed_goal_with_timed_effect")
+
+    lit = Fluent("lit", BoolType())
+    switched = Fluent("switched", BoolType())
+
+    # Not repeatable, which keeps the search space finite even without
+    # duplicate detection.
+    switch_on = DurativeAction("switch_on")
+    switch_on.set_fixed_duration(2)
+    switch_on.add_condition(StartTiming(), Not(switched))
+    switch_on.add_effect(StartTiming(), switched, True)
+    switch_on.add_effect(EndTiming(), lit, True)
+
+    problem.add_fluent(lit, default_initial_value=False)
+    problem.add_fluent(switched, default_initial_value=False)
+    problem.add_action(switch_on)
+
+    problem.add_timed_effect(GlobalStartTiming(5), lit, False)
+    problem.add_timed_goal(GlobalStartTiming(5), lit)
+
+    return problem
+
+
+def get_problem_timed_goal_at_start_unsatisfied() -> Problem:
+    """
+    Unsolvable: a goal checked at time 0, before anything can happen, that
+    the initial state doesn't satisfy. The timed action has a single event.
+    """
+    problem = Problem("timed_goal_at_start_unsatisfied")
+
+    ready = Fluent("ready", BoolType())
+    done = Fluent("done", BoolType())
+
+    finish = InstantaneousAction("finish")
+    finish.add_precondition(Not(done))
+    finish.add_effect(done, True)
+    finish.add_effect(ready, True)
+
+    problem.add_fluent(ready, default_initial_value=False)
+    problem.add_fluent(done, default_initial_value=False)
+    problem.add_action(finish)
+
+    problem.add_timed_goal(GlobalStartTiming(0), ready)
+    problem.add_goal(done)
+
+    return problem
+
+
+def get_problem_timed_goal_window_too_early() -> Problem:
+    """
+    Unsolvable: `[2, 4] ready` must hold over a window that starts before
+    `prepare`, which takes 5, can possibly have finished.
+    """
+    problem = Problem("timed_goal_window_too_early")
+
+    ready = Fluent("ready", BoolType())
+
+    prepare = DurativeAction("prepare")
+    prepare.set_fixed_duration(5)
+    prepare.add_condition(StartTiming(), Not(ready))
+    prepare.add_effect(EndTiming(), ready, True)
+
+    problem.add_fluent(ready, default_initial_value=False)
+    problem.add_action(prepare)
+
+    problem.add_timed_goal(
+        ClosedTimeInterval(GlobalStartTiming(2), GlobalStartTiming(4)), ready
+    )
+
+    return problem
+
+
+def get_problem_timed_effects_goal_undone() -> Problem:
+    """
+    Unsolvable: `finish` is only possible while the window is open, until time
+    5, and a timed effect at time 10 undoes what it achieves. UP checks the
+    goal after every timed effect, including the ones after the last action.
+    """
+    problem = Problem("timed_effects_goal_undone")
+
+    window = Fluent("window", BoolType())
+    done = Fluent("done", BoolType())
+
+    finish = InstantaneousAction("finish")
+    finish.add_precondition(window)
+    finish.add_precondition(Not(done))
+    finish.add_effect(done, True)
+
+    problem.add_fluent(window, default_initial_value=True)
+    problem.add_fluent(done, default_initial_value=False)
+    problem.add_action(finish)
+
+    problem.add_timed_effect(GlobalStartTiming(5), window, False)
+    problem.add_timed_effect(GlobalStartTiming(10), done, False)
+
+    problem.add_goal(done)
+
+    return problem
+
+
 def get_problem_hierarchical_types() -> Problem:
     problem = Problem("hierarchical-types")
 
@@ -1020,6 +1417,150 @@ def get_problem_temporal_token_chain() -> Problem:
         problem.add_action(action)
     problem.add_goal(y)
     problem.add_goal(z)
+    return problem
+
+
+def get_problem_timed_token_chain() -> Problem:
+    """`get_problem_temporal_token_chain` plus a timed effect at time 10 (the
+    optimal plan ends around time 5) on a fluent nothing else reads: the timed
+    action is in progress in every state before the plan is done, so the
+    states `makespan_dominates` prunes are deduped only because the timed
+    action alone in `todo` doesn't exclude them."""
+    problem = get_problem_temporal_token_chain()
+    problem.name = "timed_token_chain"
+    late = Fluent("late")
+    problem.add_fluent(late, default_initial_value=False)
+    problem.add_timed_effect(GlobalStartTiming(10), late, True)
+    return problem
+
+
+def get_problem_timed_window_trap() -> Problem:
+    """`finish` (duration 5) needs `p` at its start and `window` throughout,
+    and a timed effect closes `window` at time 10. `p` comes from `slow`
+    (duration 8, one action) or from `fast1` then `fast2` (duration 1/2 each),
+    which hold the same token, so they can't overlap. Both paths reach the
+    same state, `p` and the token free, with the timed action still pending:
+    `slow`'s at time 8, too late for `finish`, in fewer steps; the fast
+    chain's at time 1. Dedup by equality would keep whichever comes first in
+    search order, `slow`'s, and lose the plan; dominance keeps both."""
+    problem = Problem("timed_window_trap")
+    p, q, tok, window, done = (
+        Fluent("p"),
+        Fluent("q"),
+        Fluent("tok"),
+        Fluent("window"),
+        Fluent("done"),
+    )
+    for f in (p, q, done):
+        problem.add_fluent(f, default_initial_value=False)
+    problem.add_fluent(tok, default_initial_value=True)
+    problem.add_fluent(window, default_initial_value=True)
+
+    def holding_token(name: str, duration: Fraction | int) -> DurativeAction:
+        action = DurativeAction(name)
+        action.set_fixed_duration(duration)
+        action.add_condition(StartTiming(), tok)
+        action.add_effect(StartTiming(), tok, False)
+        action.add_effect(EndTiming(), tok, True)
+        return action
+
+    slow = holding_token("slow", 8)
+    slow.add_effect(EndTiming(), p, True)
+    fast1 = holding_token("fast1", Fraction(1, 2))
+    fast1.add_effect(EndTiming(), q, True)
+    fast2 = holding_token("fast2", Fraction(1, 2))
+    fast2.add_condition(StartTiming(), q)
+    fast2.add_effect(EndTiming(), q, False)
+    fast2.add_effect(EndTiming(), p, True)
+    finish = DurativeAction("finish")
+    finish.set_fixed_duration(5)
+    finish.add_condition(StartTiming(), p)
+    finish.add_condition(ClosedTimeInterval(StartTiming(), EndTiming()), window)
+    finish.add_effect(EndTiming(), done, True)
+    for action in (slow, fast1, fast2, finish):
+        problem.add_action(action)
+    problem.add_timed_effect(GlobalStartTiming(10), window, False)
+    problem.add_goal(done)
+    return problem
+
+
+def get_problem_timed_toggles_unsolvable() -> Problem:
+    """Two fluents set and unset by instantaneous actions, a timed effect at
+    time 100 and a goal
+    nothing achieves. Toggling cycles through four assignments, each time
+    later than the last, so the timed action stays pending in all of them:
+    without deduping those states the search would enumerate every
+    interleaving of toggles up to time 100, `epsilon` apart."""
+    problem = Problem("timed_toggles_unsolvable")
+    x, y, late, never = Fluent("x"), Fluent("y"), Fluent("late"), Fluent("never")
+    for f in (x, y, late, never):
+        problem.add_fluent(f, default_initial_value=False)
+    for f in (x, y):
+        for value in (True, False):
+            toggle = InstantaneousAction(f"set_{f.name}_{str(value).lower()}")
+            toggle.add_precondition(Not(f) if value else f)
+            toggle.add_effect(f, value)
+            problem.add_action(toggle)
+    problem.add_timed_effect(GlobalStartTiming(100), late, True)
+    problem.add_goal(never)
+    return problem
+
+
+def get_problem_durative_event_gaps(
+    start_delays: list[Fraction | int],
+    end_delays: list[Fraction | int],
+    lower: Fraction | int | None,
+    upper: Fraction | int | None,
+    right_open: bool = False,
+) -> Problem:
+    """One durative action `act` with an effect at `start + d` for each `d` in
+    `start_delays` and at `end - d` for each `d` in `end_delays`, and a
+    duration in `[lower, upper]` (`[lower, upper)` if `right_open`). Without
+    bounds, the duration is the fluent `dur`, which `set_dur` changes, so it is
+    not static and stays non-constant after grounding. For the encoder's
+    check that an action's events can be `epsilon` apart."""
+    problem = Problem("durative_event_gaps")
+    act = DurativeAction("act")
+    if lower is None or upper is None:
+        dur = Fluent("dur", RealType())
+        problem.add_fluent(dur, default_initial_value=1)
+        set_dur = InstantaneousAction("set_dur")
+        set_dur.add_effect(dur, 2)
+        problem.add_action(set_dur)
+        act.set_fixed_duration(dur())
+    elif right_open:
+        act.set_right_open_duration_interval(lower, upper)
+    else:
+        act.set_closed_duration_interval(lower, upper)
+    events = [(StartTiming(d), f"s{i}") for i, d in enumerate(start_delays)]
+    events += [(EndTiming() - d, f"e{i}") for i, d in enumerate(end_delays)]
+    for timing, name in events:
+        f = Fluent(name)
+        problem.add_fluent(f, default_initial_value=False)
+        act.add_effect(timing, f, True)
+        problem.add_goal(f)
+    problem.add_action(act)
+    return problem
+
+
+def get_problem_durative_condition(interval: TimeInterval) -> Problem:
+    """One durative action `act` (duration 10) that needs `ready` over
+    `interval` and achieves the goal `done` at its end; `spoil` can make
+    `ready` false, so it isn't static and grounding keeps the condition. For
+    the encoder's check that a condition interval isn't empty."""
+    problem = Problem("durative_condition")
+    ready, done = Fluent("ready"), Fluent("done")
+    problem.add_fluent(ready, default_initial_value=True)
+    problem.add_fluent(done, default_initial_value=False)
+    act = DurativeAction("act")
+    act.set_fixed_duration(10)
+    act.add_condition(interval, ready)
+    act.add_effect(EndTiming(), done, True)
+    spoil = InstantaneousAction("spoil")
+    spoil.add_effect(ready, False)
+    problem.add_action(act)
+    problem.add_action(spoil)
+    problem.add_goal(done)
     return problem
 
 

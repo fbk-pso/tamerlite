@@ -41,19 +41,27 @@ from unified_planning.shortcuts import (
     LE,
     AnytimePlanner,
     BoolType,
+    ClosedTimeInterval,
     Div,
+    EndTiming,
     Equals,
     Fluent,
+    GlobalEndTiming,
+    GlobalStartTiming,
     InstantaneousAction,
     InterpretedFunction,
     IntType,
+    LeftOpenTimeInterval,
     Minus,
     Object,
     OneshotPlanner,
+    OpenTimeInterval,
     PlanValidator,
     Plus,
     Problem,
     RealType,
+    RightOpenTimeInterval,
+    StartTiming,
     State,
     Times,
     UserType,
@@ -110,6 +118,15 @@ def _build_problems():
         problems_generator.get_problem_metric_object_taint(),
         problems_generator.get_problem_metric_action_cost_object(in_default=True),
         problems_generator.get_problem_metric_action_cost_object(in_default=False),
+        problems_generator.get_problem_timed_delivery(),
+        problems_generator.get_problem_timed_effects_window(),
+        problems_generator.get_problem_timed_effects_at_zero(),
+        problems_generator.get_problem_timed_effects_fluent_value(),
+        problems_generator.get_problem_timed_effects_undefined_initial_value(),
+        problems_generator.get_problem_timed_goal_point(),
+        problems_generator.get_problem_timed_goal_window(),
+        problems_generator.get_problem_timed_goal_until_end(),
+        problems_generator.get_problem_timed_goal_with_timed_effect(),
     ]
 
     up_example_problems = list(
@@ -142,6 +159,7 @@ def _build_problems():
 def _build_anytime_problems(problems):
     test_problems = [
         problems_generator.get_problem_temporal_flight_minimize_makespan(),
+        problems_generator.get_problem_timed_effects_window_minimize_makespan(),
         problems_generator.get_problem_temporal_flight_minimize_fuel(),
         problems_generator.get_problem_temporal_flight_maximize_fuel(),
         problems_generator.get_problem_flight_minimize_plan_length(),
@@ -596,6 +614,7 @@ def test_heuristic_fixed_values():
             )
             ss: SearchSpaceABC = encoder.search_space
             init_state = ss.initial_state()
+            assert init_state is not None
 
             states = [init_state]
             for action_name in path:
@@ -706,6 +725,7 @@ def test_heuristic_values(problem, data_regression):
         )
         ss: SearchSpaceABC = encoder.search_space
         init_state = ss.initial_state()
+        assert init_state is not None
 
         states = generate_states(
             ss, init_state, num_states=max_generated_states(problem)
@@ -741,6 +761,7 @@ def test_heuristic_values(problem, data_regression):
                         internal_caching=internal_caching,
                         cache_value_in_state=False,
                         inadmissible_numeric_heuristic_variant=inadmissible_numeric_heuristic,
+                        timed_action=encoder.timed_action,
                     )
                     computed_values: list[int | None] = []
                     for state in states:
@@ -778,7 +799,9 @@ def test_heuristic_reachable_actions(problem, data_regression):
 
         encoder = _encode_without_preprocessing(problem)
         ss: SearchSpaceABC = encoder.search_space
-        states = generate_states(ss, ss.initial_state(), num_states=num_states)
+        init_state = ss.initial_state()
+        assert init_state is not None
+        states = generate_states(ss, init_state, num_states=num_states)
         assert encoder.goal is not None
         for heuristic_class, heuristic_name in [
             (HFF, "hff"),
@@ -931,7 +954,9 @@ def test_inadmissible_numeric_variant_keeps_assign_and_complex_achievers(
             inadmissible_numeric_heuristic_variant=inadmissible,
         )
         ss: SearchSpaceABC = encoder.search_space
-        return heuristic.eval(ss.initial_state(), ss)
+        init_state = ss.initial_state()
+        assert init_state is not None
+        return heuristic.eval(init_state, ss)
 
     cancelled = _encode_without_preprocessing(_assign_cancelled_problem(False))
     for heuristic_class in (HFF, HAdd, HMax):
@@ -959,7 +984,9 @@ def _initial_h(encoder: Encoder, heuristic_class) -> float | None:
         inadmissible_numeric_heuristic_variant=False,
     )
     ss: SearchSpaceABC = encoder.search_space
-    return heuristic.eval(ss.initial_state(), ss)
+    init_state = ss.initial_state()
+    assert init_state is not None
+    return heuristic.eval(init_state, ss)
 
 
 @pytest.mark.parametrize("disable_rustamer", [True, False])
@@ -1072,6 +1099,7 @@ def test_heuristics_empty_goal(disable_rustamer):
     assert encoder.goal is not None
     ss: SearchSpaceABC = encoder.search_space
     init_state = ss.initial_state()
+    assert init_state is not None
     for heuristic_class in (HFF, HAdd, HMax, HMaxExplicit):
         heuristic: Heuristic = heuristic_class(
             encoder.actions,
@@ -1105,6 +1133,7 @@ def test_heuristics_constant_leaves(disable_rustamer):
     encoder = _constant_leaves_problem(with_goal=True)
     ss: SearchSpaceABC = encoder.search_space
     init_state = ss.initial_state()
+    assert init_state is not None
     op = testing_utils._op_tree
     p = make_fluent_node(encoder.fluent_ids["p"])
     q = make_fluent_node(encoder.fluent_ids["q"])
@@ -1407,6 +1436,7 @@ def test_search_space(problem, relevance_analysis):
         ss: SearchSpaceABC = encoder.search_space
 
         init_state = ss.initial_state()
+        assert init_state is not None
         backend = "python" if disable_rustamer else "rust"
         states[backend] = generate_states(
             ss, init_state, num_states=max_generated_states(problem)
@@ -1418,8 +1448,9 @@ def test_search_space(problem, relevance_analysis):
         state2 = states["rust"][i]
 
         assert len(state1.path) == len(state2.path)
-        actions1 = [encoder.get_action_name(e[0]) for e in state1.path]
-        actions2 = [encoder.get_action_name(e[0]) for e in state2.path]
+        # By id: the timed action has no UP name.
+        actions1 = [e[0].idx for e in state1.path]
+        actions2 = [e[0].idx for e in state2.path]
         assert actions1 == actions2
 
         assert len(state1.todo) == len(state2.todo)
@@ -1513,6 +1544,65 @@ def test_temporal_dominance_dedup_prunes(monkeypatch):
     ):
         assert solved and solved_off
         assert expanded < expanded_off
+
+
+def test_timed_action_dedup_prunes(monkeypatch):
+    """With only the timed action in progress, a state is still deduped by
+    `makespan` dominance, with or without a deadline: stubbing
+    `makespan_dominates` out to never hold (no dedup of those states, as
+    before) expands strictly more states, and both backends agree."""
+    problem = problems_generator.get_problem_timed_token_chain()
+    results = []
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        results.append(_solve_temporal(problem, None))
+    assert results[0] == results[1]
+    solved, expanded = results[0]
+    assert solved
+
+    reload_tamerlite(True)
+    import tamerlite.core.search as search
+
+    monkeypatch.setattr(search, "makespan_dominates", lambda *_: False)
+    solved_off, expanded_off = _solve_temporal(problem, None)
+    assert solved_off
+    assert expanded < expanded_off
+
+
+def test_timed_action_dedup_keeps_earlier_states(monkeypatch):
+    """With the timed action in progress, dedup must be by dominance even
+    without a deadline: on `get_problem_timed_window_trap` the state reached
+    first is the one too late for the timed window. Both backends solve it,
+    while pruning by equality (`makespan_dominates` stubbed to always hold)
+    loses the plan -- which is what makes this problem a real check."""
+    problem = problems_generator.get_problem_timed_window_trap()
+    results = []
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        results.append(_solve_temporal(problem, None))
+    assert results[0] == results[1]
+    assert results[0][0]
+
+    reload_tamerlite(True)
+    import tamerlite.core.search as search
+
+    monkeypatch.setattr(search, "makespan_dominates", lambda *_: True)
+    assert not _solve_temporal(problem, None)[0]
+
+
+def test_timed_action_dedup_unsolvable_terminates():
+    """An unsolvable problem whose states repeat while a timed effect is
+    pending is proved unsolvable after a handful of expansions, on both
+    backends: without deduping those states the search runs out of memory."""
+    problem = problems_generator.get_problem_timed_toggles_unsolvable()
+    results = []
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        results.append(_solve_temporal(problem, None))
+    assert results[0] == results[1]
+    solved, expanded = results[0]
+    assert not solved
+    assert expanded <= 20
 
 
 def test_makespan_dominates():
@@ -2589,7 +2679,9 @@ def test_temporal_no_start_event():
         assert noop in encoder.applicable_actions
 
         ss: SearchSpaceABC = encoder.search_space
-        succ_state = ss.get_successor_state(ss.initial_state(), noop)
+        init_state = ss.initial_state()
+        assert init_state is not None
+        succ_state = ss.get_successor_state(init_state, noop)
         assert succ_state is not None
 
         scheduled = ss.build_plan([noop])
@@ -2703,6 +2795,379 @@ def test_temporal_condition_before_start_is_rejected():
                 compression_safe_actions=False,
                 relevance_analysis=False,
             )
+
+
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+@pytest.mark.parametrize("heuristic", HEURISTICS)
+def test_timed_effects_goal_undone_after_last_action(disable_rustamer, heuristic):
+    """UP checks the goal only after every timed effect has fired, including
+    the ones after the last action, so a goal that a late timed effect undoes
+    for good is unreachable."""
+    reload_tamerlite(disable_rustamer)
+    problem = problems_generator.get_problem_timed_effects_goal_undone()
+    search = tamerlite.SearchParams(heuristic=heuristic)
+    with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+        res = planner.solve(problem, timeout=60)
+    assert res.status == ResultStatus.UNSOLVABLE_INCOMPLETELY
+
+
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+def test_timed_effects_are_not_replayed_by_heuristics(disable_rustamer):
+    """Once every timed effect has fired, the relaxation must not fire them
+    again. In `timed_effects_window`, letting the dock open and close without
+    delivering anything is a dead end, which a relaxation that could reopen
+    the dock would miss."""
+    reload_tamerlite(disable_rustamer)
+    from tamerlite.core import HFF, HAdd, HMax, HMaxExplicit
+    from tamerlite.encoder import Encoder
+
+    problem = problems_generator.get_problem_timed_effects_window()
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    encoder = Encoder(
+        ground_problem,
+        lifted_problem,
+        map_back_action_instance,
+        symmetry_breaking=False,
+        compression_safe_actions=False,
+        relevance_analysis=False,
+    )
+    ss = encoder.search_space
+    timed_action = encoder.timed_action
+    assert timed_action is not None
+
+    init_state = ss.initial_state()
+    assert init_state is not None
+    state = init_state
+    while timed_action in state.todo:
+        succ_state = ss.get_successor_state(state, timed_action)
+        assert succ_state is not None
+        state = succ_state
+    # Its events have all fired, and it can't be opened again.
+    assert ss.get_successor_state(state, timed_action) is None
+
+    assert encoder.goal is not None
+    heuristic_classes: list[Callable[..., Heuristic]] = [HFF, HAdd, HMax, HMaxExplicit]
+    for heuristic_class in heuristic_classes:
+        heuristic: Heuristic = heuristic_class(
+            encoder.actions,
+            encoder.fluent_domains,
+            encoder.events,
+            encoder.goal,
+            internal_caching=False,
+            cache_value_in_state=False,
+            inadmissible_numeric_heuristic_variant=False,
+            timed_action=timed_action,
+        )
+        assert heuristic.eval(init_state, ss) is not None
+        assert heuristic.eval(state, ss) is None
+
+
+def test_timed_effects_disable_compression_safe_actions():
+    """A compressed action runs from start to end with nothing in between,
+    so it could not straddle a timed effect: timed effects turn compression
+    off even for actions that are otherwise compression-safe."""
+    problem = problems_generator.get_problem_temporal_flight()
+    timed_problem = problem.clone()
+    connected = timed_problem.fluent("connected")
+    A = timed_problem.object("A")
+    B = timed_problem.object("B")
+    timed_problem.add_timed_effect(GlobalStartTiming(100), connected(A, B), False)
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.encoder import Encoder
+
+        compression_safe = []
+        for p in [problem, timed_problem]:
+            lifted_problem, ground_problem, map_back_action_instance = (
+                testing_utils.compile_problem(p)
+            )
+            encoder = Encoder(
+                ground_problem,
+                lifted_problem,
+                map_back_action_instance,
+                symmetry_breaking=False,
+                compression_safe_actions=True,
+                relevance_analysis=False,
+            )
+            compression_safe.append(encoder.is_any_action_compression_safe())
+        assert compression_safe == [True, False]
+
+
+def test_conditional_timed_effects_are_not_supported():
+    problem = problems_generator.get_problem_timed_effects_at_zero()
+    assert tamerlite.engine.TamerLite.supports(problem.kind)
+    ready = problem.fluent("ready")
+    bought = problem.fluent("bought")
+    problem.add_timed_effect(GlobalStartTiming(1), ready, False, condition=bought)
+    assert not tamerlite.engine.TamerLite.supports(problem.kind)
+
+
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+@pytest.mark.parametrize("heuristic", HEURISTICS)
+@pytest.mark.parametrize(
+    "problem_factory",
+    [
+        problems_generator.get_problem_timed_goal_at_start_unsatisfied,
+        problems_generator.get_problem_timed_goal_window_too_early,
+        partial(
+            problems_generator.get_problem_timed_effects_undefined_initial_value,
+            measurable=False,
+        ),
+    ],
+    ids=["at_start_unsatisfied", "window_too_early", "undefined_unmeasurable"],
+)
+def test_timed_goals_unsatisfiable(disable_rustamer, heuristic, problem_factory):
+    """Timed goals that no plan can satisfy: one checked at time 0 against an
+    initial state that falsifies it (no valid initial state, with a single-event
+    timed action), a window opening before the goal can possibly hold, and
+    the timed goal `UndefinedInitialNumericRemover` adds for a fluent that
+    never gets a value."""
+    reload_tamerlite(disable_rustamer)
+    problem = problem_factory()
+    assert tamerlite.engine.TamerLite.supports(problem.kind)
+    search = tamerlite.SearchParams(heuristic=heuristic)
+    with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+        res = planner.solve(problem, timeout=60)
+    assert res.status == ResultStatus.UNSOLVABLE_INCOMPLETELY
+
+
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+def test_no_initial_state_when_a_goal_at_time_0_fails(disable_rustamer):
+    """A timed goal checked at time 0 that the initial state falsifies leaves
+    no valid initial state: `initial_state` returns `None`, and the search
+    reports no plan without expanding anything."""
+    reload_tamerlite(disable_rustamer)
+    from tamerlite.encoder import Encoder
+
+    problem = problems_generator.get_problem_timed_goal_at_start_unsatisfied()
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    encoder = Encoder(
+        ground_problem,
+        lifted_problem,
+        map_back_action_instance,
+        symmetry_breaking=False,
+        compression_safe_actions=False,
+        relevance_analysis=False,
+    )
+    assert encoder.search_space.initial_state() is None
+
+    with OneshotPlanner(name="tamerlite") as planner:
+        res = planner.solve(problem, timeout=60)
+    assert res.status == ResultStatus.UNSOLVABLE_INCOMPLETELY
+    assert res.metrics["expanded_states"] == "0"
+
+
+def _encode_on_both_backends(
+    problem: Problem,
+    raises: type[Exception] | None = None,
+    match: str | None = None,
+) -> list[Encoder]:
+    """Encodes `problem` on both backends; with `raises`, asserts that the
+    encoder raises it, with a message matching `match`. Returns the encoders
+    built."""
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    encoders = []
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.encoder import Encoder
+
+        with (
+            pytest.raises(raises, match=match)
+            if raises is not None
+            else contextlib.nullcontext()
+        ):
+            encoders.append(
+                Encoder(
+                    ground_problem,
+                    lifted_problem,
+                    map_back_action_instance,
+                    symmetry_breaking=False,
+                    compression_safe_actions=False,
+                    relevance_analysis=False,
+                )
+            )
+    return encoders
+
+
+def test_timed_goals_starting_at_the_end_are_rejected():
+    """A timed goal whose interval starts at the end of the plan is not
+    supported (UP's own validator can't check one either): it is just a
+    goal."""
+    problem = problems_generator.get_problem_timed_goal_point()
+    problem.add_timed_goal(GlobalEndTiming(), problem.fluent("shipped"))
+    _encode_on_both_backends(
+        problem,
+        unified_planning.exceptions.UPUnsupportedProblemTypeError,
+        "starting at the end of the plan",
+    )
+
+
+@pytest.mark.parametrize(
+    "interval, raises, match",
+    [
+        pytest.param(
+            OpenTimeInterval(GlobalStartTiming(3), GlobalStartTiming(3)),
+            unified_planning.exceptions.UPProblemDefinitionError,
+            "is empty",
+            id="empty_open",
+        ),
+        pytest.param(
+            LeftOpenTimeInterval(GlobalStartTiming(3), GlobalStartTiming(3)),
+            unified_planning.exceptions.UPProblemDefinitionError,
+            "is empty",
+            id="empty_left_open",
+        ),
+        pytest.param(
+            RightOpenTimeInterval(GlobalStartTiming(3), GlobalStartTiming(3)),
+            unified_planning.exceptions.UPProblemDefinitionError,
+            "is empty",
+            id="empty_right_open",
+        ),
+        pytest.param(
+            ClosedTimeInterval(GlobalStartTiming(5), GlobalStartTiming(3)),
+            unified_planning.exceptions.UPProblemDefinitionError,
+            "is empty",
+            id="reversed",
+        ),
+        pytest.param(
+            RightOpenTimeInterval(GlobalStartTiming(1), GlobalEndTiming()),
+            unified_planning.exceptions.UPUnsupportedProblemTypeError,
+            "open at the end of the plan",
+            id="open_at_end",
+        ),
+    ],
+)
+def test_timed_goals_with_invalid_intervals_are_rejected(interval, raises, match):
+    """An empty timed-goal interval -- `(t, t)`, `(t, t]`, `[t, t)` or one
+    ending before it starts -- is a malformed problem, and `[x, end)` is not
+    supported (`[x, end]` is the goal holding until the end): the encoder
+    rejects them instead of encoding a point goal or an until-end goal."""
+    problem = problems_generator.get_problem_timed_goal_point()
+    problem.add_timed_goal(interval, problem.fluent("shipped"))
+    _encode_on_both_backends(problem, raises, match)
+
+
+@pytest.mark.parametrize(
+    "time",
+    [Fraction(1, 200), 5 + Fraction(1, 200)],
+    ids=["near_zero", "near_another"],
+)
+def test_timed_events_closer_than_epsilon_are_rejected(time):
+    """The search keeps the timed action's events at least `epsilon` apart,
+    so two timed instants closer than that (or one closer than that to time
+    0) are rejected rather than leaving the problem unsolvable -- and accepted
+    once `Problem.epsilon` is smaller than their gap."""
+    problem = problems_generator.get_problem_timed_effects_window()
+    problem.add_timed_effect(
+        GlobalStartTiming(time), problem.fluent("crane_free"), True
+    )
+    _encode_on_both_backends(
+        problem,
+        unified_planning.exceptions.UPUnsupportedProblemTypeError,
+        "closer than epsilon",
+    )
+    problem.epsilon = Fraction(1, 1000)
+    _encode_on_both_backends(problem)
+
+
+@pytest.mark.parametrize(
+    "interval, empty",
+    [
+        pytest.param(OpenTimeInterval(StartTiming(2), StartTiming(2)), True, id="open"),
+        pytest.param(
+            LeftOpenTimeInterval(StartTiming(2), StartTiming(2)), True, id="left_open"
+        ),
+        pytest.param(
+            RightOpenTimeInterval(EndTiming() - 2, EndTiming() - 2),
+            True,
+            id="right_open_from_end",
+        ),
+        pytest.param(
+            ClosedTimeInterval(StartTiming(5), StartTiming(3)), True, id="reversed"
+        ),
+        pytest.param(
+            ClosedTimeInterval(EndTiming() - 1, EndTiming() - 3),
+            True,
+            id="reversed_from_end",
+        ),
+        pytest.param(
+            ClosedTimeInterval(StartTiming(2), StartTiming(2)), False, id="point"
+        ),
+        pytest.param(
+            OpenTimeInterval(StartTiming(), EndTiming()), False, id="over_all"
+        ),
+        pytest.param(
+            ClosedTimeInterval(StartTiming(5), EndTiming() - 3),
+            False,
+            id="mixed_bounds",
+        ),
+    ],
+)
+def test_empty_durative_condition_intervals_are_rejected(interval, empty):
+    """A durative action's condition over an empty interval -- both bounds
+    from the start, or both from the end, with `upper < lower` or equal
+    bounds and an open side -- is rejected like an empty timed-goal interval,
+    instead of being encoded as a point condition. `[t, t]` is a point
+    condition, and an interval with one bound from each end can't be decided
+    without the duration, so it is accepted."""
+    problem = problems_generator.get_problem_durative_condition(interval)
+    _encode_on_both_backends(
+        problem,
+        unified_planning.exceptions.UPProblemDefinitionError if empty else None,
+        "is empty" if empty else None,
+    )
+
+
+_EPS = Fraction(1, 100)
+
+
+@pytest.mark.parametrize(
+    "start_delays, end_delays, lower, upper, right_open, dropped",
+    [
+        pytest.param([0], [0], _EPS / 2, _EPS / 2, False, True, id="short_fixed"),
+        pytest.param([0], [0], 0, _EPS / 2, False, True, id="short_interval"),
+        pytest.param([0], [0], 0, _EPS, True, True, id="right_open_at_epsilon"),
+        pytest.param([0, _EPS / 2], [], 1, 1, False, True, id="close_from_start"),
+        pytest.param([0], [_EPS / 2, 0], 10, 10, False, True, id="close_from_end"),
+        pytest.param([0], [0], 0, _EPS, False, False, id="closed_at_epsilon"),
+        pytest.param([0], [0], 0, 10, False, False, id="long_interval"),
+        pytest.param([0], [], _EPS / 2, _EPS / 2, False, False, id="no_end_event"),
+        pytest.param([0], [0], None, None, False, False, id="non_constant"),
+    ],
+)
+def test_durative_events_closer_than_epsilon_are_dropped(
+    start_delays, end_delays, lower, upper, right_open, dropped
+):
+    """The search keeps a durative action's events at least `epsilon` apart,
+    so an action whose events can't be, for any duration it allows, could
+    never be applied: the encoder leaves it out of the applicable actions,
+    with a warning naming it, instead of keeping it silently. The problem
+    isn't rejected, since grounding often makes such actions the plan doesn't
+    need (Depots' zero-duration drives from a depot to itself). A duration
+    that isn't constant can't be checked."""
+    problem = problems_generator.get_problem_durative_event_gaps(
+        start_delays, end_delays, lower, upper, right_open
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        encoders = _encode_on_both_backends(problem)
+    messages = [str(w.message) for w in caught if "never be applied" in str(w.message)]
+    assert len(messages) == (2 if dropped else 0)
+    assert all("`act`" in m for m in messages)
+    for encoder in encoders:
+        names = {
+            encoder.get_action_name(a)
+            for a in encoder.applicable_actions
+            if a != encoder.timed_action
+        }
+        assert ("act" not in names) == dropped
 
 
 def test_symmetry_breaking_object_valued_fluents():
@@ -3295,6 +3760,7 @@ def test_interpreted_function_registry_reuses_func_id_for_shared_wrapper():
         )
         ss: SearchSpaceABC = encoder.search_space
         state = ss.initial_state()
+        assert state is not None
         # `f` reads `IF_int_to_int(ithree)`, evaluated once per encoding;
         # if a stale/aliased `func_id` were ever resolved this would raise
         # or evaluate against the wrong callable instead of quietly working.
@@ -3487,6 +3953,7 @@ def test_hmax_explicit_partial_callable_can_raise():
         )
         ss: SearchSpaceABC = encoder.search_space
         init_state = ss.initial_state()
+        assert init_state is not None
 
         heuristic_classes: list[Callable[..., Heuristic]] = [HFF, HAdd, HMax]
         for heuristic_class in heuristic_classes:
@@ -3649,6 +4116,7 @@ def test_interpreted_functions_real_return_backend_normalization():
             relevant_equality=False,
         )
         init_state = encoder.search_space.initial_state()
+        assert init_state is not None
         converter = Converter(
             ground_problem,
             fluent_ids=encoder.fluent_ids,
@@ -4213,6 +4681,7 @@ def test_interpreted_function_real_arg_int_normalization():
             relevance_analysis=False,
         )
         state = encoder.search_space.initial_state()
+        assert state is not None
 
         three_int = make_int_constant_node(3)
         three_real = make_rational_constant_node(3, 1)
