@@ -18,6 +18,7 @@
 import logging
 import time
 import warnings
+import weakref
 from collections.abc import Callable, Iterator, MutableMapping
 from dataclasses import dataclass
 from fractions import Fraction
@@ -33,11 +34,12 @@ from unified_planning.engines.compilers.undefined_initial_numeric_remover import
     UndefinedInitialNumericRemover,
 )
 from unified_planning.engines.compilers.utils import get_fresh_name
+from unified_planning.engines.mixins.heuristic import HeuristicGuarantee
 from unified_planning.engines.plan_validator import (
     SequentialPlanValidator,
     TimeTriggeredPlanValidator,
 )
-from unified_planning.exceptions import UPStateMissingFluentError
+from unified_planning.exceptions import UPStateMissingFluentError, UPUsageError
 from unified_planning.model import FNode, InterpretedFunction, ProblemKind, StartTiming
 from unified_planning.model.state import State
 from unified_planning.plans import ActionInstance, PlanKind
@@ -67,7 +69,7 @@ from tamerlite.core import (
     wastar_search_memory_bounded,
 )
 from tamerlite.core.heuristics import Heuristic
-from tamerlite.encoder import Encoder
+from tamerlite.encoder import Encoder, has_interpreted_functions
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +129,19 @@ class StateWrapper(State):
     ) -> Callable[[search_space.State], float | None]:
         """Wrap heuristic so it receives a StateWrapper instead of a State."""
         return lambda state: heuristic(cls(encoder, state))
+
+
+@dataclass(frozen=True)
+class HeuristicModeParams:
+    """Configures the TamerLite heuristic (UP's `Heuristic` operation mode).
+
+    `Heuristic(problem, name="tamerlite", params={...})` passes `params` to
+    `TamerLite` as keyword arguments, which build this dataclass."""
+
+    heuristic: str = "hff"
+    inadmissible_numeric_heuristic_variant: bool = False
+    disable_numeric_reasoning: bool = False
+    internal_heuristic_cache: bool = False
 
 
 @dataclass(frozen=True)
@@ -195,18 +210,138 @@ class _HeuristicCallable(Protocol):
     ) -> Heuristic: ...
 
 
+class _HeuristicEvaluator:
+    """The state behind `TamerLite`'s Heuristic operation mode: one encoding
+    of `problem` and one core heuristic over it, evaluated on UP states.
+
+    The encoding runs without symmetry breaking, compression-safe detection,
+    relevance analysis or `relevant_equality` compaction: relevance analysis
+    prunes actions unreachable from the *initial* state, which would make a
+    dead end of a state from which the goal is reachable only through them.
+
+    A UP state only exposes fluent values, so it is evaluated as a state with
+    no durative action in progress (`Encoder.search_state_of`).
+    """
+
+    def __init__(
+        self,
+        problem: "up.model.Problem",
+        params: HeuristicModeParams,
+    ):
+        dnr = params.disable_numeric_reasoning
+        constructors: dict[str, _HeuristicCallable] = {
+            "hff": partial(HFF, disable_numeric_reasoning=dnr),
+            "hadd": partial(HAdd, disable_numeric_reasoning=dnr),
+            "hmax": partial(HMax, disable_numeric_reasoning=dnr),
+        }
+        if params.heuristic not in constructors:
+            raise UPUsageError(
+                f"Unknown heuristic '{params.heuristic}'. "
+                f"Supported values are: {', '.join(constructors)}."
+            )
+        kind = problem.kind
+        if kind.has_undefined_initial_numeric():
+            raise UPUsageError(
+                "The TamerLite heuristic does not support numeric fluents with "
+                "undefined initial values."
+            )
+        # The encoding registers interpreted-function callables, whose
+        # `func_id`s must stay valid for as long as `value()` can be called:
+        # the scope stays open until `release_interpreted_functions()`, or
+        # until this object is garbage-collected (see
+        # `interpreted_function_scope`).
+        self._finalizer: weakref.finalize | None = None
+        if has_interpreted_functions(kind):
+            scope = interpreted_function_scope()
+            scope.__enter__()
+            self._finalizer = weakref.finalize(self, scope.__exit__, None, None, None)
+        try:
+            ground_problem, map_back_action_instance = _ground(problem)
+            encoder = Encoder(
+                ground_problem,
+                problem,
+                map_back_action_instance,
+                symmetry_breaking=False,
+                compression_safe_actions=False,
+                relevance_analysis=False,
+                relevant_equality=False,
+                if_cache=new_if_cache(),
+                if_wrappers={},
+            )
+            assert encoder.goal is not None
+            actions = encoder.considered_actions
+            self._heuristic = constructors[params.heuristic](
+                actions,
+                encoder.fluent_domains,
+                {a: encoder.events[a] for a in actions},
+                encoder.goal,
+                internal_caching=params.internal_heuristic_cache,
+                cache_value_in_state=False,
+                inadmissible_numeric_heuristic_variant=(
+                    params.inadmissible_numeric_heuristic_variant
+                ),
+            )
+        except BaseException:
+            self.release_interpreted_functions()
+            raise
+        self._encoder = encoder
+        self._search_space = encoder.search_space
+
+    def value(self, state: State) -> float | None:
+        ss = self._search_space
+        return self._heuristic.eval(self._encoder.search_state_of(state), ss)
+
+    def release_interpreted_functions(self) -> None:
+        if self._finalizer is not None:
+            self._finalizer()
+
+
 class TamerLite(
     unified_planning.engines.Engine,
     unified_planning.engines.mixins.OneshotPlannerMixin,
     unified_planning.engines.mixins.AnytimePlannerMixin,
+    unified_planning.engines.mixins.HeuristicMixin,
 ):
+    """TamerLite planner (`OneshotPlanner`/`AnytimePlanner`, configured by
+    `search`) and heuristic (`Heuristic`, used when `problem` is given and
+    configured by the remaining keyword arguments, the fields of
+    `HeuristicModeParams`).
+
+    As a heuristic, `value(state)` is the delete-relaxation estimate
+    (`heuristic`: `hff`, `hadd` or `hmax`) of the number of remaining actions
+    -- events, on a temporal problem -- regardless of the quality metric, or
+    `None` when the relaxation proves the goal unreachable. `hmax` is also
+    admissible in that count, which `guarantees` cannot express since it is
+    the same for every configuration."""
+
     def __init__(
         self,
-        search: SearchParams | MultiqueueParams = SearchParams(),  # noqa: B008  # frozen (immutable) dataclass, safe as default
+        search: SearchParams | MultiqueueParams | None = None,
+        problem: "up.model.AbstractProblem | None" = None,
+        error_on_failed_checks: bool = True,
+        **heuristic_params: Any,
     ):
         unified_planning.engines.Engine.__init__(self)
         up.engines.mixins.OneshotPlannerMixin.__init__(self)
-        self._params = search
+        self._params = search if search is not None else SearchParams()
+        self._heuristic_evaluator: _HeuristicEvaluator | None = None
+        if problem is None:
+            if heuristic_params:
+                raise UPUsageError(
+                    "These options configure the TamerLite heuristic, which "
+                    f"needs a problem: {', '.join(heuristic_params)}."
+                )
+            return
+        if search is not None:
+            raise UPUsageError(
+                "search configures the TamerLite planner; the TamerLite heuristic "
+                "is configured by the fields of HeuristicModeParams."
+            )
+        if not isinstance(problem, up.model.Problem):
+            raise UPUsageError("The TamerLite heuristic only supports a Problem.")
+        params = HeuristicModeParams(**heuristic_params)
+        up.engines.mixins.HeuristicMixin.__init__(self, problem, error_on_failed_checks)
+        self._heuristic_evaluator = _HeuristicEvaluator(problem, params)
 
     @property
     def name(self) -> str:
@@ -281,6 +416,32 @@ class TamerLite(
     @staticmethod
     def ensures(anytime_guarantee: up.engines.AnytimeGuarantee) -> bool:
         return bool(anytime_guarantee == up.engines.AnytimeGuarantee.INCREASING_QUALITY)
+
+    @staticmethod
+    def guarantees(heuristic_guarantee: HeuristicGuarantee) -> bool:
+        """`GOAL_AWARE | SAFE`, for every configuration (this is static).
+
+        - GOAL_AWARE: in a goal state every goal leaf costs 0.
+        - SAFE: only a relaxed-unreachable goal yields `None`; a false complex
+          numeric or interpreted-function condition costs 1, never `inf`.
+        - Not ADMISSIBLE: hff/hadd overestimate (hmax does not, in actions).
+        """
+        return heuristic_guarantee in (
+            HeuristicGuarantee.GOAL_AWARE | HeuristicGuarantee.SAFE
+        )
+
+    def _value(self, state: State) -> float | None:
+        if self._heuristic_evaluator is None:
+            raise UPUsageError(
+                "This TamerLite instance was not built as a heuristic (no problem "
+                "was given), or it was destroyed."
+            )
+        return self._heuristic_evaluator.value(state)
+
+    def destroy(self) -> None:
+        if self._heuristic_evaluator is not None:
+            self._heuristic_evaluator.release_interpreted_functions()
+            self._heuristic_evaluator = None
 
     @staticmethod
     def _heuristic_name(
@@ -465,11 +626,7 @@ class TamerLite(
             ) -> ActionInstance | None:
                 return ai
 
-        grounder = Grounder()
-        compilation_res = grounder.compile(problem)
-        assert compilation_res.map_back_action_instance is not None
-        ground_map_back_action_instance = compilation_res.map_back_action_instance
-        ground_problem = cast("up.model.Problem", compilation_res.problem)
+        ground_problem, ground_map_back_action_instance = _ground(problem)
         lifted_problem = problem
 
         def map_back_action_instance(
@@ -1061,6 +1218,18 @@ class TamerLite(
                 True,
                 is_any_action_compression_safe,
             )
+
+
+def _ground(
+    problem: "up.model.Problem",
+) -> tuple["up.model.Problem", Callable[[ActionInstance], ActionInstance | None]]:
+    """Grounds `problem`, returning the ground problem and its action map-back."""
+    compilation_res = Grounder().compile(problem)
+    assert compilation_res.map_back_action_instance is not None
+    return (
+        cast("up.model.Problem", compilation_res.problem),
+        compilation_res.map_back_action_instance,
+    )
 
 
 def _remaining_timeout(timeout: float | None, start_time: float) -> float | None:
