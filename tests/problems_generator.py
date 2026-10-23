@@ -1506,6 +1506,64 @@ def get_problem_timed_toggles_unsolvable() -> Problem:
     return problem
 
 
+def get_problem_durative_event_gaps(
+    start_delays: list[Fraction | int],
+    end_delays: list[Fraction | int],
+    lower: Fraction | int | None,
+    upper: Fraction | int | None,
+    right_open: bool = False,
+) -> Problem:
+    """One durative action `act` with an effect at `start + d` for each `d` in
+    `start_delays` and at `end - d` for each `d` in `end_delays`, and a
+    duration in `[lower, upper]` (`[lower, upper)` if `right_open`). Without
+    bounds, the duration is the fluent `dur`, which `set_dur` changes, so it is
+    not static and stays non-constant after grounding. For the encoder's
+    check that an action's events can be `epsilon` apart."""
+    problem = Problem("durative_event_gaps")
+    act = DurativeAction("act")
+    if lower is None or upper is None:
+        dur = Fluent("dur", RealType())
+        problem.add_fluent(dur, default_initial_value=1)
+        set_dur = InstantaneousAction("set_dur")
+        set_dur.add_effect(dur, 2)
+        problem.add_action(set_dur)
+        act.set_fixed_duration(dur())
+    elif right_open:
+        act.set_right_open_duration_interval(lower, upper)
+    else:
+        act.set_closed_duration_interval(lower, upper)
+    events = [(StartTiming(d), f"s{i}") for i, d in enumerate(start_delays)]
+    events += [(EndTiming() - d, f"e{i}") for i, d in enumerate(end_delays)]
+    for timing, name in events:
+        f = Fluent(name)
+        problem.add_fluent(f, default_initial_value=False)
+        act.add_effect(timing, f, True)
+        problem.add_goal(f)
+    problem.add_action(act)
+    return problem
+
+
+def get_problem_durative_condition(interval: TimeInterval) -> Problem:
+    """One durative action `act` (duration 10) that needs `ready` over
+    `interval` and achieves the goal `done` at its end; `spoil` can make
+    `ready` false, so it isn't static and grounding keeps the condition. For
+    the encoder's check that a condition interval isn't empty."""
+    problem = Problem("durative_condition")
+    ready, done = Fluent("ready"), Fluent("done")
+    problem.add_fluent(ready, default_initial_value=True)
+    problem.add_fluent(done, default_initial_value=False)
+    act = DurativeAction("act")
+    act.set_fixed_duration(10)
+    act.add_condition(interval, ready)
+    act.add_effect(EndTiming(), done, True)
+    spoil = InstantaneousAction("spoil")
+    spoil.add_effect(ready, False)
+    problem.add_action(act)
+    problem.add_action(spoil)
+    problem.add_goal(done)
+    return problem
+
+
 def get_problem_quantified_false_precondition() -> Problem:
     """A problem whose single action's precondition is quantified, and whose
     grounder leaves most groundings' `Exists` statically unsatisfiable.

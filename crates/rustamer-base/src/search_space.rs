@@ -346,6 +346,8 @@ impl SearchSpace {
             goal: goal.map(|inner_vec| inner_vec.into_iter().map(|e| e.v).collect()),
             tn_interpreter,
             deadline: deadline.map(|v| rational_to_f64(&v)),
+            // The same default as `DEFAULT_EPSILON` in `search_space.py`, which
+            // the encoder's epsilon-separation checks rely on.
             epsilon: match &epsilon {
                 Some(x) => rational_to_f64(x),
                 None => 0.01,
