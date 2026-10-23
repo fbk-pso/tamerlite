@@ -57,6 +57,9 @@ pub trait SearchSpaceTrait {
     fn has_deadline(&self) -> bool;
     /// The minimal separation between two mutex events.
     fn epsilon(&self) -> f64;
+    /// The synthetic action carrying the timed effects and timed goals, open
+    /// from the initial state until its last event fires, if any.
+    fn timed_action(&self) -> Option<Action>;
     /// How far into the plan a temporal state already reaches: a lower bound
     /// on the makespan of any plan through it, for the
     /// `DedupPolicy::Dominance` makespan dominance check (`search.rs`).
@@ -66,10 +69,11 @@ pub trait SearchSpaceTrait {
     /// `path` (by `epsilon` if the two are mutex, by 0 otherwise), so `path` is
     /// totally ordered and its last event is the latest one. The STN's
     /// `distances` are its minimal solution, so that time is a lower bound on
-    /// the event's time in every schedule. `start_plan` always sits at 0: the
-    /// deadline's is the only constraint that could pull it later, and every
-    /// event follows `start_plan`, so it can't without making the STN
-    /// inconsistent.
+    /// the event's time in every schedule. `start_plan` always sits at 0: every
+    /// event follows `start_plan` (the timed action's start is pinned to it),
+    /// so a constraint that could pull it later -- the deadline's, or the
+    /// ordering of an event before a pending timed event -- closes a cycle
+    /// through `start_plan`, and can't without making the STN inconsistent.
     fn makespan(&self, state: &State) -> f64;
     fn tn_interpreter(&self) -> &TNInterpreter;
     /// The initial state, or `None` if there is none: no plan exists.
@@ -872,6 +876,10 @@ impl SearchSpaceTrait for SearchSpace {
 
     fn epsilon(&self) -> f64 {
         self.epsilon
+    }
+
+    fn timed_action(&self) -> Option<Action> {
+        self.timed_action
     }
 
     fn makespan(&self, state: &State) -> f64 {
