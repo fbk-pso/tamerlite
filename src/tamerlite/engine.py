@@ -469,11 +469,7 @@ class TamerLite(
             ) -> ActionInstance | None:
                 return ai
 
-        grounder = Grounder()
-        compilation_res = grounder.compile(problem)
-        assert compilation_res.map_back_action_instance is not None
-        ground_map_back_action_instance = compilation_res.map_back_action_instance
-        ground_problem = cast("up.model.Problem", compilation_res.problem)
+        ground_problem, ground_map_back_action_instance = _ground(problem)
         lifted_problem = problem
 
         def map_back_action_instance(
@@ -1084,6 +1080,18 @@ class TamerLite(
                 True,
                 is_any_action_compression_safe,
             )
+
+
+def _ground(
+    problem: "up.model.Problem",
+) -> tuple["up.model.Problem", Callable[[ActionInstance], ActionInstance | None]]:
+    """Grounds `problem`, returning the ground problem and its action map-back."""
+    compilation_res = Grounder().compile(problem)
+    assert compilation_res.map_back_action_instance is not None
+    return (
+        cast("up.model.Problem", compilation_res.problem),
+        compilation_res.map_back_action_instance,
+    )
 
 
 def _remaining_timeout(timeout: float | None, start_time: float) -> float | None:
