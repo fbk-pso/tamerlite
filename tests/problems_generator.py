@@ -1420,6 +1420,92 @@ def get_problem_temporal_token_chain() -> Problem:
     return problem
 
 
+def get_problem_timed_token_chain() -> Problem:
+    """`get_problem_temporal_token_chain` plus a timed effect at time 10 (the
+    optimal plan ends around time 5) on a fluent nothing else reads: the timed
+    action is in progress in every state before the plan is done, so the
+    states `makespan_dominates` prunes are deduped only because the timed
+    action alone in `todo` doesn't exclude them."""
+    problem = get_problem_temporal_token_chain()
+    problem.name = "timed_token_chain"
+    late = Fluent("late")
+    problem.add_fluent(late, default_initial_value=False)
+    problem.add_timed_effect(GlobalStartTiming(10), late, True)
+    return problem
+
+
+def get_problem_timed_window_trap() -> Problem:
+    """`finish` (duration 5) needs `p` at its start and `window` throughout,
+    and a timed effect closes `window` at time 10. `p` comes from `slow`
+    (duration 8, one action) or from `fast1` then `fast2` (duration 1/2 each),
+    which hold the same token, so they can't overlap. Both paths reach the
+    same state, `p` and the token free, with the timed action still pending:
+    `slow`'s at time 8, too late for `finish`, in fewer steps; the fast
+    chain's at time 1. Dedup by equality would keep whichever comes first in
+    search order, `slow`'s, and lose the plan; dominance keeps both."""
+    problem = Problem("timed_window_trap")
+    p, q, tok, window, done = (
+        Fluent("p"),
+        Fluent("q"),
+        Fluent("tok"),
+        Fluent("window"),
+        Fluent("done"),
+    )
+    for f in (p, q, done):
+        problem.add_fluent(f, default_initial_value=False)
+    problem.add_fluent(tok, default_initial_value=True)
+    problem.add_fluent(window, default_initial_value=True)
+
+    def holding_token(name: str, duration: Fraction | int) -> DurativeAction:
+        action = DurativeAction(name)
+        action.set_fixed_duration(duration)
+        action.add_condition(StartTiming(), tok)
+        action.add_effect(StartTiming(), tok, False)
+        action.add_effect(EndTiming(), tok, True)
+        return action
+
+    slow = holding_token("slow", 8)
+    slow.add_effect(EndTiming(), p, True)
+    fast1 = holding_token("fast1", Fraction(1, 2))
+    fast1.add_effect(EndTiming(), q, True)
+    fast2 = holding_token("fast2", Fraction(1, 2))
+    fast2.add_condition(StartTiming(), q)
+    fast2.add_effect(EndTiming(), q, False)
+    fast2.add_effect(EndTiming(), p, True)
+    finish = DurativeAction("finish")
+    finish.set_fixed_duration(5)
+    finish.add_condition(StartTiming(), p)
+    finish.add_condition(ClosedTimeInterval(StartTiming(), EndTiming()), window)
+    finish.add_effect(EndTiming(), done, True)
+    for action in (slow, fast1, fast2, finish):
+        problem.add_action(action)
+    problem.add_timed_effect(GlobalStartTiming(10), window, False)
+    problem.add_goal(done)
+    return problem
+
+
+def get_problem_timed_toggles_unsolvable() -> Problem:
+    """Two fluents set and unset by instantaneous actions, a timed effect at
+    time 100 and a goal
+    nothing achieves. Toggling cycles through four assignments, each time
+    later than the last, so the timed action stays pending in all of them:
+    without deduping those states the search would enumerate every
+    interleaving of toggles up to time 100, `epsilon` apart."""
+    problem = Problem("timed_toggles_unsolvable")
+    x, y, late, never = Fluent("x"), Fluent("y"), Fluent("late"), Fluent("never")
+    for f in (x, y, late, never):
+        problem.add_fluent(f, default_initial_value=False)
+    for f in (x, y):
+        for value in (True, False):
+            toggle = InstantaneousAction(f"set_{f.name}_{str(value).lower()}")
+            toggle.add_precondition(Not(f) if value else f)
+            toggle.add_effect(f, value)
+            problem.add_action(toggle)
+    problem.add_timed_effect(GlobalStartTiming(100), late, True)
+    problem.add_goal(never)
+    return problem
+
+
 def get_problem_quantified_false_precondition() -> Problem:
     """A problem whose single action's precondition is quantified, and whose
     grounder leaves most groundings' `Exists` statically unsatisfiable.

@@ -1540,6 +1540,65 @@ def test_temporal_dominance_dedup_prunes(monkeypatch):
         assert expanded < expanded_off
 
 
+def test_timed_action_dedup_prunes(monkeypatch):
+    """With only the timed action in progress, a state is still deduped by
+    `makespan` dominance, with or without a deadline: stubbing
+    `makespan_dominates` out to never hold (no dedup of those states, as
+    before) expands strictly more states, and both backends agree."""
+    problem = problems_generator.get_problem_timed_token_chain()
+    results = []
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        results.append(_solve_temporal(problem, None))
+    assert results[0] == results[1]
+    solved, expanded = results[0]
+    assert solved
+
+    reload_tamerlite(True)
+    import tamerlite.core.search as search
+
+    monkeypatch.setattr(search, "makespan_dominates", lambda *_: False)
+    solved_off, expanded_off = _solve_temporal(problem, None)
+    assert solved_off
+    assert expanded < expanded_off
+
+
+def test_timed_action_dedup_keeps_earlier_states(monkeypatch):
+    """With the timed action in progress, dedup must be by dominance even
+    without a deadline: on `get_problem_timed_window_trap` the state reached
+    first is the one too late for the timed window. Both backends solve it,
+    while pruning by equality (`makespan_dominates` stubbed to always hold)
+    loses the plan -- which is what makes this problem a real check."""
+    problem = problems_generator.get_problem_timed_window_trap()
+    results = []
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        results.append(_solve_temporal(problem, None))
+    assert results[0] == results[1]
+    assert results[0][0]
+
+    reload_tamerlite(True)
+    import tamerlite.core.search as search
+
+    monkeypatch.setattr(search, "makespan_dominates", lambda *_: True)
+    assert not _solve_temporal(problem, None)[0]
+
+
+def test_timed_action_dedup_unsolvable_terminates():
+    """An unsolvable problem whose states repeat while a timed effect is
+    pending is proved unsolvable after a handful of expansions, on both
+    backends: without deduping those states the search runs out of memory."""
+    problem = problems_generator.get_problem_timed_toggles_unsolvable()
+    results = []
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        results.append(_solve_temporal(problem, None))
+    assert results[0] == results[1]
+    solved, expanded = results[0]
+    assert not solved
+    assert expanded <= 20
+
+
 def test_makespan_dominates():
     """`makespan_dominates`: a makespan lower bound dominates another only when
     smaller by at least `epsilon` -- a future event mutex with a past event

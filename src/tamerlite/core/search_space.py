@@ -773,6 +773,12 @@ class SearchSpaceABC(ABC):
     def epsilon(self) -> Fraction:
         """The minimal separation between two mutex events."""
 
+    @property
+    @abstractmethod
+    def timed_action(self) -> Action | None:
+        """The synthetic action carrying the timed effects and timed goals,
+        open from the initial state until its last event fires, if any."""
+
     @abstractmethod
     def makespan(self, state: State) -> Fraction | int:
         """How far into the plan a temporal state already reaches: a lower
@@ -785,8 +791,10 @@ class SearchSpaceABC(ABC):
         is totally ordered and its last event is the latest one. The STN's
         `distances` are its minimal solution, so that time is a lower bound
         on the event's time in every schedule. `start_plan` always sits at 0:
-        the deadline's is the only constraint that could pull it later, and
-        every event follows `start_plan`, so it can't without making the STN
+        every event follows `start_plan` (the timed action's start is pinned
+        to it), so a constraint that could pull it later -- the deadline's, or
+        the ordering of an event before a pending timed event -- closes a
+        cycle through `start_plan`, and can't without making the STN
         inconsistent."""
 
     @abstractmethod
@@ -929,6 +937,10 @@ class SearchSpace(SearchSpaceABC):
     @property
     def epsilon(self) -> Fraction:
         return self._epsilon
+
+    @property
+    def timed_action(self) -> Action | None:
+        return self._timed_action
 
     def makespan(self, state: State) -> Fraction | int:
         tn = state.temporal_network
