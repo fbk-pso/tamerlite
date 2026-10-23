@@ -117,6 +117,34 @@ with OneshotPlanner(name="tamerlite", params={"search": multi_params}) as planne
     print(result.plan)
 ```
 
+## Heuristic
+
+TamerLite also implements Unified Planning's `Heuristic` operation mode,
+exposing its delete-relaxation heuristics on the states of a
+`SequentialSimulator`:
+
+```python
+with SequentialSimulator(problem) as simulator, Heuristic(
+    problem, name="tamerlite", params={"heuristic": "hadd"}
+) as h:
+    print(h.value(simulator.get_initial_state()))
+```
+
+The `params` are the fields of `HeuristicModeParams`:
+
+| Parameter | Default | Description |
+|---|---|---|
+| `heuristic` | `"hff"` | `"hff"`, `"hadd"` or `"hmax"` |
+| `disable_numeric_reasoning` | `False` | Treat every numeric condition as costing one action when false |
+| `inadmissible_numeric_heuristic_variant` | `False` | Same as in `SearchParams` |
+| `internal_heuristic_cache` | `False` | Memoize values per state (unbounded memory) |
+
+`value` estimates the remaining number of actions (events, on a temporal
+problem, whose states are evaluated with no action in progress), whatever the
+quality metric, and returns `None` only on dead ends: the engine is
+`GOAL_AWARE` and `SAFE`. Problems with undefined initial numeric values are not
+supported.
+
 ## Tutorial
 
 An end-to-end runnable tutorial covering classical, numeric, temporal and
