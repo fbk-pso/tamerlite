@@ -41,7 +41,9 @@ from unified_planning.shortcuts import (
     LE,
     AnytimePlanner,
     BoolType,
+    ClosedTimeInterval,
     Div,
+    EndTiming,
     Equals,
     Fluent,
     GlobalEndTiming,
@@ -49,13 +51,17 @@ from unified_planning.shortcuts import (
     InstantaneousAction,
     InterpretedFunction,
     IntType,
+    LeftOpenTimeInterval,
     Minus,
     Object,
     OneshotPlanner,
+    OpenTimeInterval,
     PlanValidator,
     Plus,
     Problem,
     RealType,
+    RightOpenTimeInterval,
+    StartTiming,
     State,
     Times,
     UserType,
@@ -2956,32 +2962,212 @@ def test_no_initial_state_when_a_goal_at_time_0_fails(disable_rustamer):
     assert res.metrics["expanded_states"] == "0"
 
 
+def _encode_on_both_backends(
+    problem: Problem,
+    raises: type[Exception] | None = None,
+    match: str | None = None,
+) -> list[Encoder]:
+    """Encodes `problem` on both backends; with `raises`, asserts that the
+    encoder raises it, with a message matching `match`. Returns the encoders
+    built."""
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    encoders = []
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.encoder import Encoder
+
+        with (
+            pytest.raises(raises, match=match)
+            if raises is not None
+            else contextlib.nullcontext()
+        ):
+            encoders.append(
+                Encoder(
+                    ground_problem,
+                    lifted_problem,
+                    map_back_action_instance,
+                    symmetry_breaking=False,
+                    compression_safe_actions=False,
+                    relevance_analysis=False,
+                )
+            )
+    return encoders
+
+
 def test_timed_goals_starting_at_the_end_are_rejected():
     """A timed goal whose interval starts at the end of the plan is not
     supported (UP's own validator can't check one either): it is just a
     goal."""
     problem = problems_generator.get_problem_timed_goal_point()
     problem.add_timed_goal(GlobalEndTiming(), problem.fluent("shipped"))
-    lifted_problem, ground_problem, map_back_action_instance = (
-        testing_utils.compile_problem(problem)
+    _encode_on_both_backends(
+        problem,
+        unified_planning.exceptions.UPUnsupportedProblemTypeError,
+        "starting at the end of the plan",
     )
 
-    for disable_rustamer in [True, False]:
-        reload_tamerlite(disable_rustamer)
-        from tamerlite.encoder import Encoder
 
-        with pytest.raises(
+@pytest.mark.parametrize(
+    "interval, raises, match",
+    [
+        pytest.param(
+            OpenTimeInterval(GlobalStartTiming(3), GlobalStartTiming(3)),
+            unified_planning.exceptions.UPProblemDefinitionError,
+            "is empty",
+            id="empty_open",
+        ),
+        pytest.param(
+            LeftOpenTimeInterval(GlobalStartTiming(3), GlobalStartTiming(3)),
+            unified_planning.exceptions.UPProblemDefinitionError,
+            "is empty",
+            id="empty_left_open",
+        ),
+        pytest.param(
+            RightOpenTimeInterval(GlobalStartTiming(3), GlobalStartTiming(3)),
+            unified_planning.exceptions.UPProblemDefinitionError,
+            "is empty",
+            id="empty_right_open",
+        ),
+        pytest.param(
+            ClosedTimeInterval(GlobalStartTiming(5), GlobalStartTiming(3)),
+            unified_planning.exceptions.UPProblemDefinitionError,
+            "is empty",
+            id="reversed",
+        ),
+        pytest.param(
+            RightOpenTimeInterval(GlobalStartTiming(1), GlobalEndTiming()),
             unified_planning.exceptions.UPUnsupportedProblemTypeError,
-            match="starting at the end of the plan",
-        ):
-            Encoder(
-                ground_problem,
-                lifted_problem,
-                map_back_action_instance,
-                symmetry_breaking=False,
-                compression_safe_actions=False,
-                relevance_analysis=False,
-            )
+            "open at the end of the plan",
+            id="open_at_end",
+        ),
+    ],
+)
+def test_timed_goals_with_invalid_intervals_are_rejected(interval, raises, match):
+    """An empty timed-goal interval -- `(t, t)`, `(t, t]`, `[t, t)` or one
+    ending before it starts -- is a malformed problem, and `[x, end)` is not
+    supported (`[x, end]` is the goal holding until the end): the encoder
+    rejects them instead of encoding a point goal or an until-end goal."""
+    problem = problems_generator.get_problem_timed_goal_point()
+    problem.add_timed_goal(interval, problem.fluent("shipped"))
+    _encode_on_both_backends(problem, raises, match)
+
+
+@pytest.mark.parametrize(
+    "time",
+    [Fraction(1, 200), 5 + Fraction(1, 200)],
+    ids=["near_zero", "near_another"],
+)
+def test_timed_events_closer_than_epsilon_are_rejected(time):
+    """The search keeps the timed action's events at least `epsilon` apart,
+    so two timed instants closer than that (or one closer than that to time
+    0) are rejected rather than leaving the problem unsolvable -- and accepted
+    once `Problem.epsilon` is smaller than their gap."""
+    problem = problems_generator.get_problem_timed_effects_window()
+    problem.add_timed_effect(
+        GlobalStartTiming(time), problem.fluent("crane_free"), True
+    )
+    _encode_on_both_backends(
+        problem,
+        unified_planning.exceptions.UPUnsupportedProblemTypeError,
+        "closer than epsilon",
+    )
+    problem.epsilon = Fraction(1, 1000)
+    _encode_on_both_backends(problem)
+
+
+@pytest.mark.parametrize(
+    "interval, empty",
+    [
+        pytest.param(OpenTimeInterval(StartTiming(2), StartTiming(2)), True, id="open"),
+        pytest.param(
+            LeftOpenTimeInterval(StartTiming(2), StartTiming(2)), True, id="left_open"
+        ),
+        pytest.param(
+            RightOpenTimeInterval(EndTiming() - 2, EndTiming() - 2),
+            True,
+            id="right_open_from_end",
+        ),
+        pytest.param(
+            ClosedTimeInterval(StartTiming(5), StartTiming(3)), True, id="reversed"
+        ),
+        pytest.param(
+            ClosedTimeInterval(EndTiming() - 1, EndTiming() - 3),
+            True,
+            id="reversed_from_end",
+        ),
+        pytest.param(
+            ClosedTimeInterval(StartTiming(2), StartTiming(2)), False, id="point"
+        ),
+        pytest.param(
+            OpenTimeInterval(StartTiming(), EndTiming()), False, id="over_all"
+        ),
+        pytest.param(
+            ClosedTimeInterval(StartTiming(5), EndTiming() - 3),
+            False,
+            id="mixed_bounds",
+        ),
+    ],
+)
+def test_empty_durative_condition_intervals_are_rejected(interval, empty):
+    """A durative action's condition over an empty interval -- both bounds
+    from the start, or both from the end, with `upper < lower` or equal
+    bounds and an open side -- is rejected like an empty timed-goal interval,
+    instead of being encoded as a point condition. `[t, t]` is a point
+    condition, and an interval with one bound from each end can't be decided
+    without the duration, so it is accepted."""
+    problem = problems_generator.get_problem_durative_condition(interval)
+    _encode_on_both_backends(
+        problem,
+        unified_planning.exceptions.UPProblemDefinitionError if empty else None,
+        "is empty" if empty else None,
+    )
+
+
+_EPS = Fraction(1, 100)
+
+
+@pytest.mark.parametrize(
+    "start_delays, end_delays, lower, upper, right_open, dropped",
+    [
+        pytest.param([0], [0], _EPS / 2, _EPS / 2, False, True, id="short_fixed"),
+        pytest.param([0], [0], 0, _EPS / 2, False, True, id="short_interval"),
+        pytest.param([0], [0], 0, _EPS, True, True, id="right_open_at_epsilon"),
+        pytest.param([0, _EPS / 2], [], 1, 1, False, True, id="close_from_start"),
+        pytest.param([0], [_EPS / 2, 0], 10, 10, False, True, id="close_from_end"),
+        pytest.param([0], [0], 0, _EPS, False, False, id="closed_at_epsilon"),
+        pytest.param([0], [0], 0, 10, False, False, id="long_interval"),
+        pytest.param([0], [], _EPS / 2, _EPS / 2, False, False, id="no_end_event"),
+        pytest.param([0], [0], None, None, False, False, id="non_constant"),
+    ],
+)
+def test_durative_events_closer_than_epsilon_are_dropped(
+    start_delays, end_delays, lower, upper, right_open, dropped
+):
+    """The search keeps a durative action's events at least `epsilon` apart,
+    so an action whose events can't be, for any duration it allows, could
+    never be applied: the encoder leaves it out of the applicable actions,
+    with a warning naming it, instead of keeping it silently. The problem
+    isn't rejected, since grounding often makes such actions the plan doesn't
+    need (Depots' zero-duration drives from a depot to itself). A duration
+    that isn't constant can't be checked."""
+    problem = problems_generator.get_problem_durative_event_gaps(
+        start_delays, end_delays, lower, upper, right_open
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        encoders = _encode_on_both_backends(problem)
+    messages = [str(w.message) for w in caught if "never be applied" in str(w.message)]
+    assert len(messages) == (2 if dropped else 0)
+    assert all("`act`" in m for m in messages)
+    for encoder in encoders:
+        names = {
+            encoder.get_action_name(a)
+            for a in encoder.applicable_actions
+            if a != encoder.timed_action
+        }
+        assert ("act" not in names) == dropped
 
 
 def test_symmetry_breaking_object_valued_fluents():

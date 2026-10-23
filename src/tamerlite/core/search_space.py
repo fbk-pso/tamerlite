@@ -23,6 +23,11 @@ from fractions import Fraction
 
 from unified_planning.model import DeltaSimpleTemporalNetwork
 
+# The minimal separation between two mutex events when the problem sets none
+# (`Problem.epsilon is None`). The Rust core's `SearchSpace::new` hard-codes the
+# same value.
+DEFAULT_EPSILON = Fraction(1, 100)
+
 
 class IfReturnType(Enum):
     """The declared return type of an interpreted function, as tagged by
@@ -883,7 +888,7 @@ class SearchSpace(SearchSpaceABC):
         self._deadline = deadline
         self._start_plan = "start_plan"
         self._end_plan = "end_plan"
-        self._epsilon = Fraction(1, 100) if epsilon is None else epsilon
+        self._epsilon = DEFAULT_EPSILON if epsilon is None else epsilon
         self._is_temporal = any(v is not None for v in actions_duration)
         self._counter = 0
 
