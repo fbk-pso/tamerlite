@@ -2908,37 +2908,48 @@ def test_conditional_timed_effects_are_not_supported():
 @pytest.mark.parametrize("disable_rustamer", [True, False])
 @pytest.mark.parametrize("heuristic", HEURISTICS)
 @pytest.mark.parametrize(
-    "problem_factory",
+    "problem_factory, expected_status",
     [
-        problems_generator.get_problem_timed_goal_at_start_unsatisfied,
-        problems_generator.get_problem_timed_goal_window_too_early,
-        partial(
-            problems_generator.get_problem_timed_effects_undefined_initial_value,
-            measurable=False,
+        (
+            problems_generator.get_problem_timed_goal_at_start_unsatisfied,
+            ResultStatus.UNSOLVABLE_PROVEN,
+        ),
+        (
+            problems_generator.get_problem_timed_goal_window_too_early,
+            ResultStatus.UNSOLVABLE_INCOMPLETELY,
+        ),
+        (
+            partial(
+                problems_generator.get_problem_timed_effects_undefined_initial_value,
+                measurable=False,
+            ),
+            ResultStatus.UNSOLVABLE_INCOMPLETELY,
         ),
     ],
     ids=["at_start_unsatisfied", "window_too_early", "undefined_unmeasurable"],
 )
-def test_timed_goals_unsatisfiable(disable_rustamer, heuristic, problem_factory):
+def test_timed_goals_unsatisfiable(
+    disable_rustamer, heuristic, problem_factory, expected_status
+):
     """Timed goals that no plan can satisfy: one checked at time 0 against an
     initial state that falsifies it (no valid initial state, with a single-event
-    timed action), a window opening before the goal can possibly hold, and
-    the timed goal `UndefinedInitialNumericRemover` adds for a fluent that
-    never gets a value."""
+    timed action, so proven unsolvable), a window opening before the goal can
+    possibly hold, and the timed goal `UndefinedInitialNumericRemover` adds for
+    a fluent that never gets a value."""
     reload_tamerlite(disable_rustamer)
     problem = problem_factory()
     assert tamerlite.engine.TamerLite.supports(problem.kind)
     search = tamerlite.SearchParams(heuristic=heuristic)
     with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
         res = planner.solve(problem, timeout=60)
-    assert res.status == ResultStatus.UNSOLVABLE_INCOMPLETELY
+    assert res.status == expected_status
 
 
 @pytest.mark.parametrize("disable_rustamer", [True, False])
 def test_no_initial_state_when_a_goal_at_time_0_fails(disable_rustamer):
     """A timed goal checked at time 0 that the initial state falsifies leaves
-    no valid initial state: `initial_state` returns `None`, and the search
-    reports no plan without expanding anything."""
+    no valid initial state: `initial_state` returns `None`, and the planner
+    proves the problem unsolvable without expanding anything."""
     reload_tamerlite(disable_rustamer)
     from tamerlite.encoder import Encoder
 
@@ -2958,8 +2969,23 @@ def test_no_initial_state_when_a_goal_at_time_0_fails(disable_rustamer):
 
     with OneshotPlanner(name="tamerlite") as planner:
         res = planner.solve(problem, timeout=60)
-    assert res.status == ResultStatus.UNSOLVABLE_INCOMPLETELY
+    assert res.status == ResultStatus.UNSOLVABLE_PROVEN
     assert res.metrics["expanded_states"] == "0"
+
+
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+@pytest.mark.parametrize("search_kind", ["wastar", "ehc"])
+def test_timed_effects_makespan_proven_optimal(disable_rustamer, search_kind):
+    """Every plan of this problem ends at the last timed effect, so the
+    anytime improvement step's deadline leaves no valid initial state: that
+    proves the first plan optimal, even with an incomplete search."""
+    reload_tamerlite(disable_rustamer)
+    problem = problems_generator.get_problem_timed_effects_window_minimize_makespan()
+    search = tamerlite.SearchParams(search=search_kind)
+    with AnytimePlanner(name="tamerlite", params={"search": search}) as planner:
+        results = list(planner.get_solutions(problem, timeout=60))
+    assert results[-1].status == ResultStatus.SOLVED_OPTIMALLY
+    assert results[-1].plan is not None
 
 
 def _encode_on_both_backends(

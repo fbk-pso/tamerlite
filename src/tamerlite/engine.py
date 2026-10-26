@@ -708,14 +708,19 @@ class TamerLite(
                     lifted_problem_kind=lifted_problem_kind,
                 )
             )
-            if (
-                res.status
-                == up.engines.PlanGenerationResultStatus.UNSOLVABLE_INCOMPLETELY
+            if res.status in (
+                up.engines.PlanGenerationResultStatus.UNSOLVABLE_INCOMPLETELY,
+                up.engines.PlanGenerationResultStatus.UNSOLVABLE_PROVEN,
             ):
-                if (
-                    len(lifted_problem.quality_metrics) == 0
-                    or solution_might_exist
-                    or (m.is_minimize_makespan() and is_any_action_compression_safe)
+                # A proven-unsolvable improvement step means no better plan
+                # exists at all, whatever the search or compression.
+                if len(lifted_problem.quality_metrics) == 0 or (
+                    res.status
+                    == up.engines.PlanGenerationResultStatus.UNSOLVABLE_INCOMPLETELY
+                    and (
+                        solution_might_exist
+                        or (m.is_minimize_makespan() and is_any_action_compression_safe)
+                    )
                 ):
                     prev_res.status = (
                         up.engines.PlanGenerationResultStatus.SOLVED_SATISFICING
@@ -942,6 +947,20 @@ class TamerLite(
                     if_cache=if_cache,
                     if_wrappers=if_wrappers,
                     lifted_problem_kind=lifted_problem_kind,
+                )
+
+            if not encoder.has_initial_state:
+                # Nothing can happen before time 0, so no plan exists,
+                # whatever the search.
+                return (
+                    up.engines.PlanGenerationResult(
+                        up.engines.PlanGenerationResultStatus.UNSOLVABLE_PROVEN,
+                        None,
+                        self.name,
+                        {"expanded_states": str(0)},
+                    ),
+                    False,
+                    is_any_action_compression_safe,
                 )
 
             if self._params.weak_equality and not encoder.search_space.is_temporal:

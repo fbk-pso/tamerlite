@@ -52,6 +52,7 @@ from tamerlite.core import (
     HMax,
     Object,
     SearchSpace,
+    State,
     Timing,
     get_fluents,
 )
@@ -296,13 +297,24 @@ class Encoder:
         )
 
         self._relevant_actions = None
+        # Left `None` without `full`: the search space then has no initial
+        # state of its own, the caller passes one to `initial_state`.
+        self._has_initial_state: bool | None = None
         if full:
+            # Only the timed action's first event can leave no initial state
+            # (see `SearchSpace.initial_state`), and compaction below can't
+            # change whether it does.
+            init = None
+            self._has_initial_state = True
+            if relevance_analysis or self._timed_action is not None:
+                init = self._search_space.initial_state()
+                self._has_initial_state = init is not None
             narrow_relevant_actions = False
             if relevance_analysis:
                 # Needs a `State` to run `HMax.reachable_actions` against --
                 # `self._search_space` above already provides one, regardless
                 # of whether compaction ends up rebuilding it below.
-                self._relevant_actions = self._compute_relevant_actions()
+                self._relevant_actions = self._compute_relevant_actions(init)
                 narrow_relevant_actions = len(self._relevant_actions) < len(
                     self.applicable_actions
                 )
@@ -590,7 +602,7 @@ class Encoder:
             fluents.update(get_fluents(duration[1]))
         return fluents
 
-    def _compute_relevant_actions(self) -> list[Action]:
+    def _compute_relevant_actions(self, init: State | None) -> list[Action]:
         """Computes the actions that are relevant for reaching the goal.
 
         This is a two-pass over-approximation, used to prune the search space
@@ -614,6 +626,9 @@ class Encoder:
         pruned this way stays available), so this cannot make a solvable
         problem appear unsolvable through under-approximation.
 
+        Args:
+            init: The search space's initial state, `None` if it has none.
+
         Returns:
             The subset of `self._actions` that are reachable and relevant;
             actions outside this set can never contribute to a plan.
@@ -631,7 +646,6 @@ class Encoder:
             inadmissible_numeric_heuristic_variant=False,
             timed_action=self._timed_action,
         )
-        init = self._search_space.initial_state()
         if init is None:
             # No initial state, so no plan: nothing is relevant beyond the
             # timed action, which every encoding with one keeps. Only the
@@ -1388,6 +1402,14 @@ class Encoder:
         if self._compression_safe_actions is None:
             return []
         return [a for a in self._actions if self._compression_safe_actions[a.idx]]
+
+    @property
+    def has_initial_state(self) -> bool:
+        """Whether the search space has an initial state. It has none when
+        the timed action's first event fails (see `SearchSpace.initial_state`):
+        then no plan exists. Only defined for a `full` encoding."""
+        assert self._has_initial_state is not None, "not a full encoding"
+        return self._has_initial_state
 
     @property
     def timed_action(self) -> Action | None:
