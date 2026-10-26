@@ -2415,15 +2415,16 @@ impl DeleteRelaxationHeuristic {
 
     /// Sets the cost of every cid that holds in `state` (and of every
     /// complex numeric or interpreted-function condition that does not, to
-    /// 1); every other cid stays unreached.
+    /// 1); every other cid stays unreached. A condition undefined in `state`
+    /// (see `internal_evaluate_defined`) does not hold there, but stays
+    /// reachable: its operands can change.
     fn init_condition_costs(&self, state: &State, cond_cost: &mut [f64]) -> PyResult<()> {
         for (cid, expr, false_cost) in &self.evaluated_conds {
-            cond_cost[*cid as usize] =
-                if internal_evaluate(expr, state)? == ExpressionNode::Bool(true) {
-                    0.0
-                } else {
-                    *false_cost
-                };
+            cond_cost[*cid as usize] = if evaluate_condition(expr, state)? {
+                0.0
+            } else {
+                *false_cost
+            };
         }
         for (cid, f) in &self.true_fluent_conds {
             if *state.get_value(*f) == ExpressionNode::Bool(true) {
@@ -2669,6 +2670,12 @@ fn for_each_combination<'a>(
 /// A nullary expression (no fluents) has exactly one possible value,
 /// computed once ever: `old_sizes` conventionally holds `[1]` after that
 /// happens, and anything else (including empty) before.
+///
+/// A combination on which `exp` is undefined (see
+/// `internal_evaluate_defined`) is skipped without calling `visit`. That is
+/// exact, not an approximation: a real state holding that combination would
+/// make the condition false or the effect's action inapplicable, so the
+/// combination yields no value.
 fn for_each_new_value(
     exp: &[ExpressionNode],
     fluents: &[Fluent],
@@ -2686,9 +2693,12 @@ fn for_each_new_value(
             fluents: &[],
             values: &[],
         };
-        let value = internal_evaluate_into(exp, &empty, scratch)?;
+        let value = internal_evaluate_into_defined(exp, &empty, scratch)?;
         *old_sizes = vec![1];
-        return visit(value);
+        return match value {
+            Some(value) => visit(value),
+            None => Ok(true),
+        };
     }
 
     let new_sizes: Vec<usize> = fluents.iter().map(|&f| assignments[f.idx].len()).collect();
@@ -2719,8 +2729,10 @@ fn for_each_new_value(
                     fluents,
                     values: cur_slice,
                 };
-                let value = internal_evaluate_into(exp, &fa, scratch)?;
-                visit(value)
+                match internal_evaluate_into_defined(exp, &fa, scratch)? {
+                    Some(value) => visit(value),
+                    None => Ok(true),
+                }
             })?;
         if !completed {
             return Ok(false);
@@ -2881,12 +2893,11 @@ impl HMaxExplicit {
     /// evaluates an interpreted-function condition against the real,
     /// concrete search state, this cross-product can hand a callable an
     /// argument combination that never jointly occurs in a reachable state.
-    /// A partial callable (e.g. a lookup table missing a key) can therefore
-    /// raise here in a way it wouldn't under hff/hadd/hmax -- the same class
-    /// of hazard as `internal_evaluate`'s own `Div` raising a
-    /// `ZeroDivisionError` on relaxed values, just with arbitrary user code
-    /// instead of a builtin operator -- so this (and every caller up to
-    /// `eval`) propagates `PyResult`.
+    /// A division by zero on such a combination is skipped (see
+    /// `for_each_new_value`), but a partial callable (e.g. a lookup table
+    /// missing a key) can raise anything else here in a way it wouldn't
+    /// under hff/hadd/hmax, so this (and every caller up to `eval`)
+    /// propagates `PyResult`.
     fn exp_can_be_true(
         &self,
         exp: &[ExpressionNode],
@@ -2998,8 +3009,9 @@ impl HMaxExplicit {
         let mut changed: Vec<bool> = vec![true; self.num_fluents];
         let mut changed_list: Vec<usize> = (0..self.num_fluents).collect();
 
-        // Scratch reused across the whole eval by every `internal_evaluate_into`
-        // call, instead of allocating a `Vec` per cross-product element.
+        // Scratch reused across the whole eval by every
+        // `internal_evaluate_into_defined` call, instead of allocating a
+        // `Vec` per cross-product element.
         let mut scratch: Vec<ExpressionNode> = Vec::new();
 
         let mut depth = 0;

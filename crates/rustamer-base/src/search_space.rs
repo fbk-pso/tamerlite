@@ -514,9 +514,12 @@ impl SearchSpace {
         Ok(None)
     }
 
+    /// Whether `conditions` hold in `state`; undefined conditions don't hold
+    /// (see `internal_evaluate_defined`).
     fn is_sat(&self, conditions: &[ExpressionNode], state: &State) -> PyResult<bool> {
-        let sat = match internal_evaluate(conditions, state)? {
-            ExpressionNode::Bool(v) => v,
+        let sat = match internal_evaluate_defined(conditions, state)? {
+            Some(ExpressionNode::Bool(v)) => v,
+            None => false,
             _ => {
                 return Err(PyException::new_err(
                     "An action condition is not a boolean expression!",
@@ -573,9 +576,12 @@ impl SearchSpace {
             new_state.active_conditions.insert(c.to_vec());
         }
 
-        // apply effects
+        // apply effects; an undefined effect makes the event inapplicable
         for eff in e.effects.iter() {
-            new_state.assignments[eff.fluent.idx] = internal_evaluate(&eff.value, state)?;
+            match internal_evaluate_defined(&eff.value, state)? {
+                Some(v) => new_state.assignments[eff.fluent.idx] = v,
+                None => return Ok(false),
+            }
         }
 
         // check active conditions. Without effects the child's assignments are
@@ -584,15 +590,7 @@ impl SearchSpace {
         // the caller with `effect_independent_start_conditions_hold`
         if !e.effects.is_empty() {
             for c in new_state.active_conditions.iter() {
-                let sat = match internal_evaluate(c, new_state)? {
-                    ExpressionNode::Bool(v) => v,
-                    _ => {
-                        return Err(PyException::new_err(
-                            "An action condition is not a boolean expression!",
-                        ))
-                    }
-                };
-                if !sat {
+                if !self.is_sat(c, new_state)? {
                     return Ok(false);
                 }
             }
@@ -607,7 +605,9 @@ impl SearchSpace {
             }
             let tn = new_state.temporal_network.as_mut().unwrap();
             if let Some(pending_opening) = pending_opening {
-                self.add_opening_constraints(state, tn, pending_opening)?;
+                if !self.add_opening_constraints(state, tn, pending_opening)? {
+                    return Ok(false);
+                }
             }
             // Add temporal constraints between past or todo events and the current one
             let ev = self.tn_interpreter.get_event_id(e.action, e.pos, *id);
@@ -707,13 +707,15 @@ impl SearchSpace {
     /// bounds, the plan-start/plan-end edges and the rigid edges tying each
     /// event to its anchor. `action_instance_id` identifies this instance of
     /// the action (its start/end timepoints) and event `k` gets instance id
-    /// `action_instance_id + 1 + k`.
+    /// `action_instance_id + 1 + k`. Returns `false`, adding nothing, if a
+    /// duration bound is undefined in `state` (see
+    /// `internal_evaluate_defined`): the action can't be opened there.
     fn add_opening_constraints(
         &self,
         state: &State,
         tn: &mut DeltaSTN<u64, f64>,
         (action, action_instance_id, events): PendingOpening,
-    ) -> PyResult<()> {
+    ) -> PyResult<bool> {
         let start = self
             .tn_interpreter
             .get_action_id(action, true, action_instance_id);
@@ -725,8 +727,14 @@ impl SearchSpace {
         let mut ub: f64 = 0.0;
         if let Some(duration) = duration {
             let d = duration;
-            lb = -expression_node_to_f64(&internal_evaluate(&d.0, state)?)?;
-            ub = expression_node_to_f64(&internal_evaluate(&d.1, state)?)?;
+            let (Some(lower), Some(upper)) = (
+                internal_evaluate_defined(&d.0, state)?,
+                internal_evaluate_defined(&d.1, state)?,
+            ) else {
+                return Ok(false);
+            };
+            lb = -expression_node_to_f64(&lower)?;
+            ub = expression_node_to_f64(&upper)?;
             if d.2 {
                 lb -= self.epsilon;
             }
@@ -750,7 +758,7 @@ impl SearchSpace {
                 tn.add(&ev, &end, &b2);
             }
         }
-        Ok(())
+        Ok(true)
     }
 }
 
@@ -857,8 +865,10 @@ impl SearchSpaceTrait for SearchSpace {
                 }
             },
         };
-        match internal_evaluate(g, state)? {
-            ExpressionNode::Bool(v) => Ok(v),
+        // An undefined goal (see `internal_evaluate_defined`) is not reached
+        match internal_evaluate_defined(g, state)? {
+            Some(ExpressionNode::Bool(v)) => Ok(v),
+            None => Ok(false),
             _ => Err(PyException::new_err(
                 "The goal is not a boolean expression!",
             )),
@@ -881,7 +891,7 @@ impl SearchSpaceTrait for SearchSpace {
         };
         let mut res: FxHashSet<_> = FxHashSet::with_hasher(FxBuildHasher);
         for g in goals {
-            if internal_evaluate(&g, state)? == ExpressionNode::Bool(true) {
+            if evaluate_condition(&g, state)? {
                 res.insert(g.into_iter().map(|v| PyExpressionNode { v }).collect());
             }
         }

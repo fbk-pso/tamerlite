@@ -42,7 +42,8 @@ from tamerlite.core.search_space import (
     SearchSpaceABC,
     State,
     Timing,
-    evaluate,
+    evaluate_condition,
+    evaluate_defined,
     extract_sub_expression,
     has_interpreted_function,
     is_object_typed_operand,
@@ -1477,10 +1478,12 @@ class DeleteRelaxationHeuristic(Heuristic):
     def _initial_condition_costs(self, state: State) -> list[float]:
         """The cost of every cid in `state`: 0 if it holds there (1 for a
         complex numeric or interpreted-function condition that does not), and
-        `math.inf` (unreached) otherwise."""
+        `math.inf` (unreached) otherwise. A condition undefined in `state`
+        (see `evaluate_defined`) does not hold there, but stays reachable:
+        its operands can change."""
         cond_cost = [math.inf] * self._num_conds
         for cid, cond, false_cost in self._evaluated_conds:
-            cond_cost[cid] = 0.0 if evaluate(cond, state) else false_cost
+            cond_cost[cid] = 0.0 if evaluate_condition(cond, state) else false_cost
         assignments = state.assignments
         for cid, idx in self._true_fluent_conds:
             if assignments[idx] is True:
@@ -1732,6 +1735,11 @@ def _for_each_new_value(
     A bare constant, or an `Expression` with no fluents at all, has exactly
     one possible value, computed once ever: `old_sizes` conventionally holds
     `(1,)` after that happens, and anything else before.
+
+    A combination on which `exp` is undefined (see `evaluate_defined`) is
+    skipped without calling `visit`. That is exact, not an approximation: a
+    real state holding that combination would make the condition false or
+    the effect's action inapplicable, so the combination yields no value.
     """
     if not isinstance(exp, tuple):
         # A bare constant effect value -- no expression to evaluate at all.
@@ -1745,7 +1753,9 @@ def _for_each_new_value(
         if old_sizes == (1,):
             return old_sizes
         state = _ScratchState(scratch)
-        visit(evaluate(exp, state))  # type: ignore[arg-type]
+        value = evaluate_defined(exp, state)  # type: ignore[arg-type]
+        if value is not None:
+            visit(value)
         return (1,)
 
     if len(old_sizes) != k:
@@ -1767,7 +1777,8 @@ def _for_each_new_value(
         for combo in itertools.product(*ranges):
             for f, v in zip(fluents, combo, strict=True):
                 scratch[f.idx] = v
-            if not visit(evaluate(exp, state)):  # type: ignore[arg-type]
+            value = evaluate_defined(exp, state)  # type: ignore[arg-type]
+            if value is not None and not visit(value):
                 return old_sizes
     return new_sizes
 
@@ -1794,11 +1805,10 @@ class HMaxExplicit(Heuristic):
     One real caveat: unlike `DeleteRelaxationHeuristic`, which only ever
     evaluates an interpreted-function condition against the real, concrete
     search state, this class's cross-product can hand a callable an argument
-    combination that never jointly occurs in any reachable state. A partial
-    callable (e.g. a lookup table missing a key) can therefore raise here in
-    a way it wouldn't under hff/hadd/hmax -- the same class of hazard as
-    `evaluate`'s own `/` raising `ZeroDivisionError` on relaxed values, just
-    with arbitrary user code instead of a builtin operator.
+    combination that never jointly occurs in any reachable state. A division
+    by zero on such a combination is skipped (see `_for_each_new_value`), but
+    a partial callable (e.g. a lookup table missing a key) can raise anything
+    else here in a way it wouldn't under hff/hadd/hmax.
     """
 
     def __init__(
