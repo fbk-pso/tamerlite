@@ -633,6 +633,13 @@ class Encoder:
             The subset of `self._actions` that are reachable and relevant;
             actions outside this set can never contribute to a plan.
         """
+        if init is None:
+            # No initial state, so no plan: nothing is relevant beyond the
+            # timed action, which every encoding with one keeps. Only the
+            # timed action's first event can fail to make an initial state
+            # (see `SearchSpace.initial_state`), so it exists.
+            assert self._timed_action is not None
+            return [self._timed_action]
         assert self.goal is not None
         applicable_actions = set(self.applicable_actions)
         events = {a: e for a, e in self.events.items() if a in applicable_actions}
@@ -646,13 +653,6 @@ class Encoder:
             inadmissible_numeric_heuristic_variant=False,
             timed_action=self._timed_action,
         )
-        if init is None:
-            # No initial state, so no plan: nothing is relevant beyond the
-            # timed action, which every encoding with one keeps. Only the
-            # timed action's first event can fail to make an initial state
-            # (see `SearchSpace.initial_state`), so it exists.
-            assert self._timed_action is not None
-            return [self._timed_action]
         reachable_actions = heuristic.reachable_actions(init)
 
         actions_affecting_fluent: dict[Fluent, set[int]] = {}
