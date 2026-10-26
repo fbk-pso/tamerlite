@@ -1,0 +1,70 @@
+hadd:
+- 5
+- 2
+- 1
+- 1
+- 0
+- 0
+hadd_inadmissible:
+- 9
+- 6
+- 1
+- 5
+- 0
+- 0
+hadd_no_numbers:
+- 5
+- 2
+- 1
+- 1
+- 0
+- 0
+hff:
+- 2
+- 2
+- 1
+- 1
+- 0
+- 0
+hff_inadmissible:
+- 2
+- 2
+- 1
+- 1
+- 0
+- 0
+hff_no_numbers:
+- 1
+- 1
+- 1
+- 0
+- 0
+- 0
+hmax:
+- 2
+- 1
+- 1
+- 1
+- 0
+- 0
+hmax_explicit:
+- 2
+- 1
+- 1
+- 1
+- 0
+- 0
+hmax_inadmissible:
+- 5
+- 5
+- 1
+- 5
+- 0
+- 0
+hmax_no_numbers:
+- 2
+- 1
+- 1
+- 1
+- 0
+- 0

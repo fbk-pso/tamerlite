@@ -319,9 +319,9 @@ fn fold_numeric(
 /// operand guaranteed numeric) and `simplify`'s `Div` (a non-numeric
 /// operand means "not yet foldable", handled by the caller before this is
 /// reached).
-fn num_div(a: NumRef, b: NumRef) -> PyResult<ExpressionNode> {
+fn num_div(a: NumRef, b: NumRef) -> Result<ExpressionNode, EvalError> {
     if num_is_zero(b) {
-        return Err(PyZeroDivisionError::new_err("division by zero"));
+        return Err(EvalError::DivByZero);
     }
     let r = match (a, b) {
         (NumRef::Int(a), NumRef::Int(b)) => BigRational::new(a.clone(), b.clone()),
@@ -651,19 +651,44 @@ pub fn internal_evaluate(
     fluent_values: &impl FluentValueTrait,
 ) -> PyResult<ExpressionNode> {
     let mut res: Vec<ExpressionNode> = Vec::with_capacity(exp.len().saturating_sub(1));
-    internal_evaluate_into(exp, fluent_values, &mut res)
+    Ok(evaluate_into(exp, fluent_values, &mut res)?)
 }
 
-/// Same as `internal_evaluate`, but writes the postfix-evaluation scratch
-/// stack into caller-provided `res` (cleared first) instead of allocating a
-/// fresh `Vec` every call. Lets a hot caller that evaluates many differently-
-/// assigned instances of the same expression shape in a tight loop reuse one
-/// buffer's capacity across calls instead of paying an allocation per evaluation.
-pub fn internal_evaluate_into(
+/// Why an evaluation failed. A division by zero in the expression itself
+/// is `DivByZero`, so `internal_evaluate_defined` can report it as
+/// undefined without building, normalizing and type-checking a Python
+/// exception; it only becomes a `PyZeroDivisionError` when converted to a
+/// `PyErr`. Everything else, including a `ZeroDivisionError` raised inside
+/// an interpreted function, is `Py`.
+enum EvalError {
+    DivByZero,
+    Py(PyErr),
+}
+
+impl From<PyErr> for EvalError {
+    fn from(e: PyErr) -> Self {
+        EvalError::Py(e)
+    }
+}
+
+impl From<EvalError> for PyErr {
+    fn from(e: EvalError) -> Self {
+        match e {
+            EvalError::DivByZero => PyZeroDivisionError::new_err("division by zero"),
+            EvalError::Py(e) => e,
+        }
+    }
+}
+
+/// The evaluator behind `internal_evaluate` and
+/// `internal_evaluate_into_defined`, keeping a division by zero apart from
+/// every other failure (`EvalError`). Writes the postfix-evaluation scratch
+/// stack into `res`, cleared first.
+fn evaluate_into(
     exp: &[ExpressionNode],
     fluent_values: &impl FluentValueTrait,
     res: &mut Vec<ExpressionNode>,
-) -> PyResult<ExpressionNode> {
+) -> Result<ExpressionNode, EvalError> {
     res.clear();
     for e in exp {
         let value = match &e {
@@ -727,5 +752,58 @@ pub fn internal_evaluate_into(
             res.push(value);
         }
     }
-    Err(PyException::new_err("Unreachable code"))
+    Err(PyException::new_err("Unreachable code").into())
+}
+
+/// `internal_evaluate`, or `None` if `exp` is undefined.
+///
+/// An expression is undefined when evaluating it divides by zero, including
+/// inside an interpreted function; every other error is returned unchanged.
+/// Undefinedness is strict: it makes the whole evaluated expression
+/// undefined, so `not (10 / d <= 1)` with `d = 0` is undefined rather than
+/// true. Every search and heuristic site maps an undefined unit the same
+/// way -- a condition or goal is not satisfied, and an action with an
+/// undefined effect or duration bound is inapplicable.
+pub fn internal_evaluate_defined(
+    exp: &[ExpressionNode],
+    fluent_values: &impl FluentValueTrait,
+) -> PyResult<Option<ExpressionNode>> {
+    let mut res: Vec<ExpressionNode> = Vec::with_capacity(exp.len().saturating_sub(1));
+    internal_evaluate_into_defined(exp, fluent_values, &mut res)
+}
+
+/// `internal_evaluate_defined`, but writes the postfix-evaluation scratch
+/// stack into caller-provided `res` (cleared first) instead of allocating a
+/// fresh `Vec` every call. Lets a hot caller that evaluates many differently-
+/// assigned instances of the same expression shape in a tight loop reuse one
+/// buffer's capacity across calls instead of paying an allocation per
+/// evaluation.
+pub fn internal_evaluate_into_defined(
+    exp: &[ExpressionNode],
+    fluent_values: &impl FluentValueTrait,
+    res: &mut Vec<ExpressionNode>,
+) -> PyResult<Option<ExpressionNode>> {
+    match evaluate_into(exp, fluent_values, res) {
+        Ok(value) => Ok(Some(value)),
+        Err(EvalError::DivByZero) => Ok(None),
+        // Only an interpreted function's own `ZeroDivisionError` gets here
+        Err(EvalError::Py(e))
+            if Python::attach(|py| e.is_instance_of::<PyZeroDivisionError>(py)) =>
+        {
+            Ok(None)
+        }
+        Err(EvalError::Py(e)) => Err(e),
+    }
+}
+
+/// Whether the condition `exp` holds; an undefined `exp` (see
+/// `internal_evaluate_defined`) does not hold.
+pub fn evaluate_condition(
+    exp: &[ExpressionNode],
+    fluent_values: &impl FluentValueTrait,
+) -> PyResult<bool> {
+    Ok(matches!(
+        internal_evaluate_defined(exp, fluent_values)?,
+        Some(ExpressionNode::Bool(true))
+    ))
 }
