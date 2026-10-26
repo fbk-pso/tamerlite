@@ -400,6 +400,41 @@ don't seed `(True,)` into `costs` per evaluation instead, that puts work on
 the hot path. Pinned by
 `tests/test_engine.py::test_heuristics_empty_goal`/`test_heuristics_constant_leaves`.
 
+**An undefined expression makes its evaluated unit false, strictly.** An
+expression is undefined in a state when evaluating it divides by zero
+(including a `ZeroDivisionError` raised inside an interpreted function; any
+other exception propagates). `evaluate`/`internal_evaluate` themselves still
+raise. Every search and heuristic site instead goes through
+`evaluate_defined`/`evaluate_condition` (`search_space.py`) /
+`internal_evaluate_defined`/`evaluate_condition` (`expressions_utils.rs`),
+which follow the PDDL 2.1 reading:
+- an undefined action condition, whole-action condition or goal does not hold;
+- an undefined effect or duration bound makes the action inapplicable.
+
+"Strict" means the whole evaluated unit is undefined, not just the comparison
+that divides: `not (10 / d <= 1)` with `d = 0` is false, not true. Postfix
+evaluation computes every operand before `and`/`or` combine them, so a guard
+such as `or(d == 0, 10 / d >= 2)` is false too when `d = 0`.
+
+The heuristics follow the same rule:
+- hff/hadd/hmax give an undefined condition the "false" cost (1), never `inf`:
+  its operands can change, so `inf` would report a false dead end.
+- `HMaxExplicit` skips a relaxed value combination on which an expression is
+  undefined. That is exact, because a real state holding it would make the
+  condition false or the action inapplicable.
+- `NumericNovelty` treats an undefined leaf as unsatisfied with no distance:
+  it is never progress, is never recorded, and is beaten by any defined
+  distance.
+
+The `build_plan` duration evaluations still raise, since an opened action's
+duration was defined. Both cores must catch at exactly the same sites, or
+`check_metrics_equality` fails. These rules are pinned by
+`problems_generator.get_problem_division_by_zero`/`get_problem_temporal_division_by_zero`
+(in `PROBLEMS` and `NOVBFS_PROBLEMS`) and
+`tests/test_engine.py::test_undefined_goal_is_not_reached`. UP's own
+`Simplifier` still raises/asserts when it folds a static fluent into a
+constant `x / 0`, before TamerLite sees the expression.
+
 ### Problem encoding ([src/tamerlite/encoder.py](src/tamerlite/encoder.py))
 
 `Encoder` bridges Unified Planning and TamerLite's internal search space:

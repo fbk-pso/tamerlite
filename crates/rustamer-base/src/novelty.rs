@@ -45,7 +45,7 @@ use std::collections::hash_map::Entry;
 
 use super::expressions::{ExpressionNode, PyExpressionNode};
 use super::expressions_utils::{
-    as_num_ref, internal_evaluate, split_expression, FluentValueTrait, NumRef,
+    as_num_ref, internal_evaluate_defined, split_expression, FluentValueTrait, NumRef,
 };
 use super::heuristics::{
     extract_fluent_domains, extract_sub_expression, is_object_typed, FluentDomain,
@@ -127,17 +127,21 @@ impl Operand {
         Operand::Expr(exp)
     }
 
-    fn eval<'a>(&'a self, state: &'a State) -> PyResult<Cow<'a, ExpressionNode>> {
+    /// The operand's value in `state`, or `None` if it is undefined there
+    /// (see `internal_evaluate_defined`).
+    fn eval<'a>(&'a self, state: &'a State) -> PyResult<Option<Cow<'a, ExpressionNode>>> {
         match self {
-            Operand::Fluent(f) => Ok(Cow::Borrowed(state.get_value(*f))),
-            Operand::Const(v) => Ok(Cow::Borrowed(v)),
-            Operand::Expr(exp) => Ok(Cow::Owned(internal_evaluate(exp, state)?)),
+            Operand::Fluent(f) => Ok(Some(Cow::Borrowed(state.get_value(*f)))),
+            Operand::Const(v) => Ok(Some(Cow::Borrowed(v))),
+            Operand::Expr(exp) => Ok(internal_evaluate_defined(exp, state)?.map(Cow::Owned)),
         }
     }
 }
 
-fn is_true(v: &ExpressionNode) -> bool {
-    matches!(v, ExpressionNode::Bool(true))
+/// Whether a propositional leaf's value satisfies it; an undefined value
+/// does not.
+fn is_true(v: &Option<Cow<'_, ExpressionNode>>) -> bool {
+    matches!(v.as_deref(), Some(ExpressionNode::Bool(true)))
 }
 
 #[derive(Clone, Copy)]
@@ -234,24 +238,33 @@ fn num_ref_to_bigrational(n: NumRef) -> BigRational {
 /// else (a `Rational` operand, or an integer literal outside i64 range)
 /// falls back to the exact arbitrary-precision path, unchanged in substance
 /// from before this type existed.
+///
+/// `None` if an operand is undefined in `state` (see
+/// `internal_evaluate_defined`): the leaf is unsatisfied there and has no
+/// distance, so it neither counts as progress nor is recorded in any table.
+/// `rhs` is not evaluated once `lhs` is undefined (as in `_compute_sdist`).
 fn compute_sdist(
     lhs: &Operand,
     rhs: &Operand,
     kind: NumKind,
     state: &State,
-) -> PyResult<(Sdist, bool)> {
-    let lhs_val = lhs.eval(state)?;
-    let rhs_val = rhs.eval(state)?;
+) -> PyResult<Option<(Sdist, bool)>> {
+    let Some(lhs_val) = lhs.eval(state)? else {
+        return Ok(None);
+    };
+    let Some(rhs_val) = rhs.eval(state)? else {
+        return Ok(None);
+    };
     let lhs_ref = as_num_ref(&lhs_val)?;
     let rhs_ref = as_num_ref(&rhs_val)?;
     if let (NumRef::Int(l), NumRef::Int(r)) = (lhs_ref, rhs_ref) {
         if let (Some(l), Some(r)) = (l.to_i64(), r.to_i64()) {
             let diff = r as i128 - l as i128;
-            return Ok(sdist_small(diff, kind));
+            return Ok(Some(sdist_small(diff, kind)));
         }
     }
     let diff = num_ref_to_bigrational(rhs_ref) - num_ref_to_bigrational(lhs_ref);
-    Ok(sdist_big(diff, kind))
+    Ok(Some(sdist_big(diff, kind)))
 }
 
 enum LeafData {
@@ -429,7 +442,7 @@ pub struct NumericNovelty {
     parent_prop_stamp: Vec<u64>,
     parent_prop_true: Vec<bool>,
     parent_numeric_stamp: Vec<u64>,
-    parent_numeric: Vec<(Sdist, bool)>,
+    parent_numeric: Vec<Option<(Sdist, bool)>>,
     generation: u64,
     /// `fluent_to_leaves[f]`: leaves reading fluent `f`. `dirty_stamp[leaf]
     /// == eval_generation` marks a leaf dirty for the child being scored;
@@ -514,7 +527,7 @@ impl NumericNovelty {
             parent_prop_stamp: vec![0; n],
             parent_prop_true: vec![false; n],
             parent_numeric_stamp: vec![0; n],
-            parent_numeric: vec![(Sdist::zero(), false); n],
+            parent_numeric: vec![None; n],
             generation: 0,
             fluent_to_leaves,
             dirty_stamp: vec![0; n],
@@ -601,7 +614,9 @@ impl NumericNovelty {
                         }
                     }
                     LeafData::Num { lhs, rhs, kind } => {
-                        let (sdist, curr_sat) = compute_sdist(lhs, rhs, *kind, state)?;
+                        let Some((sdist, curr_sat)) = compute_sdist(lhs, rhs, *kind, state)? else {
+                            continue;
+                        };
                         if curr_sat {
                             self.classification.currently_satisfied.push(leaf_id);
                             self.classification.newly_satisfied.push(leaf_id);
@@ -655,20 +670,29 @@ impl NumericNovelty {
                                 compute_sdist(lhs, rhs, *kind, parent_state)?;
                             self.parent_numeric_stamp[idx] = self.generation;
                         }
-                        let (sdist, curr_sat) = compute_sdist(lhs, rhs, *kind, state)?;
-                        let (pdist, parent_sat) = &self.parent_numeric[idx];
+                        let Some((sdist, curr_sat)) = compute_sdist(lhs, rhs, *kind, state)? else {
+                            continue;
+                        };
                         if curr_sat {
                             self.classification.currently_satisfied.push(leaf_id);
                         } else {
                             self.classification.numeric_unsatisfied.push(leaf_id);
                         }
-                        if !*parent_sat && sdist.cmp(pdist) == Ordering::Greater {
+                        // An undefined parent distance is beaten by any
+                        // defined one
+                        let (improved, parent_sat) = match &self.parent_numeric[idx] {
+                            Some((pdist, parent_sat)) => {
+                                (sdist.cmp(pdist) == Ordering::Greater, *parent_sat)
+                            }
+                            None => (true, false),
+                        };
+                        if !parent_sat && improved {
                             if curr_sat {
                                 self.classification.newly_satisfied.push(leaf_id);
                             } else {
                                 self.classification.numeric_improved.push(leaf_id);
                             }
-                        } else if *parent_sat && curr_sat {
+                        } else if parent_sat && curr_sat {
                             self.classification.persisting_satisfied.push(leaf_id);
                         }
                         self.classification.sdist_cache[idx] = sdist;
@@ -781,7 +805,12 @@ impl NumericNovelty {
                     if new_partition || self.dirty_stamp[tid as usize] == self.eval_generation {
                         &self.classification.sdist_cache[tid as usize]
                     } else {
-                        &self.parent_numeric[tid as usize].0
+                        // `parent_num_unsat_list` only holds leaves defined
+                        // in the parent
+                        &self.parent_numeric[tid as usize]
+                            .as_ref()
+                            .expect("a clean unsatisfied leaf is defined in the parent")
+                            .0
                     };
                 let key = pack_directed(f, tid);
                 match tables.best_sdist_with_psi.entry(key) {
@@ -915,10 +944,10 @@ impl NumericNovelty {
                         self.parent_numeric[idx] = compute_sdist(lhs, rhs, *kind, parent_state)?;
                         self.parent_numeric_stamp[idx] = self.generation;
                     }
-                    if self.parent_numeric[idx].1 {
-                        self.parent_sat_list.push(leaf_id);
-                    } else {
-                        self.parent_num_unsat_list.push(leaf_id);
+                    match &self.parent_numeric[idx] {
+                        Some((_, true)) => self.parent_sat_list.push(leaf_id),
+                        Some((_, false)) => self.parent_num_unsat_list.push(leaf_id),
+                        None => {}
                     }
                 }
             }
