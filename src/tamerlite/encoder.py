@@ -1851,8 +1851,8 @@ class Encoder:
         A goal holding until the end of the plan (`[l, end]`) has no event to
         end on: its active condition is never removed, and it is also returned
         as a final goal, so the goal check, the heuristics and relevance
-        analysis all see it. `[l, end)` is rejected: its meaning is unclear,
-        and UP's validator checks it like `[l, end]`, final state included.
+        analysis all see it. `[l, end)` is encoded the same way: UP's validator
+        checks it like `[l, end]`, final state included.
 
         The timed action's events are those of one action, which the search
         always keeps at least `epsilon` apart (two events of the same action
@@ -1895,12 +1895,6 @@ class Encoder:
                     f"of the plan ({interval}); use a goal instead."
                 )
             if upper.is_from_end():
-                if interval.is_right_open():
-                    raise up.exceptions.UPUnsupportedProblemTypeError(
-                        "TamerLite does not support timed goals over an interval "
-                        f"open at the end of the plan ({interval}); close it to "
-                        "make the goal hold until the end."
-                    )
                 if not interval.is_left_open():
                     bucket(lower)[1].extend(goals)
                 bucket(lower)[2].append(em.And(goals))

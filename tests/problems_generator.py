@@ -618,13 +618,17 @@ def get_problem_timed_goal_window() -> Problem:
     return problem
 
 
-def get_problem_timed_goal_until_end() -> Problem:
+def get_problem_timed_goal_until_end(right_open: bool = False) -> Problem:
     """
     A goal that must hold from time 1 until the end of the plan,
-    `[1, end] safe`. `rush` delivers at once but leaves things unsafe for
-    good, so the plan must use the slower `deliver` instead.
+    `[1, end] safe` (or `[1, end) safe` with `right_open`, which UP's
+    validator checks the same way). `rush` delivers at once but leaves
+    things unsafe for good, so the plan must use the slower `deliver`
+    instead.
     """
-    problem = Problem("timed_goal_until_end")
+    problem = Problem(
+        "timed_goal_until_end_right_open" if right_open else "timed_goal_until_end"
+    )
 
     safe = Fluent("safe", BoolType())
     delivered = Fluent("delivered", BoolType())
@@ -646,9 +650,8 @@ def get_problem_timed_goal_until_end() -> Problem:
     problem.add_action(rush)
     problem.add_action(deliver)
 
-    problem.add_timed_goal(
-        ClosedTimeInterval(GlobalStartTiming(1), GlobalEndTiming()), safe
-    )
+    interval = RightOpenTimeInterval if right_open else ClosedTimeInterval
+    problem.add_timed_goal(interval(GlobalStartTiming(1), GlobalEndTiming()), safe)
     problem.add_goal(delivered)
 
     return problem

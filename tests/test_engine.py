@@ -126,6 +126,7 @@ def _build_problems():
         problems_generator.get_problem_timed_goal_point(),
         problems_generator.get_problem_timed_goal_window(),
         problems_generator.get_problem_timed_goal_until_end(),
+        problems_generator.get_problem_timed_goal_until_end(right_open=True),
         problems_generator.get_problem_timed_goal_with_timed_effect(),
     ]
 
@@ -3062,19 +3063,12 @@ def test_timed_goals_starting_at_the_end_are_rejected():
             "is empty",
             id="reversed",
         ),
-        pytest.param(
-            RightOpenTimeInterval(GlobalStartTiming(1), GlobalEndTiming()),
-            unified_planning.exceptions.UPUnsupportedProblemTypeError,
-            "open at the end of the plan",
-            id="open_at_end",
-        ),
     ],
 )
 def test_timed_goals_with_invalid_intervals_are_rejected(interval, raises, match):
     """An empty timed-goal interval -- `(t, t)`, `(t, t]`, `[t, t)` or one
-    ending before it starts -- is a malformed problem, and `[x, end)` is not
-    supported (`[x, end]` is the goal holding until the end): the encoder
-    rejects them instead of encoding a point goal or an until-end goal."""
+    ending before it starts -- is a malformed problem: the encoder rejects it
+    instead of encoding a point goal."""
     problem = problems_generator.get_problem_timed_goal_point()
     problem.add_timed_goal(interval, problem.fluent("shipped"))
     _encode_on_both_backends(problem, raises, match)
