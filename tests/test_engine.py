@@ -3130,19 +3130,22 @@ def test_timed_events_closer_than_epsilon_are_rejected(time):
         ),
     ],
 )
-def test_empty_durative_condition_intervals_are_rejected(interval, empty):
+def test_empty_durative_condition_intervals_are_dropped(interval, empty):
     """A durative action's condition over an empty interval -- both bounds
     from the start, or both from the end, with `upper < lower` or equal
-    bounds and an open side -- is rejected like an empty timed-goal interval,
-    instead of being encoded as a point condition. `[t, t]` is a point
+    bounds and an open side -- constrains no time point, so it holds
+    vacuously and is dropped, instead of being encoded as a point condition:
+    with `ready` false, `act` is still applicable. `[t, t]` is a point
     condition, and an interval with one bound from each end can't be decided
-    without the duration, so it is accepted."""
+    without the duration, so both are kept and leave the problem
+    unsolvable."""
     problem = problems_generator.get_problem_durative_condition(interval)
-    _encode_on_both_backends(
-        problem,
-        unified_planning.exceptions.UPProblemDefinitionError if empty else None,
-        "is empty" if empty else None,
-    )
+    problem.set_initial_value(problem.fluent("ready"), False)
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        with OneshotPlanner(name="tamerlite") as planner:
+            res: PlanGenerationResult = planner.solve(problem, timeout=None)
+        assert (res.plan is not None) == empty
 
 
 _EPS = Fraction(1, 100)

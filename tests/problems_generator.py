@@ -1550,7 +1550,7 @@ def get_problem_durative_condition(interval: TimeInterval) -> Problem:
     """One durative action `act` (duration 10) that needs `ready` over
     `interval` and achieves the goal `done` at its end; `spoil` can make
     `ready` false, so it isn't static and grounding keeps the condition. For
-    the encoder's check that a condition interval isn't empty."""
+    the encoder's handling of empty condition intervals."""
     problem = Problem("durative_condition")
     ready, done = Fluent("ready"), Fluent("done")
     problem.add_fluent(ready, default_initial_value=True)

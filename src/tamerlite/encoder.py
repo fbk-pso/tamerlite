@@ -1609,10 +1609,11 @@ class Encoder:
                 for i, lc in a.conditions.items():
                     lower = i.lower
                     upper = i.upper
-                    # Like a timed goal's interval (`_group_timed_events`), but
-                    # only when both bounds are from the same timepoint: one
-                    # from the start and one from the end is empty or not
-                    # depending on the duration, known only in a state.
+                    # A condition over an empty interval constrains no time
+                    # point, so it holds vacuously and is dropped. Decided only
+                    # when both bounds are from the same timepoint: one from
+                    # the start and one from the end is empty or not depending
+                    # on the duration, known only in a state.
                     if lower.is_from_start() == upper.is_from_start() and (
                         lower.delay > upper.delay
                         or (
@@ -1620,9 +1621,7 @@ class Encoder:
                             and (i.is_left_open() or i.is_right_open())
                         )
                     ):
-                        raise up.exceptions.UPProblemDefinitionError(
-                            f"Condition interval {i} of action `{a.name}` is empty."
-                        )
+                        continue
                     if lower == upper:  # conditions
                         action_events.append((lower.delay, lower, 1, lc))
                     else:
