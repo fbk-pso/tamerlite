@@ -2597,3 +2597,86 @@ def get_problem_wide_equal_costs(n: int = 10) -> Problem:
     for g in gs + hs:
         problem.add_goal(g)
     return problem
+
+
+def get_problem_division_by_zero() -> Problem:
+    """A numeric problem whose expressions divide by a fluent `d` that is 0
+    in the initial state, so every one of them starts out undefined.
+
+    Undefined is strict (`evaluate_defined` in `core/search_space.py`):
+    `use_d`'s precondition `10 / d >= 2` does not hold, `copy_d`'s effect
+    `x := 10 / d` makes it inapplicable, and the goal -- including the
+    negated `not (10 / d <= 1)` -- is not reached, all until `set_d` makes
+    `d = 2`. The only plans therefore start with `set_d`. The numeric goal
+    leaf `10 / d <= 5` is also undefined in the initial state for the
+    novelty search. Before undefined expressions were handled, every
+    heuristic raised `ZeroDivisionError` on the initial state. Every action
+    is single-use, so the state space is acyclic and `dfs`/`bfs`, which
+    don't deduplicate states, terminate.
+    """
+    problem = Problem("division_by_zero")
+
+    d = Fluent("d", IntType())
+    x = Fluent("x", RealType())
+    p = Fluent("p", BoolType())
+    copied = Fluent("copied", BoolType())
+
+    problem.add_fluent(d, default_initial_value=0)
+    problem.add_fluent(x, default_initial_value=0)
+    problem.add_fluent(p, default_initial_value=False)
+    problem.add_fluent(copied, default_initial_value=False)
+
+    set_d = InstantaneousAction("set_d")
+    set_d.add_precondition(Equals(d, 0))
+    set_d.add_effect(d, 2)
+
+    use_d = InstantaneousAction("use_d")
+    use_d.add_precondition(Not(p))
+    use_d.add_precondition(GE(Div(10, d), 2))
+    use_d.add_effect(p, True)
+
+    copy_d = InstantaneousAction("copy_d")
+    copy_d.add_precondition(Not(copied))
+    copy_d.add_effect(x, Div(10, d))
+    copy_d.add_effect(copied, True)
+
+    problem.add_actions([set_d, use_d, copy_d])
+
+    problem.add_goal(p)
+    problem.add_goal(GE(x, 5))
+    problem.add_goal(LE(Div(10, d), 5))
+    problem.add_goal(Not(LE(Div(10, d), 1)))
+
+    return problem
+
+
+def get_problem_temporal_division_by_zero() -> Problem:
+    """A temporal problem whose only goal achiever `run` has duration
+    `10 / d`, undefined while `d = 0`: `run` can only start once `set_d`
+    has made `d = 2` (see `get_problem_division_by_zero`)."""
+    problem = Problem("temporal_division_by_zero")
+
+    d = Fluent("d", IntType())
+    ready = Fluent("ready")
+    done = Fluent("done")
+
+    problem.add_fluent(d, default_initial_value=0)
+    problem.add_fluent(ready, default_initial_value=True)
+    problem.add_fluent(done, default_initial_value=False)
+
+    set_d = DurativeAction("set_d")
+    set_d.set_fixed_duration(1)
+    set_d.add_condition(StartTiming(), Equals(d, 0))
+    set_d.add_effect(EndTiming(), d, 2)
+
+    run = DurativeAction("run")
+    run.set_fixed_duration(Div(10, d))
+    run.add_condition(StartTiming(), ready)
+    run.add_effect(StartTiming(), ready, False)
+    run.add_effect(EndTiming(), done, True)
+
+    problem.add_actions([set_d, run])
+
+    problem.add_goal(done)
+
+    return problem

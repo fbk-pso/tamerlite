@@ -110,6 +110,8 @@ def _build_problems():
         problems_generator.get_problem_metric_object_taint(),
         problems_generator.get_problem_metric_action_cost_object(in_default=True),
         problems_generator.get_problem_metric_action_cost_object(in_default=False),
+        problems_generator.get_problem_division_by_zero(),
+        problems_generator.get_problem_temporal_division_by_zero(),
     ]
 
     up_example_problems = list(
@@ -1919,6 +1921,58 @@ def test_evaluate_fixed_cases():
                 f"case {name!r} on {'python' if disable_rustamer else 'rust'} "
                 f"backend: expected {expected}, got {got}"
             )
+
+
+def test_undefined_goal_is_not_reached():
+    """An undefined goal (one that divides by zero, see `evaluate_defined`
+    in `src/tamerlite/core/search_space.py`) is not reached, on both
+    backends, and undefinedness is strict: `not (10 / d <= 1)` with `d = 0`
+    is undefined, not true. `subgoals_sat` reports only the defined,
+    satisfied subgoals. `evaluate` itself still raises
+    (`test_evaluate_fixed_cases`)."""
+    F_BOOL_T, F_INT_0 = range(2)
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.core import (
+            Fluent,
+            SearchSpace,
+            make_bool_constant_node,
+            make_fluent_node,
+            make_int_constant_node,
+            make_operator_node,
+        )
+
+        search_space = SearchSpace([], {}, [], None, None, None)
+        state = search_space.initial_state(
+            cast(
+                "list[ConstantNode]",
+                [make_bool_constant_node(True), make_int_constant_node(0)],
+            )
+        )
+        backend = "python" if disable_rustamer else "rust"
+
+        op = testing_utils._op_tree
+        f_bool_t = make_fluent_node(Fluent(F_BOOL_T))
+        ten_over_d = op(
+            "/", make_int_constant_node(10), make_fluent_node(Fluent(F_INT_0))
+        )
+        negated = op("not", op("<=", ten_over_d, make_int_constant_node(1)))
+        defined_and_undefined = op(
+            "and", f_bool_t, op("<=", ten_over_d, make_int_constant_node(5))
+        )
+
+        def flatten(tree):
+            return testing_utils._flatten_expression_tree(tree, make_operator_node)
+
+        assert not search_space.goal_reached(state, flatten(negated)), backend
+        assert search_space.goal_reached(state, flatten(f_bool_t)), backend
+        goal = flatten(defined_and_undefined)
+        assert not search_space.goal_reached(state, goal), backend
+        # Rust nodes have no value equality: compare their string forms
+        assert [str(list(g)) for g in search_space.subgoals_sat(state, goal)] == [
+            str(list(flatten(f_bool_t)))
+        ], backend
 
 
 def _check_id_type_contract(id_type: Any, where: str) -> None:

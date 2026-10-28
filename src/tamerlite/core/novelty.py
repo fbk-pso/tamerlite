@@ -128,7 +128,7 @@ from tamerlite.core.search_space import (
     OperatorNode,
     State,
     Timing,
-    evaluate,
+    evaluate_defined,
     extract_sub_expression,
     is_object_typed_operand,
 )
@@ -137,8 +137,9 @@ from tamerlite.core.search_space import (
 # integers (Rust's `Sdist::Small`), else an exact `Fraction` (`Sdist::Big`).
 _Sdist = int | Fraction
 
-# A leaf operand, precompiled once (Rust's `Operand`): evaluates it in a state.
-_Operand = Callable[[State], ConstantNode]
+# A leaf operand, precompiled once (Rust's `Operand`): evaluates it in a state,
+# `None` if it is undefined there (see `evaluate_defined`).
+_Operand = Callable[[State], ConstantNode | None]
 
 
 def _make_operand(exp: Expression) -> _Operand:
@@ -154,7 +155,7 @@ def _make_operand(exp: Expression) -> _Operand:
             return lambda state: state.assignments[idx]
         if isinstance(node, (int, Fraction, ObjectNode)):  # bool is an int subclass
             return lambda state: node
-    return lambda state: evaluate(exp, state)
+    return lambda state: evaluate_defined(exp, state)
 
 
 def _iter_subgoal_leaves(exp: Expression) -> Iterator[Expression]:
@@ -197,7 +198,7 @@ class _NumLeaf:
 _Leaf = _PropLeaf | _NumLeaf
 
 
-def _compute_sdist(leaf: _NumLeaf, state: State) -> tuple[_Sdist, bool]:
+def _compute_sdist(leaf: _NumLeaf, state: State) -> tuple[_Sdist | None, bool]:
     """The distance feature for a numeric leaf -- already in the "improves
     = larger is better" sign convention (see module docstring): satisfied
     inequalities are >= 0, satisfied equalities are exactly 0, and both
@@ -206,8 +207,19 @@ def _compute_sdist(leaf: _NumLeaf, state: State) -> tuple[_Sdist, bool]:
     evaluation rather than a second, redundant evaluation of the whole leaf.
     Satisfaction is *not* simply `sdist >= 0`: for strict `<`, the exact
     boundary (`sdist == 0`) is genuinely unsatisfied, so the comparator
-    needs to stay kind-aware here too. Mirrors Rust's `compute_sdist`."""
-    diff: _Sdist = leaf.rhs(state) - leaf.lhs(state)  # type: ignore[operator]
+    needs to stay kind-aware here too. Mirrors Rust's `compute_sdist`.
+
+    The sdist is `None` if an operand is undefined in `state` (see
+    `evaluate_defined`): the leaf is unsatisfied there and has no distance,
+    so it neither counts as progress nor is recorded in any table. `rhs` is
+    not evaluated once `lhs` is undefined (as in Rust's `compute_sdist`)."""
+    lhs = leaf.lhs(state)
+    if lhs is None:
+        return None, False
+    rhs = leaf.rhs(state)
+    if rhs is None:
+        return None, False
+    diff: _Sdist = rhs - lhs  # type: ignore[operator]
     kind = leaf.kind
     if kind == "==":
         return (diff if diff <= 0 else -diff), diff == 0  # -abs(diff)
@@ -336,7 +348,7 @@ class NumericNovelty:
         # `begin_expansion`/`start`, filled on first use by `eval`. See the
         # class docstring.
         self._parent_prop_true: dict[int, bool] = {}
-        self._parent_numeric: dict[int, tuple[_Sdist, bool]] = {}
+        self._parent_numeric: dict[int, tuple[_Sdist | None, bool]] = {}
         self._parent_snapshot: tuple[list[int], list[int]] | None = None
 
     def start(self, initial_h: float) -> int:
@@ -391,7 +403,7 @@ class NumericNovelty:
 
     def _parent_num(
         self, leaf_id: int, leaf: _NumLeaf, parent: State
-    ) -> tuple[_Sdist, bool]:
+    ) -> tuple[_Sdist | None, bool]:
         """`leaf`'s `(sdist, satisfied)` in `parent`, through the
         per-expansion cache."""
         cached = self._parent_numeric.get(leaf_id)
@@ -437,9 +449,11 @@ class NumericNovelty:
                 if isinstance(leaf, _PropLeaf):
                     if self._parent_prop(leaf_id, leaf, parent):
                         parent_sat.append(leaf_id)
-                elif self._parent_num(leaf_id, leaf, parent)[1]:
+                    continue
+                pdist, psat = self._parent_num(leaf_id, leaf, parent)
+                if psat:
                     parent_sat.append(leaf_id)
-                else:
+                elif pdist is not None:
                     parent_num_unsat.append(leaf_id)
             snapshot = self._parent_snapshot = (parent_sat, parent_num_unsat)
         return snapshot
@@ -499,6 +513,8 @@ class NumericNovelty:
                         newly_satisfied.append(leaf_id)
                     continue
                 sdist, curr_sat = _compute_sdist(leaf, state)
+                if sdist is None:
+                    continue
                 sdist_cache[leaf_id] = sdist
                 if curr_sat:
                     currently_satisfied.append(leaf_id)
@@ -526,12 +542,15 @@ class NumericNovelty:
                     continue
                 pdist, parent_sat = self._parent_num(leaf_id, leaf, parent)
                 sdist, curr_sat = _compute_sdist(leaf, state)
+                if sdist is None:
+                    continue
                 sdist_cache[leaf_id] = sdist
                 if curr_sat:
                     currently_satisfied.append(leaf_id)
                 else:
                     numeric_unsatisfied.append(leaf_id)
-                if not parent_sat and sdist > pdist:
+                # An undefined parent distance is beaten by any defined one
+                if not parent_sat and (pdist is None or sdist > pdist):
                     if curr_sat:
                         newly_satisfied.append(leaf_id)
                     else:
@@ -615,6 +634,8 @@ class NumericNovelty:
                     if tid in sdist_cache
                     else self._parent_numeric[tid][0]
                 )
+                # `parent_num_unsat` only holds leaves defined in the parent
+                assert sdist is not None
                 pair = (f, tid)
                 old = tables.best_sdist_with_psi.get(pair)
                 if old is None or sdist > old:
