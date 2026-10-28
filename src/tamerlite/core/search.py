@@ -159,21 +159,42 @@ class _BoundedPriorityQueue(Generic[ItemT]):
 _QUEUE_BOUND = 400_000
 
 
+class DedupRule(Enum):
+    """How one state is deduped (`DedupPolicy.rule`): by equality of its
+    `state_representation`, or by `makespan` dominance among states with an
+    equal one (`makespan_dominates`)."""
+
+    EQUAL = auto()
+    DOMINANCE = auto()
+
+
 class DedupPolicy(Enum):
-    """Which states take part in visited-state dedup, and how -- shared by
-    every dedup site (`VisitedStates`, `_BloomDedup`).
+    """Which states take part in visited-state dedup, and how (`rule`) --
+    shared by every dedup site (`VisitedStates`, `_BloomDedup`).
 
     - `ALL`: a classical problem, or `weak_equality` on a temporal one.
     - `TODO_EMPTY`: a temporal problem without `weak_equality` and without a
-      deadline dedups only states with an empty `todo`. With no durative action
-      in progress there are no active conditions and no pending events, so any
-      continuation of one such state can be scheduled from any other with the
-      same `assignments`: sound for plan existence, only makespan can differ.
+      deadline dedups only states with an empty `todo`. With no action in
+      progress -- not even the timed action, so every timed effect and timed
+      goal bound has already fired -- there are no pending events, and the only
+      active conditions are the timed goals holding until the end of the plan,
+      the same in every such state; so any continuation of one such state can
+      be scheduled from any other with the same `assignments`: sound for plan
+      existence, only makespan can differ.
     - `DOMINANCE`: the same states, but the problem has a deadline. It pins
       `end_plan - start_plan`, so a state may be pruned only by one that is
       at least `epsilon` earlier (`makespan_dominates`): pruning the later
       of two can't lose a plan that meets the deadline, pruning the earlier one
       can (the anytime makespan-improvement loop is what sets it).
+
+    Under `TODO_EMPTY` and `DOMINANCE`, a state whose only action in progress
+    is the timed action (`SearchSpaceABC.timed_action`) is deduped too, always
+    by dominance, even without a deadline. Its pending events are pinned to
+    `start_plan`, so unlike any other action's they constrain the future by
+    the same absolute times in every state, and the active conditions -- the
+    timed goals whose interval is open -- depend only on its next event index,
+    which `WeakEqState` compares. Equality would not do: a later state can
+    miss a timed window an earlier one makes.
     """
 
     ALL = auto()
@@ -188,10 +209,18 @@ class DedupPolicy(Enum):
             return DedupPolicy.DOMINANCE
         return DedupPolicy.TODO_EMPTY
 
-    def applies(self, state: State) -> bool:
+    def rule(self, state: State, timed_action: Action | None) -> DedupRule | None:
+        """How `state` is deduped, or `None` if it isn't."""
         if self is DedupPolicy.ALL:
-            return True
-        return len(state.todo) == 0
+            return DedupRule.EQUAL
+        todo = state.todo
+        if not todo:
+            if self is DedupPolicy.DOMINANCE:
+                return DedupRule.DOMINANCE
+            return DedupRule.EQUAL
+        if len(todo) == 1 and timed_action in todo:
+            return DedupRule.DOMINANCE
+        return None
 
 
 @dataclass
@@ -200,7 +229,8 @@ class WeakEqState:
     durative actions currently in progress), which is what the temporal
     `weak_equality` dedup path needs on top of the full `assignments` compare/hash.
     It is also the key on the `DedupPolicy.TODO_EMPTY`/`DOMINANCE` paths, where `todo`
-    is always empty: `State.__eq__` is always `False` on a temporal problem.
+    is empty or holds only the timed action: `State.__eq__` is always `False` on a
+    temporal problem.
     """
 
     state: State
@@ -240,7 +270,9 @@ def makespan_dominates(
 
     A future event must come after each past event by `epsilon` if the two are
     mutex and by 0 otherwise, and with an empty `todo` that is the only way a
-    state's past constrains its future. So the recorded state forces any future
+    state's past constrains its future. With only the timed action in `todo`,
+    its pending events add constraints too, but at fixed times from
+    `start_plan`, the same in both states. So the recorded state forces any future
     event no later than `recorded + epsilon`, and the new one forces it no
     earlier than `new`: the recorded state can take over the new one's
     schedule of any continuation once it is ahead by at least `epsilon`. Being
@@ -256,24 +288,26 @@ class _Dedup(Protocol):
 class VisitedStates:
     """The visited-state store of every non-memory-bounded search (the
     priority-search driver, `ehc_search`, `multiqueue_search`), keyed by
-    `state_representation` and gated on `DedupPolicy`: a state the policy
-    doesn't apply to is never recorded and never pruned. Under
-    `DedupPolicy.DOMINANCE` each key keeps the smallest `makespan` recorded
-    for it, and a state is pruned only if that one dominates it."""
+    `state_representation` and gated per state by `DedupPolicy.rule`: a state
+    it excludes is never recorded and never pruned. A state deduped by
+    dominance keeps the smallest `makespan` recorded for its key, and is pruned
+    only if that one dominates it."""
 
     def __init__(self, ss: SearchSpaceABC, weak_equality: bool) -> None:
         self._ss = ss
         self._policy = DedupPolicy.of(ss, weak_equality)
+        self._timed_action = ss.timed_action
         self._seen: set[State | WeakEqState] = set()
         self._epsilon = ss.epsilon
         self._makespans: dict[State | WeakEqState, Fraction | int] = {}
 
     def is_redundant(self, state: State) -> bool:
         """Whether a recorded state makes `state` redundant."""
-        if not self._policy.applies(state):
+        rule = self._policy.rule(state, self._timed_action)
+        if rule is None:
             return False
         repr_ = state_representation(state, self._ss)
-        if self._policy is not DedupPolicy.DOMINANCE:
+        if rule is DedupRule.EQUAL:
             return repr_ in self._seen
         recorded = self._makespans.get(repr_)
         return recorded is not None and makespan_dominates(
@@ -283,10 +317,11 @@ class VisitedStates:
     def insert(self, state: State) -> bool:
         """Records `state` unless a recorded state makes it redundant, and
         returns whether it was recorded."""
-        if not self._policy.applies(state):
+        rule = self._policy.rule(state, self._timed_action)
+        if rule is None:
             return True
         repr_ = state_representation(state, self._ss)
-        if self._policy is not DedupPolicy.DOMINANCE:
+        if rule is DedupRule.EQUAL:
             if repr_ in self._seen:
                 return False
             self._seen.add(repr_)
@@ -334,14 +369,16 @@ class _BloomDedup:
     `novbfs_search_memory_bounded`.
     False positives make it strictly more aggressive (and incomplete) than
     `VisitedStates`; the two are not interchangeable. It can't keep a
-    `makespan` per key, so under `DedupPolicy.DOMINANCE` it dedups
-    nothing."""
+    `makespan` per key, so it dedups only the states `DedupPolicy.rule`
+    dedups by equality -- none under `DedupPolicy.DOMINANCE`, where it
+    doesn't allocate the filter at all."""
 
     BLOOM_ITEMS = 20_000_000
     BLOOM_FP_RATE = 1e-4
 
     def __init__(self, ss: SearchSpaceABC, weak_equality: bool) -> None:
         self._policy = DedupPolicy.of(ss, weak_equality)
+        self._timed_action = ss.timed_action
         self._filter: BloomFilter | None = (
             BloomFilter(max_elements=self.BLOOM_ITEMS, error_rate=self.BLOOM_FP_RATE)
             if self._policy is not DedupPolicy.DOMINANCE
@@ -349,7 +386,10 @@ class _BloomDedup:
         )
 
     def insert(self, state: State) -> bool:
-        if self._filter is None or not self._policy.applies(state):
+        if (
+            self._filter is None
+            or self._policy.rule(state, self._timed_action) is not DedupRule.EQUAL
+        ):
             return True
         key = _bloom_key(state)
         if key in self._filter:
@@ -368,6 +408,9 @@ def _basic_search(
     logger.info("%s: timeout=%s early_termination=%s", name, timeout, early_termination)
     st = time.monotonic()
     init = ss.initial_state()
+    if init is None:
+        # No valid initial state (see `SearchSpace.initial_state`).
+        return None, {"expanded_states": str(0)}
     open: deque[State] = deque()
     expanded_states = 0
     generated_states = 1
@@ -445,6 +488,9 @@ def ehc_search(
     )
     st = time.monotonic()
     init = ss.initial_state()
+    if init is None:
+        # No valid initial state (see `SearchSpace.initial_state`).
+        return None, {"expanded_states": str(0)}
     expanded_states = 0
     generated_states = 1
     if early_termination and ss.goal_reached(init):
@@ -535,6 +581,9 @@ def _priority_search(
 
     st = time.monotonic()
     init = ss.initial_state()
+    if init is None:
+        # No valid initial state (see `SearchSpace.initial_state`).
+        return None, {"expanded_states": str(0)}
     dedup.insert(init)  # seed; return discarded, the root is never re-checked
     expanded_states = 0
     generated_states = 1

@@ -23,6 +23,11 @@ from fractions import Fraction
 
 from unified_planning.model import DeltaSimpleTemporalNetwork
 
+# The minimal separation between two mutex events when the problem sets none
+# (`Problem.epsilon is None`). The Rust core's `SearchSpace::new` hard-codes the
+# same value.
+DEFAULT_EPSILON = Fraction(1, 100)
+
 
 class IfReturnType(Enum):
     """The declared return type of an interpreted function, as tagged by
@@ -752,9 +757,9 @@ def simplify(
 
 
 # An action being opened by `SearchSpace._open_action`, whose constraints
-# `SearchSpace._expand_event` adds: the action, its `action_instance_id` and
-# its events
-_PendingOpening = tuple[Action, int, list[tuple[Timing, Event]]]
+# `SearchSpace._expand_event` adds: the action, its `action_instance_id`, its
+# events and whether its start is pinned to `start_plan`
+_PendingOpening = tuple[Action, int, list[tuple[Timing, Event]], bool]
 
 
 class SearchSpaceABC(ABC):
@@ -773,6 +778,12 @@ class SearchSpaceABC(ABC):
     def epsilon(self) -> Fraction:
         """The minimal separation between two mutex events."""
 
+    @property
+    @abstractmethod
+    def timed_action(self) -> Action | None:
+        """The synthetic action carrying the timed effects and timed goals,
+        open from the initial state until its last event fires, if any."""
+
     @abstractmethod
     def makespan(self, state: State) -> Fraction | int:
         """How far into the plan a temporal state already reaches: a lower
@@ -785,8 +796,10 @@ class SearchSpaceABC(ABC):
         is totally ordered and its last event is the latest one. The STN's
         `distances` are its minimal solution, so that time is a lower bound
         on the event's time in every schedule. `start_plan` always sits at 0:
-        the deadline's is the only constraint that could pull it later, and
-        every event follows `start_plan`, so it can't without making the STN
+        every event follows `start_plan` (the timed action's start is pinned
+        to it), so a constraint that could pull it later -- the deadline's, or
+        the ordering of an event before a pending timed event -- closes a
+        cycle through `start_plan`, and can't without making the STN
         inconsistent."""
 
     @abstractmethod
@@ -797,8 +810,8 @@ class SearchSpaceABC(ABC):
     def initial_state(
         self,
         initial_state: list[ConstantNode] | None = None,
-    ) -> State:
-        pass
+    ) -> State | None:
+        """The initial state, or `None` if there is none: no plan exists."""
 
     @abstractmethod
     def get_successor_state(self, state: State, action: Action) -> State | None:
@@ -839,8 +852,15 @@ class SearchSpace(SearchSpaceABC):
         relevant_actions: list[Action] | None = None,
         deadline: Fraction | None = None,
         epsilon: Fraction | None = None,
+        timed_action: Action | None = None,
     ):
         self._actions_duration = actions_duration
+        # The synthetic action carrying the problem's timed effects, one event
+        # per instant they fire at (see `Encoder`). It is already running in
+        # every initial state (`_open_timed_action`), can never be
+        # opened again (`get_successor_state_with_compression`), and is left
+        # out of the plan `build_plan` returns.
+        self._timed_action = timed_action
         self._events = events
         self._relevant_actions = (
             relevant_actions if relevant_actions is not None else list(actions)
@@ -868,7 +888,7 @@ class SearchSpace(SearchSpaceABC):
         self._deadline = deadline
         self._start_plan = "start_plan"
         self._end_plan = "end_plan"
-        self._epsilon = Fraction(1, 100) if epsilon is None else epsilon
+        self._epsilon = DEFAULT_EPSILON if epsilon is None else epsilon
         self._is_temporal = any(v is not None for v in actions_duration)
         self._counter = 0
 
@@ -923,6 +943,10 @@ class SearchSpace(SearchSpaceABC):
     def epsilon(self) -> Fraction:
         return self._epsilon
 
+    @property
+    def timed_action(self) -> Action | None:
+        return self._timed_action
+
     def makespan(self, state: State) -> Fraction | int:
         tn = state.temporal_network
         assert tn is not None
@@ -945,7 +969,7 @@ class SearchSpace(SearchSpaceABC):
     def initial_state(
         self,
         initial_state: list[ConstantNode] | None = None,
-    ) -> State:
+    ) -> State | None:
         if self._is_temporal:
             tn = DeltaSimpleTemporalNetwork()
             if self._deadline is not None:
@@ -957,13 +981,46 @@ class SearchSpace(SearchSpaceABC):
                 )
         else:
             tn = None
-        if initial_state is not None:
-            return State(initial_state, tn, {}, MultiSet(), 0, [])
-        else:
+        if initial_state is None:
             # `initial_state` can be None if the initial state was already
             # provided when instantiating the class
             assert self._initial_state is not None
-            return State(self._initial_state, tn, {}, MultiSet(), 0, [])
+            initial_state = self._initial_state
+        state = State(initial_state, tn, {}, MultiSet(), 0, [])
+        if self._timed_action is None:
+            return state
+        return self._open_timed_action(state)
+
+    def _open_timed_action(self, state: State) -> State | None:
+        """Opens the timed action at time 0 and fires its first event.
+
+        Its start is pinned to `start_plan`, so every event sits exactly at the
+        absolute time of the timed effects and timed goals it carries. Event 0
+        (at delay 0) is fired right away rather than left to the search: it
+        happens at time 0 whatever the search does, and putting it in `path`
+        orders every later event that interferes with it strictly after it.
+        It also keeps every `todo` index at 1 or more, as `_open_action` does,
+        which the heuristics rely on.
+
+        Returns `None` when event 0 fails: a timed goal checked at time 0
+        doesn't hold, or a deadline earlier than the last timed event makes
+        the temporal network inconsistent (UP's makespan includes every timed
+        effect and timed goal). Nothing can happen before time 0, so then no
+        plan exists.
+        """
+        action = self._timed_action
+        assert action is not None
+        events = self._events[action]
+        # `_expand_event` leaves the event's own conditions and its
+        # effect-independent start conditions to its callers
+        if not evaluate(
+            events[0][1].conditions, state
+        ) or not self._effect_independent_start_conditions_hold(action, 0, state):
+            return None
+        new_state = state.clone(with_tn=False)
+        return self._open_action(
+            state, new_state, action, events, pin_to_plan_start=True
+        )
 
     def get_successor_state(self, state: State, action: Action) -> State | None:
         return self.get_successor_state_with_compression(state, action, True)
@@ -972,10 +1029,6 @@ class SearchSpace(SearchSpaceABC):
         self, state: State, action: Action, enable_compression_safe_actions: bool
     ) -> State | None:
         events = self._events[action]
-        if action not in state.todo and not self._symmetry_allows_opening(
-            state, action
-        ):
-            return None
         if action in state.todo:
             index, id = state.todo[action]
             _, e = events[index]
@@ -994,6 +1047,12 @@ class SearchSpace(SearchSpaceABC):
                 new_state.todo[action] = index + 1, id + 1
             new_state = self._expand_event(state, new_state, e, index, id)
         else:
+            if action == self._timed_action:
+                # Already opened in the initial state; once its last event has
+                # fired there is nothing left to apply.
+                return None
+            if not self._symmetry_allows_opening(state, action):
+                return None
             # Check if the action is applicable before creating the new state
             if not evaluate(
                 events[0][1].conditions, state
@@ -1088,8 +1147,9 @@ class SearchSpace(SearchSpaceABC):
         # check conditions is done before calling this method
         # The inherited active conditions need no check here, on the parent:
         # every state this search space returns passed the post-effect check
-        # below on its own assignments, and the initial state has none, so they
-        # all hold on `state`
+        # below on its own assignments, and the initial state has none (with a
+        # timed action, `initial_state` returns a state built by this method
+        # too, see `_open_timed_action`), so they all hold on `state`
         # remove end conditions
         for c in e.end_conditions:
             new_state.active_conditions.remove(c)
@@ -1181,13 +1241,15 @@ class SearchSpace(SearchSpaceABC):
         new_state: State,
         action: Action,
         events: list[tuple[Timing, Event]],
+        pin_to_plan_start: bool = False,
     ) -> State | None:
         # Allocate the instance ids exactly as if the constraints were added
         # here, but defer the constraints themselves to `_expand_event`, after
-        # the checks that reject most successors
+        # the checks that reject most successors. The action starts at
+        # `start_plan` exactly if `pin_to_plan_start`, otherwise no earlier
         pending_opening: _PendingOpening | None = None
         if self._is_temporal:
-            pending_opening = (action, self._counter, events)
+            pending_opening = (action, self._counter, events, pin_to_plan_start)
             self._counter += 1
             id = self._counter
             self._counter += len(events)
@@ -1206,12 +1268,14 @@ class SearchSpace(SearchSpaceABC):
         action: Action,
         action_instance_id: int,
         events: list[tuple[Timing, Event]],
+        pin_to_plan_start: bool,
     ) -> None:
         """Adds the constraints of an action opened by `_open_action`: the
         duration bounds, the plan-start/plan-end edges and the rigid edges tying
         each event to its anchor. `action_instance_id` identifies this instance
         of the action (its start/end timepoints) and event `k` gets instance id
-        `action_instance_id + 1 + k`."""
+        `action_instance_id + 1 + k`. The start is pinned to `start_plan` if
+        `pin_to_plan_start`, otherwise only no earlier than it."""
         tn = new_state.temporal_network
         assert tn is not None
         start = (action, True, action_instance_id)
@@ -1233,7 +1297,10 @@ class SearchSpace(SearchSpaceABC):
             if duration[3]:
                 upper -= self._epsilon
         tn.insert_interval(start, end, left_bound=lower, right_bound=upper)
-        tn.add(self._start_plan, start, 0)
+        if pin_to_plan_start:
+            tn.insert_interval(self._start_plan, start, left_bound=0, right_bound=0)
+        else:
+            tn.add(self._start_plan, start, 0)
         tn.add(end, self._end_plan, -self._epsilon)
         for id, (t, e) in enumerate(events, start=action_instance_id + 1):
             ev = (e.action, e.pos, id)
@@ -1253,6 +1320,25 @@ class SearchSpace(SearchSpaceABC):
         event_path: list[tuple[Event, int]] = []
         counter = 0
         state = self.initial_state()
+        # A plan was found, so there is an initial state.
+        assert state is not None
+        if self._timed_action is not None:
+            # `initial_state` has already opened the timed action and
+            # fired its first event, which therefore heads the path: replay
+            # both here, with its start pinned to time 0, and the rest of the
+            # path from there.
+            action = self._timed_action
+            assert len(path) > 0 and path[0] == action
+            path = path[1:]
+            start, id, counter = self._add_action_to_plan_network(
+                tn, state, action, counter
+            )
+            tn.add(self._start_plan, start, Fraction(0))
+            tn.add(start, self._start_plan, Fraction(0))
+            action_events = self._events[action]
+            event_path.append((action_events[0][1], id))
+            if len(action_events) > 1:
+                todo[action] = (1, id + 1)
         for action in path:
             action_events = self._events[action]
             if action in todo:
@@ -1284,41 +1370,12 @@ class SearchSpace(SearchSpaceABC):
                 event_path.append((e, id))
 
             else:
-                start = (action, True, counter)
-                end = (action, False, counter)
-                counter += 1
-                duration = self._actions_duration[action.idx]
-                lb: Fraction
-                ub: Fraction
-                if duration is None:
-                    lb = Fraction(0)
-                    ub = Fraction(0)
-                else:
-                    lower = evaluate(duration[0], state)
-                    upper = evaluate(duration[1], state)
-                    assert isinstance(lower, (int, Fraction))
-                    assert isinstance(upper, (int, Fraction))
-                    lb = Fraction(-lower)
-                    ub = Fraction(upper)
-                    if duration[2]:
-                        lb -= self._epsilon
-                    if duration[3]:
-                        ub -= self._epsilon
-
-                tn.add(start, end, lb)
-                tn.add(end, start, ub)
-                id = counter
-                for t, e in action_events:
-                    ev = (e.action, e.pos, counter)
-                    b1 = -t.delay
-                    b2 = t.delay
-                    if t.is_from_start():
-                        tn.add(start, ev, b1)
-                        tn.add(ev, start, b2)
-                    else:
-                        tn.add(end, ev, b1)
-                        tn.add(ev, end, b2)
-                    counter += 1
+                start, id, counter = self._add_action_to_plan_network(
+                    tn, state, action, counter
+                )
+                if self._timed_action is not None:
+                    # Nothing starts before the timed effects' time 0.
+                    tn.add(self._start_plan, start, Fraction(0))
 
                 e = action_events[0][1]
                 ev = (e.action, e.pos, id)
@@ -1353,14 +1410,17 @@ class SearchSpace(SearchSpaceABC):
         res: list[tuple[Fraction | None, Action, Fraction | None]] = []
         start_time: dict[tuple[Action, int], Fraction] = {}
         end_time: dict[tuple[Action, int], Fraction] = {}
+        origin = (
+            -tn.distances[self._start_plan] if self._timed_action is not None else 0
+        )
         for ev, dist in tn.distances.items():
-            if not isinstance(ev[1], bool):
+            if not isinstance(ev[1], bool) or ev[0] == self._timed_action:
                 continue
 
             if ev[1]:
-                start_time[(ev[0], ev[2])] = -dist
+                start_time[(ev[0], ev[2])] = -dist - origin
             else:
-                end_time[(ev[0], ev[2])] = -dist
+                end_time[(ev[0], ev[2])] = -dist - origin
 
         for a_id, st in start_time.items():
             et = end_time[a_id]
@@ -1369,3 +1429,56 @@ class SearchSpace(SearchSpaceABC):
 
         res.sort()
         return res
+
+    def _add_action_to_plan_network(
+        self,
+        tn: DeltaSimpleTemporalNetwork,
+        state: State,
+        action: Action,
+        counter: int,
+    ) -> tuple[tuple[Action, bool, int], int, int]:
+        """Adds a newly opened action's timepoints to `build_plan`'s temporal
+        network: its start and end, `state`'s duration bounds between them,
+        and each of its events pinned at its delay. The instance ids it uses
+        start from `counter`.
+
+        Returns:
+            The action's start timepoint, the instance id of its first event,
+            and the next free instance id.
+        """
+        start = (action, True, counter)
+        end = (action, False, counter)
+        counter += 1
+        duration = self._actions_duration[action.idx]
+        lb: Fraction
+        ub: Fraction
+        if duration is None:
+            lb = Fraction(0)
+            ub = Fraction(0)
+        else:
+            lower = evaluate(duration[0], state)
+            upper = evaluate(duration[1], state)
+            assert isinstance(lower, (int, Fraction))
+            assert isinstance(upper, (int, Fraction))
+            lb = Fraction(-lower)
+            ub = Fraction(upper)
+            if duration[2]:
+                lb -= self._epsilon
+            if duration[3]:
+                ub -= self._epsilon
+
+        tn.add(start, end, lb)
+        tn.add(end, start, ub)
+        id = counter
+        for t, e in self._events[action]:
+            ev = (e.action, e.pos, counter)
+            b1 = -t.delay
+            b2 = t.delay
+            if t.is_from_start():
+                tn.add(start, ev, b1)
+                tn.add(ev, start, b2)
+            else:
+                tn.add(end, ev, b1)
+                tn.add(ev, end, b2)
+            counter += 1
+        return start, id, counter

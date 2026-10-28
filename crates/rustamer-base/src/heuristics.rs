@@ -1766,6 +1766,7 @@ pub struct DeleteRelaxationHeuristicConfig {
     pub internal_caching: bool,
     pub inadmissible_numeric_heuristic_variant: bool,
     pub disable_numeric_reasoning: bool,
+    pub timed_action: Option<Action>,
 }
 
 /// The delete-relaxation heuristics hmax, hadd and hff, computed by a
@@ -1895,7 +1896,7 @@ impl DeleteRelaxationHeuristic {
             let f_cond = Fluent::new(num_fluents + le.len() - 1);
             let mut cond = ExpressionNode::Fluent(f_cond);
             extra_goals.push(cond.clone());
-            for (_, e) in le.iter() {
+            for (i, (_, e)) in le.iter().enumerate() {
                 let mut effects: Vec<Expression> = Vec::new();
                 let mut constant_increase_effects: FxHashMap<Fluent, f64> =
                     FxHashMap::with_hasher(FxBuildHasher);
@@ -1994,6 +1995,10 @@ impl DeleteRelaxationHeuristic {
                 )
                 .map_err(map_to_python_exception)?
                 {
+                    if i == 0 && Some(*a) == config.timed_action {
+                        cond = ExpressionNode::Fluent(f);
+                        continue;
+                    }
                     operators.push(Operator {
                         id: OperatorID::new(operators.len()),
                         action: *a,
@@ -2750,6 +2755,7 @@ impl HMaxExplicit {
         events: FxHashMap<Action, Vec<(Timing, Event)>>,
         goals: Vec<PyExpressionNode>,
         internal_caching: bool,
+        timed_action: Option<Action>,
     ) -> PyResult<Self> {
         let mut operators = Vec::new();
         let mut extra_fluents = FxHashMap::with_hasher(FxBuildHasher);
@@ -2762,7 +2768,7 @@ impl HMaxExplicit {
             let f_cond = Fluent::new(num_fluents + le.len() - 1);
             let mut cond: Vec<ExpressionNode> = vec![ExpressionNode::Fluent(f_cond)];
             extra_goals.push(cond.clone());
-            for (_, e) in le.iter() {
+            for (i, (_, e)) in le.iter().enumerate() {
                 let mut effects = Vec::new();
                 let mut conditions = Vec::new();
                 let f = Fluent::new(num_fluents);
@@ -2781,7 +2787,9 @@ impl HMaxExplicit {
                         conditions.extend(split_expression(&condition)?);
                     }
                 }
-                if !conditions.contains(&vec![ExpressionNode::Bool(false)]) {
+                if !conditions.contains(&vec![ExpressionNode::Bool(false)])
+                    && !(i == 0 && Some(*a) == timed_action)
+                {
                     let condition_expressions: Vec<Expression> = conditions
                         .iter()
                         .map(|cond| expression_manager.put(cond))

@@ -15,9 +15,11 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 
+import warnings
 from collections import Counter
 from collections.abc import Callable, Hashable, Iterable, MutableMapping
 from fractions import Fraction
+from itertools import pairwise
 from typing import Any, cast
 
 import unified_planning as up
@@ -50,15 +52,26 @@ from tamerlite.core import (
     HMax,
     Object,
     SearchSpace,
+    State,
     Timing,
     get_fluents,
 )
 from tamerlite.core.search_space import (
+    DEFAULT_EPSILON,
     ConstantNode,
     FluentDomain,
     FluentKind,
     SearchSpaceABC,
 )
+
+
+def _format_timing(timing: Timing) -> str:
+    """`timing` as UP writes it, e.g. `start + 1/2` or `end - 1`."""
+    base = "start" if timing.is_from_start() else "end"
+    delay = timing.delay
+    if delay == 0:
+        return base
+    return f"{base} {'+' if delay > 0 else '-'} {abs(delay)}"
 
 
 def has_interpreted_functions(kind: up.model.ProblemKind) -> bool:
@@ -204,6 +217,23 @@ class Encoder:
             self._action_by_name[name] for name in self._action_names
         ]
 
+        # The problem's timed effects and timed goals become the events of one
+        # synthetic action, numbered after every real one. It has no UP
+        # counterpart, so it is in `_actions` but not in
+        # `_action_names`/`_action_by_name`.
+        # The minimal separation the search keeps between two mutex events
+        # (`SearchSpace`'s `epsilon`), for the encoding-time checks below.
+        self._epsilon: Fraction = (
+            problem.epsilon if problem.epsilon is not None else DEFAULT_EPSILON
+        )
+        self._timed_buckets, self._timed_final_goals = self._group_timed_events(
+            problem, self._epsilon
+        )
+        self._timed_action: Action | None = None
+        if self._timed_buckets:
+            self._timed_action = Action(len(self._action_names))
+            self._actions.append(self._timed_action)
+
         # Pass 1 (discovery): every fluent gets a slot, exactly like `full`
         # being off would still do below. Needed unconditionally --
         # `_compute_relevant_fluents` (which decides what pass 2, if any,
@@ -218,7 +248,7 @@ class Encoder:
         self._compression_safe_actions = None
         if full:
             initial_state = self.initial_state(self._problem_initial_values)
-            self._goal = self.goals(problem.goals)
+            self._goal = self.goals(problem.goals + self._timed_final_goals)
 
             # Symmetry breaking and compression-safe detection only ever
             # inspect the raw UP model (`self._problem`/`self._lifted_problem`),
@@ -235,7 +265,9 @@ class Encoder:
                     action_objects = None
                     obj_to_prev_actions_map = None
 
-            if compression_safe_actions:
+            # A compressed action runs start to end with nothing in between,
+            # so it could never straddle a timed effect.
+            if compression_safe_actions and self._timed_action is None:
                 self._compression_safe_actions = (
                     self._compute_compression_safe_actions()
                 )
@@ -261,16 +293,28 @@ class Encoder:
             self._applicable_actions,
             deadline,
             problem.epsilon,
+            self._timed_action,
         )
 
         self._relevant_actions = None
+        # Left `None` without `full`: the search space then has no initial
+        # state of its own, the caller passes one to `initial_state`.
+        self._has_initial_state: bool | None = None
         if full:
+            # Only the timed action's first event can leave no initial state
+            # (see `SearchSpace.initial_state`), and compaction below can't
+            # change whether it does.
+            init = None
+            self._has_initial_state = True
+            if relevance_analysis or self._timed_action is not None:
+                init = self._search_space.initial_state()
+                self._has_initial_state = init is not None
             narrow_relevant_actions = False
             if relevance_analysis:
                 # Needs a `State` to run `HMax.reachable_actions` against --
                 # `self._search_space` above already provides one, regardless
                 # of whether compaction ends up rebuilding it below.
-                self._relevant_actions = self._compute_relevant_actions()
+                self._relevant_actions = self._compute_relevant_actions(init)
                 narrow_relevant_actions = len(self._relevant_actions) < len(
                     self.applicable_actions
                 )
@@ -303,7 +347,7 @@ class Encoder:
                     # anymore.
                     self._encode(relevant_fluents)
                     initial_state = self.initial_state(self._problem_initial_values)
-                    self._goal = self.goals(problem.goals)
+                    self._goal = self.goals(problem.goals + self._timed_final_goals)
                     # Renumbering changed `_actions_duration`/`_events`, so
                     # the mutex/precedence analysis the `SearchSpace` above
                     # ran is now stale over the new numbering and must be
@@ -322,6 +366,7 @@ class Encoder:
                         self.considered_actions,
                         deadline,
                         problem.epsilon,
+                        self._timed_action,
                     )
 
     def _encode(self, relevant_fluents: set[Fluent] | None) -> None:
@@ -464,7 +509,11 @@ class Encoder:
 
         restrict = relevant_fluents is not None
         considered_names = (
-            {self.get_action_name(a) for a in self.considered_actions}
+            {
+                self.get_action_name(a)
+                for a in self.considered_actions
+                if a != self._timed_action
+            }
             if restrict
             else None
         )
@@ -491,6 +540,17 @@ class Encoder:
         self._actions_duration: list[
             tuple[Expression, Expression, bool, bool] | None
         ] = [actions_duration_map[a] for a in self._action_names]
+        if self._timed_action is not None:
+            # The timed action lasts until its last event, so the
+            # plan's makespan covers every timed effect and timed goal, as UP's
+            # does.
+            last = self._convert_expression(
+                self._problem.environment.expression_manager.Real(
+                    max(self._timed_buckets)
+                )
+            )
+            self._actions_duration.append((last, last, False, False))
+            self._is_temporal = True
 
     def initial_state(self, initial_values: dict[FNode, FNode]) -> list[ConstantNode]:
         initial_state_values = {}
@@ -516,7 +576,10 @@ class Encoder:
         different events of this same action, and this method unions across
         all of them. If that pairing in `_build_events` ever becomes
         conditional, this method must start walking `start_conditions` too, or
-        both relevance analyses below will silently under-approximate.
+        both relevance analyses below will silently under-approximate. The
+        timed action's goals that hold until the end of the plan are the one
+        unpaired case: they are also final goals (`_group_timed_events`), which
+        both analyses seed from.
 
         Effect *values* are excluded because the two callers route them
         differently: `_compute_relevant_actions` folds them into the same
@@ -539,7 +602,7 @@ class Encoder:
             fluents.update(get_fluents(duration[1]))
         return fluents
 
-    def _compute_relevant_actions(self) -> list[Action]:
+    def _compute_relevant_actions(self, init: State | None) -> list[Action]:
         """Computes the actions that are relevant for reaching the goal.
 
         This is a two-pass over-approximation, used to prune the search space
@@ -563,10 +626,20 @@ class Encoder:
         pruned this way stays available), so this cannot make a solvable
         problem appear unsolvable through under-approximation.
 
+        Args:
+            init: The search space's initial state, `None` if it has none.
+
         Returns:
             The subset of `self._actions` that are reachable and relevant;
             actions outside this set can never contribute to a plan.
         """
+        if init is None:
+            # No initial state, so no plan: nothing is relevant beyond the
+            # timed action, which every encoding with one keeps. Only the
+            # timed action's first event can fail to make an initial state
+            # (see `SearchSpace.initial_state`), so it exists.
+            assert self._timed_action is not None
+            return [self._timed_action]
         assert self.goal is not None
         applicable_actions = set(self.applicable_actions)
         events = {a: e for a, e in self.events.items() if a in applicable_actions}
@@ -578,10 +651,9 @@ class Encoder:
             internal_caching=False,
             cache_value_in_state=False,
             inadmissible_numeric_heuristic_variant=False,
+            timed_action=self._timed_action,
         )
-        reachable_actions = heuristic.reachable_actions(
-            self._search_space.initial_state()
-        )
+        reachable_actions = heuristic.reachable_actions(init)
 
         actions_affecting_fluent: dict[Fluent, set[int]] = {}
         action_to_dependency_fluents: dict[int, set[Fluent]] = {}
@@ -602,6 +674,10 @@ class Encoder:
 
         checked_fluents = [False] * len(self._fluents)
         stack = list(get_fluents(self.goal))
+        if self._timed_action is not None:
+            # The timed action always runs, so what its timed goals read
+            # matters whatever the final goal is.
+            stack.extend(self._action_read_fluents(self._timed_action))
         for f in stack:
             checked_fluents[f.idx] = True
 
@@ -617,7 +693,14 @@ class Encoder:
                         checked_fluents[f.idx] = True
                         stack.append(f)
 
-        return [a for a in self._actions if a.idx in relevant_actions]
+        # The timed effects happen, and the timed goals are checked, whether or
+        # not they help, so their action is always kept: the search has to fire
+        # every one of its events.
+        return [
+            a
+            for a in self._actions
+            if a.idx in relevant_actions or a == self._timed_action
+        ]
 
     def _compute_relevant_fluents(self, actions: list[Action]) -> set[Fluent]:
         """Fluents that can affect search outcome: the least fixpoint of a
@@ -728,7 +811,8 @@ class Encoder:
         Two objects of the same type are equivalent if swapping them
         everywhere leaves both the goal and the initial state unchanged, and
         neither is excluded (`_extract_domain_objects`,
-        `_extract_interpreted_function_tainted_objects`). Swaps that preserve
+        `_extract_interpreted_function_tainted_objects`,
+        `_extract_timed_objects`). Swaps that preserve
         a structure compose, so this is an equivalence relation and each
         object only needs to be compared with one representative per class.
         Objects with different signatures (`_object_signature`) can't be
@@ -743,6 +827,7 @@ class Encoder:
         excluded = (
             self._extract_domain_objects()
             | self._extract_interpreted_function_tainted_objects()
+            | self._extract_timed_objects()
         )
         canonicalizer = _CommutativeCanonicalizer(self._problem.environment)
         # The goal's distinct conjuncts in canonical form: a conjunct stated
@@ -913,6 +998,28 @@ class Encoder:
         """
 
         return set(self._lifted_problem.domain_constants)
+
+    def _extract_timed_objects(self) -> set[UPObject]:
+        """
+        Extract all objects that appear in a timed effect (as a fluent
+        argument or in the assigned value) or in a timed goal. Those happen or
+        are checked at a fixed time whatever the plan does, so swapping such
+        an object for an otherwise equivalent one changes the problem.
+
+        Returns:
+            Set[UPObject]: A set of all objects that appear in a timed effect
+            or a timed goal.
+        """
+
+        objects: set[UPObject] = set()
+        for effects in self._problem.timed_effects.values():
+            for e in effects:
+                objects.update(extract_objects(e.fluent))
+                objects.update(extract_objects(e.value))
+        for goals in self._problem.timed_goals.values():
+            for g in goals:
+                objects.update(extract_objects(g))
+        return objects
 
     def _extract_interpreted_function_tainted_objects(self) -> set[UPObject]:
         """
@@ -1297,6 +1404,20 @@ class Encoder:
         return [a for a in self._actions if self._compression_safe_actions[a.idx]]
 
     @property
+    def has_initial_state(self) -> bool:
+        """Whether the search space has an initial state. It has none when
+        the timed action's first event fails (see `SearchSpace.initial_state`):
+        then no plan exists. Only defined for a `full` encoding."""
+        assert self._has_initial_state is not None, "not a full encoding"
+        return self._has_initial_state
+
+    @property
+    def timed_action(self) -> Action | None:
+        """The synthetic action carrying the problem's timed effects, or
+        `None` if it has none. Not a UP action: it never appears in a plan."""
+        return self._timed_action
+
+    @property
     def goal(self) -> Expression | None:
         return self._goal
 
@@ -1461,11 +1582,17 @@ class Encoder:
         env = self._problem.environment
         em = env.expression_manager
         self._events: dict[Action, list[tuple[Timing, Event]]] = {}
+        # Durative actions whose events can't be `epsilon` apart, with why.
+        unplaceable: list[str] = []
         restrict = considered_actions is not None
         considered_names = (
             None
             if considered_actions is None
-            else {self.get_action_name(a) for a in considered_actions}
+            else {
+                self.get_action_name(a)
+                for a in considered_actions
+                if a != self._timed_action
+            }
         )
         applicable_actions = set()
         for a in self._problem.actions:
@@ -1482,6 +1609,19 @@ class Encoder:
                 for i, lc in a.conditions.items():
                     lower = i.lower
                     upper = i.upper
+                    # A condition over an empty interval constrains no time
+                    # point, so it holds vacuously and is dropped. Decided only
+                    # when both bounds are from the same timepoint: one from
+                    # the start and one from the end is empty or not depending
+                    # on the duration, known only in a state.
+                    if lower.is_from_start() == upper.is_from_start() and (
+                        lower.delay > upper.delay
+                        or (
+                            lower.delay == upper.delay
+                            and (i.is_left_open() or i.is_right_open())
+                        )
+                    ):
+                        continue
                     if lower == upper:  # conditions
                         action_events.append((lower.delay, lower, 1, lc))
                     else:
@@ -1565,27 +1705,18 @@ class Encoder:
                     # with an empty event list.
                     from_start[0] = (up.model.StartTiming(), [], [], [], [])
 
-                events: list[tuple[Timing, Event]] = []
-                pos = 0
-                for d in sorted(from_start):
-                    t, lc, lsc, lec, le = from_start[d]
-                    conv_t = self._convert_timing(t)
-                    c = self._convert_expression(em.And(lc))
-                    tsc = tuple([self._convert_expression(sc) for sc in lsc])
-                    tec = tuple([self._convert_expression(ec) for ec in lec])
-                    te = tuple(self._convert_effects(le))
-                    events.append((conv_t, Event(action, pos, c, tsc, tec, te)))
-                    pos += 1
-                for d in sorted(from_end):
-                    t, lc, lsc, lec, le = from_end[d]
-                    conv_t = self._convert_timing(t)
-                    c = self._convert_expression(em.And(lc))
-                    tsc = tuple([self._convert_expression(sc) for sc in lsc])
-                    tec = tuple([self._convert_expression(ec) for ec in lec])
-                    te = tuple(self._convert_effects(le))
-                    events.append((conv_t, Event(action, pos, c, tsc, tec, te)))
-                    pos += 1
-                self._events[action] = events
+                self._events[action] = self._events_from_buckets(
+                    action, from_start, from_end
+                )
+
+                if not restrict:
+                    # Decided on the unrestricted pass, like applicability: an
+                    # action whose events can't be `epsilon` apart could never
+                    # be applied, so it isn't applicable, and the user is told.
+                    reason = self._event_separation_problem(a, self._events[action])
+                    if reason is not None:
+                        applicable_actions.discard(action)
+                        unplaceable.append(f"`{a.name}` ({reason})")
             else:
                 assert isinstance(a, up.model.InstantaneousAction)
                 conv_t = Timing(True, Fraction(0))
@@ -1611,7 +1742,189 @@ class Encoder:
                 ):
                     applicable_actions.add(action)
 
+        if self._timed_action is not None:
+            self._events[self._timed_action] = self._events_from_buckets(
+                self._timed_action, self._timed_buckets
+            )
+            applicable_actions.add(self._timed_action)
+
         if not restrict:
             self._applicable_actions = [
                 a for a in self._actions if a in applicable_actions
             ]
+
+        if unplaceable:
+            shown = ", ".join(unplaceable[:5])
+            more = f", and {len(unplaceable) - 5} more" if len(unplaceable) > 5 else ""
+            warnings.warn(
+                "TamerLite keeps the events of a durative action at least epsilon "
+                f"apart (epsilon = {self._epsilon}), so these actions can never be "
+                f"applied and are ignored: {shown}{more}. Set a smaller "
+                "`Problem.epsilon`, or model them as instantaneous actions, to "
+                "allow them.",
+                stacklevel=2,
+            )
+
+    def _event_separation_problem(
+        self,
+        a: "up.model.DurativeAction",
+        events: list[tuple[Timing, Event]],
+    ) -> str | None:
+        """Why the search can never place a durative action's `events` (as
+        `_events_from_buckets` numbers them), or `None` if it can.
+
+        The search keeps consecutive events of one action at least `epsilon`
+        apart (two events of the same action are mutex). Two consecutive
+        from-start events, or two consecutive from-end ones, closer than that
+        can't be fixed by any duration. The one pair that crosses over, the
+        last from-start event and the first from-end one, needs a duration of
+        at least their delays' gap plus `epsilon`; that is checked only
+        against a constant upper bound on the duration (minus `epsilon` if
+        right-open, as `SearchSpace` does), since any other bound is only
+        known in a state.
+
+        Such an action is never applicable rather than a reason to reject the
+        problem: grounding routinely produces a few the plan doesn't need,
+        such as a zero-duration drive from a place to itself."""
+        epsilon = self._epsilon
+        for (t1, _), (t2, _) in pairwise(events):
+            if t1.is_from_start() == t2.is_from_start():
+                if t2.delay - t1.delay < epsilon:
+                    return (
+                        f"events at {_format_timing(t1)} and {_format_timing(t2)} "
+                        "are closer than epsilon"
+                    )
+                continue
+            # A cache hit: `_build_actions_duration` normalized this bound
+            # earlier on the same pass, and it is what the search evaluates.
+            upper = self._normalize_expression(a.duration.upper)
+            if not upper.is_constant():
+                continue
+            max_duration = Fraction(upper.constant_value())
+            if a.duration.is_right_open():
+                max_duration -= epsilon
+            needed = t1.delay - t2.delay + epsilon
+            if max_duration < needed:
+                return (
+                    f"events at {_format_timing(t1)} and {_format_timing(t2)} "
+                    f"need a duration of at least {needed}, but it is {a.duration}"
+                )
+        return None
+
+    def _events_from_buckets(
+        self, action: Action, *buckets: dict[Any, Any]
+    ) -> list[tuple[Timing, Event]]:
+        """Converts an action's buckets into its events, numbered in order:
+        each bucket maps a delay to `(timing, conditions, start_conditions,
+        end_conditions, effects)` over UP expressions, and is taken in delay
+        order, one bucket after the other."""
+        em = self._problem.environment.expression_manager
+        events: list[tuple[Timing, Event]] = []
+        for bucket in buckets:
+            for d in sorted(bucket):
+                t, lc, lsc, lec, le = bucket[d]
+                conv_t = self._convert_timing(t)
+                c = self._convert_expression(em.And(lc))
+                tsc = tuple([self._convert_expression(sc) for sc in lsc])
+                tec = tuple([self._convert_expression(ec) for ec in lec])
+                te = tuple(self._convert_effects(le))
+                events.append((conv_t, Event(action, len(events), c, tsc, tec, te)))
+        return events
+
+    @staticmethod
+    def _group_timed_events(
+        problem: Problem, epsilon: Fraction
+    ) -> tuple[dict[Fraction, Any], list[FNode]]:
+        """Buckets the problem's timed effects and timed goals by the absolute
+        time they refer to, for the timed action's events (see
+        `_events_from_buckets`).
+
+        A timed goal is bucketed as `_build_events` buckets a durative
+        action's interval condition: over `[l, u]`, a condition at `l`
+        (unless left-open) and at `u` (unless right-open), and an active
+        condition from `l` to `u`; a point goal `[t, t]` is just a condition.
+        Those are exactly the states UP's validator checks: the one before
+        `l`, every one up to `u`, but not the one after `u`'s effects. An empty
+        interval -- `u < l`, or `l == u` with an open side -- is rejected.
+
+        A goal holding until the end of the plan (`[l, end]`) has no event to
+        end on: its active condition is never removed, and it is also returned
+        as a final goal, so the goal check, the heuristics and relevance
+        analysis all see it. `[l, end)` is encoded the same way: UP's validator
+        checks it like `[l, end]`, final state included.
+
+        The timed action's events are those of one action, which the search
+        always keeps at least `epsilon` apart (two events of the same action
+        are mutex). Two distinct instants closer than that, or one closer than
+        that to time 0, could never both happen, so they are rejected instead
+        of making the problem unsolvable.
+
+        UP keys timed effects and goals by `Timing`, and the same instant can
+        appear under two keys: problems built in Python use
+        `GlobalStartTiming(t)`, while the PDDL reader uses `StartTiming(t)`.
+        Both are offsets from the start of the plan, so they share a bucket.
+
+        Returns:
+            The buckets, with one at time 0 when there are any, and the extra
+            final goals.
+        """
+        em = problem.environment.expression_manager
+        buckets: dict[Fraction, Any] = {}
+
+        def bucket(timing: "up.model.Timing") -> Any:
+            if not timing.is_from_start() or timing.delay < 0:
+                raise up.exceptions.UPProblemDefinitionError(
+                    "Timed effects and timed goals must be at a non-negative "
+                    f"time from the start of the plan, not at {timing}."
+                )
+            delay = Fraction(timing.delay)
+            return buckets.setdefault(
+                delay, (up.model.GlobalStartTiming(delay), [], [], [], [])
+            )
+
+        for timing, effects in problem.timed_effects.items():
+            bucket(timing)[4].extend(effects)
+
+        final_goals: list[FNode] = []
+        for interval, goals in problem.timed_goals.items():
+            lower, upper = interval.lower, interval.upper
+            if lower.is_from_end():
+                raise up.exceptions.UPUnsupportedProblemTypeError(
+                    "TamerLite does not support timed goals starting at the end "
+                    f"of the plan ({interval}); use a goal instead."
+                )
+            if upper.is_from_end():
+                if not interval.is_left_open():
+                    bucket(lower)[1].extend(goals)
+                bucket(lower)[2].append(em.And(goals))
+                final_goals.extend(goals)
+            elif lower.delay > upper.delay or (
+                lower.delay == upper.delay
+                and (interval.is_left_open() or interval.is_right_open())
+            ):
+                raise up.exceptions.UPProblemDefinitionError(
+                    f"Timed goal interval {interval} is empty."
+                )
+            elif lower.delay == upper.delay:
+                bucket(lower)[1].extend(goals)
+            else:
+                if not interval.is_left_open():
+                    bucket(lower)[1].extend(goals)
+                bucket(lower)[2].append(em.And(goals))
+                if not interval.is_right_open():
+                    bucket(upper)[1].extend(goals)
+                bucket(upper)[3].append(em.And(goals))
+
+        if buckets:
+            # Like any action, the timed action must own an event at its start
+            # (see `_build_events`); `SearchSpace.initial_state` fires it.
+            bucket(up.model.GlobalStartTiming())
+            for t1, t2 in pairwise(sorted(buckets)):
+                if t2 - t1 < epsilon:
+                    raise up.exceptions.UPUnsupportedProblemTypeError(
+                        "TamerLite keeps the instants of timed effects and timed "
+                        "goals at least epsilon apart, from each other and from "
+                        f"time 0, but {t1} and {t2} are closer than epsilon = "
+                        f"{epsilon}; set a smaller `Problem.epsilon`."
+                    )
+        return buckets, final_goals
