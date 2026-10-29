@@ -20,6 +20,7 @@ from tamerlite.core.heuristics import HFF, CustomHeuristic, HAdd, HMax, HMaxExpl
 from tamerlite.core.multiqueue import multiqueue_search
 from tamerlite.core.novelty import NumericNovelty
 from tamerlite.core.search import (
+    ExpansionLimitReached,
     astar_search,
     astar_search_memory_bounded,
     bfs_search,
@@ -68,6 +69,7 @@ __all__ = [
     "CustomHeuristic",
     "Effect",
     "Event",
+    "ExpansionLimitReached",
     "Expression",
     "Fluent",
     "HAdd",

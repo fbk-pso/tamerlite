@@ -72,6 +72,7 @@ if not use_rustamer:
     from tamerlite.core.multiqueue import multiqueue_search
     from tamerlite.core.novelty import NumericNovelty
     from tamerlite.core.search import (
+        ExpansionLimitReached,
         astar_search,
         astar_search_memory_bounded,
         bfs_search,
@@ -133,6 +134,7 @@ else:
         rustamer_lib.dfs_search,
     )
     multiqueue_search = rustamer_lib.multiqueue_search
+    ExpansionLimitReached = rustamer_lib.ExpansionLimitReached
     novbfs_search = rustamer_lib.novbfs_search
     novbfs_search_memory_bounded = rustamer_lib.novbfs_search_memory_bounded
     NumericNovelty = rustamer_lib.NumericNovelty

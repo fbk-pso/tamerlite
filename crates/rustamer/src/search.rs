@@ -20,44 +20,55 @@ use pyo3::prelude::*;
 use rustamer_base::SearchResult;
 
 #[pyfunction]
-#[pyo3(signature = (ss, timeout=None, early_termination=false))]
+#[pyo3(signature = (ss, timeout=None, max_expanded_states=None, early_termination=false))]
 pub fn bfs_search(
     ss: &rustamer_base::SearchSpace,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
 ) -> PyResult<SearchResult> {
-    rustamer_base::bfs_search(ss, timeout, early_termination)
+    rustamer_base::bfs_search(ss, timeout, max_expanded_states, early_termination)
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, timeout=None, early_termination=false))]
+#[pyo3(signature = (ss, timeout=None, max_expanded_states=None, early_termination=false))]
 pub fn dfs_search(
     ss: &rustamer_base::SearchSpace,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
 ) -> PyResult<SearchResult> {
-    rustamer_base::dfs_search(ss, timeout, early_termination)
+    rustamer_base::dfs_search(ss, timeout, max_expanded_states, early_termination)
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, heuristic, timeout=None, early_termination=false, weak_equality=false))]
+#[pyo3(signature = (ss, heuristic, timeout=None, max_expanded_states=None, early_termination=false, weak_equality=false))]
 pub fn ehc_search(
     ss: &rustamer_base::SearchSpace,
     heuristic: &Heuristic,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<SearchResult> {
-    rustamer_base::ehc_search(ss, heuristic, timeout, early_termination, weak_equality)
+    rustamer_base::ehc_search(
+        ss,
+        heuristic,
+        timeout,
+        max_expanded_states,
+        early_termination,
+        weak_equality,
+    )
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, heuristic, weight, timeout=None, early_termination=false, weak_equality=false))]
+#[pyo3(signature = (ss, heuristic, weight, timeout=None, max_expanded_states=None, early_termination=false, weak_equality=false))]
 pub fn wastar_search(
     ss: &rustamer_base::SearchSpace,
     heuristic: &Heuristic,
     weight: f64,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<SearchResult> {
@@ -66,18 +77,20 @@ pub fn wastar_search(
         heuristic,
         weight,
         timeout,
+        max_expanded_states,
         early_termination,
         weak_equality,
     )
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, heuristic, weight, timeout=None, early_termination=false, weak_equality=false))]
+#[pyo3(signature = (ss, heuristic, weight, timeout=None, max_expanded_states=None, early_termination=false, weak_equality=false))]
 pub fn wastar_search_memory_bounded(
     ss: &rustamer_base::SearchSpace,
     heuristic: &Heuristic,
     weight: f64,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<SearchResult> {
@@ -86,17 +99,19 @@ pub fn wastar_search_memory_bounded(
         heuristic,
         weight,
         timeout,
+        max_expanded_states,
         early_termination,
         weak_equality,
     )
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, heuristic, timeout=None, early_termination=false, weak_equality=false))]
+#[pyo3(signature = (ss, heuristic, timeout=None, max_expanded_states=None, early_termination=false, weak_equality=false))]
 pub fn astar_search(
     ss: &rustamer_base::SearchSpace,
     heuristic: &Heuristic,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<SearchResult> {
@@ -105,17 +120,19 @@ pub fn astar_search(
         heuristic,
         0.5,
         timeout,
+        max_expanded_states,
         early_termination,
         weak_equality,
     )
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, heuristic, timeout=None, early_termination=false, weak_equality=false))]
+#[pyo3(signature = (ss, heuristic, timeout=None, max_expanded_states=None, early_termination=false, weak_equality=false))]
 pub fn astar_search_memory_bounded(
     ss: &rustamer_base::SearchSpace,
     heuristic: &Heuristic,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<SearchResult> {
@@ -124,16 +141,18 @@ pub fn astar_search_memory_bounded(
         heuristic,
         0.5,
         timeout,
+        max_expanded_states,
         early_termination,
         weak_equality,
     )
 }
 #[pyfunction]
-#[pyo3(signature = (ss, heuristic, timeout=None, early_termination=false, weak_equality=false))]
+#[pyo3(signature = (ss, heuristic, timeout=None, max_expanded_states=None, early_termination=false, weak_equality=false))]
 pub fn gbfs_search(
     ss: &rustamer_base::SearchSpace,
     heuristic: &Heuristic,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<SearchResult> {
@@ -142,17 +161,19 @@ pub fn gbfs_search(
         heuristic,
         1.0,
         timeout,
+        max_expanded_states,
         early_termination,
         weak_equality,
     )
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, heuristic, timeout=None, early_termination=false, weak_equality=false))]
+#[pyo3(signature = (ss, heuristic, timeout=None, max_expanded_states=None, early_termination=false, weak_equality=false))]
 pub fn gbfs_search_memory_bounded(
     ss: &rustamer_base::SearchSpace,
     heuristic: &Heuristic,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<SearchResult> {
@@ -161,13 +182,14 @@ pub fn gbfs_search_memory_bounded(
         heuristic,
         1.0,
         timeout,
+        max_expanded_states,
         early_termination,
         weak_equality,
     )
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, heuristic, novelty, prefer_higher_g, timeout=None, early_termination=false, weak_equality=false))]
+#[pyo3(signature = (ss, heuristic, novelty, prefer_higher_g, timeout=None, max_expanded_states=None, early_termination=false, weak_equality=false))]
 #[allow(clippy::too_many_arguments)]
 pub fn novbfs_search(
     ss: &rustamer_base::SearchSpace,
@@ -175,6 +197,7 @@ pub fn novbfs_search(
     novelty: &Bound<'_, rustamer_base::NumericNovelty>,
     prefer_higher_g: bool,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<SearchResult> {
@@ -185,13 +208,14 @@ pub fn novbfs_search(
         &mut novelty,
         prefer_higher_g,
         timeout,
+        max_expanded_states,
         early_termination,
         weak_equality,
     )
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, heuristic, novelty, prefer_higher_g, timeout=None, early_termination=false, weak_equality=false))]
+#[pyo3(signature = (ss, heuristic, novelty, prefer_higher_g, timeout=None, max_expanded_states=None, early_termination=false, weak_equality=false))]
 #[allow(clippy::too_many_arguments)]
 pub fn novbfs_search_memory_bounded(
     ss: &rustamer_base::SearchSpace,
@@ -199,6 +223,7 @@ pub fn novbfs_search_memory_bounded(
     novelty: &Bound<'_, rustamer_base::NumericNovelty>,
     prefer_higher_g: bool,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<SearchResult> {
@@ -209,19 +234,28 @@ pub fn novbfs_search_memory_bounded(
         &mut novelty,
         prefer_higher_g,
         timeout,
+        max_expanded_states,
         early_termination,
         weak_equality,
     )
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, heuristics, timeout=None, early_termination=false, weak_equality=false))]
+#[pyo3(signature = (ss, heuristics, timeout=None, max_expanded_states=None, early_termination=false, weak_equality=false))]
 pub fn multiqueue_search(
     ss: &rustamer_base::SearchSpace,
     heuristics: Vec<(Heuristic, f64)>,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<SearchResult> {
-    rustamer_base::multiqueue_search(ss, heuristics, timeout, early_termination, weak_equality)
+    rustamer_base::multiqueue_search(
+        ss,
+        heuristics,
+        timeout,
+        max_expanded_states,
+        early_termination,
+        weak_equality,
+    )
 }

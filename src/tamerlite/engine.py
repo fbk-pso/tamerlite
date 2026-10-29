@@ -47,6 +47,7 @@ from tamerlite.core import (
     HFF,
     Action,
     CustomHeuristic,
+    ExpansionLimitReached,
     HAdd,
     HMax,
     HMaxExplicit,
@@ -171,6 +172,7 @@ class _SearchCallable(Protocol):
         self,
         ss: search_space.SearchSpaceABC,
         timeout: float | None = ...,
+        max_expanded_states: int | None = ...,
         early_termination: bool = ...,
         weak_equality: bool = ...,
     ) -> tuple[list[Action] | None, dict[str, str]]: ...
@@ -762,6 +764,44 @@ class TamerLite(
         timeout: float | None = None,
         output_stream: IO[str] | None = None,
     ) -> "up.engines.results.PlanGenerationResult":
+        return self._solve_with_params(problem, heuristic, timeout, output_stream)
+
+    def _solve_with_params(
+        self,
+        problem: "up.model.AbstractProblem",
+        heuristic: Callable[[State], float | None] | None = None,
+        timeout: float | None = None,
+        output_stream: IO[str] | None = None,
+        warm_start_plan: up.plans.Plan | None = None,
+        max_expanded_states: int | None = None,
+        **kwargs,
+    ) -> "up.engines.results.PlanGenerationResult":
+        """Oneshot solve. `max_expanded_states` caps how many states each
+        search run may expand (`None`: unlimited); hitting it returns an
+        `UNSOLVABLE_INCOMPLETELY` result whose `expanded_states` metric is the
+        limit. The `weak_equality` retry is a separate run with its own
+        budget."""
+        if kwargs:
+            raise TypeError(
+                f"Unexpected keyword arguments for {self.name}: {sorted(kwargs)}"
+            )
+        if warm_start_plan is not None:
+            warnings.warn(
+                f"{self.name} does not support warm_start_plan; it is ignored.",
+                stacklevel=3,
+            )
+        if max_expanded_states is not None:
+            if isinstance(max_expanded_states, bool) or not isinstance(
+                max_expanded_states, int
+            ):
+                raise TypeError(
+                    "max_expanded_states must be an int or None, got "
+                    f"{type(max_expanded_states).__name__}"
+                )
+            if max_expanded_states < 0:
+                raise ValueError(
+                    f"max_expanded_states must be >= 0, got {max_expanded_states}"
+                )
         assert isinstance(problem, up.model.Problem)
         start_time = time.monotonic()
         lifted_problem, ground_problem, map_back_action_instance = (
@@ -785,6 +825,7 @@ class TamerLite(
                 map_back_action_instance,
                 heuristic=heuristic,
                 timeout=timeout - elapsed_time if timeout is not None else None,
+                max_expanded_states=max_expanded_states,
                 output_stream=output_stream,
                 is_intermediate_solution=False,
             )
@@ -858,6 +899,7 @@ class TamerLite(
         map_back_action_instance: Callable[[ActionInstance], ActionInstance | None],
         heuristic: Callable[[State], float | None] | None = None,
         timeout: float | None = None,
+        max_expanded_states: int | None = None,
         output_stream: IO[str] | None = None,
         deadline: Fraction | None = None,
         is_intermediate_solution: bool = False,
@@ -991,6 +1033,7 @@ class TamerLite(
                     encoder.search_space,
                     heuristics,
                     timeout,
+                    max_expanded_states=max_expanded_states,
                     early_termination=self._params.early_termination,
                     weak_equality=self._params.weak_equality,
                 )
@@ -1009,6 +1052,7 @@ class TamerLite(
                         encoder.search_space,
                         heuristics,
                         updated_timeout,
+                        max_expanded_states=max_expanded_states,
                         early_termination=self._params.early_termination,
                         weak_equality=False,
                     )
@@ -1024,6 +1068,7 @@ class TamerLite(
                     path, metrics = search(
                         encoder.search_space,
                         timeout=timeout,
+                        max_expanded_states=max_expanded_states,
                         early_termination=self._params.early_termination,
                         weak_equality=True,
                     )
@@ -1037,6 +1082,7 @@ class TamerLite(
                         path, metrics = search(
                             encoder.search_space,
                             timeout=updated_timeout,
+                            max_expanded_states=max_expanded_states,
                             early_termination=self._params.early_termination,
                             weak_equality=False,
                         )
@@ -1044,6 +1090,7 @@ class TamerLite(
                     path, metrics = search(
                         encoder.search_space,
                         timeout=timeout,
+                        max_expanded_states=max_expanded_states,
                         early_termination=self._params.early_termination,
                     )
 
@@ -1075,6 +1122,18 @@ class TamerLite(
             return (
                 up.engines.PlanGenerationResult(status, plan, self.name, metrics),
                 solution_might_exist,
+                is_any_action_compression_safe,
+            )
+        except ExpansionLimitReached:
+            logger.info("Search reached max_expanded_states=%s", max_expanded_states)
+            return (
+                up.engines.PlanGenerationResult(
+                    up.engines.PlanGenerationResultStatus.UNSOLVABLE_INCOMPLETELY,
+                    None,
+                    self.name,
+                    {"expanded_states": str(max_expanded_states)},
+                ),
+                True,
                 is_any_action_compression_safe,
             )
         except TimeoutError:

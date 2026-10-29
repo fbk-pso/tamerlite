@@ -35,6 +35,22 @@ from tamerlite.core.search_space import Action, ObjectNode, SearchSpaceABC, Stat
 logger = logging.getLogger(__name__)
 
 
+class ExpansionLimitReached(Exception):
+    """Raised by a search once it has expanded `max_expanded_states` states
+    without finding a plan."""
+
+
+def check_expansion_limit(
+    expanded_states: int, max_expanded_states: int | None
+) -> None:
+    """Raise `ExpansionLimitReached` if expanding one more state would exceed
+    `max_expanded_states` (`None` means unlimited)."""
+    if max_expanded_states is not None and expanded_states >= max_expanded_states:
+        raise ExpansionLimitReached(
+            f"Reached the limit of {max_expanded_states} expanded states"
+        )
+
+
 def extract_path(state: State) -> list[Action]:
     return [a for a, _, _ in state.path]
 
@@ -402,6 +418,7 @@ def _basic_search(
     ss: SearchSpaceABC,
     bfs: bool,
     timeout: float | None = None,
+    max_expanded_states: int | None = None,
     early_termination: bool = False,
 ) -> tuple[list[Action] | None, dict[str, str]]:
     name = "bfs" if bfs else "dfs"
@@ -425,6 +442,7 @@ def _basic_search(
     while len(open) > 0:
         if timeout is not None and time.monotonic() - st > timeout:
             raise TimeoutError
+        check_expansion_limit(expanded_states, max_expanded_states)
         state = open.popleft() if bfs else open.pop()
         expanded_states += 1
         if expanded_states % 10_000 == 0:
@@ -462,21 +480,28 @@ def _basic_search(
 
 
 def bfs_search(
-    ss: SearchSpaceABC, timeout: float | None = None, early_termination: bool = False
+    ss: SearchSpaceABC,
+    timeout: float | None = None,
+    max_expanded_states: int | None = None,
+    early_termination: bool = False,
 ) -> tuple[list[Action] | None, dict[str, str]]:
-    return _basic_search(ss, True, timeout, early_termination)
+    return _basic_search(ss, True, timeout, max_expanded_states, early_termination)
 
 
 def dfs_search(
-    ss: SearchSpaceABC, timeout: float | None = None, early_termination: bool = False
+    ss: SearchSpaceABC,
+    timeout: float | None = None,
+    max_expanded_states: int | None = None,
+    early_termination: bool = False,
 ) -> tuple[list[Action] | None, dict[str, str]]:
-    return _basic_search(ss, False, timeout, early_termination)
+    return _basic_search(ss, False, timeout, max_expanded_states, early_termination)
 
 
 def ehc_search(
     ss: SearchSpaceABC,
     heuristic: Heuristic,
     timeout: float | None = None,
+    max_expanded_states: int | None = None,
     early_termination: bool = False,
     weak_equality: bool = False,
 ) -> tuple[list[Action] | None, dict[str, str]]:
@@ -510,6 +535,7 @@ def ehc_search(
     while len(open) > 0:
         if timeout is not None and time.monotonic() - st > timeout:
             raise TimeoutError
+        check_expansion_limit(expanded_states, max_expanded_states)
         state = open.popleft()
         expanded_states += 1
         closed.insert(state)
@@ -566,6 +592,7 @@ def _priority_search(
     ss: SearchSpaceABC,
     heuristic: Heuristic,
     timeout: float | None,
+    max_expanded_states: int | None,
     early_termination: bool,
     *,
     name: str,
@@ -601,6 +628,7 @@ def _priority_search(
     while len(open) > 0:
         if timeout is not None and time.monotonic() - st > timeout:
             raise TimeoutError
+        check_expansion_limit(expanded_states, max_expanded_states)
         item = open.pop()
         state = item.state
         expanded_states += 1
@@ -654,6 +682,7 @@ def wastar_search(
     heuristic: Heuristic,
     weight: float = 0.5,
     timeout: float | None = None,
+    max_expanded_states: int | None = None,
     early_termination: bool = False,
     weak_equality: bool = False,
 ) -> tuple[list[Action] | None, dict[str, str]]:
@@ -668,6 +697,7 @@ def wastar_search(
         ss,
         heuristic,
         timeout,
+        max_expanded_states,
         early_termination,
         name="wastar_search",
         open=_PriorityQueue(),
@@ -683,20 +713,32 @@ def astar_search(
     ss: SearchSpaceABC,
     heuristic: Heuristic,
     timeout: float | None = None,
+    max_expanded_states: int | None = None,
     early_termination: bool = False,
     weak_equality: bool = False,
 ) -> tuple[list[Action] | None, dict[str, str]]:
-    return wastar_search(ss, heuristic, 0.5, timeout, early_termination, weak_equality)
+    return wastar_search(
+        ss,
+        heuristic,
+        0.5,
+        timeout,
+        max_expanded_states,
+        early_termination,
+        weak_equality,
+    )
 
 
 def gbfs_search(
     ss: SearchSpaceABC,
     heuristic: Heuristic,
     timeout: float | None = None,
+    max_expanded_states: int | None = None,
     early_termination: bool = False,
     weak_equality: bool = False,
 ) -> tuple[list[Action] | None, dict[str, str]]:
-    return wastar_search(ss, heuristic, 1, timeout, early_termination, weak_equality)
+    return wastar_search(
+        ss, heuristic, 1, timeout, max_expanded_states, early_termination, weak_equality
+    )
 
 
 def wastar_search_memory_bounded(
@@ -704,6 +746,7 @@ def wastar_search_memory_bounded(
     heuristic: Heuristic,
     weight: float = 0.5,
     timeout: float | None = None,
+    max_expanded_states: int | None = None,
     early_termination: bool = False,
     weak_equality: bool = False,
 ) -> tuple[list[Action] | None, dict[str, str]]:
@@ -719,6 +762,7 @@ def wastar_search_memory_bounded(
         ss,
         heuristic,
         timeout,
+        max_expanded_states,
         early_termination,
         name="wastar_search_memory_bounded",
         open=_BoundedPriorityQueue(_QUEUE_BOUND),
@@ -734,11 +778,18 @@ def astar_search_memory_bounded(
     ss: SearchSpaceABC,
     heuristic: Heuristic,
     timeout: float | None = None,
+    max_expanded_states: int | None = None,
     early_termination: bool = False,
     weak_equality: bool = False,
 ) -> tuple[list[Action] | None, dict[str, str]]:
     return wastar_search_memory_bounded(
-        ss, heuristic, 0.5, timeout, early_termination, weak_equality
+        ss,
+        heuristic,
+        0.5,
+        timeout,
+        max_expanded_states,
+        early_termination,
+        weak_equality,
     )
 
 
@@ -746,11 +797,18 @@ def gbfs_search_memory_bounded(
     ss: SearchSpaceABC,
     heuristic: Heuristic,
     timeout: float | None = None,
+    max_expanded_states: int | None = None,
     early_termination: bool = False,
     weak_equality: bool = False,
 ) -> tuple[list[Action] | None, dict[str, str]]:
     return wastar_search_memory_bounded(
-        ss, heuristic, 1, timeout, early_termination, weak_equality
+        ss,
+        heuristic,
+        1,
+        timeout,
+        max_expanded_states,
+        early_termination,
+        weak_equality,
     )
 
 
@@ -760,6 +818,7 @@ def _novbfs(
     novelty: NumericNovelty,
     prefer_higher_g: bool,
     timeout: float | None,
+    max_expanded_states: int | None,
     early_termination: bool,
     *,
     name: str,
@@ -799,6 +858,7 @@ def _novbfs(
         ss,
         heuristic,
         timeout,
+        max_expanded_states,
         early_termination,
         name=name,
         open=open,
@@ -815,6 +875,7 @@ def novbfs_search(
     novelty: NumericNovelty,
     prefer_higher_g: bool,
     timeout: float | None = None,
+    max_expanded_states: int | None = None,
     early_termination: bool = False,
     weak_equality: bool = False,
 ) -> tuple[list[Action] | None, dict[str, str]]:
@@ -859,6 +920,7 @@ def novbfs_search(
         novelty,
         prefer_higher_g,
         timeout,
+        max_expanded_states,
         early_termination,
         name="novbfs_search",
         open=_PriorityQueue(),
@@ -873,6 +935,7 @@ def novbfs_search_memory_bounded(
     novelty: NumericNovelty,
     prefer_higher_g: bool,
     timeout: float | None = None,
+    max_expanded_states: int | None = None,
     early_termination: bool = False,
     weak_equality: bool = False,
 ) -> tuple[list[Action] | None, dict[str, str]]:
@@ -890,6 +953,7 @@ def novbfs_search_memory_bounded(
         novelty,
         prefer_higher_g,
         timeout,
+        max_expanded_states,
         early_termination,
         name="novbfs_search_memory_bounded",
         open=_BoundedPriorityQueue(_QUEUE_BOUND),
