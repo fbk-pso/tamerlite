@@ -19,6 +19,7 @@ import warnings
 from collections import Counter
 from collections.abc import Callable, Hashable, Iterable, MutableMapping
 from fractions import Fraction
+from functools import cached_property
 from itertools import pairwise
 from typing import Any, cast
 
@@ -368,6 +369,8 @@ class Encoder:
                         problem.epsilon,
                         self._timed_action,
                     )
+
+        self._initial_assignments: list[ConstantNode] | None = initial_state
 
     def _encode(self, relevant_fluents: set[Fluent] | None) -> None:
         """(Re)builds everything whose numbering depends on which fluents
@@ -1449,6 +1452,40 @@ class Encoder:
             return SequentialPlan(
                 [self._problem.action(self.get_action_name(a))() for _, a, _ in plan]
             )
+
+    @cached_property
+    def _non_static_fluents(self) -> list[tuple[int, FNode]]:
+        """The slot and UP fluent expression of every non-static fluent, built
+        on first use, after `__init__` has fixed the slots."""
+        fluent_exp_by_name = {
+            self._convert_fluent(f): f for f in self._problem_initial_values
+        }
+        return [
+            (i, f)
+            for i, f in enumerate(fluent_exp_by_name[name] for name in self._fluents)
+            if f.fluent() not in self._static_fluents
+        ]
+
+    def search_state_of(self, state: "up.model.State") -> State:
+        """The search state of `state`, a UP state of the problem, with no
+        durative action in progress, since a UP state cannot express one.
+
+        Only non-static fluents are read, through `state.get_value`; a static
+        one keeps its initial value, which no action changes. Values are
+        converted by `Converter.convert_constant`, which memoizes nothing, so
+        evaluating many states doesn't grow any per-`FNode` cache."""
+
+        assert self._initial_assignments is not None
+        assignments = list(self._initial_assignments)
+        for i, f in self._non_static_fluents:
+            assignments[i] = cast(
+                ConstantNode, self._converter.convert_constant(state.get_value(f))
+            )
+        search_state = self._search_space.initial_state(assignments)
+        # Only a timed action can make `initial_state` fail, and the heuristic
+        # mode rejects problems that have one.
+        assert search_state is not None
+        return search_state
 
     def _convert_fluent(self, fluent_exp: FNode) -> str:
         # Purely structural (`str(FNode)`), independent of fluent numbering, so the

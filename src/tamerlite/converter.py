@@ -42,6 +42,7 @@ from tamerlite.core import (
     shift_expression,
     use_rustamer,
 )
+from tamerlite.core.search_space import ExpressionNode
 
 
 def _unresolvable_fluent_message(expression: FNode) -> str:
@@ -291,28 +292,41 @@ class Converter(DagWalker):
                 _unresolvable_fluent_message(expression)
             ) from None
 
+    def convert_constant(self, value: FNode) -> ExpressionNode:
+        """Converts a constant `value` (a bool/int/real constant or an object)
+        into its single node, without memoizing it like `convert` does."""
+        if value.is_bool_constant():
+            return make_bool_constant_node(value.is_true())
+        if value.is_int_constant():
+            return make_int_constant_node(value.int_constant_value())
+        if value.is_real_constant():
+            v = value.constant_value()
+            return make_rational_constant_node(v.numerator, v.denominator)
+        if value.is_object_exp():
+            return make_object_node(self._object_ids[value.object().name])
+        raise NotImplementedError(f"`{value}` is not a constant")
+
     def walk_object_exp(self, expression: FNode, args: list[Expression]) -> Expression:
         assert len(args) == 0
-        return (make_object_node(self._object_ids[expression.object().name]),)
+        return (self.convert_constant(expression),)
 
     def walk_bool_constant(
         self, expression: FNode, args: list[Expression]
     ) -> Expression:
         assert len(args) == 0
-        return (make_bool_constant_node(expression.is_true()),)
+        return (self.convert_constant(expression),)
 
     def walk_real_constant(
         self, expression: FNode, args: list[Expression]
     ) -> Expression:
         assert len(args) == 0
-        v = expression.constant_value()
-        return (make_rational_constant_node(v.numerator, v.denominator),)
+        return (self.convert_constant(expression),)
 
     def walk_int_constant(
         self, expression: FNode, args: list[Expression]
     ) -> Expression:
         assert len(args) == 0
-        return (make_int_constant_node(expression.int_constant_value()),)
+        return (self.convert_constant(expression),)
 
     def _get_interpreted_function_wrapper(
         self, interpreted_function: InterpretedFunction

@@ -117,6 +117,49 @@ with OneshotPlanner(name="tamerlite", params={"search": multi_params}) as planne
     print(result.plan)
 ```
 
+## Heuristic
+
+TamerLite also implements Unified Planning's `Heuristic` operation mode,
+exposing its delete-relaxation heuristics on Unified Planning states:
+
+```python
+from tamerlite import HeuristicModeParams
+from unified_planning.model import UPState
+
+with Heuristic(
+    problem,
+    name="tamerlite",
+    params={"heuristic": HeuristicModeParams(heuristic="hadd")},
+) as h:
+    print(h.value(UPState(problem.initial_values, problem)))
+```
+
+`value` accepts any `up.model.State`: the state is read only through
+`get_value`, and it is not validated. Some assumptions on the state:
+
+- **Static fluents** (fluents no action of the problem modifies) are
+  expected to keep the values of the problem's initial state. They are never
+  read from the state: a state that changes one is evaluated with its initial
+  value instead.
+- **Temporal problems**: a UP state only holds fluent values, so it is
+  evaluated as a state with no durative action in progress (the search
+  state's `todo` is empty). Its value then counts the remaining events
+  (action starts, ends and intermediate events) rather than actions.
+
+The fields of `HeuristicModeParams` are:
+
+| Parameter | Default | Description |
+|---|---|---|
+| `heuristic` | `"hff"` | `"hff"`, `"hadd"` or `"hmax"` |
+| `disable_numeric_reasoning` | `False` | Treat every numeric condition as costing one action when false |
+| `inadmissible_numeric_heuristic_variant` | `False` | Same as in `SearchParams` |
+| `internal_heuristic_cache` | `False` | Memoize values per state (unbounded memory) |
+
+`value` estimates the remaining number of actions (events, on a temporal
+problem), whatever the quality metric, and returns `None` only on dead ends:
+the engine is `GOAL_AWARE` and `SAFE`. Problems with undefined initial numeric
+values, timed effects or timed goals are not supported.
+
 ## Tutorial
 
 An end-to-end runnable tutorial covering classical, numeric, temporal and

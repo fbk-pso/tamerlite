@@ -3141,3 +3141,38 @@ def get_problem_wide_equal_costs(n: int = 10) -> Problem:
     for g in gs + hs:
         problem.add_goal(g)
     return problem
+
+
+def get_problem_visit_all() -> Problem:
+    """A robot in `l1` (already visited) has to visit `l2` and `l3`; `move`
+    connects every pair of locations. UP's own Heuristic-mode example."""
+    location = UserType("Location")
+    robot_at = Fluent("robot_at", BoolType(), l=location)
+    visited = Fluent("visited", BoolType(), l=location)
+    move = InstantaneousAction("move", l_from=location, l_to=location)
+    move.add_precondition(robot_at(move.l_from))
+    move.add_effect(robot_at(move.l_from), False)
+    move.add_effect(robot_at(move.l_to), True)
+    move.add_effect(visited(move.l_to), True)
+    problem = Problem("visit_all")
+    problem.add_fluent(robot_at, default_initial_value=False)
+    problem.add_fluent(visited, default_initial_value=False)
+    problem.add_action(move)
+    l1, l2, l3 = (problem.add_object(f"l{i}", location) for i in (1, 2, 3))
+    problem.set_initial_value(robot_at(l1), True)
+    problem.set_initial_value(visited(l1), True)
+    problem.add_goal(And(visited(l2), visited(l3)))
+    return problem
+
+
+def get_problem_counter() -> Problem:
+    """`x` starts at 0 and `inc` adds 3 to it until `x >= 10`: four
+    applications of a single simple numeric achiever."""
+    x = Fluent("x", IntType())
+    inc = InstantaneousAction("inc")
+    inc.add_increase_effect(x, 3)
+    problem = Problem("counter")
+    problem.add_fluent(x, default_initial_value=0)
+    problem.add_action(inc)
+    problem.add_goal(GE(x, 10))
+    return problem
