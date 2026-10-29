@@ -16,4 +16,9 @@
 #
 
 from tamerlite import engine
-from tamerlite.engine import HeuristicParams, MultiqueueParams, SearchParams
+from tamerlite.engine import (
+    HeuristicModeParams,
+    HeuristicParams,
+    MultiqueueParams,
+    SearchParams,
+)

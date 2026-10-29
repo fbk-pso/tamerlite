@@ -47,6 +47,12 @@ get_environment().credits_stream = None
 HEURISTICS = ["hff", "hadd", "hmax"]
 
 
+def _params(heuristic: str, **kwargs) -> dict[str, tamerlite.HeuristicModeParams]:
+    """`Heuristic`'s `params` selecting `heuristic`; read through `tamerlite`
+    at call time, so it is the class of the currently loaded backend."""
+    return {"heuristic": tamerlite.HeuristicModeParams(heuristic=heuristic, **kwargs)}
+
+
 CLASSICAL_PROBLEMS: dict[str, Callable[[], Problem]] = {
     "visit_all": problems_generator.get_problem_visit_all,
     "counter": problems_generator.get_problem_counter,
@@ -115,7 +121,7 @@ def test_initial_value_matches_core(disable_rustamer, heuristic, problem_name):
     core heuristic's value on the encoder's own initial state."""
     reload_tamerlite(disable_rustamer)
     problem = PROBLEMS[problem_name]()
-    with Heuristic(problem, name="tamerlite", params={"heuristic": heuristic}) as h:
+    with Heuristic(problem, name="tamerlite", params=_params(heuristic)) as h:
         value = h.value(UPState(problem.initial_values, problem))
     assert value == _core_value(problem, heuristic)
 
@@ -131,7 +137,7 @@ def test_values_along_plan(heuristic, problem_name):
     for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
         states = _plan_states(problem)
-        with Heuristic(problem, name="tamerlite", params={"heuristic": heuristic}) as h:
+        with Heuristic(problem, name="tamerlite", params=_params(heuristic)) as h:
             values.append([h.value(s) for s in states])
     assert values[0] == values[1]
     backend_values = values[0]
@@ -148,7 +154,7 @@ def test_values_along_plan(heuristic, problem_name):
 def test_dead_end(disable_rustamer, heuristic):
     reload_tamerlite(disable_rustamer)
     problem = problems_generator.get_problem_unreachable_goal()
-    with Heuristic(problem, name="tamerlite", params={"heuristic": heuristic}) as h:
+    with Heuristic(problem, name="tamerlite", params=_params(heuristic)) as h:
         assert h.value(UPState(problem.initial_values, problem)) is None
 
 
@@ -163,7 +169,7 @@ def test_temporal_goal_state(disable_rustamer):
     values[at(problem.object("A"))] = problem.environment.expression_manager.FALSE()
     values[at(problem.object("D"))] = problem.environment.expression_manager.TRUE()
     for heuristic in HEURISTICS:
-        with Heuristic(problem, name="tamerlite", params={"heuristic": heuristic}) as h:
+        with Heuristic(problem, name="tamerlite", params=_params(heuristic)) as h:
             assert h.value(UPState(values, problem)) == 0
 
 
@@ -182,7 +188,7 @@ def test_params(disable_rustamer):
             with Heuristic(
                 problem,
                 name="tamerlite",
-                params={"heuristic": heuristic, **params},
+                params=_params(heuristic, **params),
             ) as h:
                 assert h.value(state) is not None
                 # A second evaluation of the same state (a cache hit with
@@ -206,16 +212,21 @@ def test_guarantees():
 def test_rejections():
     TamerLite = tamerlite.engine.TamerLite
     problem = problems_generator.get_problem_visit_all()
+    HeuristicModeParams = tamerlite.HeuristicModeParams
     with pytest.raises(UPUsageError, match="Unknown heuristic"):
-        TamerLite(problem=problem, heuristic="hmax_explicit")
-    with pytest.raises(UPUsageError, match="search configures"):
-        TamerLite(tamerlite.SearchParams(), problem=problem)
-    with pytest.raises(UPUsageError, match="needs a problem: heuristic"):
-        TamerLite(heuristic="hadd")
+        TamerLite(
+            heuristic=HeuristicModeParams(heuristic="hmax_explicit"), problem=problem
+        )
+    with pytest.raises(UPUsageError, match="needs a problem"):
+        TamerLite(heuristic=HeuristicModeParams())
+    with pytest.raises(UPUsageError, match="must be a HeuristicModeParams"):
+        TamerLite(heuristic="hadd", problem=problem)  # type: ignore[arg-type]
+    with pytest.raises(UPUsageError, match="must be a SearchParams"):
+        TamerLite(search=HeuristicModeParams(), problem=problem)  # type: ignore[arg-type]
     with pytest.raises(UPUsageError, match="only supports a Problem"):
         TamerLite(problem=MultiAgentProblem("agents"))
     with pytest.raises(TypeError, match="weight"):
-        TamerLite(problem=problem, weight=0.8)
+        TamerLite(problem=problem, weight=0.8)  # type: ignore[call-arg]
     with pytest.raises(UPUsageError, match="not built as a heuristic"):
         TamerLite().value(UPState(problem.initial_values, problem))
     h = TamerLite(problem=problem)
@@ -240,6 +251,16 @@ def test_interpreted_function_scope():
         assert tamerlite.converter._live_if_scopes == before
     with OneshotPlanner(name="tamerlite"):
         assert tamerlite.converter._live_if_scopes == before
+    # A solve on an instance that is also a heuristic leaves the heuristic's
+    # scope open, so its `func_id`s stay valid after the solve.
+    engine = tamerlite.engine.TamerLite(problem=problem)
+    state = UPState(problem.initial_values, problem)
+    value = engine.value(state)
+    assert engine.solve(problem).status == ResultStatus.SOLVED_SATISFICING
+    assert tamerlite.converter._live_if_scopes == before + 1
+    assert engine.value(state) == value
+    engine.destroy()
+    assert tamerlite.converter._live_if_scopes == before
 
 
 def test_heuristic_drives_planner():
@@ -258,3 +279,27 @@ def test_heuristic_drives_planner():
     assert res.status == ResultStatus.SOLVED_SATISFICING
     with PlanValidator(problem_kind=problem.kind) as v:
         assert v.validate(problem, res.plan)
+
+
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+def test_planner_and_heuristic_interleaved(disable_rustamer):
+    """One instance is both a planner (`search`) and a heuristic (`heuristic`),
+    and its `value` can drive its own `solve`."""
+    reload_tamerlite(disable_rustamer)
+    problem = problems_generator.get_problem_flight()
+    state = UPState(problem.initial_values, problem)
+    with tamerlite.engine.TamerLite(
+        search=tamerlite.SearchParams(relevant_equality=False),
+        heuristic=tamerlite.HeuristicModeParams(heuristic="hadd"),
+        problem=problem,
+        # As `Heuristic(problem, name="tamerlite")`: the flight problem's kind
+        # is not covered by `supported_kind`.
+        error_on_failed_checks=False,
+    ) as engine:
+        value = engine.value(state)
+        plans = [engine.solve(problem), engine.solve(problem, heuristic=engine.value)]
+        assert engine.value(state) == value
+    with PlanValidator(problem_kind=problem.kind) as v:
+        for res in plans:
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+            assert v.validate(problem, res.plan)

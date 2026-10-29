@@ -133,10 +133,9 @@ class StateWrapper(State):
 
 @dataclass(frozen=True)
 class HeuristicModeParams:
-    """Configures the TamerLite heuristic (UP's `Heuristic` operation mode).
-
-    `Heuristic(problem, name="tamerlite", params={...})` passes `params` to
-    `TamerLite` as keyword arguments, which build this dataclass."""
+    """Configures the TamerLite heuristic (UP's `Heuristic` operation mode),
+    passed as `TamerLite`'s `heuristic` argument, e.g. through
+    `Heuristic(problem, name="tamerlite", params={"heuristic": ...})`."""
 
     heuristic: str = "hff"
     inadmissible_numeric_heuristic_variant: bool = False
@@ -304,9 +303,11 @@ class TamerLite(
     unified_planning.engines.mixins.HeuristicMixin,
 ):
     """TamerLite planner (`OneshotPlanner`/`AnytimePlanner`, configured by
-    `search`) and heuristic (`Heuristic`, used when `problem` is given and
-    configured by the remaining keyword arguments, the fields of
-    `HeuristicModeParams`).
+    `search`) and heuristic (`Heuristic`, built when `problem` is given and
+    configured by `heuristic`). One instance can be both, and `value` and
+    `solve` can be interleaved, including `solve(problem, heuristic=self.value)`:
+    each solve builds its own encoding, and the heuristic's open
+    `interpreted_function_scope` keeps its `func_id`s valid across solves.
 
     As a heuristic, `value(state)` is the delete-relaxation estimate
     (`heuristic`: `hff`, `hadd` or `hmax`) of the number of remaining actions
@@ -318,31 +319,33 @@ class TamerLite(
     def __init__(
         self,
         search: SearchParams | MultiqueueParams | None = None,
+        heuristic: HeuristicModeParams | None = None,
         problem: "up.model.AbstractProblem | None" = None,
         error_on_failed_checks: bool = True,
-        **heuristic_params: Any,
     ):
         unified_planning.engines.Engine.__init__(self)
         up.engines.mixins.OneshotPlannerMixin.__init__(self)
+        if search is not None and not isinstance(
+            search, (SearchParams, MultiqueueParams)
+        ):
+            raise UPUsageError("search must be a SearchParams or a MultiqueueParams.")
+        if heuristic is not None and not isinstance(heuristic, HeuristicModeParams):
+            raise UPUsageError("heuristic must be a HeuristicModeParams.")
         self._params = search if search is not None else SearchParams()
         self._heuristic_evaluator: _HeuristicEvaluator | None = None
         if problem is None:
-            if heuristic_params:
+            if heuristic is not None:
                 raise UPUsageError(
-                    "These options configure the TamerLite heuristic, which "
-                    f"needs a problem: {', '.join(heuristic_params)}."
+                    "heuristic configures the TamerLite heuristic, which needs a "
+                    "problem."
                 )
             return
-        if search is not None:
-            raise UPUsageError(
-                "search configures the TamerLite planner; the TamerLite heuristic "
-                "is configured by the fields of HeuristicModeParams."
-            )
         if not isinstance(problem, up.model.Problem):
             raise UPUsageError("The TamerLite heuristic only supports a Problem.")
-        params = HeuristicModeParams(**heuristic_params)
         up.engines.mixins.HeuristicMixin.__init__(self, problem, error_on_failed_checks)
-        self._heuristic_evaluator = _HeuristicEvaluator(problem, params)
+        self._heuristic_evaluator = _HeuristicEvaluator(
+            problem, heuristic if heuristic is not None else HeuristicModeParams()
+        )
 
     @property
     def name(self) -> str:

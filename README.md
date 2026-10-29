@@ -120,17 +120,33 @@ with OneshotPlanner(name="tamerlite", params={"search": multi_params}) as planne
 ## Heuristic
 
 TamerLite also implements Unified Planning's `Heuristic` operation mode,
-exposing its delete-relaxation heuristics on the states of a
-`SequentialSimulator`:
+exposing its delete-relaxation heuristics on Unified Planning states:
 
 ```python
-with SequentialSimulator(problem) as simulator, Heuristic(
-    problem, name="tamerlite", params={"heuristic": "hadd"}
+from tamerlite import HeuristicModeParams
+from unified_planning.model import UPState
+
+with Heuristic(
+    problem,
+    name="tamerlite",
+    params={"heuristic": HeuristicModeParams(heuristic="hadd")},
 ) as h:
-    print(h.value(simulator.get_initial_state()))
+    print(h.value(UPState(problem.initial_values, problem)))
 ```
 
-The `params` are the fields of `HeuristicModeParams`:
+`value` accepts any `up.model.State`: the state is read only through
+`get_value`, and it is not validated. Some assumptions on the state:
+
+- **Static fluents** (fluents no action of the problem modifies) are
+  expected to keep the values of the problem's initial state. They are never
+  read from the state: a state that changes one is evaluated with its initial
+  value instead.
+- **Temporal problems**: a UP state only holds fluent values, so it is
+  evaluated as a state with no durative action in progress (the search
+  state's `todo` is empty). Its value then counts the remaining events
+  (action starts, ends and intermediate events) rather than actions.
+
+The fields of `HeuristicModeParams` are:
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -140,10 +156,9 @@ The `params` are the fields of `HeuristicModeParams`:
 | `internal_heuristic_cache` | `False` | Memoize values per state (unbounded memory) |
 
 `value` estimates the remaining number of actions (events, on a temporal
-problem, whose states are evaluated with no action in progress), whatever the
-quality metric, and returns `None` only on dead ends: the engine is
-`GOAL_AWARE` and `SAFE`. Problems with undefined initial numeric values are not
-supported.
+problem), whatever the quality metric, and returns `None` only on dead ends:
+the engine is `GOAL_AWARE` and `SAFE`. Problems with undefined initial numeric
+values are not supported.
 
 ## Tutorial
 
