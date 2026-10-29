@@ -29,7 +29,7 @@ use foldhash::fast::{FixedState, RandomState};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use std::hash::BuildHasher;
 
-use pyo3::exceptions::PyTimeoutError;
+use pyo3::exceptions::{PyException, PyTimeoutError};
 use pyo3::prelude::*;
 
 use super::heuristics::*;
@@ -40,6 +40,27 @@ use super::structures::Action;
 use super::utils::PersistentList;
 
 pub type SearchResult = (Option<Vec<Action>>, FxHashMap<&'static str, String>);
+
+pyo3::create_exception!(
+    rustamer,
+    ExpansionLimitReached,
+    PyException,
+    "Raised by a search once it has expanded `max_expanded_states` states without finding a plan."
+);
+
+/// Errors with `ExpansionLimitReached` if expanding one more state would
+/// exceed `max_expanded_states` (`None` means unlimited).
+pub(crate) fn check_expansion_limit(
+    expanded_states: usize,
+    max_expanded_states: Option<usize>,
+) -> PyResult<()> {
+    match max_expanded_states {
+        Some(m) if expanded_states >= m => Err(ExpansionLimitReached::new_err(format!(
+            "Reached the limit of {m} expanded states"
+        ))),
+        _ => Ok(()),
+    }
+}
 
 /// Mirrors `heuristics.rs`'s `EvalGenItem`/`EvalGenOwnedItem`, generalized
 /// over the payload type `StatePayload::eval_gen` bridges between.
@@ -603,6 +624,7 @@ fn basic_search<S: SearchSpaceTrait>(
     ss: &S,
     bfs: bool,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
 ) -> PyResult<SearchResult> {
     let name = if bfs { "bfs" } else { "dfs" };
@@ -618,7 +640,7 @@ fn basic_search<S: SearchSpaceTrait>(
         return Ok((None, metrics));
     };
     let mut open = VecDeque::new();
-    let mut expanded_states = 0;
+    let mut expanded_states: usize = 0;
     let mut generated_states = 1;
 
     if early_termination && ss.goal_reached(&init, None)? {
@@ -635,6 +657,7 @@ fn basic_search<S: SearchSpaceTrait>(
             }
         }
 
+        check_expansion_limit(expanded_states, max_expanded_states)?;
         let state = if bfs {
             open.pop_front().unwrap()
         } else {
@@ -642,7 +665,7 @@ fn basic_search<S: SearchSpaceTrait>(
         };
 
         expanded_states += 1;
-        if expanded_states % 10_000 == 0 {
+        if expanded_states.is_multiple_of(10_000) {
             debug!(
                 "{}: expanded={} generated={} open={}",
                 name,
@@ -685,23 +708,26 @@ fn basic_search<S: SearchSpaceTrait>(
 pub fn bfs_search<S: SearchSpaceTrait>(
     ss: &S,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
 ) -> PyResult<SearchResult> {
-    basic_search(ss, true, timeout, early_termination)
+    basic_search(ss, true, timeout, max_expanded_states, early_termination)
 }
 
 pub fn dfs_search<S: SearchSpaceTrait>(
     ss: &S,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
 ) -> PyResult<SearchResult> {
-    basic_search(ss, false, timeout, early_termination)
+    basic_search(ss, false, timeout, max_expanded_states, early_termination)
 }
 
 pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     ss: &S,
     heuristic: &H,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<SearchResult> {
@@ -717,7 +743,7 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         return Ok((None, metrics));
     };
     let init = Rc::new(init);
-    let mut expanded_states = 0;
+    let mut expanded_states: usize = 0;
     let mut generated_states = 1;
 
     if early_termination && ss.goal_reached(&init, None)? {
@@ -745,6 +771,7 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
             }
         }
 
+        check_expansion_limit(expanded_states, max_expanded_states)?;
         expanded_states += 1;
         if !early_termination && ss.goal_reached(&state, None)? {
             info!(
@@ -859,6 +886,7 @@ fn priority_search<H, S, St, O, D>(
     ss: &S,
     heuristic: &H,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
     name: &str,
     strategy: &mut St,
@@ -907,6 +935,7 @@ where
                 return Err(PyTimeoutError::new_err("Timeout"));
             }
         }
+        check_expansion_limit(expanded_states, max_expanded_states)?;
         expanded_states += 1;
         if expanded_states.is_multiple_of(10_000) {
             debug!(
@@ -1015,6 +1044,7 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     heuristic: &H,
     weight: f64,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<SearchResult> {
@@ -1029,6 +1059,7 @@ pub fn wastar_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         ss,
         heuristic,
         timeout,
+        max_expanded_states,
         early_termination,
         "wastar_search",
         &mut strategy,
@@ -1042,6 +1073,7 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
     heuristic: &H,
     weight: f64,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<SearchResult> {
@@ -1057,6 +1089,7 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
         ss,
         heuristic,
         timeout,
+        max_expanded_states,
         early_termination,
         "wastar_search_memory_bounded",
         &mut strategy,
@@ -1170,6 +1203,7 @@ pub fn novbfs_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     novelty: &mut NumericNovelty,
     prefer_higher_g: bool,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<SearchResult> {
@@ -1184,6 +1218,7 @@ pub fn novbfs_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         ss,
         heuristic,
         timeout,
+        max_expanded_states,
         early_termination,
         "novbfs_search",
         &mut strategy,
@@ -1206,6 +1241,7 @@ pub fn novbfs_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
     novelty: &mut NumericNovelty,
     prefer_higher_g: bool,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<SearchResult> {
@@ -1221,6 +1257,7 @@ pub fn novbfs_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
         ss,
         heuristic,
         timeout,
+        max_expanded_states,
         early_termination,
         "novbfs_search_memory_bounded",
         &mut strategy,

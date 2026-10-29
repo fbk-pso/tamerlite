@@ -26,9 +26,13 @@ use search::*;
 
 /// A Python module implemented in Rust.
 #[pymodule]
-fn rustamer(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
+fn rustamer(py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     pyo3_log::init();
 
+    m.add(
+        "ExpansionLimitReached",
+        py.get_type::<rustamer_base::ExpansionLimitReached>(),
+    )?;
     m.add_class::<rustamer_base::PyExpressionNode>()?;
     m.add_class::<rustamer_base::IfReturnType>()?;
     m.add_class::<rustamer_base::Fluent>()?;

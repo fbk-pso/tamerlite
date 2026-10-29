@@ -121,6 +121,7 @@ pub fn multiqueue_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     ss: &S,
     heuristics: Vec<(H, f64)>,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<SearchResult> {
@@ -130,6 +131,7 @@ pub fn multiqueue_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         heuristics,
         &mut switch_policy,
         timeout,
+        max_expanded_states,
         early_termination,
         weak_equality,
     )
@@ -140,6 +142,7 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
     heuristics: Vec<(H, f64)>,
     switch_policy: &mut T,
     timeout: Option<f32>,
+    max_expanded_states: Option<usize>,
     early_termination: bool,
     weak_equality: bool,
 ) -> PyResult<SearchResult> {
@@ -158,7 +161,7 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
         return Ok((None, metrics));
     };
     let init = Rc::new(init);
-    let mut expanded_states = 0;
+    let mut expanded_states: usize = 0;
     let mut generated_states = 1;
     if early_termination && ss.goal_reached(&init, None)? {
         metrics.insert("expanded_states", expanded_states.to_string());
@@ -203,10 +206,11 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
             if *current.state_container.expanded.borrow() {
                 continue;
             }
+            check_expansion_limit(expanded_states, max_expanded_states)?;
             current.state_container.set_expanded(true);
             let state = &current.state_container.state;
             expanded_states += 1;
-            if expanded_states % 10_000 == 0 {
+            if expanded_states.is_multiple_of(10_000) {
                 debug!(
                     "multiqueue_search: expanded={} generated={} open={}",
                     expanded_states,

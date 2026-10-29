@@ -22,7 +22,11 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 from tamerlite.core.heuristics import Heuristic
-from tamerlite.core.search import VisitedStates, extract_path
+from tamerlite.core.search import (
+    VisitedStates,
+    check_expansion_limit,
+    extract_path,
+)
 from tamerlite.core.search_space import Action, SearchSpaceABC, State
 
 logger = logging.getLogger(__name__)
@@ -80,6 +84,7 @@ def multiqueue_search(
     ss: SearchSpaceABC,
     heuristics: list[tuple[Heuristic, float]],
     timeout: float | None = None,
+    max_expanded_states: int | None = None,
     early_termination: bool = False,
     weak_equality: bool = False,
 ) -> tuple[list[Action] | None, dict[str, str]]:
@@ -88,6 +93,7 @@ def multiqueue_search(
         heuristics=heuristics,
         switch_policy=RoundRobinSwitchPolicy(len(heuristics)),
         timeout=timeout,
+        max_expanded_states=max_expanded_states,
         early_termination=early_termination,
         weak_equality=weak_equality,
     )
@@ -98,6 +104,7 @@ def _multiqueue_search(
     heuristics: list[tuple[Heuristic, float]],
     switch_policy: MQSwitchPolicy,
     timeout: float | None = None,
+    max_expanded_states: int | None = None,
     early_termination: bool = False,
     weak_equality: bool = False,
 ) -> tuple[list[Action] | None, dict[str, str]]:
@@ -144,6 +151,7 @@ def _multiqueue_search(
         sc = item.state_container
         if sc.expanded:
             continue
+        check_expansion_limit(states_expanded, max_expanded_states)
         sc.expanded = True
         state = sc.state
         states_expanded += 1
