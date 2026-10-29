@@ -19,7 +19,7 @@ import warnings
 from collections import Counter
 from collections.abc import Callable, Hashable, Iterable, MutableMapping
 from fractions import Fraction
-from itertools import pairwise
+from itertools import chain
 from typing import Any, cast
 
 import unified_planning as up
@@ -222,13 +222,12 @@ class Encoder:
         # counterpart, so it is in `_actions` but not in
         # `_action_names`/`_action_by_name`.
         # The minimal separation the search keeps between two mutex events
-        # (`SearchSpace`'s `epsilon`), for the encoding-time checks below.
+        # (`SearchSpace`'s `epsilon`), for the encoding-time checks in
+        # `_build_events`.
         self._epsilon: Fraction = (
             problem.epsilon if problem.epsilon is not None else DEFAULT_EPSILON
         )
-        self._timed_buckets, self._timed_final_goals = self._group_timed_events(
-            problem, self._epsilon
-        )
+        self._timed_buckets, self._timed_final_goals = self._group_timed_events(problem)
         self._timed_action: Action | None = None
         if self._timed_buckets:
             self._timed_action = Action(len(self._action_names))
@@ -1191,6 +1190,7 @@ class Encoder:
         for action in self._problem.actions:
             if (
                 isinstance(action, up.model.DurativeAction)
+                and self.action_by_name[action.name] not in self._incompressible_actions
                 and not self._has_intermediate_conditions(action)
                 and self._end_conditions_contained_in_overall_conditions(action)
                 and not self._effects_interfere_with_conditions(
@@ -1582,9 +1582,18 @@ class Encoder:
         env = self._problem.environment
         em = env.expression_manager
         self._events: dict[Action, list[tuple[Timing, Event]]] = {}
-        # Durative actions whose events can't be `epsilon` apart, with why.
+        # Durative actions whose interfering events can't be `epsilon` apart,
+        # with why.
         unplaceable: list[str] = []
         restrict = considered_actions is not None
+        if not restrict:
+            # Durative actions whose temporal encoding a compressed one
+            # wouldn't reproduce, so they aren't compression-safe: those left
+            # out as unplaceable (the plan of a compiled problem using one
+            # couldn't be rebuilt), and those whose start-to-end conditions
+            # are rewritten for duration 0 (`TimedToSequential` checks them
+            # after the start effects).
+            self._incompressible_actions: set[Action] = set()
         considered_names = (
             None
             if considered_actions is None
@@ -1606,14 +1615,21 @@ class Encoder:
                     tuple[int | Fraction, up.model.Timing, int, list]
                 ] = []
                 is_applicable = True
+                # A cache hit: `_build_actions_duration` normalized this bound
+                # earlier on the same pass.
+                dur_upper = self._normalize_expression(a.duration.upper)
+                zero_duration = (
+                    dur_upper.is_constant() and dur_upper.constant_value() == 0
+                )
                 for i, lc in a.conditions.items():
                     lower = i.lower
                     upper = i.upper
                     # A condition over an empty interval constrains no time
                     # point, so it holds vacuously and is dropped. Decided only
-                    # when both bounds are from the same timepoint: one from
-                    # the start and one from the end is empty or not depending
-                    # on the duration, known only in a state.
+                    # when both bounds are from the same timepoint, or when the
+                    # action always lasts 0 (below): one bound from the start
+                    # and one from the end is empty or not depending on the
+                    # duration, otherwise known only in a state.
                     if lower.is_from_start() == upper.is_from_start() and (
                         lower.delay > upper.delay
                         or (
@@ -1622,7 +1638,18 @@ class Encoder:
                         )
                     ):
                         continue
-                    if lower == upper:  # conditions
+                    # When the action always lasts 0, a start-to-end interval
+                    # is either the point `start` (both delays 0) or empty.
+                    at_zero_duration = (
+                        zero_duration and lower.is_from_start() and upper.is_from_end()
+                    )
+                    if at_zero_duration and not restrict:
+                        self._incompressible_actions.add(action)
+                    if at_zero_duration and (
+                        lower.delay != 0 or upper.delay != 0 or i.is_left_open()
+                    ):
+                        continue
+                    if lower == upper or at_zero_duration:  # conditions
                         action_events.append((lower.delay, lower, 1, lc))
                     else:
                         # lower: start conditions
@@ -1711,11 +1738,25 @@ class Encoder:
 
                 if not restrict:
                     # Decided on the unrestricted pass, like applicability: an
-                    # action whose events can't be `epsilon` apart could never
-                    # be applied, so it isn't applicable, and the user is told.
-                    reason = self._event_separation_problem(a, self._events[action])
-                    if reason is not None:
+                    # action whose interfering events can't be `epsilon` apart
+                    # could never be applied, so it isn't applicable, and the
+                    # user is told.
+                    separation = self._event_separation_problem(
+                        action, self._events[action], dur_upper
+                    )
+                    if separation is not None:
+                        t1, t2, needed = separation
+                        between = (
+                            f"events at {_format_timing(t1)} and {_format_timing(t2)}"
+                        )
+                        reason = (
+                            f"{between} interfere and are closer than epsilon"
+                            if needed is None
+                            else f"{between} need a duration of at least "
+                            f"{needed}, but it is {a.duration}"
+                        )
                         applicable_actions.discard(action)
+                        self._incompressible_actions.add(action)
                         unplaceable.append(f"`{a.name}` ({reason})")
             else:
                 assert isinstance(a, up.model.InstantaneousAction)
@@ -1743,10 +1784,32 @@ class Encoder:
                     applicable_actions.add(action)
 
         if self._timed_action is not None:
-            self._events[self._timed_action] = self._events_from_buckets(
+            timed_events = self._events_from_buckets(
                 self._timed_action, self._timed_buckets
             )
+            self._events[self._timed_action] = timed_events
             applicable_actions.add(self._timed_action)
+            # Unlike a durative action, the timed action must fire every event,
+            # so two interfering instants closer than `epsilon` (one of them
+            # possibly time 0) make the problem unsupported, not one action
+            # inapplicable. Its events are all from its start, so no duration
+            # is involved.
+            separation = (
+                None
+                if restrict
+                else self._event_separation_problem(
+                    self._timed_action, timed_events, None
+                )
+            )
+            if separation is not None:
+                t1, t2, _ = separation
+                raise up.exceptions.UPUnsupportedProblemTypeError(
+                    "TamerLite keeps two timed instants whose timed effects and "
+                    "timed goals interfere (one writes a fluent the other reads "
+                    f"or writes) at least epsilon apart, but {t1.delay} and "
+                    f"{t2.delay} are closer than epsilon = {self._epsilon}; set "
+                    "a smaller `Problem.epsilon`."
+                )
 
         if not restrict:
             self._applicable_actions = [
@@ -1757,7 +1820,8 @@ class Encoder:
             shown = ", ".join(unplaceable[:5])
             more = f", and {len(unplaceable) - 5} more" if len(unplaceable) > 5 else ""
             warnings.warn(
-                "TamerLite keeps the events of a durative action at least epsilon "
+                "TamerLite keeps two events of a durative action that interfere "
+                "(one writes a fluent the other reads or writes) at least epsilon "
                 f"apart (epsilon = {self._epsilon}), so these actions can never be "
                 f"applied and are ignored: {shown}{more}. Set a smaller "
                 "`Problem.epsilon`, or model them as instantaneous actions, to "
@@ -1765,50 +1829,123 @@ class Encoder:
                 stacklevel=2,
             )
 
+    def _event_read_writes(
+        self, action: Action, events: list[tuple[Timing, Event]]
+    ) -> list[tuple[set[Fluent], set[Fluent]]]:
+        """The fluents each of `action`'s `events` reads and writes, exactly as
+        `SearchSpace` collects them for its `MutexChecker`: an event reads its
+        conditions and its effects' values (and, for a durative action's
+        start event, the duration bounds) and writes its effects' fluents."""
+        duration = self._actions_duration[action.idx]
+        read_writes = []
+        for i, (_, e) in enumerate(events):
+            reads = set(get_fluents(e.conditions))
+            reads.update(f for eff in e.effects for f in get_fluents(eff.value))
+            if i == 0 and duration is not None:
+                reads.update(get_fluents(duration[0]))
+                reads.update(get_fluents(duration[1]))
+            read_writes.append((reads, {eff.fluent for eff in e.effects}))
+        return read_writes
+
     def _event_separation_problem(
         self,
-        a: "up.model.DurativeAction",
+        action: Action,
         events: list[tuple[Timing, Event]],
-    ) -> str | None:
-        """Why the search can never place a durative action's `events` (as
-        `_events_from_buckets` numbers them), or `None` if it can.
+        duration_upper: FNode | None,
+    ) -> tuple[Timing, Timing, Fraction | None] | None:
+        """Two of `action`'s `events` (as `_events_from_buckets` numbers them)
+        that the search can never place, or `None` if it can place them all.
+        The third element is `None` if their delays are too close, otherwise
+        the duration they need.
 
-        The search keeps consecutive events of one action at least `epsilon`
-        apart (two events of the same action are mutex). Two consecutive
-        from-start events, or two consecutive from-end ones, closer than that
-        can't be fixed by any duration. The one pair that crosses over, the
-        last from-start event and the first from-end one, needs a duration of
-        at least their delays' gap plus `epsilon`; that is checked only
-        against a constant upper bound on the duration (minus `epsilon` if
-        right-open, as `SearchSpace` does), since any other bound is only
-        known in a state.
+        The search keeps two events at least `epsilon` apart if they are mutex,
+        i.e. interfere (`MutexChecker`: one writes a fluent the other reads or
+        writes), even two events of the same action, and otherwise only in
+        order. Every pair counts, not only consecutive ones: a mutex pair gets
+        its `epsilon` even with an unrelated event in between. Two from-start
+        events, or two from-end ones, are a fixed distance apart, whatever the
+        duration. A from-start event and a later from-end one need a duration
+        of at least their delays' gap, plus `epsilon` if mutex; that is checked
+        only against a constant upper bound on the duration,
+        `duration_upper` (minus `epsilon` if right-open, as `SearchSpace`
+        does), since any other bound is only known in a state.
 
-        Such an action is never applicable rather than a reason to reject the
-        problem: grounding routinely produces a few the plan doesn't need,
-        such as a zero-duration drive from a place to itself."""
+        Each pair needn't be checked: within an anchor delays are in order, so
+        an event is closest to the latest earlier event it interferes with,
+        which is the latest earlier one reading or writing one of its fluents;
+        and across anchors the pair needing the longest duration is the latest
+        from-start event and the earliest from-end one, among all events or
+        among those that interfere through one fluent. That makes the check
+        linear in the size of the events' read and write sets.
+
+        For a durative action, this makes it inapplicable rather than the
+        problem rejected: grounding routinely produces a few the plan doesn't
+        need, such as a zero-duration drive from a place to itself that both
+        frees and occupies the truck's location."""
         epsilon = self._epsilon
-        for (t1, _), (t2, _) in pairwise(events):
-            if t1.is_from_start() == t2.is_from_start():
-                if t2.delay - t1.delay < epsilon:
-                    return (
-                        f"events at {_format_timing(t1)} and {_format_timing(t2)} "
-                        "are closer than epsilon"
-                    )
-                continue
-            # A cache hit: `_build_actions_duration` normalized this bound
-            # earlier on the same pass, and it is what the search evaluates.
-            upper = self._normalize_expression(a.duration.upper)
-            if not upper.is_constant():
-                continue
-            max_duration = Fraction(upper.constant_value())
-            if a.duration.is_right_open():
-                max_duration -= epsilon
-            needed = t1.delay - t2.delay + epsilon
+        read_writes = self._event_read_writes(action, events)
+        # `_events_from_buckets` numbers from-start events first.
+        n_start = sum(1 for t, _ in events if t.is_from_start())
+        timed_read_writes = [
+            (t, rw) for (t, _), rw in zip(events, read_writes, strict=True)
+        ]
+        anchors = [timed_read_writes[:n_start], timed_read_writes[n_start:]]
+        # Per anchor, the latest event reading, and writing, each fluent.
+        latest: list[tuple[dict[Fluent, Timing], dict[Fluent, Timing]]] = []
+        for anchor in anchors:
+            last_read: dict[Fluent, Timing] = {}
+            last_write: dict[Fluent, Timing] = {}
+            for t, (reads, writes) in anchor:
+                for prev in chain(
+                    (last_write.get(f) for f in reads | writes),
+                    (last_read.get(f) for f in writes),
+                ):
+                    if prev is not None and t.delay - prev.delay < epsilon:
+                        return prev, t, None
+                last_read.update(dict.fromkeys(reads, t))
+                last_write.update(dict.fromkeys(writes, t))
+            latest.append((last_read, last_write))
+
+        from_start, from_end = anchors
+        if (
+            not from_start
+            or not from_end
+            or duration_upper is None
+            or not duration_upper.is_constant()
+        ):
+            return None
+        max_duration = Fraction(duration_upper.constant_value())
+        duration = self._actions_duration[action.idx]
+        assert duration is not None
+        if duration[3]:
+            max_duration -= epsilon
+        # The earliest from-end event reading or writing, and writing, each
+        # fluent.
+        first_read_write: dict[Fluent, Timing] = {}
+        first_write: dict[Fluent, Timing] = {}
+        for t, (reads, writes) in from_end:
+            for f in reads | writes:
+                first_read_write.setdefault(f, t)
+            for f in writes:
+                first_write.setdefault(f, t)
+        start_read, start_write = latest[0]
+        candidates = chain(
+            [(from_start[-1][0], from_end[0][0], Fraction(0))],
+            (
+                (s, first_read_write[f], epsilon)
+                for f, s in start_write.items()
+                if f in first_read_write
+            ),
+            (
+                (s, first_write[f], epsilon)
+                for f, s in start_read.items()
+                if f in first_write
+            ),
+        )
+        for t1, t2, gap in candidates:
+            needed = t1.delay - t2.delay + gap
             if max_duration < needed:
-                return (
-                    f"events at {_format_timing(t1)} and {_format_timing(t2)} "
-                    f"need a duration of at least {needed}, but it is {a.duration}"
-                )
+                return t1, t2, needed
         return None
 
     def _events_from_buckets(
@@ -1833,7 +1970,7 @@ class Encoder:
 
     @staticmethod
     def _group_timed_events(
-        problem: Problem, epsilon: Fraction
+        problem: Problem,
     ) -> tuple[dict[Fraction, Any], list[FNode]]:
         """Buckets the problem's timed effects and timed goals by the absolute
         time they refer to, for the timed action's events (see
@@ -1853,11 +1990,9 @@ class Encoder:
         analysis all see it. `[l, end)` is encoded the same way: UP's validator
         checks it like `[l, end]`, final state included.
 
-        The timed action's events are those of one action, which the search
-        always keeps at least `epsilon` apart (two events of the same action
-        are mutex). Two distinct instants closer than that, or one closer than
-        that to time 0, could never both happen, so they are rejected instead
-        of making the problem unsolvable.
+        The search keeps two instants at least `epsilon` apart if they
+        interfere; `_build_events` rejects those closer than that, once their
+        events exist.
 
         UP keys timed effects and goals by `Timing`, and the same instant can
         appear under two keys: problems built in Python use
@@ -1919,12 +2054,4 @@ class Encoder:
             # Like any action, the timed action must own an event at its start
             # (see `_build_events`); `SearchSpace.initial_state` fires it.
             bucket(up.model.GlobalStartTiming())
-            for t1, t2 in pairwise(sorted(buckets)):
-                if t2 - t1 < epsilon:
-                    raise up.exceptions.UPUnsupportedProblemTypeError(
-                        "TamerLite keeps the instants of timed effects and timed "
-                        "goals at least epsilon apart, from each other and from "
-                        f"time 0, but {t1} and {t2} are closer than epsilon = "
-                        f"{epsilon}; set a smaller `Problem.epsilon`."
-                    )
         return buckets, final_goals
