@@ -245,6 +245,12 @@ class _HeuristicEvaluator:
                 "The TamerLite heuristic does not support numeric fluents with "
                 "undefined initial values."
             )
+        if kind.has_timed_effects() or kind.has_timed_goals():
+            # A UP state can't express how far the timed effects and goals
+            # have progressed (`Encoder.timed_action`).
+            raise UPUsageError(
+                "The TamerLite heuristic does not support timed effects or timed goals."
+            )
         # The encoding registers interpreted-function callables, whose
         # `func_id`s must stay valid for as long as `value()` can be called:
         # the scope stays open until `release_interpreted_functions()`, or
@@ -280,6 +286,7 @@ class _HeuristicEvaluator:
                 inadmissible_numeric_heuristic_variant=(
                     params.inadmissible_numeric_heuristic_variant
                 ),
+                timed_action=None,
             )
         except BaseException:
             self.release_interpreted_functions()

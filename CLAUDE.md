@@ -460,6 +460,7 @@ UP's problem-level `timed_effects` (`Dict[Timing, List[Effect]]`, the generaliza
 - **`guarantees`** is static, so it holds for every configuration: `GOAL_AWARE | SAFE`. SAFE holds because a false complex-numeric or interpreted-function leaf costs 1, never `inf`, and the inadmissible variant never changes which operators are achievers. hmax is also admissible in that count, but that can only be documented, not declared.
 - **Interpreted functions**: if `has_interpreted_functions(problem.kind)` (`encoder.py`), the evaluator holds an `interpreted_function_scope` open from construction until `destroy()`, with a `weakref.finalize` fallback, because its `func_id`s must stay valid across every `value()` call.
 - `UNDEFINED_INITIAL_NUMERIC` raises `UPUsageError`. Supporting it needs `UndefinedInitialNumericRemover`'s fluent-to-`is_value_defined` map, which the remover doesn't return.
+- Timed effects and timed goals raise `UPUsageError`: they run as `Encoder.timed_action`, which `initial_state` opens and pre-fires on the given assignments, and a UP state can't express how far it has progressed. `search_state_of` asserts `initial_state` returns a state, which holds only without a timed action.
 - UP lists `tamerlite` before `up_goal_counting` in its preference list, so an unnamed `Heuristic(problem)` picks TamerLite with hff.
 
 ### Configuration

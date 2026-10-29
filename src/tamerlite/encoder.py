@@ -63,7 +63,6 @@ from tamerlite.core.search_space import (
     FluentDomain,
     FluentKind,
     SearchSpaceABC,
-    State,
 )
 
 
@@ -1482,7 +1481,11 @@ class Encoder:
             assignments[i] = cast(
                 ConstantNode, self._converter.convert_constant(state.get_value(f))
             )
-        return self._search_space.initial_state(assignments)
+        search_state = self._search_space.initial_state(assignments)
+        # Only a timed action can make `initial_state` fail, and the heuristic
+        # mode rejects problems that have one.
+        assert search_state is not None
+        return search_state
 
     def _convert_fluent(self, fluent_exp: FNode) -> str:
         # Purely structural (`str(FNode)`), independent of fluent numbering, so the

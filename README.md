@@ -158,7 +158,7 @@ The fields of `HeuristicModeParams` are:
 `value` estimates the remaining number of actions (events, on a temporal
 problem), whatever the quality metric, and returns `None` only on dead ends:
 the engine is `GOAL_AWARE` and `SAFE`. Problems with undefined initial numeric
-values are not supported.
+values, timed effects or timed goals are not supported.
 
 ## Tutorial
 

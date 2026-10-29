@@ -96,7 +96,9 @@ def _core_value(problem: Problem, heuristic: str) -> float | None:
         inadmissible_numeric_heuristic_variant=False,
     )
     ss = encoder.search_space
-    return h.eval(ss.initial_state(), ss)
+    state = ss.initial_state()
+    assert state is not None
+    return h.eval(state, ss)
 
 
 def _plan_states(problem: Problem) -> list[UPState]:
@@ -235,6 +237,12 @@ def test_rejections():
         h.value(UPState(problem.initial_values, problem))
     with pytest.raises(UPUsageError, match="undefined initial values"):
         TamerLite(problem=problems_generator.get_problem_if_undefined_initial_numeric())
+    for timed_problem in (
+        problems_generator.get_problem_timed_effects_window(),
+        problems_generator.get_problem_timed_goal_point(),
+    ):
+        with pytest.raises(UPUsageError, match="timed effects or timed goals"):
+            TamerLite(problem=timed_problem)
 
 
 def test_interpreted_function_scope():
