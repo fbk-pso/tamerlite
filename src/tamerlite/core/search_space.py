@@ -463,10 +463,11 @@ class MutexChecker:
     def __contains__(
         self, events_pair: tuple[tuple[Action, int], tuple[Action, int]]
     ) -> bool:
+        """Whether the two events are mutex, i.e. interfere: one writes a
+        fluent the other reads or writes. Two events of the same action are no
+        exception, so a zero-duration action whose start and end don't
+        interfere can fire both at one instant."""
         (a1, i1), (a2, i2) = events_pair
-        if a1 == a2:
-            return True
-
         are_mutex = self._cache.get(events_pair, None)
         if are_mutex is None:
             (_, a_writes, a_read_writes, _, _) = self._event_fluents[a1.idx][i1]
@@ -1424,7 +1425,9 @@ class SearchSpace(SearchSpaceABC):
 
         for a_id, st in start_time.items():
             et = end_time[a_id]
-            d = None if et - st == 0 else et - st
+            # Decided by the action, not by the schedule: a durative action
+            # scheduled at duration 0 still has a duration.
+            d = None if self._actions_duration[a_id[0].idx] is None else et - st
             res.append((st, a_id[0], d))
 
         res.sort()

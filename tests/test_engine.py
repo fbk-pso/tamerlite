@@ -3075,19 +3075,24 @@ def test_timed_goals_with_invalid_intervals_are_rejected(interval, raises, match
 
 
 @pytest.mark.parametrize(
-    "time",
-    [Fraction(1, 200), 5 + Fraction(1, 200)],
-    ids=["near_zero", "near_another"],
+    "time, fluent, value",
+    [
+        pytest.param(Fraction(1, 200), "dock_open", True, id="near_zero"),
+        pytest.param(5 + Fraction(1, 200), "dock_open", False, id="near_another"),
+    ],
 )
-def test_timed_events_closer_than_epsilon_are_rejected(time):
-    """The search keeps the timed action's events at least `epsilon` apart,
-    so two timed instants closer than that (or one closer than that to time
-    0) are rejected rather than leaving the problem unsolvable -- and accepted
-    once `Problem.epsilon` is smaller than their gap."""
+def test_interfering_timed_events_closer_than_epsilon_are_rejected(time, fluent, value):
+    """The search keeps two timed instants that interfere at least `epsilon`
+    apart, so two closer than that (one may be time 0) could never both
+    happen: the problem is rejected rather than left unsolvable -- and
+    accepted once `Problem.epsilon` is smaller than their gap. Here both write
+    `dock_open`."""
     problem = problems_generator.get_problem_timed_effects_window()
-    problem.add_timed_effect(
-        GlobalStartTiming(time), problem.fluent("crane_free"), True
-    )
+    if time < 1:
+        problem.add_timed_effect(
+            GlobalStartTiming(0), problem.fluent("dock_open"), False
+        )
+    problem.add_timed_effect(GlobalStartTiming(time), problem.fluent(fluent), value)
     _encode_on_both_backends(
         problem,
         unified_planning.exceptions.UPUnsupportedProblemTypeError,
@@ -3095,6 +3100,42 @@ def test_timed_events_closer_than_epsilon_are_rejected(time):
     )
     problem.epsilon = Fraction(1, 1000)
     _encode_on_both_backends(problem)
+
+
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+@pytest.mark.parametrize(
+    "time, goal_until",
+    [
+        pytest.param(Fraction(1, 200), None, id="near_zero"),
+        pytest.param(5 + Fraction(1, 200), None, id="near_another"),
+        pytest.param(None, 5 + Fraction(1, 200), id="short_goal"),
+    ],
+)
+def test_non_interfering_timed_events_closer_than_epsilon(
+    disable_rustamer, time, goal_until
+):
+    """Two timed instants closer than `epsilon` that don't interfere need no
+    separation, so the problem is solved, and the plan is valid. In
+    `timed_effects_window`, `dock_open` opens at 5: the added effect or goal
+    is on `crane_free`. Near time 0 the other instant is the timed action's
+    start, which does nothing."""
+    reload_tamerlite(disable_rustamer)
+    problem = problems_generator.get_problem_timed_effects_window()
+    crane_free = problem.fluent("crane_free")
+    if time is not None:
+        problem.add_timed_effect(GlobalStartTiming(time), crane_free, True)
+    if goal_until is not None:
+        problem.add_timed_goal(
+            ClosedTimeInterval(GlobalStartTiming(5), GlobalStartTiming(goal_until)),
+            crane_free,
+        )
+    search = tamerlite.SearchParams(heuristic="hadd")
+    with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+        res: PlanGenerationResult = planner.solve(problem, timeout=60)
+    assert res.status == ResultStatus.SOLVED_SATISFICING
+    assert res.plan is not None
+    with PlanValidator(problem_kind=problem.kind, plan_kind=res.plan.kind) as v:
+        assert v.validate(problem, res.plan).status.name == "VALID"
 
 
 @pytest.mark.parametrize(
@@ -3152,31 +3193,63 @@ _EPS = Fraction(1, 100)
 
 
 @pytest.mark.parametrize(
-    "start_delays, end_delays, lower, upper, right_open, dropped",
+    "start_delays, end_delays, lower, upper, right_open, interfering, dropped",
     [
-        pytest.param([0], [0], _EPS / 2, _EPS / 2, False, True, id="short_fixed"),
-        pytest.param([0], [0], 0, _EPS / 2, False, True, id="short_interval"),
-        pytest.param([0], [0], 0, _EPS, True, True, id="right_open_at_epsilon"),
-        pytest.param([0, _EPS / 2], [], 1, 1, False, True, id="close_from_start"),
-        pytest.param([0], [_EPS / 2, 0], 10, 10, False, True, id="close_from_end"),
-        pytest.param([0], [0], 0, _EPS, False, False, id="closed_at_epsilon"),
-        pytest.param([0], [0], 0, 10, False, False, id="long_interval"),
-        pytest.param([0], [], _EPS / 2, _EPS / 2, False, False, id="no_end_event"),
-        pytest.param([0], [0], None, None, False, False, id="non_constant"),
+        pytest.param([0], [0], _EPS / 2, _EPS / 2, False, None, True, id="short_fixed"),
+        pytest.param([0], [0], 0, _EPS / 2, False, None, True, id="short_interval"),
+        pytest.param([0], [0], 0, _EPS, True, None, True, id="right_open_at_epsilon"),
+        pytest.param([0, _EPS / 2], [], 1, 1, False, None, True, id="close_from_start"),
+        pytest.param(
+            [0], [_EPS / 2, 0], 10, 10, False, None, True, id="close_from_end"
+        ),
+        pytest.param(
+            [0, _EPS / 3, 2 * _EPS / 3],
+            [],
+            1,
+            1,
+            False,
+            [0, 2],
+            True,
+            id="close_not_consecutive",
+        ),
+        pytest.param(
+            [0, 3], [0], 1, 1, False, [], True, id="out_of_order_without_interfering"
+        ),
+        pytest.param([0], [0], 0, _EPS, False, None, False, id="closed_at_epsilon"),
+        pytest.param([0], [0], 0, 10, False, None, False, id="long_interval"),
+        pytest.param(
+            [0], [], _EPS / 2, _EPS / 2, False, None, False, id="no_end_event"
+        ),
+        pytest.param([0], [0], None, None, False, None, False, id="non_constant"),
+        pytest.param([0], [0], 0, 0, False, [], False, id="zero_without_interfering"),
+        pytest.param(
+            [0, _EPS / 2], [], 1, 1, False, [1], False, id="close_one_interfering"
+        ),
+        pytest.param(
+            [0, _EPS / 3, 2 * _EPS / 3],
+            [],
+            1,
+            1,
+            False,
+            [0, 1],
+            True,
+            id="close_consecutive_interfering",
+        ),
     ],
 )
 def test_durative_events_closer_than_epsilon_are_dropped(
-    start_delays, end_delays, lower, upper, right_open, dropped
+    start_delays, end_delays, lower, upper, right_open, interfering, dropped
 ):
-    """The search keeps a durative action's events at least `epsilon` apart,
-    so an action whose events can't be, for any duration it allows, could
-    never be applied: the encoder leaves it out of the applicable actions,
-    with a warning naming it, instead of keeping it silently. The problem
-    isn't rejected, since grounding often makes such actions the plan doesn't
-    need (Depots' zero-duration drives from a depot to itself). A duration
-    that isn't constant can't be checked."""
+    """The search keeps two events of a durative action that interfere at
+    least `epsilon` apart (any two, not only consecutive ones), and the
+    others in order, so an action whose events can't be, for any duration it
+    allows, could never be applied: the encoder leaves it out of the
+    applicable actions, with a warning naming it, instead of keeping it
+    silently. The problem isn't rejected, since grounding often makes such
+    actions the plan doesn't need (Depots' zero-duration drives from a depot
+    to itself). A duration that isn't constant can't be checked."""
     problem = problems_generator.get_problem_durative_event_gaps(
-        start_delays, end_delays, lower, upper, right_open
+        start_delays, end_delays, lower, upper, right_open, interfering
     )
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
@@ -3191,6 +3264,48 @@ def test_durative_events_closer_than_epsilon_are_dropped(
             if a != encoder.timed_action
         }
         assert ("act" not in names) == dropped
+
+
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+@pytest.mark.parametrize("compression_safe_actions", [True, False])
+@pytest.mark.parametrize(
+    "variant, solvable",
+    [
+        ("end_effect", True),
+        ("start_only", True),
+        ("open_over_all", True),
+        ("closed_over_all", True),
+        ("closed_over_all_false", False),
+        ("lock", False),
+    ],
+)
+def test_zero_duration_actions(
+    disable_rustamer, compression_safe_actions, variant, solvable
+):
+    """A durative action of duration 0 fires its start and end at one instant
+    when they don't interfere, and is reported with duration 0, not as
+    instantaneous, so UP's validator accepts the plan. At duration 0 a
+    condition over `(start, end)` constrains nothing, while one over
+    `[start, end]` is checked at the start, before its effects. An action
+    whose start and end interfere (`lock`) is still never applicable, and
+    left out with a warning, also when compression would otherwise apply."""
+    reload_tamerlite(disable_rustamer)
+    problem = problems_generator.get_problem_zero_duration(variant)
+    search = tamerlite.SearchParams(compression_safe_actions=compression_safe_actions)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+            res: PlanGenerationResult = planner.solve(problem, timeout=60)
+    warned = any("never be applied" in str(w.message) for w in caught)
+    assert warned == (variant == "lock")
+    if not solvable:
+        assert res.status == ResultStatus.UNSOLVABLE_INCOMPLETELY
+        return
+    assert res.status == ResultStatus.SOLVED_SATISFICING
+    plan = cast(TimeTriggeredPlan, res.plan)
+    assert [(str(a.action.name), d) for _, a, d in plan.timed_actions] == [("z", 0)]
+    with PlanValidator(problem_kind=problem.kind, plan_kind=plan.kind) as v:
+        assert v.validate(problem, plan).status.name == "VALID"
 
 
 def test_symmetry_breaking_object_valued_fluents():

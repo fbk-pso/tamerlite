@@ -1515,14 +1515,20 @@ def get_problem_durative_event_gaps(
     lower: Fraction | int | None,
     upper: Fraction | int | None,
     right_open: bool = False,
+    interfering: list[int] | None = None,
 ) -> Problem:
     """One durative action `act` with an effect at `start + d` for each `d` in
     `start_delays` and at `end - d` for each `d` in `end_delays`, and a
     duration in `[lower, upper]` (`[lower, upper)` if `right_open`). Without
     bounds, the duration is the fluent `dur`, which `set_dur` changes, so it is
-    not static and stays non-constant after grounding. For the encoder's
-    check that an action's events can be `epsilon` apart."""
+    not static and stays non-constant after grounding. The events at the
+    positions in `interfering` (all of them if `None`), counting the
+    from-start ones first, also increase the fluent `n`, so they interfere
+    with each other. For the encoder's check that an action's interfering
+    events can be `epsilon` apart."""
     problem = Problem("durative_event_gaps")
+    n = Fluent("n", IntType())
+    problem.add_fluent(n, default_initial_value=0)
     act = DurativeAction("act")
     if lower is None or upper is None:
         dur = Fluent("dur", RealType())
@@ -1537,12 +1543,71 @@ def get_problem_durative_event_gaps(
         act.set_closed_duration_interval(lower, upper)
     events = [(StartTiming(d), f"s{i}") for i, d in enumerate(start_delays)]
     events += [(EndTiming() - d, f"e{i}") for i, d in enumerate(end_delays)]
-    for timing, name in events:
+    for position, (timing, name) in enumerate(events):
         f = Fluent(name)
         problem.add_fluent(f, default_initial_value=False)
         act.add_effect(timing, f, True)
+        if interfering is None or position in interfering:
+            act.add_increase_effect(timing, n, 1)
         problem.add_goal(f)
     problem.add_action(act)
+    return problem
+
+
+def get_problem_zero_duration(variant: str) -> Problem:
+    """One durative action `z` of duration 0 that achieves the goal `g`, in
+    one of these variants:
+
+    - `end_effect`: `g` at its end, and nothing else;
+    - `start_only`: `g` at its start, which needs `p` (made non-static by
+      `spoil`);
+    - `open_over_all`: `g` at its end, `p` over `(start, end)`, which is
+      empty at duration 0, while its start falsifies `p`;
+    - `closed_over_all`: the same over `[start, end]`, which is the point
+      `start` at duration 0, before its start falsifies `p`;
+    - `closed_over_all_false`: `g` at its end, `p` over `[start, end]`, but
+      `p` is false and only `restore`, which needs `g`, makes it true;
+    - `lock`: `g` at its end, and its start takes `free` that its end gives
+      back, so its two events interfere.
+
+    UP's validator and VAL accept `0: z [0]` in all of them but the last two;
+    UP's validator also accepts it for `lock`."""
+    problem = Problem(f"zero_duration_{variant}")
+    p, g, free = Fluent("p"), Fluent("g"), Fluent("free")
+    problem.add_fluent(p, default_initial_value=True)
+    problem.add_fluent(g, default_initial_value=False)
+    problem.add_fluent(free, default_initial_value=True)
+    z = DurativeAction("z")
+    z.set_fixed_duration(0)
+    if variant == "start_only":
+        spoil = InstantaneousAction("spoil")
+        spoil.add_effect(p, False)
+        problem.add_action(spoil)
+        z.add_condition(StartTiming(), p)
+        z.add_effect(StartTiming(), g, True)
+    else:
+        z.add_effect(EndTiming(), g, True)
+    if variant == "open_over_all":
+        z.add_condition(OpenTimeInterval(StartTiming(), EndTiming()), p)
+        z.add_effect(StartTiming(), p, False)
+    elif variant == "closed_over_all":
+        z.add_condition(ClosedTimeInterval(StartTiming(), EndTiming()), p)
+        z.add_effect(StartTiming(), p, False)
+    elif variant == "closed_over_all_false":
+        problem.set_initial_value(p, False)
+        restore = InstantaneousAction("restore")
+        restore.add_precondition(g)
+        restore.add_effect(p, True)
+        problem.add_action(restore)
+        z.add_condition(ClosedTimeInterval(StartTiming(), EndTiming()), p)
+    elif variant == "lock":
+        z.add_condition(StartTiming(), free)
+        z.add_effect(StartTiming(), free, False)
+        z.add_effect(EndTiming(), free, True)
+    else:
+        assert variant in ("end_effect", "start_only"), variant
+    problem.add_action(z)
+    problem.add_goal(g)
     return problem
 
 

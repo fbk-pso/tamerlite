@@ -115,16 +115,16 @@ impl MutexChecker {
         }
     }
 
+    /// Whether the two events are mutex, i.e. interfere: one writes a fluent
+    /// the other reads or writes. Two events of the same action are no
+    /// exception, so a zero-duration action whose start and end don't
+    /// interfere can fire both at one instant.
     fn check(
         &self,
         events_pair: &((Action, usize), (Action, usize)),
         event_fluents: &EventFluents,
     ) -> bool {
         let ((a1, i1), (a2, i2)) = events_pair;
-        if a1 == a2 {
-            return true;
-        }
-
         let mut cache = self.cache.lock().unwrap();
         if let Some(are_mutex) = cache.get(events_pair) {
             return *are_mutex;
@@ -1159,12 +1159,11 @@ impl SearchSpaceTrait for SearchSpace {
         }
         for (a, st) in start_time {
             let et = &end_time[&a];
-            let d = et - st.clone();
-            let d: Option<BigRational> = if d == mk_rational(0, 1) {
-                None
-            } else {
-                Some(d)
-            };
+            // Decided by the action, not by the schedule: a durative action
+            // scheduled at duration 0 still has a duration.
+            let d: Option<BigRational> = self.actions_duration[a.0.idx]
+                .as_ref()
+                .map(|_| et - st.clone());
             res.push((Some(st), a.0, d));
         }
         res.sort();
