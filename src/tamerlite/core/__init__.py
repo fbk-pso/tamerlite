@@ -201,7 +201,7 @@ else:
         elif v.real_constant is not None:
             return v.real_constant
         else:
-            raise NotImplementedError("Unreachable code")
+            raise AssertionError("Unreachable code")
 
     def get_fluent_value(fluent: Fluent, state: "_StateT") -> ConstantNode:
         return _unwrap_value(state.get_value(fluent))

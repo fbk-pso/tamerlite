@@ -1133,7 +1133,7 @@ impl<P: StatePayload> SearchStrategy for NovBFSStrategy<'_, P> {
     }
 
     fn root(&mut self, s: P, h: f64) -> PyResult<Self::Item> {
-        let partition = self.novelty.start(h);
+        let partition = self.novelty.start(h)?;
         // Seeds the tables (return discarded); the root's *stored* novelty
         // is hard-coded to 1 below regardless.
         self.novelty.eval(s.as_state(), partition, None, None)?;
@@ -1153,7 +1153,7 @@ impl<P: StatePayload> SearchStrategy for NovBFSStrategy<'_, P> {
     }
 
     fn child(&mut self, parent: &Self::Item, s: P, h: f64, idx: usize) -> PyResult<Self::Item> {
-        let partition = self.novelty.partition_of(h);
+        let partition = self.novelty.partition_of(h)?;
         let novelty = self.novelty.eval(
             s.as_state(),
             partition,
