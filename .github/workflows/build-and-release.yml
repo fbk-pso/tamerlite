@@ -248,7 +248,11 @@ jobs:
       && needs.windows.result == 'success'
       && needs.macos.result == 'success'
       && needs.sdist.result == 'success'
-    needs: [linux, windows, macos, sdist]
+      && needs.tamerlite.result == 'success'
+    # Publish nothing unless every build succeeded, and rustamer before
+    # tamerlite (publish-tamerlite needs this job): tamerlite's `rust` extra
+    # pins rustamer==X.Y.Z, and PyPI uploads can't be undone.
+    needs: [linux, windows, macos, sdist, tamerlite]
     runs-on: ubuntu-latest
     environment: pypi-rustamer
     permissions:
@@ -273,7 +277,8 @@ jobs:
       always()
       && startsWith(github.ref, 'refs/tags/v')
       && needs.tamerlite.result == 'success'
-    needs: [tamerlite]
+      && needs.publish-rustamer.result == 'success'
+    needs: [tamerlite, publish-rustamer]
     runs-on: ubuntu-latest
     environment: pypi-tamerlite
     permissions:
