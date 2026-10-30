@@ -18,7 +18,7 @@
 use log::{debug, info};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::SystemTime;
+use std::time::Instant;
 use std::{collections::BinaryHeap, vec::Vec};
 
 use rustc_hash::{FxBuildHasher, FxHashMap};
@@ -154,7 +154,7 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
         weak_equality
     );
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
-    let start = SystemTime::now();
+    let start = Instant::now();
     let Some(init) = ss.initial_state(None)? else {
         // No valid initial state (see `SearchSpaceTrait::initial_state`).
         metrics.insert("expanded_states", 0.to_string());
@@ -191,7 +191,7 @@ pub fn _multiqueue_search<T: MQSwitchPolicy, H: HeuristicTrait, S: SearchSpaceTr
     let mut i = 0;
     loop {
         if let Some(t) = timeout {
-            if start.elapsed().unwrap().as_secs_f32() > t {
+            if start.elapsed().as_secs_f32() > t {
                 return Err(PyTimeoutError::new_err("Timeout"));
             }
         }
