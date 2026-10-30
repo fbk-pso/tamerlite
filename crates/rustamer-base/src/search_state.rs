@@ -37,7 +37,7 @@ pub struct State {
     pub assignments: Vector<ExpressionNode>,
     pub temporal_network: Option<DeltaSTN<u64, f64>>,
     pub todo: FxHashMap<Action, (usize, u32)>,
-    pub active_conditions: HashMultiSet<Vec<ExpressionNode>>,
+    pub active_conditions: HashMultiSet<Expression>,
     pub g: f64,
     pub path: Option<Arc<PersistentList<(Action, usize, u32)>>>,
     pub heuristic_cache: Mutex<FxHashMap<&'static str, Option<f64>>>,
