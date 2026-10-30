@@ -18,6 +18,7 @@
 import contextlib
 import gc
 import os
+import threading
 import warnings
 import weakref
 from collections import OrderedDict
@@ -5308,3 +5309,54 @@ def test_oneshot_solve_during_suspended_anytime_run():
                     assert val_res
 
             gen_a.close()
+
+
+def test_long_path_is_freed_without_recursion():
+    """Freeing a long plan's states must not recurse once per step.
+
+    A state's `path` (and each STN node's edge list) is an `Arc`-linked chain
+    in the Rust core, so a compiler-generated drop frees a uniquely owned chain
+    of N nodes N frames deep. `bfs` releases such a chain all at once, which
+    overflowed a small thread stack (SIGSEGV, no Python exception) at about 15k
+    steps. Rust core only: the Python core copies `path` per state, so it never
+    recursed, and a plan this long would be quadratic there.
+    """
+
+    reload_tamerlite(False)
+    if not tamerlite.core.use_rustamer:
+        pytest.skip("rustamer is not available")
+
+    n = 50_000
+    problem = Problem("counter")
+    x = Fluent("x", IntType())
+    problem.add_fluent(x, default_initial_value=0)
+    inc = InstantaneousAction("inc")
+    inc.add_increase_effect(x, 1)
+    problem.add_action(inc)
+    problem.add_goal(GE(x, n))
+
+    outcome: dict[str, Any] = {}
+
+    def solve():
+        try:
+            with OneshotPlanner(
+                name="tamerlite",
+                params={"search": tamerlite.SearchParams(search="bfs")},
+            ) as planner:
+                outcome["result"] = planner.solve(problem)
+        except BaseException as e:
+            outcome["error"] = e
+
+    previous_stack_size = threading.stack_size(512 * 1024)
+    try:
+        thread = threading.Thread(target=solve)
+        thread.start()
+        thread.join()
+    finally:
+        threading.stack_size(previous_stack_size)
+
+    if "error" in outcome:
+        raise outcome["error"]
+    result = outcome["result"]
+    assert result.status == ResultStatus.SOLVED_SATISFICING
+    assert len(result.plan.actions) == n

@@ -30,6 +30,17 @@ struct DeltaNeighbors<T, Q> {
     next: Option<Arc<DeltaNeighbors<T, Q>>>,
 }
 
+/// Frees the chain iteratively: a node collecting one edge per action on a long
+/// temporal plan would otherwise overflow the stack.
+impl<T, Q> Drop for DeltaNeighbors<T, Q> {
+    fn drop(&mut self) {
+        let mut next = self.next.take();
+        while let Some(node) = next {
+            next = Arc::into_inner(node).and_then(|mut inner| inner.next.take());
+        }
+    }
+}
+
 impl<T, Q> DeltaNeighbors<T, Q>
 where
     Q: Clone,
