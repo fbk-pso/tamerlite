@@ -63,6 +63,9 @@ from tamerlite.core.search_space import (
 # the pure-Python core in this package is in use).
 use_rustamer: bool
 
+# Parse a `DISABLE_RUSTAMER` value; invalid values warn and return `False`.
+def _rustamer_disabled(value: str | None) -> bool: ...
+
 __all__ = [
     "HFF",
     "Action",
