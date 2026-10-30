@@ -442,7 +442,10 @@ class Encoder:
                         tuple(self._objects[cast(_UserType, f.type).name]),
                     )
                 else:
-                    raise NotImplementedError
+                    raise up.exceptions.UPUnsupportedProblemTypeError(
+                        f"TamerLite does not support the type {f.type} of fluent "
+                        f"`{name}`."
+                    )
                 fluent_domains[name] = d
             self._fluents: list[str] = sorted(fluent_domains.keys())
             self._fluent_ids = {f: Fluent(i) for i, f in enumerate(self._fluents)}
@@ -1551,19 +1554,25 @@ class Encoder:
             some_inc_dec_effects = len(inc_effects) > 0 or len(dec_effects) > 0
             some_assign_effects = len(assign_effects) > 0
             is_bool_type = fluent.fluent().type.is_bool_type()
-            assert (some_inc_dec_effects and not some_assign_effects) or (
-                not some_inc_dec_effects and some_assign_effects
-            )
+            # UP rejects both conflicts below within one timing, but not
+            # across two timings the encoder merges onto the same instant (an
+            # ICE fold, or `StartTiming(t)`/`GlobalStartTiming(t)` timed effects).
+            if some_inc_dec_effects and some_assign_effects:
+                raise up.exceptions.UPUnsupportedProblemTypeError(
+                    "TamerLite does not support increase/decrease and assignment "
+                    f"effects on the same fluent `{fluent}` at the same time."
+                )
 
             if some_assign_effects:
                 if len(assign_effects) == 1:
                     value = assign_effects[0]
                 elif not is_bool_type:
-                    # NOTE: If multiple numeric assignment effects are present,
-                    # they are assumed to be identical
                     value = assign_effects[0]
-                    for v in assign_effects:
-                        assert value == v
+                    if any(v != value for v in assign_effects):
+                        raise up.exceptions.UPUnsupportedProblemTypeError(
+                            "TamerLite does not support different assignment "
+                            f"effects on the same fluent `{fluent}` at the same time."
+                        )
                 else:
                     value = assign_effects[0]
                     non_constant_assignments = 0
@@ -1578,7 +1587,7 @@ class Encoder:
                             non_constant_assignments += 1
 
                     if non_constant_assignments > 1:
-                        raise Exception(
+                        raise up.exceptions.UPUnsupportedProblemTypeError(
                             "TamerLite does not support multiple non-constant "
                             "boolean assignment effects on the same fluent."
                         )
@@ -1713,7 +1722,7 @@ class Encoder:
                             from_start[d_from_start][4].extend(le)
                         from_end.clear()
                     else:
-                        raise Exception(
+                        raise up.exceptions.UPUnsupportedProblemTypeError(
                             "TamerLite does not support ICE from start and from "
                             "end inside the same action!"
                         )
@@ -1723,7 +1732,7 @@ class Encoder:
                     # end-relative timing that the fold above mapped before the
                     # action's own start. Such an event would sort ahead of the
                     # start event below and break the invariant it establishes.
-                    raise Exception(
+                    raise up.exceptions.UPUnsupportedProblemTypeError(
                         "TamerLite does not support conditions or effects placed "
                         f"before the start of a durative action (action `{a.name}`)!"
                     )

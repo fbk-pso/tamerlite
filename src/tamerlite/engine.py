@@ -39,7 +39,11 @@ from unified_planning.engines.plan_validator import (
     SequentialPlanValidator,
     TimeTriggeredPlanValidator,
 )
-from unified_planning.exceptions import UPStateMissingFluentError, UPUsageError
+from unified_planning.exceptions import (
+    UPStateMissingFluentError,
+    UPUnsupportedProblemTypeError,
+    UPUsageError,
+)
 from unified_planning.model import FNode, InterpretedFunction, ProblemKind, StartTiming
 from unified_planning.model.state import State
 from unified_planning.plans import ActionInstance, PlanKind
@@ -120,7 +124,8 @@ class StateWrapper(State):
                 self.problem.object(self.encoder.object_names[obj.idx])
             )
         else:
-            raise NotImplementedError(f"Unknown value type for expression {fluent}")
+            # The encoder only gives bool, int, real and user-typed fluents a slot.
+            raise AssertionError(f"Unknown value type for expression {fluent}")
 
     @classmethod
     def wrap_heuristic(
@@ -130,6 +135,31 @@ class StateWrapper(State):
     ) -> Callable[[search_space.State], float | None]:
         """Wrap heuristic so it receives a StateWrapper instead of a State."""
         return lambda state: heuristic(cls(encoder, state))
+
+
+# The names `HeuristicParams.heuristic` and `SearchParams.search` accept, as
+# dispatched by `TamerLite._get_heuristic`/`TamerLite._get_search`.
+_HEURISTIC_NAMES = (
+    "custom",
+    "blind",
+    "hff",
+    "hadd",
+    "hmax",
+    "hmax_explicit",
+    "hff_no_numbers",
+    "hadd_no_numbers",
+    "hmax_no_numbers",
+)
+_SEARCH_NAMES = (
+    "wastar",
+    "astar",
+    "gbfs",
+    "dfs",
+    "bfs",
+    "ehc",
+    "novbfs_hg",
+    "novbfs_lg",
+)
 
 
 @dataclass(frozen=True)
@@ -243,14 +273,14 @@ class _HeuristicEvaluator:
             )
         kind = problem.kind
         if kind.has_undefined_initial_numeric():
-            raise UPUsageError(
+            raise UPUnsupportedProblemTypeError(
                 "The TamerLite heuristic does not support numeric fluents with "
                 "undefined initial values."
             )
         if kind.has_timed_effects() or kind.has_timed_goals():
             # A UP state can't express how far the timed effects and goals
             # have progressed (`Encoder.timed_action`).
-            raise UPUsageError(
+            raise UPUnsupportedProblemTypeError(
                 "The TamerLite heuristic does not support timed effects or timed goals."
             )
         # The encoding registers interpreted-function callables, whose
@@ -341,6 +371,7 @@ class TamerLite(
         if heuristic is not None and not isinstance(heuristic, HeuristicModeParams):
             raise UPUsageError("heuristic must be a HeuristicModeParams.")
         self._params = search if search is not None else SearchParams()
+        self._check_names(self._params)
         self._heuristic_evaluator: _HeuristicEvaluator | None = None
         if problem is None:
             if heuristic is not None:
@@ -459,6 +490,23 @@ class TamerLite(
             self._heuristic_evaluator = None
 
     @staticmethod
+    def _check_names(params: SearchParams | MultiqueueParams) -> None:
+        """Raises `UPUsageError` for a heuristic or search name `params`
+        selects but TamerLite doesn't know."""
+        queues = params.queues if isinstance(params, MultiqueueParams) else [params]
+        for q in queues:
+            if q.heuristic is not None and q.heuristic not in _HEURISTIC_NAMES:
+                raise UPUsageError(
+                    f"Unknown heuristic '{q.heuristic}'. "
+                    f"Supported values are: {', '.join(_HEURISTIC_NAMES)}."
+                )
+        if isinstance(params, SearchParams) and params.search not in _SEARCH_NAMES:
+            raise UPUsageError(
+                f"Unknown search '{params.search}'. "
+                f"Supported values are: {', '.join(_SEARCH_NAMES)}."
+            )
+
+    @staticmethod
     def _heuristic_name(
         params: HeuristicParams, heuristic: Callable[[State], float | None] | None
     ) -> str:
@@ -481,7 +529,10 @@ class TamerLite(
         h_name = self._heuristic_name(params, heuristic)
 
         if h_name == "custom":
-            assert heuristic is not None
+            if heuristic is None:
+                raise UPUsageError(
+                    "heuristic='custom' needs a heuristic callable passed to solve()."
+                )
             h: Heuristic = CustomHeuristic(
                 StateWrapper.wrap_heuristic(encoder, heuristic),
                 cache_heuristic_in_state,
@@ -502,11 +553,8 @@ class TamerLite(
                 "hadd_no_numbers": partial(HAdd, disable_numeric_reasoning=True),
                 "hmax_no_numbers": partial(HMax, disable_numeric_reasoning=True),
             }
-            if h_name not in hh_map:
-                raise NotImplementedError(
-                    f"Unknown heuristic '{h_name}'. "
-                    f"Supported values are: custom, blind, {', '.join(sorted(hh_map))}."
-                )
+            # `_check_names` rejected any other name when `TamerLite` was built.
+            assert h_name in hh_map, f"Unknown heuristic '{h_name}'"
 
             # `considered_actions` is the same action set the search will
             # actually expand: `relevant_actions` if relevance analysis
@@ -608,11 +656,8 @@ class TamerLite(
                 prefer_higher_g=(search_name == "novbfs_hg"),
             )
         else:
-            raise NotImplementedError(
-                f"Unknown search '{search_name}'. "
-                "Supported values are: wastar, astar, gbfs, dfs, bfs, ehc, "
-                "novbfs_hg, novbfs_lg."
-            )
+            # `_check_names` rejected any other name when `TamerLite` was built.
+            raise AssertionError(f"Unknown search '{search_name}'")
 
         return search_name, search
 
@@ -655,6 +700,64 @@ class TamerLite(
 
         return lifted_problem, ground_problem, map_back_action_instance
 
+    @staticmethod
+    def _check_anytime_metrics(problem: "up.model.Problem") -> None:
+        """Raises `UPUnsupportedProblemTypeError` for quality metrics the
+        anytime improvement loop can't bound."""
+        metrics = problem.quality_metrics
+        if len(metrics) == 0:
+            return
+        if len(metrics) > 1:
+            raise UPUnsupportedProblemTypeError(
+                "TamerLite does not support multiple quality metrics."
+            )
+        metric = metrics[0]
+        if metric.is_minimize_sequential_plan_length() and any(
+            not isinstance(a, up.model.InstantaneousAction) for a in problem.actions
+        ):
+            raise UPUnsupportedProblemTypeError(
+                "TamerLite supports the plan length metric only with "
+                "instantaneous actions."
+            )
+        if (
+            metric.is_minimize_makespan()
+            and all(
+                isinstance(a, up.model.InstantaneousAction) for a in problem.actions
+            )
+            and not problem.timed_effects
+            and not problem.timed_goals
+        ):
+            # The plan is sequential, and UP's validator gives a sequential
+            # plan no makespan to improve on.
+            raise UPUnsupportedProblemTypeError(
+                "TamerLite supports the makespan metric only on temporal problems."
+            )
+        if not any(
+            (
+                metric.is_minimize_expression_on_final_state(),
+                metric.is_maximize_expression_on_final_state(),
+                metric.is_minimize_sequential_plan_length(),
+                metric.is_minimize_action_costs(),
+                metric.is_minimize_makespan(),
+            )
+        ):
+            raise UPUnsupportedProblemTypeError(
+                f"TamerLite does not support the quality metric {metric}."
+            )
+
+    def _unsupported_result(
+        self, error: UPUnsupportedProblemTypeError
+    ) -> up.engines.PlanGenerationResult:
+        """The result reporting that `error` names a feature of the problem
+        TamerLite doesn't support."""
+        logger.info("Unsupported problem: %s", error)
+        return up.engines.PlanGenerationResult(
+            up.engines.PlanGenerationResultStatus.UNSUPPORTED_PROBLEM,
+            None,
+            self.name,
+            log_messages=[up.engines.LogMessage(up.engines.LogLevel.ERROR, str(error))],
+        )
+
     def _get_solutions_with_params(
         self,
         problem: "up.model.AbstractProblem",
@@ -664,8 +767,11 @@ class TamerLite(
         **kwargs,
     ) -> Iterator["up.engines.results.PlanGenerationResult"]:
         assert isinstance(problem, up.model.Problem)
-        if len(problem.quality_metrics) > 1:
-            raise NotImplementedError("Multiple quality metrics are not supported")
+        try:
+            self._check_anytime_metrics(problem)
+        except UPUnsupportedProblemTypeError as e:
+            yield self._unsupported_result(e)
+            return
 
         # Brackets this whole run -- including every suspension between
         # `yield`s below, not just the synchronous work in between -- so
@@ -687,9 +793,13 @@ class TamerLite(
         em = problem.environment.expression_manager
         tm = problem.environment.type_manager
 
-        lifted_problem, ground_problem, map_back_action_instance = (
-            self._compile_problem(problem)
-        )
+        try:
+            lifted_problem, ground_problem, map_back_action_instance = (
+                self._compile_problem(problem)
+            )
+        except UPUnsupportedProblemTypeError as e:
+            yield self._unsupported_result(e)
+            return
         original_problem = problem
 
         # Share one interpreted functions cache across every `_solve_ground_problem`
@@ -720,17 +830,24 @@ class TamerLite(
             len(list(ground_problem.fluents)),
         )
         elapsed_time = time.monotonic() - start_time
-        res, _, _ = self._solve_ground_problem(
-            lifted_problem,
-            ground_problem,
-            map_back_action_instance,
-            timeout=timeout - elapsed_time if timeout is not None else None,
-            output_stream=output_stream,
-            lifted_problem_kind=lifted_problem_kind,
-            is_intermediate_solution=True,
-            if_cache=if_cache,
-            if_wrappers=if_wrappers,
-        )
+        # Only the first solve is guarded: each improvement step re-encodes the
+        # same problem plus a quality bound, so an unsupported feature there
+        # would be a bug in that bound's encoding.
+        try:
+            res, _, _ = self._solve_ground_problem(
+                lifted_problem,
+                ground_problem,
+                map_back_action_instance,
+                timeout=timeout - elapsed_time if timeout is not None else None,
+                output_stream=output_stream,
+                lifted_problem_kind=lifted_problem_kind,
+                is_intermediate_solution=True,
+                if_cache=if_cache,
+                if_wrappers=if_wrappers,
+            )
+        except UPUnsupportedProblemTypeError as e:
+            yield self._unsupported_result(e)
+            return
         if res.plan is not None:
             logger.info(
                 "Initial solution found in %.3fs: %s",
@@ -810,13 +927,13 @@ class TamerLite(
                 )
                 problem.add_fluent(plan_length, default_initial_value=0)
                 for a in problem.actions:
-                    if isinstance(a, up.model.InstantaneousAction):
-                        a.add_increase_effect(plan_length, 1)
-                    else:
-                        raise NotImplementedError(
-                            "Only instantaneous actions supported for plan "
-                            "length metric"
-                        )
+                    # `_check_anytime_metrics` rejects a declared plan-length
+                    # metric with durative actions, and the implicit one is only
+                    # added for a sequential plan.
+                    assert isinstance(a, up.model.InstantaneousAction), (
+                        "Only instantaneous actions supported for plan length metric"
+                    )
+                    a.add_increase_effect(plan_length, 1)
                 exp = em.LT(plan_length, v)
             elif m.is_minimize_action_costs():
                 m = cast(
@@ -842,7 +959,8 @@ class TamerLite(
             elif m.is_minimize_makespan():
                 deadline = Fraction(v)
             else:
-                raise NotImplementedError(f"Unknown metric type for metric {m}")
+                # `_check_anytime_metrics` rejects any other metric.
+                raise AssertionError(f"Unknown metric type for metric {m}")
 
             if exp is not None:
                 for a in problem.actions:
@@ -971,31 +1089,35 @@ class TamerLite(
                 )
         assert isinstance(problem, up.model.Problem)
         start_time = time.monotonic()
-        lifted_problem, ground_problem, map_back_action_instance = (
-            self._compile_problem(problem)
-        )
-        elapsed_time = time.monotonic() - start_time
-        logger.info(
-            "Solving '%s': actions=%d fluents=%d",
-            ground_problem.name,
-            len(list(ground_problem.actions)),
-            len(list(ground_problem.fluents)),
-        )
-        # See `interpreted_function_scope`'s docstring (converter.py): brackets
-        # this standalone solve so `clear_interpreted_function_cache` never runs
-        # while it -- or a concurrently suspended anytime generator -- could
-        # still resume and evaluate a `func_id` it registered.
-        with interpreted_function_scope():
-            res, _, _ = self._solve_ground_problem(
-                lifted_problem,
-                ground_problem,
-                map_back_action_instance,
-                heuristic=heuristic,
-                timeout=timeout - elapsed_time if timeout is not None else None,
-                max_expanded_states=max_expanded_states,
-                output_stream=output_stream,
-                is_intermediate_solution=False,
+        try:
+            lifted_problem, ground_problem, map_back_action_instance = (
+                self._compile_problem(problem)
             )
+            elapsed_time = time.monotonic() - start_time
+            logger.info(
+                "Solving '%s': actions=%d fluents=%d",
+                ground_problem.name,
+                len(list(ground_problem.actions)),
+                len(list(ground_problem.fluents)),
+            )
+            # See `interpreted_function_scope`'s docstring (converter.py):
+            # brackets this standalone solve so `clear_interpreted_function_cache`
+            # never runs while it -- or a concurrently suspended anytime
+            # generator -- could still resume and evaluate a `func_id` it
+            # registered.
+            with interpreted_function_scope():
+                res, _, _ = self._solve_ground_problem(
+                    lifted_problem,
+                    ground_problem,
+                    map_back_action_instance,
+                    heuristic=heuristic,
+                    timeout=timeout - elapsed_time if timeout is not None else None,
+                    max_expanded_states=max_expanded_states,
+                    output_stream=output_stream,
+                    is_intermediate_solution=False,
+                )
+        except UPUnsupportedProblemTypeError as e:
+            return self._unsupported_result(e)
         if res.plan is not None:
             logger.info(
                 "Solution found in %.3fs: %s",

@@ -233,6 +233,17 @@ class _PartitionTables:
     best_sdist_with_psi: dict[tuple[int, int], _Sdist] = field(default_factory=dict)
 
 
+def _check_non_negative(h_value: float) -> None:
+    """Rejects a heuristic value novbfs can't partition on: `floor(h)` needs a
+    non-negative `h` (a NaN fails the comparison too). The heuristic may be a
+    user's custom one, so this is an error, not an invariant."""
+    if not h_value >= 0:
+        raise ValueError(
+            "novbfs partitions on floor(h), so its heuristic must never return "
+            f"a negative value, got {h_value}"
+        )
+
+
 class NumericNovelty:
     """Partitioned numeric novelty over the subgoals of `events`/`goals`.
 
@@ -347,10 +358,7 @@ class NumericNovelty:
         an explicit `eval()` call on the initial state and then pushing the
         root with novelty hard-coded to 1, regardless of that call's return
         value (see `novbfs_search`)."""
-        assert initial_h >= 0, (
-            "initial_h must be non-negative (novbfs partitions on "
-            "floor(h), so its heuristic must never return a negative value)"
-        )
+        _check_non_negative(initial_h)
         self._partitions = {}
         self._max_partition = max(1, math.floor(initial_h))
         self.begin_expansion()
@@ -359,10 +367,7 @@ class NumericNovelty:
     def partition_of(self, h_value: float) -> int:
         """The partition function: `floor(h_value)`, clamped at the top to
         `max_partition`."""
-        assert h_value >= 0, (
-            "h_value must be non-negative (novbfs partitions on "
-            "floor(h), so its heuristic must never return a negative value)"
-        )
+        _check_non_negative(h_value)
         return min(math.floor(h_value), self._max_partition)
 
     def begin_expansion(self) -> None:

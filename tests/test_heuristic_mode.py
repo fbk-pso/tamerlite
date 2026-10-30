@@ -24,7 +24,7 @@ import pytest
 from unified_planning.engines import HeuristicGuarantee
 from unified_planning.engines import PlanGenerationResultStatus as ResultStatus
 from unified_planning.engines.compilers.grounder import Grounder
-from unified_planning.exceptions import UPUsageError
+from unified_planning.exceptions import UPUnsupportedProblemTypeError, UPUsageError
 from unified_planning.model import UPState
 from unified_planning.model.multi_agent import MultiAgentProblem
 from unified_planning.shortcuts import (
@@ -235,13 +235,15 @@ def test_rejections():
     h.destroy()
     with pytest.raises(UPUsageError, match="destroyed"):
         h.value(UPState(problem.initial_values, problem))
-    with pytest.raises(UPUsageError, match="undefined initial values"):
+    with pytest.raises(UPUnsupportedProblemTypeError, match="undefined initial values"):
         TamerLite(problem=problems_generator.get_problem_if_undefined_initial_numeric())
     for timed_problem in (
         problems_generator.get_problem_timed_effects_window(),
         problems_generator.get_problem_timed_goal_point(),
     ):
-        with pytest.raises(UPUsageError, match="timed effects or timed goals"):
+        with pytest.raises(
+            UPUnsupportedProblemTypeError, match="timed effects or timed goals"
+        ):
             TamerLite(problem=timed_problem)
 
 

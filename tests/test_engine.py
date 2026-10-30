@@ -18,6 +18,7 @@
 import contextlib
 import gc
 import os
+import re
 import warnings
 import weakref
 from collections import OrderedDict
@@ -2787,7 +2788,10 @@ def test_temporal_condition_before_start_is_rejected():
         reload_tamerlite(disable_rustamer)
         from tamerlite.encoder import Encoder
 
-        with pytest.raises(Exception, match="before the start of a durative action"):
+        with pytest.raises(
+            unified_planning.exceptions.UPUnsupportedProblemTypeError,
+            match="before the start of a durative action",
+        ):
             Encoder(
                 ground_problem,
                 lifted_problem,
@@ -2987,6 +2991,171 @@ def test_timed_effects_makespan_proven_optimal(disable_rustamer, search_kind):
         results = list(planner.get_solutions(problem, timeout=60))
     assert results[-1].status == ResultStatus.SOLVED_OPTIMALLY
     assert results[-1].plan is not None
+
+
+def _assert_unsupported_on_both_backends(
+    problem: Problem, match: str, anytime_only: bool = False
+) -> None:
+    """Solves `problem` on both backends, oneshot (unless `anytime_only`) and
+    anytime, and asserts each reports `UNSUPPORTED_PROBLEM` with a log message
+    matching `match` instead of raising, releasing the interpreted-function
+    scope it entered."""
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        search = tamerlite.SearchParams(search="gbfs", heuristic="blind")
+        live_scopes = tamerlite.converter._live_if_scopes
+        results: list[PlanGenerationResult] = []
+        if not anytime_only:
+            with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+                results.append(planner.solve(problem, timeout=None))
+        with AnytimePlanner(name="tamerlite", params={"search": search}) as planner:
+            anytime_results = list(planner.get_solutions(problem, timeout=None))
+        assert len(anytime_results) == 1
+        results.extend(anytime_results)
+        for res in results:
+            assert res.status == ResultStatus.UNSUPPORTED_PROBLEM
+            assert res.plan is None
+            assert [m.message for m in res.log_messages or []]
+            assert all(re.search(match, m.message) for m in res.log_messages or [])
+        assert tamerlite.converter._live_if_scopes == live_scopes
+
+
+@pytest.mark.parametrize(
+    "make_problem, match, anytime_only",
+    [
+        pytest.param(
+            problems_generator.get_problem_multiple_bool_assignments,
+            "multiple non-constant boolean assignment",
+            False,
+            id="multiple_bool_assignments",
+        ),
+        pytest.param(
+            problems_generator.get_problem_ice_from_start_and_end,
+            "ICE from start and from end",
+            False,
+            id="ice_from_start_and_end",
+        ),
+        pytest.param(
+            partial(problems_generator.get_problem_ice_fold_conflict, False),
+            "different assignment effects on the same fluent",
+            False,
+            id="ice_fold_two_assignments",
+        ),
+        pytest.param(
+            partial(problems_generator.get_problem_ice_fold_conflict, True),
+            "increase/decrease and assignment effects on the same fluent",
+            False,
+            id="ice_fold_increase_and_assignment",
+        ),
+        pytest.param(
+            problems_generator.get_problem_temporal_condition_before_start,
+            "before the start of a durative action",
+            False,
+            id="condition_before_start",
+        ),
+        pytest.param(
+            problems_generator.get_problem_multiple_quality_metrics,
+            "multiple quality metrics",
+            True,
+            id="multiple_quality_metrics",
+        ),
+        pytest.param(
+            problems_generator.get_problem_plan_length_with_durative_actions,
+            "plan length metric only with instantaneous actions",
+            True,
+            id="plan_length_with_durative_actions",
+        ),
+        pytest.param(
+            problems_generator.get_problem_classical_makespan,
+            "makespan metric only on temporal problems",
+            True,
+            id="classical_makespan",
+        ),
+    ],
+)
+def test_unsupported_problem_status(
+    make_problem: Callable[[], Problem], match: str, anytime_only: bool
+):
+    """A problem `supports` accepts but whose features TamerLite can't
+    handle is reported as `UNSUPPORTED_PROBLEM` rather than raised. The
+    metric cases are anytime-only: a oneshot solve ignores the metrics."""
+    _assert_unsupported_on_both_backends(make_problem(), match, anytime_only)
+
+
+def test_unsupported_timed_goal_starting_at_the_end_status():
+    """The encoder's timed-goal rejection reaches the caller as
+    `UNSUPPORTED_PROBLEM` too."""
+    problem = problems_generator.get_problem_timed_goal_point()
+    problem.add_timed_goal(GlobalEndTiming(), problem.fluent("shipped"))
+    _assert_unsupported_on_both_backends(problem, "starting at the end of the plan")
+
+
+@pytest.mark.parametrize(
+    "make_params, match",
+    [
+        pytest.param(
+            lambda: tamerlite.SearchParams(search="nope"),
+            "Unknown search 'nope'",
+            id="search",
+        ),
+        pytest.param(
+            lambda: tamerlite.SearchParams(heuristic="nope"),
+            "Unknown heuristic 'nope'",
+            id="heuristic",
+        ),
+        pytest.param(
+            lambda: tamerlite.MultiqueueParams(
+                queues=[
+                    tamerlite.HeuristicParams(heuristic="hff"),
+                    tamerlite.HeuristicParams(heuristic="nope"),
+                ]
+            ),
+            "Unknown heuristic 'nope'",
+            id="multiqueue_heuristic",
+        ),
+    ],
+)
+def test_unknown_names_are_usage_errors(make_params: Callable[[], Any], match: str):
+    """An unknown search or heuristic name is a usage error, raised when the
+    planner is built rather than after encoding a problem. The params are
+    built inside the test: another test may have reloaded `tamerlite`."""
+    with pytest.raises(unified_planning.exceptions.UPUsageError, match=match):
+        tamerlite.engine.TamerLite(search=make_params())
+
+
+def test_custom_heuristic_without_callable_is_a_usage_error():
+    """`heuristic="custom"` without a callable passed to `solve` is a usage
+    error, on both backends."""
+    problem = problems_generator.get_problem_multiple_quality_metrics()
+    problem.clear_quality_metrics()
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        search = tamerlite.SearchParams(heuristic="custom")
+        with (
+            OneshotPlanner(name="tamerlite", params={"search": search}) as planner,
+            pytest.raises(
+                unified_planning.exceptions.UPUsageError,
+                match="needs a heuristic callable",
+            ),
+        ):
+            planner.solve(problem, timeout=None)
+
+
+@pytest.mark.parametrize("value", [-1.0, float("nan")])
+def test_novbfs_negative_custom_heuristic_is_a_value_error(value: float):
+    """novbfs partitions on `floor(h)`, so a custom heuristic returning a
+    negative value (or NaN) is the caller's error: a `ValueError` on both
+    backends, not an internal assertion or a Rust panic."""
+    problem = problems_generator.get_problem_multiple_quality_metrics()
+    problem.clear_quality_metrics()
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        search = tamerlite.SearchParams(search="novbfs_hg")
+        with (
+            OneshotPlanner(name="tamerlite", params={"search": search}) as planner,
+            pytest.raises(ValueError, match="must never return a negative value"),
+        ):
+            planner.solve(problem, heuristic=lambda _: value, timeout=None)
 
 
 def _encode_on_both_backends(
@@ -3791,7 +3960,7 @@ def test_interpreted_function_registry_reuses_func_id_for_shared_wrapper():
         assert len(states) >= 1
 
 
-def test_interpreted_function_unsupported_return_type_raises():
+def test_interpreted_function_unsupported_return_type_is_unsupported():
     """`Converter.walk_interpreted_function_exp`'s return-type dispatch
     (bool/int/real/user-type) has no reachable fifth case through the public
     `InterpretedFunction` API -- `InterpretedFunction.__init__` only asserts
@@ -3805,7 +3974,7 @@ def test_interpreted_function_unsupported_return_type_raises():
     `counter` is written by `bump`, so it isn't static and UP's Grounder
     can't constant-fold `IF_broken(counter)` away before it ever reaches
     TamerLite (same reasoning as `test_interpreted_function_in_fluent_
-    argument_raises`)."""
+    argument_is_unsupported`)."""
     from unified_planning.model.types import TIME
 
     counter = Fluent("counter", IntType())
@@ -3826,36 +3995,23 @@ def test_interpreted_function_unsupported_return_type_raises():
     problem.set_initial_value(counter, 1)
     problem.add_goal(GE(counter, 1))
 
-    for disable_rustamer in [True, False]:
-        reload_tamerlite(disable_rustamer)
-        search = tamerlite.SearchParams(search="gbfs", heuristic="blind")
-        with (
-            OneshotPlanner(name="tamerlite", params={"search": search}) as planner,
-            pytest.raises(
-                NotImplementedError,
-                match="Unsupported interpreted function return type",
-            ),
-        ):
-            planner.solve(problem, timeout=None)
+    _assert_unsupported_on_both_backends(
+        problem, "Unsupported interpreted function return type"
+    )
 
 
 def test_interpreted_function_bad_return_value_raises():
     """A callable declared to return an object but that actually returns
     something else (a user bug, not a modeling error) must fail loudly on
-    both backends. Rust's `interpreted_function_result` raises a
-    `PyValueError` when it can't extract an `ObjectNode`
-    (`crates/rustamer-base/src/interpreted_functions.rs`). Python's own wrapper
-    (`Converter._get_interpreted_function_wrapper`) doesn't validate the raw
-    result before wrapping it -- `make_object_node(self._object_ids[raw_
-    result.name])` -- so a non-`Object` return surfaces as a bare
-    `AttributeError` right there (`src/tamerlite/converter.py`), not as the
-    cleaner `assert isinstance(r, ObjectNode)` in `InterpretedFunctionNode.
-    call`, which only runs for calls the wrapper doesn't already resolve to
-    an object. `counter` is written by `bump`, so it isn't static and UP's
-    own Grounder/Simplifier can't constant-fold `IF_broken(counter)` away
-    first -- without that, the bad return would instead surface as an
-    `AttributeError` from UP's own `Simplifier.walk_interpreted_function_exp`
-    during grounding, one layer before TamerLite ever sees it."""
+    both backends: the wrapper both backends share
+    (`Converter._get_interpreted_function_wrapper`) checks the raw result is
+    an object of the problem before wrapping it, and raises a `TypeError`
+    naming the function otherwise. `counter` is written by `bump`, so it
+    isn't static and UP's own Grounder/Simplifier can't constant-fold
+    `IF_broken(counter)` away first -- without that, the bad return would
+    instead surface as an `AttributeError` from UP's own
+    `Simplifier.walk_interpreted_function_exp` during grounding, one layer
+    before TamerLite ever sees it."""
     Loc = UserType("Loc")
     l1 = Object("l1", Loc)
     l2 = Object("l2", Loc)
@@ -3894,7 +4050,7 @@ def test_interpreted_function_bad_return_value_raises():
         search = tamerlite.SearchParams(search="gbfs", heuristic="blind")
         with (
             OneshotPlanner(name="tamerlite", params={"search": search}) as planner,
-            pytest.raises((AssertionError, ValueError, TypeError, AttributeError)),
+            pytest.raises(TypeError, match="must return an object of the problem"),
         ):
             planner.solve(problem, timeout=None)
 
@@ -4754,11 +4910,12 @@ def test_interpreted_functions_duration():
             assert duration == Fraction(6)
 
 
-def test_interpreted_function_in_fluent_argument_raises():
+def test_interpreted_function_in_fluent_argument_is_unsupported():
     """`value(choose(sel))` addresses `value` through an interpreted-function
     call rather than a plain object -- no such grounded fluent exists in
-    `problem.initial_values` (only `value(l1)`/`value(l2)` do), so encoding
-    must fail loudly instead of crashing with a bare `KeyError`. `sel` is
+    `problem.initial_values` (only `value(l1)`/`value(l2)` do), so the solve
+    must report `UNSUPPORTED_PROBLEM` instead of crashing with a bare
+    `KeyError`. `sel` is
     written by `pick`'s effect, so it stays non-static and `choose(sel)`
     survives grounding instead of being constant-folded away."""
     Loc = UserType("Loc")
@@ -4790,25 +4947,19 @@ def test_interpreted_function_in_fluent_argument_raises():
     problem.set_initial_value(sel, l1)
     problem.add_goal(GE(value(l2), 2))
 
-    for disable_rustamer in [True, False]:
-        reload_tamerlite(disable_rustamer)
-        search = tamerlite.SearchParams(search="gbfs", heuristic="blind")
-        with (
-            OneshotPlanner(name="tamerlite", params={"search": search}) as planner,
-            pytest.raises(
-                NotImplementedError, match="interpreted functions in its arguments"
-            ),
-        ):
-            planner.solve(problem, timeout=None)
+    _assert_unsupported_on_both_backends(
+        problem, "interpreted functions in its arguments"
+    )
 
 
-def test_nested_fluent_in_fluent_argument_raises():
+def test_nested_fluent_in_fluent_argument_is_unsupported():
     """`value(sel)` addresses `value` through another fluent rather than a
     plain object -- nothing in UP forbids this on the read side (only
     `Effect.__init__` rejects it, and only for effect *targets*), so it
     reaches TamerLite's encoder unchecked. No grounded `value(sel)` instance
     exists in `problem.initial_values` (only `value(l1)`/`value(l2)` do), so
-    this must fail loudly rather than crash with a bare `KeyError`. `sel` is
+    the solve must report `UNSUPPORTED_PROBLEM` rather than crash with a bare
+    `KeyError`. `sel` is
     written by `pick`'s effect, so it stays non-static and survives
     grounding instead of being constant-folded away."""
     Loc = UserType("Loc")
@@ -4835,14 +4986,7 @@ def test_nested_fluent_in_fluent_argument_raises():
     problem.set_initial_value(sel, l1)
     problem.add_goal(GE(value(l2), 2))
 
-    for disable_rustamer in [True, False]:
-        reload_tamerlite(disable_rustamer)
-        search = tamerlite.SearchParams(search="gbfs", heuristic="blind")
-        with (
-            OneshotPlanner(name="tamerlite", params={"search": search}) as planner,
-            pytest.raises(NotImplementedError, match="other fluents in its arguments"),
-        ):
-            planner.solve(problem, timeout=None)
+    _assert_unsupported_on_both_backends(problem, "other fluents in its arguments")
 
 
 def test_symmetry_breaking_interpreted_function_numeric_is_retained():
