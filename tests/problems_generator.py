@@ -1658,6 +1658,118 @@ def get_problem_temporal_condition_before_start() -> Problem:
     return problem
 
 
+def get_problem_multiple_bool_assignments() -> Problem:
+    """`set` assigns `g` two different non-constant values, which UP accepts
+    for a boolean fluent but TamerLite does not support."""
+    problem = Problem("multiple_bool_assignments")
+
+    a = Fluent("a")
+    b = Fluent("b")
+    g = Fluent("g")
+
+    flip = InstantaneousAction("flip")
+    flip.add_effect(a, True)
+    flip.add_effect(b, True)
+
+    set_g = InstantaneousAction("set")
+    set_g.add_effect(g, a)
+    set_g.add_effect(g, b)
+
+    for f in (a, b, g):
+        problem.add_fluent(f, default_initial_value=False)
+    problem.add_action(flip)
+    problem.add_action(set_g)
+    problem.add_goal(g)
+
+    return problem
+
+
+def get_problem_ice_from_start_and_end() -> Problem:
+    """`a` has intermediate effects relative to both its start and its end,
+    and a non-constant duration, so the two can't be put in one order, which
+    TamerLite does not support."""
+    problem = Problem("ice_from_start_and_end")
+
+    half = Fluent("half")
+    done = Fluent("done")
+
+    a = DurativeAction("a")
+    a.set_closed_duration_interval(2, 5)
+    a.add_effect(StartTiming() + 1, half, True)
+    a.add_effect(EndTiming() - 1, done, True)
+
+    problem.add_fluent(half, default_initial_value=False)
+    problem.add_fluent(done, default_initial_value=False)
+    problem.add_action(a)
+    problem.add_goal(done)
+
+    return problem
+
+
+def get_problem_ice_fold_conflict(increase: bool) -> Problem:
+    """With its fixed duration of 2, `a`'s effects at `start + 1` and
+    `end - 1` happen at the same instant, writing `f` twice: two different
+    values, or (`increase`) an increase and an assignment. UP rejects either
+    within one timing but not across these two, and TamerLite does not
+    support them."""
+    problem = Problem(f"ice_fold_conflict_{'increase' if increase else 'assign'}")
+
+    f = Fluent("f", IntType())
+    done = Fluent("done")
+
+    a = DurativeAction("a")
+    a.set_fixed_duration(2)
+    if increase:
+        a.add_increase_effect(StartTiming() + 1, f, 1)
+    else:
+        a.add_effect(StartTiming() + 1, f, 1)
+    a.add_effect(EndTiming() - 1, f, 2)
+    a.add_effect(EndTiming(), done, True)
+
+    problem.add_fluent(f, default_initial_value=0)
+    problem.add_fluent(done, default_initial_value=False)
+    problem.add_action(a)
+    problem.add_goal(done)
+
+    return problem
+
+
+def get_problem_classical_makespan() -> Problem:
+    """A makespan metric on a problem without durative actions or timed
+    effects, whose plans are sequential and so have no makespan to improve
+    on."""
+    problem = get_problem_multiple_quality_metrics()
+    problem.clear_quality_metrics()
+    problem.add_quality_metric(MinimizeMakespan())
+    return problem
+
+
+def get_problem_plan_length_with_durative_actions() -> Problem:
+    """A plan length metric on a temporal problem, which the anytime loop
+    can't bound."""
+    problem = get_problem_timed_goal_point()
+    problem.clear_timed_goals()
+    problem.add_quality_metric(MinimizeSequentialPlanLength())
+    return problem
+
+
+def get_problem_multiple_quality_metrics() -> Problem:
+    """Two quality metrics, which the anytime loop can't bound together."""
+    problem = Problem("multiple_quality_metrics")
+
+    done = Fluent("done")
+    act = InstantaneousAction("act")
+    act.add_effect(done, True)
+
+    problem.add_fluent(done, default_initial_value=False)
+    problem.add_action(act)
+    problem.add_goal(done)
+    problem.add_quality_metric(MinimizeSequentialPlanLength())
+    problem.add_quality_metric(MinimizeActionCosts({act: 1}))
+
+    return problem
+
+
 def get_problem_object_value_symmetry_initial() -> Problem:
     Token = UserType("Token")
     Slot = UserType("Slot")

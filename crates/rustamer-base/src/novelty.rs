@@ -36,7 +36,7 @@
 
 use num::{BigInt, Signed, ToPrimitive, Zero};
 use num_rational::BigRational;
-use pyo3::exceptions::PyException;
+use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::borrow::Cow;
@@ -458,6 +458,20 @@ pub struct NumericNovelty {
     parent_snapshot_gen: u64,
 }
 
+/// Rejects a heuristic value novbfs can't partition on: `floor(h)` needs a
+/// non-negative `h` (a NaN fails the comparison too). The heuristic may be a
+/// user's custom one, so this is an error, not an invariant.
+fn check_non_negative(h_value: f64) -> PyResult<()> {
+    if h_value >= 0.0 {
+        Ok(())
+    } else {
+        Err(PyValueError::new_err(format!(
+            "novbfs partitions on floor(h), so its heuristic must never return \
+             a negative value, got {h_value}"
+        )))
+    }
+}
+
 #[pymethods]
 impl NumericNovelty {
     #[new]
@@ -533,12 +547,8 @@ impl NumericNovelty {
     /// any `eval()` call -- and again, before any further `eval()`, if this
     /// instance is being reused for another `novbfs_search` call (see the
     /// struct docstring). Returns the root's (clamped) partition id.
-    pub fn start(&mut self, initial_h: f64) -> u64 {
-        assert!(
-            initial_h >= 0.0,
-            "initial_h must be non-negative (novbfs partitions on floor(h), \
-             so its heuristic must never return a negative value)"
-        );
+    pub fn start(&mut self, initial_h: f64) -> PyResult<u64> {
+        check_non_negative(initial_h)?;
         self.partitions.clear();
         self.max_partition = (initial_h.floor() as u64).max(1);
         self.generation += 1;
@@ -551,13 +561,9 @@ impl NumericNovelty {
     /// `None` (unreachable) before calling this, so `partition` is a
     /// genuine, always-non-negative index, never a signed quantity that
     /// happens to stay positive.
-    pub fn partition_of(&self, h_value: f64) -> u64 {
-        assert!(
-            h_value >= 0.0,
-            "h_value must be non-negative (novbfs partitions on floor(h), \
-             so its heuristic must never return a negative value)"
-        );
-        (h_value.floor() as u64).min(self.max_partition)
+    pub fn partition_of(&self, h_value: f64) -> PyResult<u64> {
+        check_non_negative(h_value)?;
+        Ok((h_value.floor() as u64).min(self.max_partition))
     }
 
     /// Resets the lazy parent-feature caches and the parent snapshot (by

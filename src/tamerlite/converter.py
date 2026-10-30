@@ -21,6 +21,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from cachetools import LRUCache
+from unified_planning.exceptions import UPUnsupportedProblemTypeError
 from unified_planning.model import Fluent as UPFluent
 from unified_planning.model import FNode, InterpretedFunction, Problem
 from unified_planning.model import Object as UPObject
@@ -45,8 +46,11 @@ from tamerlite.core import (
 from tamerlite.core.search_space import ExpressionNode
 
 
-def _unresolvable_fluent_message(expression: FNode) -> str:
-    """Explain why `expression` names no grounded fluent of the problem."""
+def _unresolvable_fluent_error(expression: FNode) -> Exception:
+    """The error for a fluent `expression` that names no grounded fluent of the
+    problem. Interpreted functions or other fluents in its arguments are an
+    unsupported feature; otherwise the fluent is not present in the encoding,
+    which is a bug."""
     env = expression.environment
     ifuns = set(env.interpreted_functions_extractor.get(expression))
     nested_fluents = set(env.free_vars_extractor.get(expression))
@@ -56,8 +60,10 @@ def _unresolvable_fluent_message(expression: FNode) -> str:
     elif nested_fluents:
         cause = f"contains other fluents in its arguments: {nested_fluents}"
     else:
-        cause = "does not name a grounded fluent of the problem"
-    return (
+        return AssertionError(
+            f"The fluent expression `{expression}` is not present in the encoding."
+        )
+    return UPUnsupportedProblemTypeError(
         f"TamerLite does not support the fluent expression `{expression}`: it "
         f"{cause}, so it cannot be resolved to a single grounded fluent at "
         "encoding time."
@@ -288,9 +294,7 @@ class Converter(DagWalker):
         try:
             return (make_fluent_node(self._fluent_ids[fluent]),)
         except KeyError:
-            raise NotImplementedError(
-                _unresolvable_fluent_message(expression)
-            ) from None
+            raise _unresolvable_fluent_error(expression) from None
 
     def convert_constant(self, value: FNode) -> ExpressionNode:
         """Converts a constant `value` (a bool/int/real constant or an object)
@@ -304,7 +308,7 @@ class Converter(DagWalker):
             return make_rational_constant_node(v.numerator, v.denominator)
         if value.is_object_exp():
             return make_object_node(self._object_ids[value.object().name])
-        raise NotImplementedError(f"`{value}` is not a constant")
+        raise AssertionError(f"`{value}` is not a constant")
 
     def walk_object_exp(self, expression: FNode, args: list[Expression]) -> Expression:
         assert len(args) == 0
@@ -398,7 +402,17 @@ class Converter(DagWalker):
                     raw_result = interpreted_function.function(*real_args)
                     if_cache[cache_key] = raw_result
             if wraps_result:
-                return make_object_node(object_ids[raw_result.name])
+                oid = (
+                    object_ids.get(raw_result.name)
+                    if isinstance(raw_result, UPObject)
+                    else None
+                )
+                if oid is None:
+                    raise TypeError(
+                        f"Interpreted function `{interpreted_function.name}` must "
+                        f"return an object of the problem, not {raw_result!r}."
+                    )
+                return make_object_node(oid)
             return raw_result
 
         self._if_wrappers[interpreted_function] = wrapper
@@ -424,7 +438,7 @@ class Converter(DagWalker):
         elif return_type.is_user_type():
             return_type_tag = IfReturnType.OBJECT
         else:
-            raise NotImplementedError(
+            raise UPUnsupportedProblemTypeError(
                 f"Unsupported interpreted function return type: {return_type}"
             )
 
@@ -444,11 +458,13 @@ class Converter(DagWalker):
         )
         return res
 
+    # NNF (`Encoder._normalize_expression`) removes implications and
+    # equivalences, and grounding removes parameters, before any conversion.
     def walk_implies(self, expression: FNode, args: list[Expression]) -> Expression:
-        raise NotImplementedError
+        raise AssertionError(f"`{expression}` is not in NNF")
 
     def walk_iff(self, expression: FNode, args: list[Expression]) -> Expression:
-        raise NotImplementedError
+        raise AssertionError(f"`{expression}` is not in NNF")
 
     def walk_param_exp(self, expression: FNode, args: list[Expression]) -> Expression:
-        raise NotImplementedError
+        raise AssertionError(f"`{expression}` is not grounded")
