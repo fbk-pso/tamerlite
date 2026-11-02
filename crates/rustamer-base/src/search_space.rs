@@ -756,10 +756,10 @@ impl SearchSpace {
         let mut ub: f64 = 0.0;
         if let Some(duration) = duration {
             let d = duration;
-            let (Some(lower), Some(upper)) = (
-                internal_evaluate_defined(&d.0, state)?,
-                internal_evaluate_defined(&d.1, state)?,
-            ) else {
+            let Some(lower) = internal_evaluate_defined(&d.0, state)? else {
+                return Ok(false);
+            };
+            let Some(upper) = internal_evaluate_defined(&d.1, state)? else {
                 return Ok(false);
             };
             lb = -expression_node_to_f64(&lower)?;

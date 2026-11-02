@@ -1315,8 +1315,10 @@ class SearchSpace(SearchSpaceABC):
             lower, upper = 0, 0
         else:
             evaluated_lower = evaluate_defined(duration[0], state)
+            if evaluated_lower is None:
+                return False
             evaluated_upper = evaluate_defined(duration[1], state)
-            if evaluated_lower is None or evaluated_upper is None:
+            if evaluated_upper is None:
                 return False
             assert isinstance(evaluated_lower, (int, Fraction))
             lower = evaluated_lower
