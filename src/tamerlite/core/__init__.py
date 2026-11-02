@@ -17,7 +17,6 @@
 
 import importlib
 import os
-import sys
 import warnings
 from typing import TYPE_CHECKING
 
@@ -39,14 +38,35 @@ if TYPE_CHECKING:
     from tamerlite.core.search_space import Expression as _ExpressionT
     from tamerlite.core.search_space import State as _StateT
 
-use_rustamer = True
-if "DISABLE_RUSTAMER" in os.environ:
-    if os.environ["DISABLE_RUSTAMER"].lower() in ("1", "true", "yes"):
-        use_rustamer = False
-    elif os.environ["DISABLE_RUSTAMER"].lower() in ("0", "false", "no"):
-        use_rustamer = True
-    else:
-        sys.exit("The DISABLE_RUSTAMER environment variable has an invalid value.")
+_TRUE_VALUES = ("1", "true", "yes", "on")
+_FALSE_VALUES = ("0", "false", "no", "off")
+
+
+def _rustamer_disabled(value: str | None) -> bool:
+    """Parse the `DISABLE_RUSTAMER` environment variable.
+
+    An unset, empty or whitespace-only value counts as unset. An unrecognized
+    value only warns and keeps the default (Rust) backend: this runs at import
+    time, which UP's engine discovery triggers, so it must never abort the host
+    process.
+    """
+    if value is None:
+        return False
+    normalized = value.strip().lower()
+    if not normalized:
+        return False
+    if normalized in _TRUE_VALUES:
+        return True
+    if normalized not in _FALSE_VALUES:
+        warnings.warn(
+            f"Ignoring invalid value {value!r} of the DISABLE_RUSTAMER environment "
+            f"variable (expected one of {', '.join(_TRUE_VALUES + _FALSE_VALUES)}).",
+            stacklevel=2,
+        )
+    return False
+
+
+use_rustamer = not _rustamer_disabled(os.environ.get("DISABLE_RUSTAMER"))
 
 if use_rustamer:
     try:
