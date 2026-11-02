@@ -198,7 +198,7 @@ class _NumLeaf:
 _Leaf = _PropLeaf | _NumLeaf
 
 
-def _compute_sdist(leaf: _NumLeaf, state: State) -> tuple[_Sdist | None, bool]:
+def _compute_sdist(leaf: _NumLeaf, state: State) -> tuple[_Sdist, bool] | None:
     """The distance feature for a numeric leaf -- already in the "improves
     = larger is better" sign convention (see module docstring): satisfied
     inequalities are >= 0, satisfied equalities are exactly 0, and both
@@ -209,16 +209,16 @@ def _compute_sdist(leaf: _NumLeaf, state: State) -> tuple[_Sdist | None, bool]:
     boundary (`sdist == 0`) is genuinely unsatisfied, so the comparator
     needs to stay kind-aware here too. Mirrors Rust's `compute_sdist`.
 
-    The sdist is `None` if an operand is undefined in `state` (see
+    `None` if an operand is undefined in `state` (see
     `evaluate_defined`): the leaf is unsatisfied there and has no distance,
     so it neither counts as progress nor is recorded in any table. `rhs` is
     not evaluated once `lhs` is undefined (as in Rust's `compute_sdist`)."""
     lhs = leaf.lhs(state)
     if lhs is None:
-        return None, False
+        return None
     rhs = leaf.rhs(state)
     if rhs is None:
-        return None, False
+        return None
     diff: _Sdist = rhs - lhs  # type: ignore[operator]
     kind = leaf.kind
     if kind == "==":
@@ -348,7 +348,7 @@ class NumericNovelty:
         # `begin_expansion`/`start`, filled on first use by `eval`. See the
         # class docstring.
         self._parent_prop_true: dict[int, bool] = {}
-        self._parent_numeric: dict[int, tuple[_Sdist | None, bool]] = {}
+        self._parent_numeric: dict[int, tuple[_Sdist, bool] | None] = {}
         self._parent_snapshot: tuple[list[int], list[int]] | None = None
 
     def start(self, initial_h: float) -> int:
@@ -403,14 +403,13 @@ class NumericNovelty:
 
     def _parent_num(
         self, leaf_id: int, leaf: _NumLeaf, parent: State
-    ) -> tuple[_Sdist | None, bool]:
-        """`leaf`'s `(sdist, satisfied)` in `parent`, through the
-        per-expansion cache."""
-        cached = self._parent_numeric.get(leaf_id)
-        if cached is None:
-            cached = _compute_sdist(leaf, parent)
-            self._parent_numeric[leaf_id] = cached
-        return cached
+    ) -> tuple[_Sdist, bool] | None:
+        """`leaf`'s `(sdist, satisfied)` in `parent`, `None` if undefined
+        there, through the per-expansion cache."""
+        parent_numeric = self._parent_numeric
+        if leaf_id not in parent_numeric:
+            parent_numeric[leaf_id] = _compute_sdist(leaf, parent)
+        return parent_numeric[leaf_id]
 
     def _mark_dirty_leaves(self, parent: State, state: State) -> dict[int, None]:
         """Every leaf reading a fluent whose value may differ between
@@ -450,10 +449,12 @@ class NumericNovelty:
                     if self._parent_prop(leaf_id, leaf, parent):
                         parent_sat.append(leaf_id)
                     continue
-                pdist, psat = self._parent_num(leaf_id, leaf, parent)
-                if psat:
+                parent_num = self._parent_num(leaf_id, leaf, parent)
+                if parent_num is None:
+                    continue
+                if parent_num[1]:
                     parent_sat.append(leaf_id)
-                elif pdist is not None:
+                else:
                     parent_num_unsat.append(leaf_id)
             snapshot = self._parent_snapshot = (parent_sat, parent_num_unsat)
         return snapshot
@@ -512,9 +513,10 @@ class NumericNovelty:
                         currently_satisfied.append(leaf_id)
                         newly_satisfied.append(leaf_id)
                     continue
-                sdist, curr_sat = _compute_sdist(leaf, state)
-                if sdist is None:
+                num = _compute_sdist(leaf, state)
+                if num is None:
                     continue
+                sdist, curr_sat = num
                 sdist_cache[leaf_id] = sdist
                 if curr_sat:
                     currently_satisfied.append(leaf_id)
@@ -540,22 +542,23 @@ class NumericNovelty:
                         else:
                             newly_satisfied.append(leaf_id)
                     continue
-                pdist, parent_sat = self._parent_num(leaf_id, leaf, parent)
-                sdist, curr_sat = _compute_sdist(leaf, state)
-                if sdist is None:
+                parent_num = self._parent_num(leaf_id, leaf, parent)
+                num = _compute_sdist(leaf, state)
+                if num is None:
                     continue
+                sdist, curr_sat = num
                 sdist_cache[leaf_id] = sdist
                 if curr_sat:
                     currently_satisfied.append(leaf_id)
                 else:
                     numeric_unsatisfied.append(leaf_id)
                 # An undefined parent distance is beaten by any defined one
-                if not parent_sat and (pdist is None or sdist > pdist):
+                if parent_num is None or (not parent_num[1] and sdist > parent_num[0]):
                     if curr_sat:
                         newly_satisfied.append(leaf_id)
                     else:
                         numeric_improved.append(leaf_id)
-                elif parent_sat and curr_sat:
+                elif parent_num[1] and curr_sat:
                     persisting_satisfied.append(leaf_id)
 
             if not newly_satisfied and not numeric_improved:
@@ -629,13 +632,13 @@ class NumericNovelty:
                 # `numeric_unsatisfied` (unlike `numeric_improved`) can hold
                 # a clean leaf on a same-partition call, which Pass A never
                 # evaluated: its sdist is its parent's cached one.
-                sdist = (
-                    sdist_cache[tid]
-                    if tid in sdist_cache
-                    else self._parent_numeric[tid][0]
-                )
-                # `parent_num_unsat` only holds leaves defined in the parent
-                assert sdist is not None
+                if tid in sdist_cache:
+                    sdist = sdist_cache[tid]
+                else:
+                    parent_num = self._parent_numeric[tid]
+                    # `parent_num_unsat` only holds leaves defined in the parent
+                    assert parent_num is not None
+                    sdist = parent_num[0]
                 pair = (f, tid)
                 old = tables.best_sdist_with_psi.get(pair)
                 if old is None or sdist > old:
