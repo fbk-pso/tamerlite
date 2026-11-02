@@ -3188,10 +3188,9 @@ def get_problem_division_by_zero() -> Problem:
     negated `not (10 / d <= 1)` -- is not reached, all until `set_d` makes
     `d = 2`. The only plans therefore start with `set_d`. The numeric goal
     leaf `10 / d <= 5` is also undefined in the initial state for the
-    novelty search. Before undefined expressions were handled, every
-    heuristic raised `ZeroDivisionError` on the initial state. Every action
-    is single-use, so the state space is acyclic and `dfs`/`bfs`, which
-    don't deduplicate states, terminate.
+    novelty search. Every heuristic evaluates these undefined expressions
+    on the initial state. Every action is single-use, so the state space is
+    acyclic and `dfs`/`bfs`, which don't deduplicate states, terminate.
     """
     problem = Problem("division_by_zero")
 
