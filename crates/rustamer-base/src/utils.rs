@@ -120,6 +120,18 @@ pub struct PersistentList<Q> {
     previous: Option<Arc<PersistentList<Q>>>,
 }
 
+/// Frees the chain iteratively: the compiler-generated drop recurses once per uniquely
+/// owned node, which overflows the stack on a long path. The walk stops at the first
+/// node another list still shares, since that owner keeps the rest alive.
+impl<Q> Drop for PersistentList<Q> {
+    fn drop(&mut self) {
+        let mut next = self.previous.take();
+        while let Some(node) = next {
+            next = Arc::into_inner(node).and_then(|mut inner| inner.previous.take());
+        }
+    }
+}
+
 impl<Q> PersistentList<Q>
 where
     Q: Clone,
