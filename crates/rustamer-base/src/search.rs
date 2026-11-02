@@ -21,7 +21,7 @@ use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::rc::Rc;
-use std::time::SystemTime;
+use std::time::Instant;
 use std::{collections::BinaryHeap, vec::Vec};
 
 use fastbloom::BloomFilter;
@@ -633,7 +633,7 @@ fn basic_search<S: SearchSpaceTrait>(
         name, timeout, early_termination
     );
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
-    let start = SystemTime::now();
+    let start = Instant::now();
     let Some(init) = ss.initial_state(None)? else {
         // No valid initial state (see `SearchSpaceTrait::initial_state`).
         metrics.insert("expanded_states", 0.to_string());
@@ -652,7 +652,7 @@ fn basic_search<S: SearchSpaceTrait>(
 
     while !open.is_empty() {
         if let Some(t) = timeout {
-            if start.elapsed().unwrap().as_secs_f32() > t {
+            if start.elapsed().as_secs_f32() > t {
                 return Err(PyTimeoutError::new_err("Timeout"));
             }
         }
@@ -736,7 +736,7 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
         timeout, early_termination, weak_equality
     );
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
-    let start = SystemTime::now();
+    let start = Instant::now();
     let Some(init) = ss.initial_state(None)? else {
         // No valid initial state (see `SearchSpaceTrait::initial_state`).
         metrics.insert("expanded_states", 0.to_string());
@@ -766,7 +766,7 @@ pub fn ehc_search<H: HeuristicTrait, S: SearchSpaceTrait>(
     let mut closed = VisitedStates::new(ss, weak_equality);
     while let Some(state) = open.pop_front() {
         if let Some(t) = timeout {
-            if start.elapsed().unwrap().as_secs_f32() > t {
+            if start.elapsed().as_secs_f32() > t {
                 return Err(PyTimeoutError::new_err("Timeout"));
             }
         }
@@ -901,7 +901,7 @@ where
     D: DedupStore<St::Payload>,
 {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
-    let start = SystemTime::now();
+    let start = Instant::now();
     let Some(init) = ss.initial_state(None)? else {
         // No valid initial state (see `SearchSpaceTrait::initial_state`).
         metrics.insert("expanded_states", 0.to_string());
@@ -931,7 +931,7 @@ where
 
     while let Some(current) = open.pop_item() {
         if let Some(t) = timeout {
-            if start.elapsed().unwrap().as_secs_f32() > t {
+            if start.elapsed().as_secs_f32() > t {
                 return Err(PyTimeoutError::new_err("Timeout"));
             }
         }
