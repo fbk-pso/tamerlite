@@ -10,7 +10,8 @@
 # Both backends expose an identical interface (see CLAUDE.md), so this stub
 # re-exports the canonical pure-Python definitions as the single type each
 # name presents to the checker, regardless of which backend actually runs.
-# Keep in sync with `__all__` in `__init__.py` and with `rustamer.pyi`.
+# Keep in sync with `rustamer.pyi` and with the names `__init__.py` binds in
+# both branches of its `if not use_rustamer: ... else: ...` dispatch.
 #
 # `__all__` below is what marks these as re-exports rather than private
 # stub-local imports (PEP 484); it must list every name importable from
