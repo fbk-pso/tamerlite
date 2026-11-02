@@ -3259,3 +3259,38 @@ def get_problem_temporal_division_by_zero() -> Problem:
     problem.add_goal(done)
 
     return problem
+
+
+def get_problem_compression_safe_division_by_zero() -> Problem:
+    """`get_problem_temporal_division_by_zero` with `set_d`'s effect at
+    start, so both actions pass `Encoder._compute_compression_safe_actions`.
+    `run`'s duration `10 / d` is undefined while `d = 0`, so the engine keeps
+    the problem off the `TimedToSequential` recompile, which drops durations,
+    and the temporal search makes `run` wait for `set_d`: the only plans
+    start with `set_d`."""
+    problem = Problem("compression_safe_division_by_zero")
+
+    d = Fluent("d", IntType())
+    ready = Fluent("ready")
+    done = Fluent("done")
+
+    problem.add_fluent(d, default_initial_value=0)
+    problem.add_fluent(ready, default_initial_value=True)
+    problem.add_fluent(done, default_initial_value=False)
+
+    set_d = DurativeAction("set_d")
+    set_d.set_fixed_duration(1)
+    set_d.add_condition(StartTiming(), Equals(d, 0))
+    set_d.add_effect(StartTiming(), d, 2)
+
+    run = DurativeAction("run")
+    run.set_fixed_duration(Div(10, d))
+    run.add_condition(StartTiming(), ready)
+    run.add_effect(StartTiming(), ready, False)
+    run.add_effect(EndTiming(), done, True)
+
+    problem.add_actions([set_d, run])
+
+    problem.add_goal(done)
+
+    return problem

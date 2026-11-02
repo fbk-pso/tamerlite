@@ -105,6 +105,23 @@ def extract_fluents(exp: FNode) -> Iterable[UPFluent]:
             stack.extend(exp.args)
 
 
+def may_be_undefined(exp: FNode) -> bool:
+    """Whether `exp` may be undefined in some state: it divides by an
+    expression that reads a fluent, or calls an interpreted function, which
+    may raise `ZeroDivisionError`. A constant divisor is never zero here: UP's
+    simplifier already rejects a constant division by zero when grounding,
+    where it also folds static fluents."""
+    stack: list[FNode] = [exp]
+    while len(stack) > 0:
+        exp = stack.pop()
+        if exp.is_interpreted_function_exp():
+            return True
+        if exp.is_div() and any(True for _ in extract_fluents(exp.arg(1))):
+            return True
+        stack.extend(exp.args)
+    return False
+
+
 def extract_and_arguments(expressions: list[FNode]) -> Iterable[FNode]:
     stack: list[FNode] = list(expressions)
     while len(stack) > 0:
@@ -1438,6 +1455,21 @@ class Encoder:
     def is_any_action_compression_safe(self) -> bool:
         return self._compression_safe_actions is not None and any(
             self._compression_safe_actions
+        )
+
+    def has_possibly_undefined_duration(self) -> bool:
+        """Whether a bound of some durative action's duration may be undefined
+        (`may_be_undefined`). An undefined bound makes the action inapplicable,
+        which only the temporal search can check: `TimedToSequential` drops
+        durations, so such a problem must not be compiled to sequential even
+        when all its actions are compression-safe."""
+        return any(
+            isinstance(action, up.model.DurativeAction)
+            and (
+                may_be_undefined(action.duration.lower)
+                or may_be_undefined(action.duration.upper)
+            )
+            for action in self._problem.actions
         )
 
     def build_plan(self, path: list[Action]) -> Plan:

@@ -1119,6 +1119,7 @@ class TamerLite(
             are_all_actions_compression_safe = (
                 not is_intermediate_solution
                 and encoder.are_all_actions_compression_safe()
+                and not encoder.has_possibly_undefined_duration()
             )
             is_any_action_compression_safe = (
                 are_all_actions_compression_safe

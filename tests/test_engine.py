@@ -131,6 +131,7 @@ def _build_problems():
         problems_generator.get_problem_timed_goal_with_timed_effect(),
         problems_generator.get_problem_division_by_zero(),
         problems_generator.get_problem_temporal_division_by_zero(),
+        problems_generator.get_problem_compression_safe_division_by_zero(),
     ]
 
     up_example_problems = list(
