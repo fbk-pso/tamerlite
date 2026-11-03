@@ -205,6 +205,14 @@ pub struct SearchSpace {
     compression_safe_actions: Option<Vec<bool>>,
     event_fluents: EventFluents,
     effect_independent_start_conditions: Vec<Vec<Box<[usize]>>>,
+    /// Interns events' start/end conditions, so `State.active_conditions` holds
+    /// cheap-to-clone ids. Equal conditions share an id, as the multiset's
+    /// counts require.
+    conditions: ExpressionManager,
+    /// `start_conditions`/`end_conditions` of event `[action.idx][index]`,
+    /// interned in `conditions`
+    start_condition_ids: Vec<Vec<Box<[Expression]>>>,
+    end_condition_ids: Vec<Vec<Box<[Expression]>>>,
     mutex: MutexChecker,
     precedence: PrecedenceChecker,
     action_objects: Option<Vec<Vec<Object>>>,
@@ -281,6 +289,9 @@ impl SearchSpace {
 
         let mut event_fluents = vec![Vec::new(); actions.len()];
         let mut effect_independent_start_conditions = vec![Vec::new(); actions.len()];
+        let mut conditions = ExpressionManager::new();
+        let mut start_condition_ids = vec![Vec::new(); actions.len()];
+        let mut end_condition_ids = vec![Vec::new(); actions.len()];
         for (a, le) in &events {
             let duration = &converted_actions_duration[a.idx];
             for (i, (_, e)) in le.iter().enumerate() {
@@ -307,6 +318,14 @@ impl SearchSpace {
                         .map(|(k, _)| k)
                         .collect(),
                 );
+                start_condition_ids[a.idx].push(
+                    e.start_conditions
+                        .iter()
+                        .map(|c| conditions.put(c))
+                        .collect(),
+                );
+                end_condition_ids[a.idx]
+                    .push(e.end_conditions.iter().map(|c| conditions.put(c)).collect());
                 let read_writes: FxHashSet<Fluent> = reads.union(&writes).copied().collect();
                 let start_cond_reads: FxHashSet<Fluent> = e
                     .start_conditions
@@ -337,6 +356,9 @@ impl SearchSpace {
             compression_safe_actions,
             event_fluents,
             effect_independent_start_conditions,
+            conditions,
+            start_condition_ids,
+            end_condition_ids,
             mutex: MutexChecker::new(),
             precedence: PrecedenceChecker::new(),
             action_objects,
@@ -590,13 +612,13 @@ impl SearchSpace {
         // `open_timed_action`), so they all hold on `state`
 
         // remove end conditions
-        for c in e.end_conditions.iter() {
+        for c in self.end_condition_ids[e.action.idx][*index].iter() {
             new_state.active_conditions.remove(c);
         }
 
         // insert start conditions
-        for c in e.start_conditions.iter() {
-            new_state.active_conditions.insert(c.to_vec());
+        for &c in self.start_condition_ids[e.action.idx][*index].iter() {
+            new_state.active_conditions.insert(c);
         }
 
         // apply effects
@@ -610,7 +632,7 @@ impl SearchSpace {
         // the caller with `effect_independent_start_conditions_hold`
         if !e.effects.is_empty() {
             for c in new_state.active_conditions.iter() {
-                let sat = match internal_evaluate(c, new_state)? {
+                let sat = match internal_evaluate(self.conditions.force_get(c), new_state)? {
                     ExpressionNode::Bool(v) => v,
                     _ => {
                         return Err(PyException::new_err(
