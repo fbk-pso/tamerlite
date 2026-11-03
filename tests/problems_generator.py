@@ -3293,3 +3293,40 @@ def get_problem_compression_safe_division_by_zero() -> Problem:
     problem.add_goal(done)
 
     return problem
+
+
+def get_problem_timed_division_by_zero(at_zero: bool = False) -> Problem:
+    """Timed effects and goals that divide by a fluent `d`, 0 until `set_d`
+    makes it 2 (see `get_problem_division_by_zero`).
+
+    By default, the timed effect `x := 10 / d` at time 3 is undefined, so its
+    timed event is inapplicable, unless `set_d` starts before then, and the
+    goal `x >= 5` needs it: the only plans start `set_d` before time 3.
+    With `at_zero`, the only timed element is instead a goal `10 / d >= 1`
+    checked at time 0, which is undefined in the initial state, so it doesn't
+    hold: there is no valid initial state, and no plan.
+    """
+    problem = Problem(
+        "timed_division_by_zero_at_zero" if at_zero else "timed_division_by_zero"
+    )
+
+    d = Fluent("d", IntType())
+    problem.add_fluent(d, default_initial_value=0)
+
+    set_d = DurativeAction("set_d")
+    set_d.set_fixed_duration(1)
+    # Not repeatable, which keeps the search space finite even without
+    # duplicate detection.
+    set_d.add_condition(StartTiming(), Equals(d, 0))
+    set_d.add_effect(StartTiming(), d, 2)
+    problem.add_action(set_d)
+
+    if at_zero:
+        problem.add_timed_goal(GlobalStartTiming(0), GE(Div(10, d), 1))
+    else:
+        x = Fluent("x", RealType())
+        problem.add_fluent(x, default_initial_value=0)
+        problem.add_timed_effect(GlobalStartTiming(3), x, Div(10, d))
+        problem.add_goal(GE(x, 5))
+
+    return problem

@@ -132,6 +132,7 @@ def _build_problems():
         problems_generator.get_problem_division_by_zero(),
         problems_generator.get_problem_temporal_division_by_zero(),
         problems_generator.get_problem_compression_safe_division_by_zero(),
+        problems_generator.get_problem_timed_division_by_zero(),
     ]
 
     up_example_problems = list(
@@ -2983,8 +2984,19 @@ def test_conditional_timed_effects_are_not_supported():
             ),
             ResultStatus.UNSOLVABLE_INCOMPLETELY,
         ),
+        (
+            partial(
+                problems_generator.get_problem_timed_division_by_zero, at_zero=True
+            ),
+            ResultStatus.UNSOLVABLE_PROVEN,
+        ),
     ],
-    ids=["at_start_unsatisfied", "window_too_early", "undefined_unmeasurable"],
+    ids=[
+        "at_start_unsatisfied",
+        "window_too_early",
+        "undefined_unmeasurable",
+        "at_start_undefined",
+    ],
 )
 def test_timed_goals_unsatisfiable(
     disable_rustamer, heuristic, problem_factory, expected_status
@@ -2992,8 +3004,9 @@ def test_timed_goals_unsatisfiable(
     """Timed goals that no plan can satisfy: one checked at time 0 against an
     initial state that falsifies it (no valid initial state, with a single-event
     timed action, so proven unsolvable), a window opening before the goal can
-    possibly hold, and the timed goal `UndefinedInitialNumericRemover` adds for
-    a fluent that never gets a value."""
+    possibly hold, the timed goal `UndefinedInitialNumericRemover` adds for
+    a fluent that never gets a value, and one checked at time 0 that is
+    undefined there (see `evaluate_defined`), so doesn't hold either."""
     reload_tamerlite(disable_rustamer)
     problem = problem_factory()
     assert tamerlite.engine.TamerLite.supports(problem.kind)

@@ -1036,7 +1036,7 @@ class SearchSpace(SearchSpaceABC):
         events = self._events[action]
         # `_expand_event` leaves the event's own conditions and its
         # effect-independent start conditions to its callers
-        if not evaluate(
+        if not evaluate_condition(
             events[0][1].conditions, state
         ) or not self._effect_independent_start_conditions_hold(action, 0, state):
             return None
