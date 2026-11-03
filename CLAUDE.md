@@ -409,7 +409,10 @@ raise. Every search and heuristic site instead goes through
 `internal_evaluate_defined`/`evaluate_condition` (`expressions_utils.rs`),
 which follow the PDDL 2.1 reading:
 - an undefined action condition, whole-action condition or goal does not hold;
-- an undefined effect or duration bound makes the action inapplicable.
+- an undefined effect or duration bound makes the action inapplicable;
+- the timed action follows the same rule: an undefined timed goal does not
+  hold and an undefined timed effect makes its timed event inapplicable. At
+  time 0 that leaves no initial state, so no plan (both cores' `open_timed_action`).
 
 "Strict" means the whole evaluated unit is undefined, not just the comparison
 that divides: `not (10 / d <= 1)` with `d = 0` is false, not true. Postfix
@@ -430,7 +433,8 @@ The `build_plan` duration evaluations still raise, since an opened action's
 duration was defined. Both cores must catch at exactly the same sites, or
 `check_metrics_equality` fails. These rules are pinned by
 `problems_generator.get_problem_division_by_zero`/`get_problem_temporal_division_by_zero`
-(in `PROBLEMS` and `NOVBFS_PROBLEMS`) and
+(in `PROBLEMS` and `NOVBFS_PROBLEMS`), `get_problem_timed_division_by_zero`
+(in `PROBLEMS`, and with `at_zero` in `test_timed_goals_unsatisfiable`) and
 `tests/test_engine.py::test_undefined_goal_is_not_reached`. UP's own
 `Simplifier` still raises/asserts when it folds a static fluent into a
 constant `x / 0`, before TamerLite sees the expression.
