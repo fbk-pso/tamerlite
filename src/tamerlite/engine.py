@@ -834,7 +834,7 @@ class TamerLite(
         # same problem plus a quality bound, so an unsupported feature there
         # would be a bug in that bound's encoding.
         try:
-            res, _, _ = self._solve_ground_problem(
+            res, _, _, symbolic_makespan = self._solve_ground_problem(
                 lifted_problem,
                 ground_problem,
                 map_back_action_instance,
@@ -908,7 +908,8 @@ class TamerLite(
 
             problem = cast("up.model.Problem", ground_problem.clone())
             exp = None
-            deadline = None
+            deadline: Fraction | tuple[Fraction, int] | None = None
+            makespan_bound: Fraction | None = None
             m, v = next(iter(val_res.metric_evaluations.items()))
             logger.info("Searching for improvement over current quality: %s", v)
             if m.is_minimize_expression_on_final_state():
@@ -957,7 +958,21 @@ class TamerLite(
                         raise AssertionError(f"Unknown action type {type(a)}")
                 exp = em.LT(actions_cost, v)
             elif m.is_minimize_makespan():
-                deadline = Fraction(v)
+                # Bound the next search by the previous plan's symbolic makespan
+                # `(c, k)`, not by `v`. Without a problem epsilon, `v` is that
+                # makespan at the concrete `δ` the plan was reported at; the
+                # same plan at any smaller `δ` is shorter than `v`, so the next
+                # search would find it again forever. The symbolic bound asks
+                # for a plan shorter for every small enough `δ`. With an
+                # epsilon it is `(v, 0)`. Each plan is reported at its own `δ`,
+                # though, so `v` itself also bounds the next plan's reported
+                # makespan (`makespan_bound`).
+                makespan_bound = Fraction(v)
+                deadline = (
+                    symbolic_makespan
+                    if symbolic_makespan is not None
+                    else makespan_bound
+                )
             else:
                 # `_check_anytime_metrics` rejects any other metric.
                 raise AssertionError(f"Unknown metric type for metric {m}")
@@ -981,19 +996,23 @@ class TamerLite(
                 return None
 
             elapsed_time = time.monotonic() - start_time
-            res, solution_might_exist, is_any_action_compression_safe = (
-                self._solve_ground_problem(
-                    lifted_problem,
-                    problem,
-                    new_map_back_action_instance,
-                    timeout=timeout - elapsed_time if timeout is not None else None,
-                    output_stream=output_stream,
-                    deadline=deadline,
-                    is_intermediate_solution=True,
-                    if_cache=if_cache,
-                    if_wrappers=if_wrappers,
-                    lifted_problem_kind=lifted_problem_kind,
-                )
+            (
+                res,
+                solution_might_exist,
+                is_any_action_compression_safe,
+                symbolic_makespan,
+            ) = self._solve_ground_problem(
+                lifted_problem,
+                problem,
+                new_map_back_action_instance,
+                timeout=timeout - elapsed_time if timeout is not None else None,
+                output_stream=output_stream,
+                deadline=deadline,
+                makespan_bound=makespan_bound,
+                is_intermediate_solution=True,
+                if_cache=if_cache,
+                if_wrappers=if_wrappers,
+                lifted_problem_kind=lifted_problem_kind,
             )
             if res.status in (
                 up.engines.PlanGenerationResultStatus.UNSOLVABLE_INCOMPLETELY,
@@ -1106,7 +1125,7 @@ class TamerLite(
             # generator -- could still resume and evaluate a `func_id` it
             # registered.
             with interpreted_function_scope():
-                res, _, _ = self._solve_ground_problem(
+                res, _, _, _ = self._solve_ground_problem(
                     lifted_problem,
                     ground_problem,
                     map_back_action_instance,
@@ -1190,12 +1209,28 @@ class TamerLite(
         timeout: float | None = None,
         max_expanded_states: int | None = None,
         output_stream: IO[str] | None = None,
-        deadline: Fraction | None = None,
+        deadline: Fraction | tuple[Fraction, int] | None = None,
+        makespan_bound: Fraction | None = None,
         is_intermediate_solution: bool = False,
         if_cache: MutableMapping[tuple[InterpretedFunction, tuple], Any] | None = None,
         if_wrappers: dict[InterpretedFunction, Callable] | None = None,
         lifted_problem_kind: ProblemKind | None = None,
-    ) -> tuple["up.engines.results.PlanGenerationResult", bool, bool]:
+    ) -> tuple[
+        "up.engines.results.PlanGenerationResult",
+        bool,
+        bool,
+        tuple[Fraction, int] | None,
+    ]:
+        """Encodes `ground_problem`, searches it (on its `TimedToSequential`
+        compilation when every action is compression-safe and this is not an
+        anytime step, `is_intermediate_solution`) and maps the plan back.
+
+        Returns the result, whether a plan might still exist when none was
+        found, whether any action is compression-safe, and the plan's
+        symbolic makespan (`Encoder.build_plan`; `None` without a plan or
+        on a non-temporal problem), which bounds the next anytime step as its
+        `deadline`. `makespan_bound`, the previous anytime plan's reported
+        makespan, bounds this plan's reported one (`Encoder.build_plan`)."""
         # Default to one fresh pair shared by both `Encoder(...)` sites below.
         # This path only ever runs for a standalone oneshot `_solve()` call --
         # `_anytime_solutions` always supplies its own `if_cache`/`if_wrappers`
@@ -1292,6 +1327,7 @@ class TamerLite(
                     ),
                     False,
                     is_any_action_compression_safe,
+                    None,
                 )
 
             if self._params.weak_equality and not encoder.search_space.is_temporal:
@@ -1394,7 +1430,9 @@ class TamerLite(
                         for _ in original_encoder.events[action]:
                             path.append(action)
 
-                plan = original_encoder.build_plan(path)
+                plan, symbolic_makespan = original_encoder.build_plan(
+                    path, makespan_bound
+                )
                 plan = plan.replace_action_instances(map_back_action_instance)
                 status = (
                     up.engines.PlanGenerationResultStatus.INTERMEDIATE
@@ -1404,6 +1442,7 @@ class TamerLite(
                 solution_might_exist = True
             else:
                 plan = None
+                symbolic_makespan = None
                 status = up.engines.PlanGenerationResultStatus.UNSOLVABLE_INCOMPLETELY
                 solution_might_exist = not self._search_is_complete(
                     search_name, heuristic
@@ -1412,6 +1451,7 @@ class TamerLite(
                 up.engines.PlanGenerationResult(status, plan, self.name, metrics),
                 solution_might_exist,
                 is_any_action_compression_safe,
+                symbolic_makespan,
             )
         except ExpansionLimitReached:
             logger.info("Search reached max_expanded_states=%s", max_expanded_states)
@@ -1424,6 +1464,7 @@ class TamerLite(
                 ),
                 True,
                 is_any_action_compression_safe,
+                None,
             )
         except TimeoutError:
             status = up.engines.PlanGenerationResultStatus.TIMEOUT
@@ -1431,6 +1472,7 @@ class TamerLite(
                 up.engines.PlanGenerationResult(status, None, self.name),
                 True,
                 is_any_action_compression_safe,
+                None,
             )
 
 

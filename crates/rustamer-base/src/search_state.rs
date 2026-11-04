@@ -27,7 +27,7 @@ use std::{
 use super::expressions::*;
 use super::expressions_utils::*;
 use super::multiset::HashMultiSet;
-use super::stn::DeltaSTN;
+use super::stn::{DeltaSTN, DeltaTime};
 use super::structures::{Action, Fluent};
 use super::utils::*;
 
@@ -35,7 +35,7 @@ use super::utils::*;
 #[derive(Debug)]
 pub struct State {
     pub assignments: Vector<ExpressionNode>,
-    pub temporal_network: Option<DeltaSTN<u64, f64>>,
+    pub temporal_network: Option<DeltaSTN<u64, DeltaTime<f64>>>,
     pub todo: FxHashMap<Action, (usize, u32)>,
     pub active_conditions: HashMultiSet<Vec<ExpressionNode>>,
     pub g: f64,
