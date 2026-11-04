@@ -17,6 +17,7 @@
 
 use im::Vector;
 use num_rational::BigRational;
+use num_traits::Signed;
 use pyo3::{exceptions::PyException, prelude::*};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use std::{sync::Mutex, vec::Vec};
@@ -25,13 +26,20 @@ use super::expressions::*;
 use super::expressions_utils::*;
 use super::multiset::HashMultiSet;
 use super::search_state::*;
-use super::stn::DeltaSTN;
+use super::stn::{DeltaSTN, DeltaTime};
 use super::structures::*;
 use super::tn_interpreter::TNInterpreter;
 use super::utils::*;
 
 type ScheduledAction = (Option<BigRational>, Action, Option<BigRational>);
 type PyScheduledAction<'py> = (Option<Bound<'py, PyAny>>, Action, Option<Bound<'py, PyAny>>);
+/// What `build_plan` returns: the schedule and its symbolic makespan (`None`
+/// on a non-temporal problem).
+type ScheduleWithMakespan = (Vec<ScheduledAction>, Option<DeltaTime<BigRational>>);
+type PyScheduleWithMakespan<'py> = (
+    Vec<PyScheduledAction<'py>>,
+    Option<(Bound<'py, PyAny>, i64)>,
+);
 type MutexCache = Mutex<FxHashMap<((Action, usize), (Action, usize)), bool>>;
 type PrecedenceCache = Mutex<FxHashMap<((Action, usize), (Action, usize)), bool>>;
 type EventFluents = Vec<
@@ -46,17 +54,33 @@ type EventFluents = Vec<
 type DurationInterval = (Vec<ExpressionNode>, Vec<ExpressionNode>, bool, bool);
 type PyDurationInterval = (Vec<PyExpressionNode>, Vec<PyExpressionNode>, bool, bool);
 
-/// The `DeltaSTN` tolerance of a search space with minimal mutex separation
-/// `epsilon`.
-pub(crate) fn stn_tolerance(epsilon: f64) -> f64 {
-    epsilon / 1000.0
+/// The `DeltaSTN` tolerance of the search when the problem has no epsilon to
+/// give it a scale. It only decides when two standard parts are
+/// equal (`DeltaTime`): the infinitesimal ones are compared exactly.
+const STRICT_SEPARATION_TOLERANCE: f64 = 1e-6;
+
+/// A `DeltaTime` from Python: `None`, a number `c` (`k = 0`), or the pair
+/// `(c, k)` meaning `c + k·δ`. Used for `SearchSpace`'s `deadline`, which the
+/// anytime makespan improvement sets to the previous plan's symbolic makespan
+/// (`build_plan`).
+fn get_option_delta_time(obj: &Bound<'_, PyAny>) -> PyResult<Option<DeltaTime<BigRational>>> {
+    if obj.is_none() {
+        Ok(None)
+    } else if let Ok((c, k)) = obj.extract::<(Bound<'_, PyAny>, i64)>() {
+        Ok(Some(DeltaTime::new(get_big_rational(&c)?, k)))
+    } else {
+        Ok(Some(DeltaTime::standard(get_big_rational(obj)?)))
+    }
 }
 
 pub trait SearchSpaceTrait {
     fn is_temporal(&self) -> bool;
     fn has_deadline(&self) -> bool;
-    /// The minimal separation between two mutex events.
-    fn epsilon(&self) -> f64;
+    /// The minimal gap between two mutex events: `(epsilon, 0)` with a
+    /// problem epsilon, otherwise `(0, 1)`, any positive amount.
+    fn epsilon(&self) -> DeltaTime<f64>;
+    /// The tolerance of the temporal networks' standard parts.
+    fn tolerance(&self) -> f64;
     /// The synthetic action carrying the timed effects and timed goals, open
     /// from the initial state until its last event fires, if any.
     fn timed_action(&self) -> Option<Action>;
@@ -74,7 +98,7 @@ pub trait SearchSpaceTrait {
     /// so a constraint that could pull it later -- the deadline's, or the
     /// ordering of an event before a pending timed event -- closes a cycle
     /// through `start_plan`, and can't without making the STN inconsistent.
-    fn makespan(&self, state: &State) -> f64;
+    fn makespan(&self, state: &State) -> DeltaTime<f64>;
     fn tn_interpreter(&self) -> &TNInterpreter;
     /// The initial state, or `None` if there is none: no plan exists.
     fn initial_state(
@@ -100,7 +124,14 @@ pub trait SearchSpaceTrait {
         state: &State,
         goal: Option<Vec<PyExpressionNode>>,
     ) -> PyResult<Vec<Vec<PyExpressionNode>>>;
-    fn build_plan(&self, path: &[Action]) -> PyResult<Vec<ScheduledAction>>;
+    /// The schedule of `path`, sorted, and its symbolic makespan (`None` on a
+    /// non-temporal problem). With a `makespan_bound`, the previous anytime
+    /// plan's reported makespan, the schedule's makespan is reported below it.
+    fn build_plan(
+        &self,
+        path: &[Action],
+        makespan_bound: Option<&BigRational>,
+    ) -> PyResult<ScheduleWithMakespan>;
 }
 
 #[derive(Debug)]
@@ -196,6 +227,106 @@ fn get_fluents<'a>(expr: &'a [ExpressionNode]) -> impl Iterator<Item = Fluent> +
 /// is pinned to `start_plan`
 type PendingOpening<'a> = (Action, u32, &'a [(Timing, Event)], bool);
 
+/// The value of a time of `build_plan`'s network at a concrete `δ`.
+fn time_at(t: &DeltaTime<BigRational>, delta: &BigRational) -> BigRational {
+    &t.c + delta * BigRational::from_integer(t.k.into())
+}
+
+/// `delta`, divided by ten until `makespan` at it is below `bound`.
+///
+/// `bound` is the previous anytime plan's reported makespan. That plan's
+/// symbolic makespan is the deadline the search kept `makespan` below, but
+/// only for every small enough `δ`: each plan is reported at its own `δ`, so
+/// at this plan's `feasible_delta` it could still come out longer. Returns
+/// `delta` unchanged if no `δ` puts `makespan` below `bound`; the deadline
+/// excludes that, since the network's bounds have `k <= 0`, so its times, the
+/// previous makespan included, have `k >= 0`. Mirrors `_delta_below` in
+/// `search_space.py`.
+fn delta_below(
+    makespan: &DeltaTime<BigRational>,
+    bound: &BigRational,
+    mut delta: BigRational,
+) -> BigRational {
+    if makespan.c > *bound || (makespan.c == *bound && makespan.k >= 0) {
+        return delta;
+    }
+    let ten = BigRational::from_integer(10.into());
+    while time_at(makespan, &delta) >= *bound {
+        delta /= &ten;
+    }
+    delta
+}
+
+/// `build_plan`'s temporal network, which also keeps every constraint added
+/// to it. The network itself drops a constraint whose bound is
+/// lexicographically no tighter than one it holds between the same
+/// timepoints, but at a concrete `δ` that constraint can still be the tighter
+/// one, so `feasible_delta` must see it.
+struct RecordingSTN {
+    tn: DeltaSTN<u64, DeltaTime<BigRational>>,
+    constraints: Vec<(u64, u64, DeltaTime<BigRational>)>,
+}
+
+impl RecordingSTN {
+    fn new() -> Self {
+        RecordingSTN {
+            tn: DeltaSTN::new(mk_rational(0, 1)),
+            constraints: Vec::new(),
+        }
+    }
+
+    fn add(&mut self, x: &u64, y: &u64, b: &DeltaTime<BigRational>) {
+        self.tn.add(x, y, b);
+        self.constraints.push((*x, *y, b.clone()));
+    }
+
+    /// The largest power of ten, at most 1/100 (`DEFAULT_DELTA` in
+    /// `search_space.py`), at which the network's minimal solution still meets
+    /// every recorded constraint: the `δ` the plan's times are reported at. A
+    /// plan without strict separations has no infinitesimal parts, so every
+    /// `δ` is feasible and it is 1/100.
+    ///
+    /// The minimal solution `d` meets each constraint `d(y) <= d(x) + b`
+    /// lexicographically, i.e. for every small enough `δ`: its standard slack
+    /// `d(x).c + b.c - d(y).c` is non-negative, and positive if the
+    /// infinitesimal one, `d(x).k + b.k - d(y).k`, is negative, and then the
+    /// constraint holds for `δ` up to the ratio of the two.
+    fn feasible_delta(&self) -> PyResult<BigRational> {
+        // An inconsistent network stops adding timepoints to `distances`.
+        if !self.tn.check() {
+            return Err(PyException::new_err(
+                "build_plan: the plan's temporal network is inconsistent",
+            ));
+        }
+        let mut max_delta: Option<BigRational> = None;
+        for (x, y, b) in &self.constraints {
+            let dx = &self.tn.distances[x];
+            let dy = &self.tn.distances[y];
+            let k = dx.k + b.k - dy.k;
+            if k < 0 {
+                let c = &dx.c + &b.c - &dy.c;
+                if !c.is_positive() {
+                    return Err(PyException::new_err(
+                        "build_plan: the plan's temporal network is inconsistent",
+                    ));
+                }
+                let bound = c / BigRational::from_integer((-k).into());
+                if max_delta.as_ref().is_none_or(|m| bound < *m) {
+                    max_delta = Some(bound);
+                }
+            }
+        }
+        let mut delta = mk_rational(1, 100);
+        if let Some(max_delta) = max_delta {
+            let ten = BigRational::from_integer(10.into());
+            while delta > max_delta {
+                delta /= &ten;
+            }
+        }
+        Ok(delta)
+    }
+}
+
 #[pyclass(name = "SearchSpace")]
 #[derive(Debug)]
 pub struct SearchSpace {
@@ -212,9 +343,13 @@ pub struct SearchSpace {
     initial_state: Option<Vec<ExpressionNode>>,
     goal: Option<Vec<ExpressionNode>>,
     tn_interpreter: TNInterpreter,
-    deadline: Option<f64>,
-    epsilon: f64,
-    epsilon_rational: BigRational,
+    deadline: Option<DeltaTime<f64>>,
+    /// The minimal gap the search keeps between two mutex events
+    /// (`SearchSpaceTrait::epsilon`), also used to make an open duration
+    /// bound and the plan's end strict.
+    epsilon: DeltaTime<f64>,
+    epsilon_rational: DeltaTime<BigRational>,
+    tolerance: f64,
     is_temporal: bool,
     counter: Mutex<u32>,
     /// The synthetic action carrying the problem's timed effects, one event
@@ -240,7 +375,7 @@ impl SearchSpace {
         initial_state: Option<Vec<PyExpressionNode>>,
         goal: Option<Vec<PyExpressionNode>>,
         relevant_actions: Option<Vec<Action>>,
-        #[pyo3(from_py_with = get_option_big_rational)] deadline: Option<BigRational>,
+        #[pyo3(from_py_with = get_option_delta_time)] deadline: Option<DeltaTime<BigRational>>,
         #[pyo3(from_py_with = get_option_big_rational)] epsilon: Option<BigRational>,
         timed_action: Option<Action>,
     ) -> PyResult<Self> {
@@ -330,6 +465,20 @@ impl SearchSpace {
 
         let tn_interpreter = TNInterpreter::new(&actions, &events);
 
+        // Without a problem epsilon, mutex events are strictly apart, by any
+        // positive amount, as UP means it. A problem's own epsilon is a
+        // requirement on the plan.
+        let (epsilon, tolerance) = match epsilon {
+            None => (
+                DeltaTime::new(mk_rational(0, 1), 1),
+                STRICT_SEPARATION_TOLERANCE,
+            ),
+            Some(epsilon) => {
+                let tolerance = rational_to_f64(&epsilon) / 1000.0;
+                (DeltaTime::standard(epsilon), tolerance)
+            }
+        };
+
         let res = SearchSpace {
             actions_duration: converted_actions_duration,
             events,
@@ -345,17 +494,10 @@ impl SearchSpace {
                 .map(|inner_vec| inner_vec.into_iter().map(|v| v.v).collect()),
             goal: goal.map(|inner_vec| inner_vec.into_iter().map(|e| e.v).collect()),
             tn_interpreter,
-            deadline: deadline.map(|v| rational_to_f64(&v)),
-            // The same default as `DEFAULT_EPSILON` in `search_space.py`, which
-            // the encoder's epsilon-separation checks rely on.
-            epsilon: match &epsilon {
-                Some(x) => rational_to_f64(x),
-                None => 0.01,
-            },
-            epsilon_rational: match epsilon {
-                Some(x) => x,
-                None => mk_rational(1, 100),
-            },
+            deadline: deadline.map(|v| DeltaTime::new(rational_to_f64(&v.c), v.k)),
+            epsilon: DeltaTime::new(rational_to_f64(&epsilon.c), epsilon.k),
+            tolerance,
+            epsilon_rational: epsilon,
             is_temporal,
             counter: Mutex::new(0),
             timed_action,
@@ -422,13 +564,14 @@ impl SearchSpace {
         self.subgoals_sat(state, goal)
     }
 
-    #[pyo3(name = "build_plan", signature = (path))]
+    #[pyo3(name = "build_plan", signature = (path, makespan_bound=None))]
     fn py_build_plan<'py>(
         &self,
         py: Python<'py>,
         path: Vec<Action>,
-    ) -> PyResult<Option<Vec<PyScheduledAction<'py>>>> {
-        let plan = self.build_plan(&path)?;
+        #[pyo3(from_py_with = get_option_big_rational)] makespan_bound: Option<BigRational>,
+    ) -> PyResult<PyScheduleWithMakespan<'py>> {
+        let (plan, makespan) = self.build_plan(&path, makespan_bound.as_ref())?;
         let mut res = Vec::with_capacity(plan.len());
         for (start, action, duration) in plan.into_iter() {
             let start = match start {
@@ -441,7 +584,11 @@ impl SearchSpace {
             };
             res.push((start, action, duration));
         }
-        Ok(Some(res))
+        let makespan = match makespan {
+            Some(m) => Some((big_rational_to_py_fraction(&m.c, py)?, m.k)),
+            None => None,
+        };
+        Ok((res, makespan))
     }
 }
 
@@ -655,7 +802,7 @@ impl SearchSpace {
                     break;
                 }
                 if is_predecessor {
-                    tn.add(&ev2, &ev, &0.0);
+                    tn.add(&ev2, &ev, &DeltaTime::standard(0.0));
                     is_predecessor = false;
                 }
             }
@@ -666,10 +813,9 @@ impl SearchSpace {
                     let e2_id = (*a, j + i.0);
                     let ev2 = self.tn_interpreter.get_event_id(e2.action, e2.pos, id2);
                     if self.mutex.check(&(e_id, e2_id), &self.event_fluents) {
-                        let b: f64 = -self.epsilon;
-                        tn.add(&ev, &ev2, &b);
+                        tn.add(&ev, &ev2, &-self.epsilon);
                     } else {
-                        tn.add(&ev, &ev2, &0.0);
+                        tn.add(&ev, &ev2, &DeltaTime::standard(0.0));
                     }
                 }
             }
@@ -740,7 +886,7 @@ impl SearchSpace {
     fn add_opening_constraints(
         &self,
         state: &State,
-        tn: &mut DeltaSTN<u64, f64>,
+        tn: &mut DeltaSTN<u64, DeltaTime<f64>>,
         (action, action_instance_id, events, pin_to_plan_start): PendingOpening,
     ) -> PyResult<()> {
         let start = self
@@ -750,30 +896,31 @@ impl SearchSpace {
             .tn_interpreter
             .get_action_id(action, false, action_instance_id);
         let duration = self.actions_duration[action.idx].as_ref();
-        let mut lb: f64 = 0.0;
-        let mut ub: f64 = 0.0;
+        let zero = DeltaTime::standard(0.0);
+        let mut lb = zero;
+        let mut ub = zero;
         if let Some(duration) = duration {
             let d = duration;
-            lb = -expression_node_to_f64(&internal_evaluate(&d.0, state)?)?;
-            ub = expression_node_to_f64(&internal_evaluate(&d.1, state)?)?;
+            lb = DeltaTime::standard(-expression_node_to_f64(&internal_evaluate(&d.0, state)?)?);
+            ub = DeltaTime::standard(expression_node_to_f64(&internal_evaluate(&d.1, state)?)?);
             if d.2 {
-                lb -= self.epsilon;
+                lb = lb - self.epsilon;
             }
             if d.3 {
-                ub -= self.epsilon;
+                ub = ub - self.epsilon;
             }
         }
         tn.add(&start, &end, &lb);
         tn.add(&end, &start, &ub);
-        tn.add(&self.tn_interpreter.start_plan_id, &start, &0.0);
+        tn.add(&self.tn_interpreter.start_plan_id, &start, &zero);
         if pin_to_plan_start {
-            tn.add(&start, &self.tn_interpreter.start_plan_id, &0.0);
+            tn.add(&start, &self.tn_interpreter.start_plan_id, &zero);
         }
         tn.add(&end, &self.tn_interpreter.end_plan_id, &-self.epsilon);
         for (id, (t, e)) in (action_instance_id + 1..).zip(events.iter()) {
             let ev = self.tn_interpreter.get_event_id(e.action, e.pos, id);
-            let b1 = -rational_to_f64(&t.delay);
-            let b2 = rational_to_f64(&t.delay);
+            let b1 = DeltaTime::standard(-rational_to_f64(&t.delay));
+            let b2 = DeltaTime::standard(rational_to_f64(&t.delay));
             if t.is_from_start() {
                 tn.add(&start, &ev, &b1);
                 tn.add(&ev, &start, &b2);
@@ -825,7 +972,7 @@ impl SearchSpace {
     /// core.
     fn add_action_to_plan_network(
         &self,
-        tn: &mut DeltaSTN<u64, BigRational>,
+        tn: &mut RecordingSTN,
         state: &State,
         action: Action,
         counter: &mut u32,
@@ -835,25 +982,32 @@ impl SearchSpace {
         *counter += 1;
         let (lb, ub) = match self.actions_duration[action.idx].as_ref() {
             Some(d) => {
-                let mut lb = -get_rational_from_expression_node(&internal_evaluate(&d.0, state)?)?;
-                let mut ub = get_rational_from_expression_node(&internal_evaluate(&d.1, state)?)?;
+                let mut lb = DeltaTime::standard(-get_rational_from_expression_node(
+                    &internal_evaluate(&d.0, state)?,
+                )?);
+                let mut ub = DeltaTime::standard(get_rational_from_expression_node(
+                    &internal_evaluate(&d.1, state)?,
+                )?);
                 if d.2 {
-                    lb -= self.epsilon_rational.clone();
+                    lb = lb - self.epsilon_rational.clone();
                 }
                 if d.3 {
-                    ub -= self.epsilon_rational.clone();
+                    ub = ub - self.epsilon_rational.clone();
                 }
                 (lb, ub)
             }
-            None => (mk_rational(0, 1), mk_rational(0, 1)),
+            None => (
+                DeltaTime::standard(mk_rational(0, 1)),
+                DeltaTime::standard(mk_rational(0, 1)),
+            ),
         };
         tn.add(&start, &end, &lb);
         tn.add(&end, &start, &ub);
         let id = *counter;
         for (t, e) in self.events[&action].iter() {
             let ev = self.tn_interpreter.get_event_id(e.action, e.pos, *counter);
-            let b1 = -t.delay.clone();
-            let b2 = t.delay.clone();
+            let b1 = DeltaTime::standard(-t.delay.clone());
+            let b2 = DeltaTime::standard(t.delay.clone());
             if t.is_from_start() {
                 tn.add(&start, &ev, &b1);
                 tn.add(&ev, &start, &b2);
@@ -876,21 +1030,25 @@ impl SearchSpaceTrait for SearchSpace {
         self.deadline.is_some()
     }
 
-    fn epsilon(&self) -> f64 {
+    fn epsilon(&self) -> DeltaTime<f64> {
         self.epsilon
+    }
+
+    fn tolerance(&self) -> f64 {
+        self.tolerance
     }
 
     fn timed_action(&self) -> Option<Action> {
         self.timed_action
     }
 
-    fn makespan(&self, state: &State) -> f64 {
+    fn makespan(&self, state: &State) -> DeltaTime<f64> {
         let tn = state
             .temporal_network
             .as_ref()
             .expect("a temporal state has a temporal network");
         match PersistentList::iter_rev(&state.path).next() {
-            None => 0.0,
+            None => DeltaTime::standard(0.0),
             Some((action, pos, id)) => self
                 .tn_interpreter
                 .get_event_timing(tn, *action, *pos, *id)
@@ -921,8 +1079,8 @@ impl SearchSpaceTrait for SearchSpace {
                 }
             },
         };
-        let tn: Option<DeltaSTN<u64, f64>> = if self.is_temporal {
-            let mut tn = DeltaSTN::new(stn_tolerance(self.epsilon));
+        let tn: Option<DeltaSTN<u64, DeltaTime<f64>>> = if self.is_temporal {
+            let mut tn = DeltaSTN::new(self.tolerance);
             if let Some(deadline) = &self.deadline {
                 tn.add(
                     &self.tn_interpreter.end_plan_id,
@@ -932,7 +1090,7 @@ impl SearchSpaceTrait for SearchSpace {
                 tn.add(
                     &self.tn_interpreter.start_plan_id,
                     &self.tn_interpreter.end_plan_id,
-                    &-deadline,
+                    &-*deadline,
                 );
             }
             Some(tn)
@@ -1012,12 +1170,24 @@ impl SearchSpaceTrait for SearchSpace {
         Ok(res.into_iter().collect())
     }
 
-    fn build_plan(&self, path: &[Action]) -> PyResult<Vec<ScheduledAction>> {
+    /// The schedule's times are reported at `feasible_delta`, lowered further,
+    /// with a `makespan_bound`, until the makespan is below it
+    /// (`delta_below`). The makespan is taken before a concrete `δ` is chosen:
+    /// the latest end of an action, the timed action's included (UP's makespan
+    /// covers every timed effect and timed goal), relative to plan start. As
+    /// the deadline of the next anytime makespan-improvement search, it asks
+    /// for a plan that is shorter for every small enough `δ`.
+    fn build_plan(
+        &self,
+        path: &[Action],
+        makespan_bound: Option<&BigRational>,
+    ) -> PyResult<ScheduleWithMakespan> {
         if !self.is_temporal {
-            return Ok(path.iter().map(|a| (None, *a, None)).collect());
+            return Ok((path.iter().map(|a| (None, *a, None)).collect(), None));
         }
 
-        let mut tn = DeltaSTN::new(mk_rational(0, 1));
+        let rational_zero = DeltaTime::standard(mk_rational(0, 1));
+        let mut tn = RecordingSTN::new();
         let mut todo: FxHashMap<Action, (usize, u32)> = FxHashMap::with_hasher(FxBuildHasher);
         let mut event_path: Vec<(Event, u32)> = Vec::new();
         let mut counter = 0;
@@ -1037,8 +1207,8 @@ impl SearchSpaceTrait for SearchSpace {
             let (start, id) =
                 self.add_action_to_plan_network(&mut tn, &state, action, &mut counter)?;
             let start_plan = self.tn_interpreter.start_plan_id;
-            tn.add(&start_plan, &start, &mk_rational(0, 1));
-            tn.add(&start, &start_plan, &mk_rational(0, 1));
+            tn.add(&start_plan, &start, &rational_zero);
+            tn.add(&start, &start_plan, &rational_zero);
             let events = &self.events[&action];
             event_path.push((events[0].1.clone(), id));
             if events.len() > 1 {
@@ -1063,9 +1233,9 @@ impl SearchSpaceTrait for SearchSpace {
                                 let b = -self.epsilon_rational.clone();
                                 tn.add(&ev2, &ev, &b);
                             } else if self.precedence.check(&(e2_id, e_id), &self.event_fluents) {
-                                tn.add(&ev2, &ev, &mk_rational(0, 1));
+                                tn.add(&ev2, &ev, &rational_zero);
                             } else {
-                                // tn.add(&ev2, &ev, &mk_rational(0, 1));
+                                // tn.add(&ev2, &ev, &rational_zero);
                             }
                         }
                         for (a, i) in todo.iter() {
@@ -1079,7 +1249,7 @@ impl SearchSpaceTrait for SearchSpace {
                                     let b = -self.epsilon_rational.clone();
                                     tn.add(&ev, &ev2, &b);
                                 } else {
-                                    // tn.add(&ev, &ev2, &mk_rational(0, 1));
+                                    // tn.add(&ev, &ev2, &rational_zero);
                                 }
                             }
                         }
@@ -1091,7 +1261,7 @@ impl SearchSpaceTrait for SearchSpace {
                     if til.is_some() {
                         // Nothing starts before the timed effects' time 0.
                         let start_plan = self.tn_interpreter.start_plan_id;
-                        tn.add(&start_plan, &start, &mk_rational(0, 1));
+                        tn.add(&start_plan, &start, &rational_zero);
                     }
                     let e = events[0].1.clone();
                     let ev = self.tn_interpreter.get_event_id(e.action, e.pos, id);
@@ -1103,9 +1273,9 @@ impl SearchSpaceTrait for SearchSpace {
                             let b = -self.epsilon_rational.clone();
                             tn.add(&ev2, &ev, &b);
                         } else if self.precedence.check(&(e2_id, e_id), &self.event_fluents) {
-                            tn.add(&ev2, &ev, &mk_rational(0, 1));
+                            tn.add(&ev2, &ev, &rational_zero);
                         } else {
-                            // tn.add(&ev2, &ev, &mk_rational(0, 1));
+                            // tn.add(&ev2, &ev, &rational_zero);
                         }
                     }
                     for (a, i) in todo.iter() {
@@ -1119,7 +1289,7 @@ impl SearchSpaceTrait for SearchSpace {
                                 let b = -self.epsilon_rational.clone();
                                 tn.add(&ev, &ev2, &b);
                             } else {
-                                // tn.add(&ev, &ev2, &mk_rational(0, 1));
+                                // tn.add(&ev, &ev2, &rational_zero);
                             }
                         }
                     }
@@ -1141,20 +1311,36 @@ impl SearchSpaceTrait for SearchSpace {
             FxHashMap::with_hasher(FxBuildHasher);
         let mut end_time: FxHashMap<(Action, u32), BigRational> =
             FxHashMap::with_hasher(FxBuildHasher);
-        let origin = match til {
+        let mut delta = tn.feasible_delta()?;
+        let symbolic_origin = match til {
             Some(_) => tn
+                .tn
                 .get_model_value(&self.tn_interpreter.start_plan_id)
                 .unwrap(),
-            None => mk_rational(0, 1),
+            None => rational_zero,
         };
-        for (a, t) in self.tn_interpreter.get_actions_timings(&tn).iter() {
+        let timings = self.tn_interpreter.get_actions_timings(&tn.tn);
+        let mut makespan = DeltaTime::standard(mk_rational(0, 1));
+        for (a, t) in timings.iter() {
+            if !a.1 {
+                let end = t.clone() - symbolic_origin.clone();
+                if end > makespan {
+                    makespan = end;
+                }
+            }
+        }
+        if let Some(bound) = makespan_bound {
+            delta = delta_below(&makespan, bound, delta);
+        }
+        let origin = time_at(&symbolic_origin, &delta);
+        for (a, t) in timings.iter() {
             if Some(a.0) == til {
                 continue;
             }
             if a.1 {
-                start_time.insert((a.0, a.2), t - &origin);
+                start_time.insert((a.0, a.2), time_at(t, &delta) - &origin);
             } else {
-                end_time.insert((a.0, a.2), t - &origin);
+                end_time.insert((a.0, a.2), time_at(t, &delta) - &origin);
             }
         }
         for (a, st) in start_time {
@@ -1168,6 +1354,62 @@ impl SearchSpaceTrait for SearchSpace {
             res.push((Some(st), a.0, d));
         }
         res.sort();
-        Ok(res)
+        Ok((res, Some(makespan)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bound(c: i32, k: i64) -> DeltaTime<BigRational> {
+        DeltaTime::new(mk_rational(c, 1), k)
+    }
+
+    #[test]
+    fn feasible_delta_rejects_an_inconsistent_network() {
+        // t1 >= t0 + δ and t0 >= t1: no schedule. The network stops adding
+        // timepoints once inconsistent, so 2 never reaches `distances`.
+        let mut tn = RecordingSTN::new();
+        tn.add(&0, &1, &bound(0, -1));
+        tn.add(&1, &0, &bound(0, 0));
+        tn.add(&1, &2, &bound(0, 0));
+        assert!(tn.feasible_delta().is_err());
+    }
+
+    #[test]
+    fn strict_separation_tolerance_absorbs_rounding_at_large_times() {
+        // `a + b + c` is exactly 0, but `-1.86e-9` in `f64`.
+        let (a, b, c) = (1e7 + 0.1, 0.2, -(1e7 + 0.3));
+        let cycle = |tolerance: f64, k: i64| {
+            let mut tn: DeltaSTN<u32, DeltaTime<f64>> = DeltaSTN::new(tolerance);
+            tn.add(&0, &1, &DeltaTime::new(a, 0));
+            tn.add(&1, &2, &DeltaTime::new(b, k));
+            tn.add(&2, &0, &DeltaTime::new(c, 0));
+            tn.check()
+        };
+        assert!(!cycle(1e-9, 0));
+        assert!(cycle(STRICT_SEPARATION_TOLERANCE, 0));
+        // A strict separation on the cycle still makes it negative.
+        assert!(!cycle(STRICT_SEPARATION_TOLERANCE, -1));
+    }
+
+    #[test]
+    fn delta_below_lowers_delta_only_when_it_can() {
+        // 2 + δ is 2.01 at 1/100: below 2.01 at 1/1000, never below 2.
+        let makespan = bound(2, 1);
+        let delta = mk_rational(1, 100);
+        assert_eq!(
+            delta_below(&makespan, &mk_rational(201, 100), delta.clone()),
+            mk_rational(1, 1000)
+        );
+        assert_eq!(
+            delta_below(&makespan, &mk_rational(3, 1), delta.clone()),
+            delta
+        );
+        assert_eq!(
+            delta_below(&makespan, &mk_rational(2, 1), delta.clone()),
+            delta
+        );
     }
 }

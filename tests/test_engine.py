@@ -1465,7 +1465,10 @@ def test_search_space(problem, relevance_analysis):
         assert state1.g == state2.g
 
 
-def _solve_temporal(problem: Problem, deadline: Fraction | None) -> tuple[bool, int]:
+Deadline = Fraction | tuple[Fraction, int] | None
+
+
+def _solve_temporal(problem: Problem, deadline: Deadline) -> tuple[bool, int]:
     from tamerlite.core import CustomHeuristic, wastar_search
     from tamerlite.encoder import Encoder
 
@@ -1492,53 +1495,75 @@ def _solve_temporal(problem: Problem, deadline: Fraction | None) -> tuple[bool, 
 
 # The three actions of `get_problem_temporal_commuting` can all run at once,
 # so its optimal makespan is the longest duration, 5; `end_plan` must
-# additionally follow the last end by `epsilon` (1/100).
-_COMMUTING_DEADLINES = [None, Fraction(100), Fraction(501, 100), Fraction(5)]
+# additionally follow the last end, strictly or by `Problem.epsilon`. Per
+# epsilon, whether each deadline has a plan: the last solvable one is the
+# tightest, `5 + δ` or `5 + epsilon`, and 5 itself has none.
+_COMMUTING_DEADLINES: dict[Fraction | None, dict[Deadline, bool]] = {
+    None: {
+        None: True,
+        Fraction(100): True,
+        (Fraction(5), 1): True,
+        Fraction(5): False,
+    },
+    Fraction(1, 100): {
+        None: True,
+        Fraction(100): True,
+        Fraction(501, 100): True,
+        Fraction(5): False,
+    },
+}
 
 
-def test_temporal_todo_empty_dedup():
+@pytest.mark.parametrize("epsilon", list(_COMMUTING_DEADLINES), ids=["strict", "eps"])
+def test_temporal_todo_empty_dedup(epsilon):
     """Without `weak_equality`, a temporal search still dedups states with no
     durative action in progress: by equality without a deadline
     (`DedupPolicy.TODO_EMPTY`), by `makespan` dominance with one
     (`DedupPolicy.DOMINANCE`) -- which must keep every deadline that has a plan
-    solvable, down to the tightest one, on both backends identically."""
-    results: dict[tuple[bool, Fraction | None], tuple[bool, int]] = {}
+    solvable, down to the tightest one, on both backends identically, with
+    strict separation and with a `Problem.epsilon` alike."""
+    expected = _COMMUTING_DEADLINES[epsilon]
+    results: dict[tuple[bool, Deadline], tuple[bool, int]] = {}
     for disable_rustamer in [True, False]:
         reload_tamerlite(disable_rustamer)
-        for deadline in _COMMUTING_DEADLINES:
-            results[disable_rustamer, deadline] = _solve_temporal(
-                problems_generator.get_problem_temporal_commuting(), deadline
-            )
+        for deadline in expected:
+            problem = problems_generator.get_problem_temporal_commuting()
+            problem.epsilon = epsilon
+            results[disable_rustamer, deadline] = _solve_temporal(problem, deadline)
 
     for disable_rustamer in [True, False]:
-        solved = {d: results[disable_rustamer, d][0] for d in _COMMUTING_DEADLINES}
-        assert solved == {
-            None: True,
-            Fraction(100): True,
-            Fraction(501, 100): True,
-            Fraction(5): False,
-        }
+        solved = {d: results[disable_rustamer, d][0] for d in expected}
+        assert solved == expected
         # Dominance only prunes a state no earlier than one already seen, so
         # it can never prune more than equality does.
         assert (
             results[disable_rustamer, None][1]
             < results[disable_rustamer, Fraction(100)][1]
         )
-    for deadline in _COMMUTING_DEADLINES:
+    for deadline in expected:
         assert results[True, deadline] == results[False, deadline]
 
 
-def test_temporal_dominance_dedup_prunes(monkeypatch):
+@pytest.mark.parametrize(
+    "epsilon, tightest",
+    [
+        pytest.param(None, (Fraction(5), 2), id="strict"),
+        pytest.param(Fraction(1, 100), Fraction(251, 50), id="eps"),
+    ],
+)
+def test_temporal_dominance_dedup_prunes(monkeypatch, epsilon, tightest):
     """`DedupPolicy.DOMINANCE` does prune: with `makespan_dominates` stubbed
     out to never hold, the same deadline-constrained searches expand strictly
     more states and still agree on solvability -- including at the tightest
     deadline that has a plan (`c` alongside `a`'s first half is impossible,
-    so the optimum is `a` then `c`, or `c` then `a`, plus `b` after `x`)."""
+    so the optimum is `a` then `c`, or `c` then `a`, plus `b` after `x`: 5
+    plus two separations, `5 + 2δ` or `5 + 2 epsilon`)."""
     reload_tamerlite(True)
     import tamerlite.core.search as search
 
     problem = problems_generator.get_problem_temporal_token_chain()
-    deadlines = [Fraction(100), Fraction(251, 50)]
+    problem.epsilon = epsilon
+    deadlines = [Fraction(100), tightest]
     with_dominance = [_solve_temporal(problem, d) for d in deadlines]
     monkeypatch.setattr(search, "makespan_dominates", lambda *_: False)
     without_dominance = [_solve_temporal(problem, d) for d in deadlines]
@@ -1614,6 +1639,7 @@ def test_makespan_dominates():
     near the last one must follow it by `epsilon`, so a smaller lead could
     still force that event later."""
     from tamerlite.core.search import makespan_dominates
+    from tamerlite.core.search_space import DeltaTime
 
     eps = Fraction(1, 100)
     assert makespan_dominates(2, 3, eps)
@@ -1621,6 +1647,12 @@ def test_makespan_dominates():
     assert not makespan_dominates(3 - eps / 2, 3, eps)
     assert not makespan_dominates(3, 3, eps)
     assert not makespan_dominates(3, 2, eps)
+    # Without a problem epsilon, any positive lead dominates.
+    delta = DeltaTime(0, 1)
+    assert makespan_dominates(3 - eps / 2, 3, delta)
+    assert makespan_dominates(3, DeltaTime(3, 1), delta)
+    assert not makespan_dominates(3, 3, delta)
+    assert not makespan_dominates(DeltaTime(3, 1), 3, delta)
 
 
 def _anytime_cases():
@@ -2687,7 +2719,7 @@ def test_temporal_no_start_event():
         succ_state = ss.get_successor_state(init_state, noop)
         assert succ_state is not None
 
-        scheduled = ss.build_plan([noop])
+        scheduled, _ = ss.build_plan([noop])
         assert len(scheduled) == 1
         start, scheduled_action, duration = scheduled[0]
         # `scheduled_action` is reconstructed by `build_plan`, so it may not
@@ -2702,7 +2734,7 @@ def test_temporal_no_start_event():
         # start event, which makes it mutex with the event writing them.
         setup = encoder.action_by_name["setup"]
         finish = encoder.action_by_name["finish"]
-        scheduled = ss.build_plan([setup, setup, finish, finish])
+        scheduled, _ = ss.build_plan([setup, setup, finish, finish])
         by_idx = {a.idx: (start, duration) for start, a, duration in scheduled}
         assert by_idx[setup.idx] == (Fraction(0), Fraction(20))
         finish_start, finish_duration = by_idx[finish.idx]
@@ -3250,14 +3282,16 @@ def test_timed_goals_with_invalid_intervals_are_rejected(interval, raises, match
     ids=["near_zero", "near_another"],
 )
 def test_timed_events_closer_than_epsilon_are_rejected(time):
-    """The search keeps the timed action's events at least `epsilon` apart,
-    so two timed instants closer than that (or one closer than that to time
-    0) are rejected rather than leaving the problem unsolvable -- and accepted
-    once `Problem.epsilon` is smaller than their gap."""
+    """The search keeps the timed action's events at least `Problem.epsilon`
+    apart, so two timed instants closer than that (or one closer than that to
+    time 0) are rejected rather than leaving the problem unsolvable -- and
+    accepted once `Problem.epsilon` is smaller than their gap, or unset."""
     problem = problems_generator.get_problem_timed_effects_window()
     problem.add_timed_effect(
         GlobalStartTiming(time), problem.fluent("crane_free"), True
     )
+    _encode_on_both_backends(problem)
+    problem.epsilon = Fraction(1, 100)
     _encode_on_both_backends(
         problem,
         unified_planning.exceptions.UPUnsupportedProblemTypeError,
@@ -3338,8 +3372,8 @@ _EPS = Fraction(1, 100)
 def test_durative_events_closer_than_epsilon_are_dropped(
     start_delays, end_delays, lower, upper, right_open, dropped
 ):
-    """The search keeps a durative action's events at least `epsilon` apart,
-    so an action whose events can't be, for any duration it allows, could
+    """The search keeps a durative action's events at least `Problem.epsilon`
+    apart, so an action whose events can't be, for any duration it allows, could
     never be applied: the encoder leaves it out of the applicable actions,
     with a warning naming it, instead of keeping it silently. The problem
     isn't rejected, since grounding often makes such actions the plan doesn't
@@ -3348,6 +3382,7 @@ def test_durative_events_closer_than_epsilon_are_dropped(
     problem = problems_generator.get_problem_durative_event_gaps(
         start_delays, end_delays, lower, upper, right_open
     )
+    problem.epsilon = _EPS
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         encoders = _encode_on_both_backends(problem)

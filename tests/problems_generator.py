@@ -3288,3 +3288,71 @@ def get_problem_counter() -> Problem:
     problem.add_action(inc)
     problem.add_goal(GE(x, 10))
     return problem
+
+
+def get_problem_tight_timed_window(steps: int, width: Fraction) -> Problem:
+    """`step` needs the dock open, which it is only between the timed effects
+    at time 1 and `1 + width`, and the goal needs `steps` of them. They all
+    increase `count`, so they are mutex with each other and with nothing
+    else: they must fit strictly inside the window, apart from each other.
+    For strict separation, where any positive gap will do."""
+    problem = Problem("tight_timed_window")
+    dock_open = Fluent("dock_open", BoolType())
+    count = Fluent("count", IntType())
+    problem.add_fluent(dock_open, default_initial_value=False)
+    problem.add_fluent(count, default_initial_value=0)
+    step = InstantaneousAction("step")
+    step.add_precondition(dock_open)
+    step.add_increase_effect(count, 1)
+    problem.add_action(step)
+    problem.add_timed_effect(GlobalStartTiming(1), dock_open, True)
+    problem.add_timed_effect(GlobalStartTiming(1 + width), dock_open, False)
+    problem.add_goal(GE(count, steps))
+    return problem
+
+
+def get_problem_strict_separation_chain(shortcut: bool = True) -> Problem:
+    """`delivered` holds after `load` (duration 1) and then `go` (duration
+    1), which reads at its start what `load` writes at its end and so starts
+    strictly after it -- makespan `2 + δ` under strict separation -- or, if
+    `shortcut`, after `load_and_go` (duration 2) alone, makespan 2. Minimizes
+    the makespan."""
+    problem = Problem("strict_separation_chain")
+    loaded = Fluent("loaded", BoolType())
+    delivered = Fluent("delivered", BoolType())
+    problem.add_fluent(loaded, default_initial_value=False)
+    problem.add_fluent(delivered, default_initial_value=False)
+    load = DurativeAction("load")
+    load.set_fixed_duration(1)
+    load.add_effect(EndTiming(), loaded, True)
+    go = DurativeAction("go")
+    go.set_fixed_duration(1)
+    go.add_condition(StartTiming(), loaded)
+    go.add_effect(EndTiming(), delivered, True)
+    problem.add_actions([load, go])
+    if shortcut:
+        load_and_go = DurativeAction("load_and_go")
+        load_and_go.set_fixed_duration(2)
+        load_and_go.add_effect(EndTiming(), delivered, True)
+        problem.add_action(load_and_go)
+    problem.add_goal(delivered)
+    problem.add_quality_metric(MinimizeMakespan())
+    return problem
+
+
+def get_problem_narrow_duration(
+    lower: Fraction | int, upper: Fraction | int
+) -> Problem:
+    """One durative action `act`, with a duration in the open interval
+    `(lower, upper)`, that achieves the goal at its end. For strict
+    separation, which makes an open duration bound strict by any positive
+    amount."""
+    problem = Problem("narrow_duration")
+    done = Fluent("done", BoolType())
+    problem.add_fluent(done, default_initial_value=False)
+    act = DurativeAction("act")
+    act.set_open_duration_interval(lower, upper)
+    act.add_effect(EndTiming(), done, True)
+    problem.add_action(act)
+    problem.add_goal(done)
+    return problem
