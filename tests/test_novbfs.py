@@ -472,6 +472,14 @@ NOVBFS_SEARCHES = ["novbfs_hg", "novbfs_lg"]
 NOVBFS_PROBLEMS: list[tuple[str, Callable[[], object]]] = [
     ("numeric", problems_generator.get_problem_numeric),
     ("division_by_zero", problems_generator.get_problem_division_by_zero),
+    (
+        "undefined_unread_effect",
+        problems_generator.get_problem_undefined_unread_effect,
+    ),
+    (
+        "undefined_discarded_bool_effect",
+        problems_generator.get_problem_undefined_discarded_bool_effect,
+    ),
     ("satellite", problems_generator.get_problem_satellite),
     ("logistics", lambda: problems_generator.get_problem_logistics(1, 1, 4, 2)),
     ("temporal_flight", problems_generator.get_problem_temporal_flight),
