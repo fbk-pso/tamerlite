@@ -3330,3 +3330,83 @@ def get_problem_timed_division_by_zero(at_zero: bool = False) -> Problem:
         problem.add_goal(GE(x, 5))
 
     return problem
+
+
+def get_problem_undefined_unread_effect() -> Problem:
+    """`a`'s effects `f := h / g`, `c += 1 / g` and `p := 1 / g > 0` are
+    undefined while `g = 0`, which makes `a` inapplicable until `set_g` has
+    made `g = 2`: the only plan is `set_g, a`. Nothing reads `f`, `c` or `p`,
+    so relevance analysis drops them, and `a` keeps only the definedness of
+    their values, the condition `g != 0` (`Encoder._convert_effects`);
+    without it, `a` alone would reach the goal. That condition reads the
+    divisor only, so `h`, read nowhere else, is dropped too. Every action is
+    single-use, so the state space is acyclic and `dfs`/`bfs`, which don't
+    deduplicate states, terminate."""
+    problem = Problem("undefined_unread_effect")
+
+    f = Fluent("f", RealType())
+    h = Fluent("h", RealType())
+    c = Fluent("c", RealType())
+    p = Fluent("p", BoolType())
+    g = Fluent("g", RealType())
+    done = Fluent("done", BoolType())
+
+    problem.add_fluent(f, default_initial_value=0)
+    problem.add_fluent(h, default_initial_value=1)
+    problem.add_fluent(c, default_initial_value=0)
+    problem.add_fluent(p, default_initial_value=False)
+    problem.add_fluent(g, default_initial_value=0)
+    problem.add_fluent(done, default_initial_value=False)
+
+    set_g = InstantaneousAction("set_g")
+    set_g.add_precondition(Equals(g, 0))
+    set_g.add_effect(g, 2)
+
+    a = InstantaneousAction("a")
+    a.add_precondition(Not(done))
+    a.add_effect(f, Div(h, g))
+    a.add_increase_effect(c, Div(1, g))
+    a.add_effect(p, GT(Div(1, g), 0))
+    a.add_effect(done, True)
+
+    problem.add_actions([set_g, a])
+
+    problem.add_goal(done)
+
+    return problem
+
+
+def get_problem_undefined_discarded_bool_effect() -> Problem:
+    """`a` assigns both `True` and `1 / g > 0` to `p`. `Encoder._convert_effects`
+    folds the two into `p := True`, discarding the second value, but that value
+    is still evaluated when `a` fires, and is undefined while `g = 0`: `a` is
+    inapplicable until `set_g` has made `g = 2`, so the only plan is
+    `set_g, a`. The discarded value's definedness, `g != 0`, is a condition of
+    `a`'s event, so relevance analysis sees `a` read `g` and keeps `set_g`.
+    Every action is single-use, so the state space is acyclic and `dfs`/`bfs`,
+    which don't deduplicate states, terminate."""
+    problem = Problem("undefined_discarded_bool_effect")
+
+    p = Fluent("p", BoolType())
+    g = Fluent("g", RealType())
+    done = Fluent("done", BoolType())
+
+    problem.add_fluent(p, default_initial_value=False)
+    problem.add_fluent(g, default_initial_value=0)
+    problem.add_fluent(done, default_initial_value=False)
+
+    set_g = InstantaneousAction("set_g")
+    set_g.add_precondition(Equals(g, 0))
+    set_g.add_effect(g, 2)
+
+    a = InstantaneousAction("a")
+    a.add_precondition(Not(done))
+    a.add_effect(p, True)
+    a.add_effect(p, GT(Div(1, g), 0))
+    a.add_effect(done, True)
+
+    problem.add_actions([set_g, a])
+
+    problem.add_goal(done)
+
+    return problem

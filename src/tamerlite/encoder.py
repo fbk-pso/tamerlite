@@ -17,7 +17,7 @@
 
 import warnings
 from collections import Counter
-from collections.abc import Callable, Hashable, Iterable, MutableMapping
+from collections.abc import Callable, Hashable, Iterable, Iterator, MutableMapping
 from fractions import Fraction
 from functools import cached_property
 from itertools import pairwise
@@ -105,21 +105,48 @@ def extract_fluents(exp: FNode) -> Iterable[UPFluent]:
             stack.extend(exp.args)
 
 
-def may_be_undefined(exp: FNode) -> bool:
-    """Whether `exp` may be undefined in some state: it divides by an
-    expression that reads a fluent, or calls an interpreted function, which
-    may raise `ZeroDivisionError`. A constant divisor is never zero here: UP's
-    simplifier already rejects a constant division by zero when grounding,
-    where it also folds static fluents."""
+def definedness_conditions(exp: FNode) -> Iterator[FNode]:
+    """Yields conditions that all hold exactly where `exp` is defined, in
+    walk order and possibly repeated (`1 / g + 2 / g` yields `g != 0` twice;
+    a caller that keeps them deduplicates). Only a division by zero,
+    including one inside an interpreted function, makes an expression
+    undefined, so there is one condition per possible source:
+    `not (b == 0)` for each `a / b` whose divisor isn't a constant, and a
+    self-comparison for each interpreted-function call. Undefinedness is
+    strict (`evaluate_defined`), so a condition is also false where its own
+    operand is undefined: the walk doesn't descend into a divisor or into a
+    call's arguments. A constant divisor is never zero here: UP's simplifier
+    already rejects a constant division by zero when grounding, where it also
+    folds static fluents and interpreted-function calls with constant
+    arguments. Any other divisor is guarded, including one without fluents
+    on an expression that wasn't simplified, e.g. `1 / IF(3)` with
+    `IF(3) = 0`. The conditions must be converted without
+    `Encoder._normalize_expression`, whose simplifier could fold a
+    self-comparison to True."""
+    em = exp.environment.expression_manager
     stack: list[FNode] = [exp]
     while len(stack) > 0:
         exp = stack.pop()
         if exp.is_interpreted_function_exp():
-            return True
-        if exp.is_div() and any(True for _ in extract_fluents(exp.arg(1))):
-            return True
-        stack.extend(exp.args)
-    return False
+            if exp.type.is_bool_type():
+                yield em.Or(exp, em.Not(exp))
+            elif exp.type.is_user_type():
+                yield em.Equals(exp, exp)
+            else:
+                yield em.LE(exp, exp)
+        elif exp.is_div() and not exp.arg(1).is_constant():
+            yield em.Not(em.Equals(exp.arg(1), 0))
+            stack.append(exp.arg(0))
+        else:
+            stack.extend(exp.args)
+
+
+def may_be_undefined(exp: FNode) -> bool:
+    """Whether `exp` may be undefined in some state (see
+    `definedness_conditions`). An undefined duration bound or effect makes its
+    action inapplicable (`has_possibly_undefined_duration`,
+    `_convert_effects`)."""
+    return next(definedness_conditions(exp), None) is not None
 
 
 def extract_and_arguments(expressions: list[FNode]) -> Iterable[FNode]:
@@ -360,9 +387,9 @@ class Encoder:
                     # condition, a goal, a duration bound, or the RHS of an effect
                     # targeting a kept fluent is always itself in
                     # `relevant_fluents`, so conversion never hits a missing id;
-                    # only an effect whose *target* wasn't kept gets silently
-                    # dropped (see `_convert_effects`), since nothing reads it
-                    # anymore.
+                    # only an effect whose *target* wasn't kept gets dropped
+                    # (see `_convert_effects`), since nothing reads it anymore,
+                    # leaving its definedness conditions on its event.
                     self._encode(relevant_fluents)
                     initial_state = self.initial_state(self._problem_initial_values)
                     self._goal = self.goals(problem.goals + self._timed_final_goals)
@@ -737,6 +764,16 @@ class Encoder:
         bookkeeping fluent read nowhere else, or one that only feeds another
         bookkeeping fluent transitively, is never seeded and never added.
 
+        The fluents read by the definedness conditions of an effect value
+        (`_effect_definedness`, recorded by `_convert_effects` from the
+        uncompacted encoding) are seeds too, whether or not the effect's
+        target is relevant: an undefined effect makes its event inapplicable,
+        so its definedness matters even when nothing reads the target. If the
+        target is dropped, `_convert_effects` attaches these same conditions to
+        the event of the compacted encoding, so they read exactly these
+        fluents: a divisor's, or an interpreted-function call's, never the
+        rest of the value.
+
         `__init__` calls this with `self.considered_actions`, matching what
         `_encode`'s pass 2 (`_build_events`/`_build_actions_duration`)
         restricts its own conversion to -- see those methods. Seeding from
@@ -760,6 +797,8 @@ class Encoder:
         # effect that writes it.
         written_from: dict[Fluent, set[Fluent]] = {}
         for a in actions:
+            for condition in self._effect_definedness[a]:
+                relevant_fluents.update(get_fluents(self._converter.convert(condition)))
             relevant_fluents.update(self._action_read_fluents(a))
             for _, e in self.events[a]:
                 for eff in e.effects:
@@ -1552,7 +1591,35 @@ class Encoder:
     def _convert_timing(self, timing: "up.model.Timing") -> Timing:
         return Timing(timing.is_from_start(), Fraction(timing.delay))
 
-    def _convert_effects(self, effects: list["up.model.Effect"]) -> list[Effect]:
+    def _convert_conditions(
+        self, conditions: list[FNode], definedness_conditions: list[FNode]
+    ) -> Expression:
+        """The conjunction of `conditions` and of the `definedness_conditions`
+        returned by `_convert_effects`, converted. Only `conditions` is
+        normalized (see the module-level function `definedness_conditions`)."""
+        em = self._problem.environment.expression_manager
+        if len(definedness_conditions) == 0:
+            return self._convert_expression(em.And(conditions))
+        normalized = self._normalize_expression(em.And(conditions))
+        if normalized.is_true():
+            parts = []
+        elif normalized.is_and():
+            parts = list(normalized.args)
+        else:
+            parts = [normalized]
+        return self._converter.convert(em.And(parts + definedness_conditions))
+
+    def _convert_effects(
+        self, effects: list["up.model.Effect"]
+    ) -> tuple[list[Effect], list[FNode], list[FNode]]:
+        """The converted effects; the conditions the event must also satisfy;
+        and the `definedness_conditions` of every effect value, which
+        `_compute_relevant_fluents` seeds from. The event's conditions are the
+        `definedness_conditions` of every value no converted effect carries:
+        a value whose target compaction dropped, and a bool assignment value
+        that folding discards. Every value is evaluated when the event fires,
+        so an undefined one makes the event inapplicable even when it isn't
+        the one assigned."""
         env = self._problem.environment
         em = env.expression_manager
         fluent_to_effects: dict[FNode, list[list[FNode]]] = {}
@@ -1568,18 +1635,13 @@ class Encoder:
                 fluent_to_effects[effect.fluent][2].append(effect.value)
 
         converted_effects = []
+        event_conditions: dict[FNode, None] = {}
+        effect_definedness: dict[FNode, None] = {}
         for fluent, (
             inc_effects,
             dec_effects,
             assign_effects,
         ) in fluent_to_effects.items():
-            tl_fluent = self.fluent_ids.get(self._convert_fluent(fluent))
-            if tl_fluent is None:
-                # Compaction dropped this fluent as irrelevant -- nothing
-                # reads it, so the effect that would write it can't matter
-                # either (see `_encode`/`_compute_relevant_fluents`).
-                continue
-
             some_inc_dec_effects = len(inc_effects) > 0 or len(dec_effects) > 0
             some_assign_effects = len(assign_effects) > 0
             is_bool_type = fluent.fluent().type.is_bool_type()
@@ -1625,13 +1687,35 @@ class Encoder:
                 else:
                     value = em.Minus(fluent, em.Plus(dec_effects))
 
-            converted_value = self._convert_expression(value)
-            converted_effects.append(Effect(tl_fluent, converted_value))
+            # The values folding discarded: only bool assignments, since
+            # multiple numeric assignments are identical.
+            for v in assign_effects:
+                if v is not value:
+                    for c in definedness_conditions(self._normalize_expression(v)):
+                        event_conditions[c] = None
+                        effect_definedness[c] = None
 
-        return converted_effects
+            normalized = self._normalize_expression(value)
+            value_definedness = list(definedness_conditions(normalized))
+            effect_definedness.update(dict.fromkeys(value_definedness))
+            tl_fluent = self.fluent_ids.get(self._convert_fluent(fluent))
+            if tl_fluent is None:
+                # Compaction dropped this fluent as irrelevant: nothing reads
+                # it, so the effect's value can't matter. Whether the value
+                # is defined still can, so that survives as conditions. Their
+                # fluents were seeded by `_compute_relevant_fluents`.
+                event_conditions.update(dict.fromkeys(value_definedness))
+                continue
+
+            converted_effects.append(
+                Effect(tl_fluent, self._converter.convert(normalized))
+            )
+
+        return converted_effects, list(event_conditions), list(effect_definedness)
 
     def _build_events(self, considered_actions: list[Action] | None = None) -> None:
-        """Sets `_events` (and, when unrestricted, `_applicable_actions`).
+        """Sets `_events`/`_effect_definedness` (and, when unrestricted,
+        `_applicable_actions`).
 
         `considered_actions=None` means every action gets an `_events` entry
         (pass 1, or an unrestricted encode), and `_applicable_actions` is
@@ -1653,6 +1737,9 @@ class Encoder:
         self._events: dict[Action, list[tuple[Timing, Event]]] = {}
         # Durative actions whose events can't be `epsilon` apart, with why.
         unplaceable: list[str] = []
+        # The `definedness_conditions` of each action's effect values (see
+        # `_convert_effects`), as FNodes, so independent of fluent numbering.
+        self._effect_definedness: dict[Action, list[FNode]] = {}
         restrict = considered_actions is not None
         considered_names = (
             None
@@ -1789,17 +1876,18 @@ class Encoder:
             else:
                 assert isinstance(a, up.model.InstantaneousAction)
                 conv_t = Timing(True, Fraction(0))
-                te = tuple(self._convert_effects(a.effects))
+                effects, conditions, definedness = self._convert_effects(a.effects)
+                self._effect_definedness[action] = definedness
                 self._events[action] = [
                     (
                         conv_t,
                         Event(
                             action,
                             0,
-                            self._convert_expression(em.And(a.preconditions)),
+                            self._convert_conditions(a.preconditions, conditions),
                             (),
                             (),
-                            te,
+                            tuple(effects),
                         ),
                     )
                 ]
@@ -1886,18 +1974,23 @@ class Encoder:
         """Converts an action's buckets into its events, numbered in order:
         each bucket maps a delay to `(timing, conditions, start_conditions,
         end_conditions, effects)` over UP expressions, and is taken in delay
-        order, one bucket after the other."""
-        em = self._problem.environment.expression_manager
+        order, one bucket after the other. Records the `definedness_conditions`
+        of the action's effect values in `_effect_definedness` (see
+        `_convert_effects`)."""
         events: list[tuple[Timing, Event]] = []
+        effect_definedness: dict[FNode, None] = {}
         for bucket in buckets:
             for d in sorted(bucket):
                 t, lc, lsc, lec, le = bucket[d]
                 conv_t = self._convert_timing(t)
-                c = self._convert_expression(em.And(lc))
+                effects, conditions, definedness = self._convert_effects(le)
+                effect_definedness.update(dict.fromkeys(definedness))
+                c = self._convert_conditions(lc, conditions)
                 tsc = tuple([self._convert_expression(sc) for sc in lsc])
                 tec = tuple([self._convert_expression(ec) for ec in lec])
-                te = tuple(self._convert_effects(le))
+                te = tuple(effects)
                 events.append((conv_t, Event(action, len(events), c, tsc, tec, te)))
+        self._effect_definedness[action] = list(effect_definedness)
         return events
 
     @staticmethod

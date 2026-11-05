@@ -36,7 +36,7 @@ from unified_planning.engines import PlanGenerationResult, ValidationResult
 from unified_planning.engines import PlanGenerationResultStatus as ResultStatus
 from unified_planning.engines.compilers.timed_to_sequential import TimedToSequential
 from unified_planning.exceptions import UPStateMissingFluentError
-from unified_planning.plans import TimeTriggeredPlan
+from unified_planning.plans import SequentialPlan, TimeTriggeredPlan
 from unified_planning.shortcuts import (
     GE,
     LE,
@@ -133,6 +133,8 @@ def _build_problems():
         problems_generator.get_problem_temporal_division_by_zero(),
         problems_generator.get_problem_compression_safe_division_by_zero(),
         problems_generator.get_problem_timed_division_by_zero(),
+        problems_generator.get_problem_undefined_unread_effect(),
+        problems_generator.get_problem_undefined_discarded_bool_effect(),
     ]
 
     up_example_problems = list(
@@ -2578,6 +2580,66 @@ def test_relevant_equality_excludes_bookkeeping_fluents_from_encoding():
             assert res.status == ResultStatus.SOLVED_SATISFICING
             with PlanValidator(problem_kind=temporal.kind) as v:
                 assert v.validate(temporal, res.plan)
+
+
+def test_relevance_analysis_keeps_definedness_of_dropped_effects():
+    """An undefined effect makes its action inapplicable, so compaction may
+    drop a fluent that nothing reads only if the definedness of the values
+    written to it survives: `get_problem_undefined_unread_effect`'s `f`, `c`
+    and `p` are dropped, `g` (their values' divisor) is kept, `h` (read only
+    by `f`'s value, outside any divisor) is dropped too, and `a` waits for
+    `set_g` exactly as it does without compaction."""
+    problem = problems_generator.get_problem_undefined_unread_effect()
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+
+        encoder = Encoder(
+            ground_problem,
+            lifted_problem,
+            map_back_action_instance,
+            symmetry_breaking=False,
+            compression_safe_actions=False,
+            relevance_analysis=True,
+        )
+        assert set(encoder.fluents) == {"g", "done"}
+
+        for relevant_equality in [True, False]:
+            search = tamerlite.SearchParams(relevant_equality=relevant_equality)
+            with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+                res: PlanGenerationResult = planner.solve(problem, timeout=None)
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+            assert isinstance(res.plan, SequentialPlan)
+            assert [a.action.name for a in res.plan.actions] == ["set_g", "a"]
+            with PlanValidator(problem_kind=problem.kind) as v:
+                assert v.validate(problem, res.plan)
+
+
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+@pytest.mark.parametrize("relevance_analysis", [True, False])
+@pytest.mark.parametrize("relevant_equality", [True, False])
+def test_definedness_of_discarded_bool_effect_values(
+    disable_rustamer, relevance_analysis, relevant_equality
+):
+    """A bool assignment value that `_convert_effects` folds away still makes
+    its action inapplicable where it is undefined, whatever the relevance
+    settings: `get_problem_undefined_discarded_bool_effect`'s `a` waits for
+    `set_g`. Relevance analysis must not prune `set_g` either, which it would
+    if it only saw the folded `p := True`."""
+    reload_tamerlite(disable_rustamer)
+    problem = problems_generator.get_problem_undefined_discarded_bool_effect()
+    search = tamerlite.SearchParams(
+        relevance_analysis=relevance_analysis, relevant_equality=relevant_equality
+    )
+    with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+        res: PlanGenerationResult = planner.solve(problem, timeout=None)
+    assert res.status == ResultStatus.SOLVED_SATISFICING
+    assert isinstance(res.plan, SequentialPlan)
+    assert [a.action.name for a in res.plan.actions] == ["set_g", "a"]
+    with PlanValidator(problem_kind=problem.kind) as v:
+        assert v.validate(problem, res.plan)
 
 
 def test_custom_heuristic_get_value_respects_relevant_equality():
