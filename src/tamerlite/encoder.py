@@ -667,7 +667,9 @@ class Encoder:
         relevant, the fluents it *depends on* -- those read by
         `_action_read_fluents` (its own conditions and duration bounds), plus
         those read by its own effect value expressions -- are added to the
-        goal-dependency set and the walk continues from there.
+        goal-dependency set and the walk continues from there. The timed
+        action, which always runs, also seeds the walk with what its timed
+        goals and its timed effects' definedness read.
 
         Both passes only ever narrow the search space (an action never
         pruned this way stays available), so this cannot make a solvable
@@ -723,8 +725,12 @@ class Encoder:
         stack = list(get_fluents(self.goal))
         if self._timed_action is not None:
             # The timed action always runs, so what its timed goals read
-            # matters whatever the final goal is.
+            # matters whatever the final goal is, and so does what its timed
+            # effects' definedness reads: an undefined timed effect makes its
+            # event inapplicable even when nothing reads its target.
             stack.extend(self._action_read_fluents(self._timed_action))
+            for condition in self._effect_definedness[self._timed_action]:
+                stack.extend(get_fluents(self._converter.convert(condition)))
         for f in stack:
             checked_fluents[f.idx] = True
 

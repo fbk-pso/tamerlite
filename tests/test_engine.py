@@ -133,6 +133,7 @@ def _build_problems():
         problems_generator.get_problem_temporal_division_by_zero(),
         problems_generator.get_problem_compression_safe_division_by_zero(),
         problems_generator.get_problem_timed_division_by_zero(),
+        problems_generator.get_problem_timed_unread_division_by_zero(),
         problems_generator.get_problem_undefined_unread_effect(),
         problems_generator.get_problem_undefined_discarded_bool_effect(),
     ]
@@ -2638,6 +2639,32 @@ def test_definedness_of_discarded_bool_effect_values(
     assert res.status == ResultStatus.SOLVED_SATISFICING
     assert isinstance(res.plan, SequentialPlan)
     assert [a.action.name for a in res.plan.actions] == ["set_g", "a"]
+    with PlanValidator(problem_kind=problem.kind) as v:
+        assert v.validate(problem, res.plan)
+
+
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+@pytest.mark.parametrize("relevance_analysis", [True, False])
+@pytest.mark.parametrize("relevant_equality", [True, False])
+def test_relevance_keeps_definedness_of_unread_timed_effects(
+    disable_rustamer, relevance_analysis, relevant_equality
+):
+    """The timed action always runs, so an undefined timed effect blocks the
+    plan even when nothing reads its target: in
+    `get_problem_timed_unread_division_by_zero`, relevance analysis must keep
+    `set_d`, which makes the timed effect's divisor nonzero, and every
+    setting must start it before the timed effect at time 3."""
+    reload_tamerlite(disable_rustamer)
+    problem = problems_generator.get_problem_timed_unread_division_by_zero()
+    search = tamerlite.SearchParams(
+        relevance_analysis=relevance_analysis, relevant_equality=relevant_equality
+    )
+    with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+        res: PlanGenerationResult = planner.solve(problem, timeout=None)
+    assert res.status == ResultStatus.SOLVED_SATISFICING
+    assert isinstance(res.plan, TimeTriggeredPlan)
+    starts = {a.action.name: s for s, a, _ in res.plan.timed_actions}
+    assert starts["set_d"] < 3
     with PlanValidator(problem_kind=problem.kind) as v:
         assert v.validate(problem, res.plan)
 

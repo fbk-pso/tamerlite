@@ -3332,6 +3332,41 @@ def get_problem_timed_division_by_zero(at_zero: bool = False) -> Problem:
     return problem
 
 
+def get_problem_timed_unread_division_by_zero() -> Problem:
+    """The timed effect `x := 10 / d` at time 3 of
+    `get_problem_timed_division_by_zero`, but nothing reads `x`: the goal is
+    `done`, which `finish` achieves. The timed effect is still evaluated, and
+    is undefined while `d = 0`, so its timed event is inapplicable unless
+    `set_d` starts before time 3: the only plans do. Relevance analysis must
+    keep `set_d` although `x` is irrelevant (`_compute_relevant_actions`),
+    and compaction drops `x` but keeps `d != 0` on the timed event."""
+    problem = Problem("timed_unread_division_by_zero")
+
+    d = Fluent("d", IntType())
+    x = Fluent("x", RealType())
+    done = Fluent("done", BoolType())
+    problem.add_fluent(d, default_initial_value=0)
+    problem.add_fluent(x, default_initial_value=0)
+    problem.add_fluent(done, default_initial_value=False)
+
+    set_d = DurativeAction("set_d")
+    set_d.set_fixed_duration(1)
+    # Not repeatable, like `finish`, which keeps the search space finite
+    # even without duplicate detection.
+    set_d.add_condition(StartTiming(), Equals(d, 0))
+    set_d.add_effect(StartTiming(), d, 2)
+
+    finish = InstantaneousAction("finish")
+    finish.add_precondition(Not(done))
+    finish.add_effect(done, True)
+
+    problem.add_actions([set_d, finish])
+    problem.add_timed_effect(GlobalStartTiming(3), x, Div(10, d))
+    problem.add_goal(done)
+
+    return problem
+
+
 def get_problem_undefined_unread_effect() -> Problem:
     """`a`'s effects `f := h / g`, `c += 1 / g` and `p := 1 / g > 0` are
     undefined while `g = 0`, which makes `a` inapplicable until `set_g` has
