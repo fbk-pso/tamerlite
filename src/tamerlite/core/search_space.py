@@ -29,6 +29,20 @@ from unified_planning.model import DeltaSimpleTemporalNetwork
 DEFAULT_EPSILON = Fraction(1, 100)
 
 
+class _NoSubsumptionSTN(DeltaSimpleTemporalNetwork):
+    """A `DeltaSimpleTemporalNetwork` whose `add` never checks for subsumption
+    and always prepends the new edge, mirroring the Rust core's
+    `DeltaSTN::new_without_subsumption`. Meant for `SearchSpace.build_plan`'s
+    network, where each (x, y) pair is added about once, so the out-list walk
+    almost always misses. Skipping it changes neither the verdict nor the schedule,
+    since an implied edge never lowers a distance.
+
+    Overrides UP's private `_is_subsumed`, which `add` calls."""
+
+    def _is_subsumed(self, x: object, y: object, b: Fraction) -> bool:
+        return False
+
+
 class IfReturnType(Enum):
     """The declared return type of an interpreted function, as tagged by
     `Converter.walk_interpreted_function_exp`. Mirrors the `#[pyclass] enum
@@ -1315,7 +1329,7 @@ class SearchSpace(SearchSpaceABC):
         if not self.is_temporal:
             return [(None, a, None) for a in path]
 
-        tn = DeltaSimpleTemporalNetwork()
+        tn = _NoSubsumptionSTN()
         todo: dict[Action, tuple[int, int]] = {}
         event_path: list[tuple[Event, int]] = []
         counter = 0
