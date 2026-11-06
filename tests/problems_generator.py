@@ -3260,14 +3260,24 @@ def get_problem_temporal_division_by_zero() -> Problem:
     return problem
 
 
-def get_problem_compression_safe_division_by_zero() -> Problem:
+def get_problem_compression_safe_division_by_zero(
+    interpreted: bool = False,
+) -> Problem:
     """`get_problem_temporal_division_by_zero` with `set_d`'s effect at
-    start, so both actions pass `Encoder._compute_compression_safe_actions`.
-    `run`'s duration `10 / d` is undefined while `d = 0`, so the engine keeps
-    the problem off the `TimedToSequential` recompile, which drops durations,
-    and the temporal search makes `run` wait for `set_d`: the only plans
-    start with `set_d`."""
-    problem = Problem("compression_safe_division_by_zero")
+    start, so both actions pass `Encoder._compute_compression_safe_actions`
+    and the engine compiles the problem with `TimedToSequential`, which drops
+    durations. `run`'s duration `10 / d` is undefined while `d = 0`, so its
+    compiled action gets the precondition `not (d == 0)`
+    (`Encoder.duration_definedness`) and waits for `set_d`: the only plans
+    start with `set_d`. With `interpreted`, the duration is an interpreted
+    function computing `10 / d`, which raises `ZeroDivisionError` while
+    `d = 0`, and the precondition is the self-comparison `ten_over(d) <=
+    ten_over(d)`, which UP's simplifier must not see."""
+    problem = Problem(
+        "compression_safe_if_division_by_zero"
+        if interpreted
+        else "compression_safe_division_by_zero"
+    )
 
     d = Fluent("d", IntType())
     ready = Fluent("ready")
@@ -3282,8 +3292,20 @@ def get_problem_compression_safe_division_by_zero() -> Problem:
     set_d.add_condition(StartTiming(), Equals(d, 0))
     set_d.add_effect(StartTiming(), d, 2)
 
+    if interpreted:
+
+        def ten_over(x):
+            return Fraction(10, x)
+
+        IF_ten_over = InterpretedFunction(
+            "ten_over", RealType(), OrderedDict(x=IntType()), ten_over
+        )
+        duration = IF_ten_over(d)
+    else:
+        duration = Div(10, d)
+
     run = DurativeAction("run")
-    run.set_fixed_duration(Div(10, d))
+    run.set_fixed_duration(duration)
     run.add_condition(StartTiming(), ready)
     run.add_effect(StartTiming(), ready, False)
     run.add_effect(EndTiming(), done, True)

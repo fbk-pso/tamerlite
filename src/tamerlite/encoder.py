@@ -141,14 +141,6 @@ def definedness_conditions(exp: FNode) -> Iterator[FNode]:
             stack.extend(exp.args)
 
 
-def may_be_undefined(exp: FNode) -> bool:
-    """Whether `exp` may be undefined in some state (see
-    `definedness_conditions`). An undefined duration bound or effect makes its
-    action inapplicable (`has_possibly_undefined_duration`,
-    `_convert_effects`)."""
-    return next(definedness_conditions(exp), None) is not None
-
-
 def extract_and_arguments(expressions: list[FNode]) -> Iterable[FNode]:
     stack: list[FNode] = list(expressions)
     while len(stack) > 0:
@@ -210,11 +202,13 @@ class Encoder:
         if_cache: MutableMapping[tuple[InterpretedFunction, tuple], Any] | None = None,
         if_wrappers: dict[InterpretedFunction, Callable] | None = None,
         lifted_problem_kind: up.model.ProblemKind | None = None,
+        precondition_definedness: dict[str, list[FNode]] | None = None,
     ):
         self._problem = problem
         self._lifted_problem = lifted_problem
         self._map_back_action_instance = map_back_action_instance
         self._lifted_problem_kind = lifted_problem_kind
+        self._precondition_definedness = precondition_definedness or {}
         if full:
             self._simplifier = up.model.walkers.Simplifier(problem.environment, problem)
         else:
@@ -1502,20 +1496,21 @@ class Encoder:
             self._compression_safe_actions
         )
 
-    def has_possibly_undefined_duration(self) -> bool:
-        """Whether a bound of some durative action's duration may be undefined
-        (`may_be_undefined`). An undefined bound makes the action inapplicable,
-        which only the temporal search can check: `TimedToSequential` drops
-        durations, so such a problem must not be compiled to sequential even
-        when all its actions are compression-safe."""
-        return any(
-            isinstance(action, up.model.DurativeAction)
-            and (
-                may_be_undefined(action.duration.lower)
-                or may_be_undefined(action.duration.upper)
-            )
-            for action in self._problem.actions
-        )
+    def duration_definedness(self) -> dict[str, list[FNode]]:
+        """The `definedness_conditions` of each durative action's normalized
+        duration bounds, deduplicated, by action name, leaving out the actions
+        that have none."""
+        result = {}
+        for a in self._problem.actions:
+            if isinstance(a, up.model.DurativeAction):
+                conditions = dict.fromkeys(
+                    c
+                    for bound in (a.duration.lower, a.duration.upper)
+                    for c in definedness_conditions(self._normalize_expression(bound))
+                )
+                if conditions:
+                    result[a.name] = list(conditions)
+        return result
 
     def build_plan(self, path: list[Action]) -> Plan:
         plan = self.search_space.build_plan(path)
@@ -1884,6 +1879,9 @@ class Encoder:
                 conv_t = Timing(True, Fraction(0))
                 effects, conditions, definedness = self._convert_effects(a.effects)
                 self._effect_definedness[action] = definedness
+                extra = self._precondition_definedness.get(a.name)
+                if extra is not None:
+                    conditions = list(dict.fromkeys(conditions + extra))
                 self._events[action] = [
                     (
                         conv_t,

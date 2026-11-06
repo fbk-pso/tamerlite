@@ -132,6 +132,9 @@ def _build_problems():
         problems_generator.get_problem_division_by_zero(),
         problems_generator.get_problem_temporal_division_by_zero(),
         problems_generator.get_problem_compression_safe_division_by_zero(),
+        problems_generator.get_problem_compression_safe_division_by_zero(
+            interpreted=True
+        ),
         problems_generator.get_problem_timed_division_by_zero(),
         problems_generator.get_problem_timed_unread_division_by_zero(),
         problems_generator.get_problem_undefined_unread_effect(),
@@ -2665,6 +2668,43 @@ def test_relevance_keeps_definedness_of_unread_timed_effects(
     assert isinstance(res.plan, TimeTriggeredPlan)
     starts = {a.action.name: s for s, a, _ in res.plan.timed_actions}
     assert starts["set_d"] < 3
+    with PlanValidator(problem_kind=problem.kind) as v:
+        assert v.validate(problem, res.plan)
+
+
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+@pytest.mark.parametrize("interpreted", [False, True])
+@pytest.mark.parametrize("relevant_equality", [True, False])
+def test_sequential_compile_keeps_duration_definedness(
+    monkeypatch, disable_rustamer, interpreted, relevant_equality
+):
+    """A duration that may be undefined doesn't keep a compression-safe
+    problem off the `TimedToSequential` compile, which drops durations: its
+    definedness becomes preconditions of the compiled action
+    (`Encoder.duration_definedness`). In
+    `get_problem_compression_safe_division_by_zero`, `run` must therefore
+    still wait for `set_d`, or `build_plan` would evaluate `10 / 0`."""
+    reload_tamerlite(disable_rustamer)
+    compiles = 0
+    compile_ = tamerlite.engine.TimedToSequential.compile
+
+    def counting_compile(self, *args, **kwargs):
+        nonlocal compiles
+        compiles += 1
+        return compile_(self, *args, **kwargs)
+
+    monkeypatch.setattr(tamerlite.engine.TimedToSequential, "compile", counting_compile)
+    problem = problems_generator.get_problem_compression_safe_division_by_zero(
+        interpreted=interpreted
+    )
+    search = tamerlite.SearchParams(relevant_equality=relevant_equality)
+    with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+        res: PlanGenerationResult = planner.solve(problem, timeout=None)
+    assert compiles == 1
+    assert res.status == ResultStatus.SOLVED_SATISFICING
+    assert isinstance(res.plan, TimeTriggeredPlan)
+    starts = {a.action.name: s for s, a, _ in res.plan.timed_actions}
+    assert starts["set_d"] < starts["run"]
     with PlanValidator(problem_kind=problem.kind) as v:
         assert v.validate(problem, res.plan)
 

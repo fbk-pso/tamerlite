@@ -1119,7 +1119,6 @@ class TamerLite(
             are_all_actions_compression_safe = (
                 not is_intermediate_solution
                 and encoder.are_all_actions_compression_safe()
-                and not encoder.has_possibly_undefined_duration()
             )
             is_any_action_compression_safe = (
                 are_all_actions_compression_safe
@@ -1131,7 +1130,15 @@ class TamerLite(
                 # `TimedToSequential.supported_kind()` doesn't declare
                 # MAKESPAN, but a fully compression-safe problem can still
                 # carry a minimize-makespan metric, which would make
-                # the kind check reject it.
+                # the kind check reject it. The compile drops durations, so
+                # the definedness of each duration becomes preconditions of
+                # its compiled action, which read the state the duration is
+                # evaluated in. They are passed to the `Encoder` rather than
+                # added to the problem, whose simplifier could fold them to
+                # True. The compiler can't prune a fluent they read: it keeps
+                # every written fluent, and an unwritten one is static, so
+                # the normalized bounds they come from hold its value.
+                duration_definedness = encoder.duration_definedness()
                 t2s_compiler = TimedToSequential()
                 t2s_compiler.skip_checks = True
                 compilation_res = t2s_compiler.compile(ground_problem)
@@ -1157,6 +1164,7 @@ class TamerLite(
                     if_cache=if_cache,
                     if_wrappers=if_wrappers,
                     lifted_problem_kind=lifted_problem_kind,
+                    precondition_definedness=duration_definedness,
                 )
 
             if not encoder.has_initial_state:

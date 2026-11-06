@@ -411,7 +411,10 @@ which follow the PDDL 2.1 reading:
 - an undefined action condition, whole-action condition or goal does not hold;
 - an undefined effect or duration bound makes the action inapplicable, even when
   relevance analysis drops the effect's target: the effect survives as a definedness
-  condition on its event (see "Relevance analysis" below);
+  condition on its event (see "Relevance analysis" below). The
+  `TimedToSequential` compile drops durations, so the engine passes each
+  duration's definedness (`Encoder.duration_definedness`) to the compiled
+  problem's `Encoder` as unnormalized preconditions of its action;
 - the timed action follows the same rule: an undefined timed goal does not
   hold and an undefined timed effect makes its timed event inapplicable. At
   time 0 that leaves no initial state, so no plan (both cores' `open_timed_action`).
