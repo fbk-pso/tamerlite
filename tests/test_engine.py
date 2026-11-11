@@ -2902,6 +2902,76 @@ def test_timed_effects_disable_compression_safe_actions():
         assert compression_safe == [True, False]
 
 
+def _compression_safe_action_names(problem: Problem) -> set[str]:
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    encoder = Encoder(
+        ground_problem,
+        lifted_problem,
+        map_back_action_instance,
+        symmetry_breaking=False,
+        compression_safe_actions=True,
+        relevance_analysis=False,
+    )
+    return {encoder.action_names[a.idx] for a in encoder.compression_safe_actions}
+
+
+@pytest.mark.parametrize(
+    "make_problem, expected",
+    [
+        pytest.param(
+            partial(problems_generator.get_problem_compression_effect_read, False),
+            set(),
+            id="effect_read_instantaneous",
+        ),
+        pytest.param(
+            partial(problems_generator.get_problem_compression_effect_read, True),
+            {"c"},
+            id="effect_read_durative",
+        ),
+    ],
+)
+def test_compression_safe_actions(make_problem: Callable[[], Problem], expected):
+    """Which actions `Encoder._compute_compression_safe_actions` marks safe.
+    `c` as a start-only durative action has no later effect, so it is safe
+    whatever the problem."""
+    assert _compression_safe_action_names(make_problem()) == expected
+
+
+@pytest.mark.parametrize(
+    "make_problem",
+    [
+        pytest.param(
+            partial(problems_generator.get_problem_compression_effect_read, False),
+            id="effect_read_instantaneous",
+        ),
+        pytest.param(
+            partial(problems_generator.get_problem_compression_effect_read, True),
+            id="effect_read_durative",
+        ),
+    ],
+)
+def test_compression_preserves_plan_existence(make_problem: Callable[[], Problem]):
+    """Compression loses no plan: each problem has one, found with
+    compression on and off, on both backends."""
+    problem = make_problem()
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        for compression_safe_actions in [True, False]:
+            search = tamerlite.SearchParams(
+                compression_safe_actions=compression_safe_actions
+            )
+            with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+                res = planner.solve(problem, timeout=60)
+            assert res.status == ResultStatus.SOLVED_SATISFICING, (
+                disable_rustamer,
+                compression_safe_actions,
+            )
+            with PlanValidator(problem_kind=problem.kind) as v:
+                assert v.validate(problem, res.plan)
+
+
 def test_conditional_timed_effects_are_not_supported():
     problem = problems_generator.get_problem_timed_effects_at_zero()
     assert tamerlite.engine.TamerLite.supports(problem.kind)

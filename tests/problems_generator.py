@@ -3288,3 +3288,39 @@ def get_problem_counter() -> Problem:
     problem.add_action(inc)
     problem.add_goal(GE(x, 10))
     return problem
+
+
+def get_problem_compression_effect_read(c_durative: bool) -> Problem:
+    """`a` is compression-safe by its own conditions and effects: at start it
+    requires `not done` and sets `done` and `r`, at end it sets `f`. `c` is
+    enabled only by `a`'s start and sets `y` to `not f`, so the only plans
+    place `c` inside `a`'s window, where `f` is still false: moving `c` after
+    `a`'s end would leave `y` false. With `c_durative`, `c` is a durative
+    action with only start effects, so every action would be
+    compression-safe if the read of `f` were ignored."""
+    done, r, f, y = (Fluent(n, BoolType()) for n in ("done", "r", "f", "y"))
+    a = DurativeAction("a")
+    a.set_fixed_duration(5)
+    a.add_condition(StartTiming(), Not(done))
+    a.add_effect(StartTiming(), done, True)
+    a.add_effect(StartTiming(), r, True)
+    a.add_effect(EndTiming(), f, True)
+    c: DurativeAction | InstantaneousAction
+    if c_durative:
+        c = DurativeAction("c")
+        c.set_fixed_duration(1)
+        c.add_condition(StartTiming(), r)
+        c.add_effect(StartTiming(), y, Not(f))
+    else:
+        c = InstantaneousAction("c")
+        c.add_precondition(r)
+        c.add_effect(y, Not(f))
+    problem = Problem(
+        f"compression_effect_read_{'durative' if c_durative else 'instantaneous'}"
+    )
+    for fluent in (done, r, f, y):
+        problem.add_fluent(fluent, default_initial_value=False)
+    problem.add_action(a)
+    problem.add_action(c)
+    problem.add_goal(y)
+    return problem
