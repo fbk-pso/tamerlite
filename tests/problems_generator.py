@@ -3324,3 +3324,25 @@ def get_problem_compression_effect_read(c_durative: bool) -> Problem:
     problem.add_action(c)
     problem.add_goal(y)
     return problem
+
+
+def get_problem_compression_open_window() -> Problem:
+    """`p` holds only while `b` runs, and the compression-safe `a` needs it
+    only at its start: the only plans start `a` inside `b`'s window and end it
+    after `b` ends."""
+    p, g = Fluent("p", BoolType()), Fluent("g", BoolType())
+    a = DurativeAction("a")
+    a.set_fixed_duration(5)
+    a.add_condition(StartTiming(), p)
+    a.add_effect(EndTiming(), g, True)
+    b = DurativeAction("b")
+    b.set_fixed_duration(1)
+    b.add_effect(StartTiming(), p, True)
+    b.add_effect(EndTiming(), p, False)
+    problem = Problem("compression_open_window")
+    problem.add_fluent(p, default_initial_value=False)
+    problem.add_fluent(g, default_initial_value=False)
+    problem.add_action(a)
+    problem.add_action(b)
+    problem.add_goal(g)
+    return problem

@@ -2930,6 +2930,11 @@ def _compression_safe_action_names(problem: Problem) -> set[str]:
             {"c"},
             id="effect_read_durative",
         ),
+        pytest.param(
+            problems_generator.get_problem_compression_open_window,
+            {"a"},
+            id="open_window",
+        ),
     ],
 )
 def test_compression_safe_actions(make_problem: Callable[[], Problem], expected):
@@ -2949,6 +2954,10 @@ def test_compression_safe_actions(make_problem: Callable[[], Problem], expected)
         pytest.param(
             partial(problems_generator.get_problem_compression_effect_read, True),
             id="effect_read_durative",
+        ),
+        pytest.param(
+            problems_generator.get_problem_compression_open_window,
+            id="open_window",
         ),
     ],
 )

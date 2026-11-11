@@ -1202,7 +1202,10 @@ class Encoder:
           and every end condition is also an `over all` condition;
         - `W` reads the same values: every later effect (after `start + 0`)
           assigns a boolean constant to a fluent that is read only by literal
-          conditions (`_extract_reads`), none requiring the opposite value."""
+          conditions (`_extract_reads`), none requiring the opposite value.
+
+        The search compresses only when nothing is in progress, so `W` fits
+        after `A`'s end."""
         actions = [False] * len(self.action_names)
         fluent_to_conditions, complex_read_fluents = self._extract_reads()
         for action in self._problem.actions:

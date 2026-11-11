@@ -502,11 +502,14 @@ impl SearchSpace {
                     return Ok(None);
                 }
 
+                // Compress only with nothing in progress: the remaining events
+                // of an action in `todo` would bound the compressed action's end
                 if enable_compression_safe_actions
                     && self
                         .compression_safe_actions
                         .as_ref()
                         .is_some_and(|is_compression_safe| is_compression_safe[action.idx])
+                    && state.todo.is_empty()
                     && events.len() > 1
                 {
                     let start_id = new_state.todo.remove(&action).unwrap().1;
