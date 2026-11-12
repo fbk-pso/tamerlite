@@ -5504,3 +5504,111 @@ def test_long_path_is_freed_without_recursion():
     result = outcome["result"]
     assert result.status == ResultStatus.SOLVED_SATISFICING
     assert len(result.plan.actions) == n
+
+
+def _search_space_hook_planner(make_params):
+    """A Python-core `TamerLite` whose `_make_search_space` returns a
+    delegating wrapper, recording the wrappers and the ground solves.
+    `make_params` runs after the reload, so its params match the engine."""
+    reload_tamerlite(True)
+
+    class CountingSearchSpace(SearchSpaceABC):
+        def __init__(self, wrapped):
+            self._wrapped = wrapped
+            self.successor_calls = 0
+
+        @property
+        def is_temporal(self):
+            return self._wrapped.is_temporal
+
+        @property
+        def has_deadline(self):
+            return self._wrapped.has_deadline
+
+        @property
+        def epsilon(self):
+            return self._wrapped.epsilon
+
+        @property
+        def timed_action(self):
+            return self._wrapped.timed_action
+
+        def makespan(self, state):
+            return self._wrapped.makespan(state)
+
+        def reset(self):
+            self._wrapped.reset()
+
+        def initial_state(self, initial_state=None):
+            return self._wrapped.initial_state(initial_state)
+
+        def get_successor_state(self, state, action):
+            return self._wrapped.get_successor_state(state, action)
+
+        def get_successor_states(self, state):
+            self.successor_calls += 1
+            return self._wrapped.get_successor_states(state)
+
+        def goal_reached(self, state, goal=None):
+            return self._wrapped.goal_reached(state, goal)
+
+        def subgoals_sat(self, state, goal=None):
+            return self._wrapped.subgoals_sat(state, goal)
+
+        def build_plan(self, path):
+            return self._wrapped.build_plan(path)
+
+    class HookedTamerLite(tamerlite.engine.TamerLite):
+        def __init__(self, search):
+            super().__init__(search)
+            self.wrappers = []
+            self.ground_calls = 0
+
+        def _make_search_space(self, encoder):
+            wrapper = CountingSearchSpace(encoder.search_space)
+            self.wrappers.append(wrapper)
+            return wrapper
+
+        def _solve_ground_problem(self, *args, **kwargs):
+            self.ground_calls += 1
+            return super()._solve_ground_problem(*args, **kwargs)
+
+    planner = HookedTamerLite(make_params())
+    # The flight fixtures have BOUNDED_TYPES, which `supports` rejects.
+    planner.skip_checks = True
+    return planner
+
+
+@pytest.mark.parametrize("multiqueue", [False, True])
+def test_search_space_hook_oneshot(multiqueue):
+    problem = problems_generator.get_problem_temporal_flight()
+
+    def make_params():
+        if multiqueue:
+            return tamerlite.engine.MultiqueueParams(
+                queues=[
+                    tamerlite.HeuristicParams(heuristic="hff", weight=0.8),
+                    tamerlite.HeuristicParams(heuristic="hadd", weight=0.8),
+                ]
+            )
+        return tamerlite.SearchParams()
+
+    planner = _search_space_hook_planner(make_params)
+    res = planner.solve(problem)
+    assert res.status == ResultStatus.SOLVED_SATISFICING
+    assert len(planner.wrappers) == 1
+    assert planner.wrappers[0].successor_calls > 0
+
+    plain = tamerlite.engine.TamerLite(make_params())
+    plain.skip_checks = True
+    assert res.plan == plain.solve(problem).plan
+
+
+def test_search_space_hook_anytime():
+    problem = problems_generator.get_problem_temporal_flight_minimize_makespan()
+    planner = _search_space_hook_planner(lambda: tamerlite.SearchParams())
+    results = list(planner.get_solutions(problem, timeout=None))
+    assert results[-1].plan is not None
+    assert planner.ground_calls >= 2
+    assert len(planner.wrappers) == planner.ground_calls
+    assert all(w.successor_calls > 0 for w in planner.wrappers)
