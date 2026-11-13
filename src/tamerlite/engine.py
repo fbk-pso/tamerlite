@@ -661,6 +661,14 @@ class TamerLite(
 
         return search_name, search
 
+    def _make_search_space(self, encoder: Encoder) -> search_space.SearchSpaceABC:
+        """Return the search space the search runs on.
+
+        Returning anything other than the encoder's `SearchSpace` while the
+        Rust core is in use requires changing `rustamer` to accept it.
+        """
+        return encoder.search_space
+
     def _compile_problem(
         self, problem: "up.model.Problem"
     ) -> tuple[
@@ -1294,6 +1302,8 @@ class TamerLite(
                     is_any_action_compression_safe,
                 )
 
+            ss = self._make_search_space(encoder)
+
             if self._params.weak_equality and not encoder.search_space.is_temporal:
                 warnings.warn(
                     "weak_equality has no effect on non-temporal problems.",
@@ -1319,7 +1329,7 @@ class TamerLite(
 
                 start = time.monotonic()
                 path, metrics = multiqueue_search(
-                    encoder.search_space,
+                    ss,
                     heuristics,
                     timeout,
                     max_expanded_states=max_expanded_states,
@@ -1338,7 +1348,7 @@ class TamerLite(
                         updated_timeout,
                     )
                     path, metrics = multiqueue_search(
-                        encoder.search_space,
+                        ss,
                         heuristics,
                         updated_timeout,
                         max_expanded_states=max_expanded_states,
@@ -1355,7 +1365,7 @@ class TamerLite(
                 if self._params.weak_equality and search_name not in ("dfs", "bfs"):
                     start = time.monotonic()
                     path, metrics = search(
-                        encoder.search_space,
+                        ss,
                         timeout=timeout,
                         max_expanded_states=max_expanded_states,
                         early_termination=self._params.early_termination,
@@ -1369,7 +1379,7 @@ class TamerLite(
                             updated_timeout,
                         )
                         path, metrics = search(
-                            encoder.search_space,
+                            ss,
                             timeout=updated_timeout,
                             max_expanded_states=max_expanded_states,
                             early_termination=self._params.early_termination,
@@ -1377,7 +1387,7 @@ class TamerLite(
                         )
                 else:
                     path, metrics = search(
-                        encoder.search_space,
+                        ss,
                         timeout=timeout,
                         max_expanded_states=max_expanded_states,
                         early_termination=self._params.early_termination,
