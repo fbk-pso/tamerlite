@@ -68,6 +68,7 @@ fn rustamer(py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(multiqueue_search, &m)?)?;
     m.add_function(wrap_pyfunction!(wastar_search, &m)?)?;
     m.add_function(wrap_pyfunction!(wastar_search_memory_bounded, &m)?)?;
+    m.add_function(wrap_pyfunction!(wastar_search_enumerate, &m)?)?;
     m.add_function(wrap_pyfunction!(astar_search, &m)?)?;
     m.add_function(wrap_pyfunction!(astar_search_memory_bounded, &m)?)?;
     m.add_function(wrap_pyfunction!(gbfs_search, &m)?)?;

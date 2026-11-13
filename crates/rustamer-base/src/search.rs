@@ -1098,6 +1098,142 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
     )
 }
 
+/// Plans found by `wastar_search_enumerate`, the metrics, and whether the
+/// timeout stopped the search.
+pub type EnumerateResult = (Vec<Vec<Action>>, FxHashMap<&'static str, String>, bool);
+
+/// Plan enumeration (port of `rust_anytime`): records every goal path with at most
+/// `bound` events (first plan's length if `max_len` is inf), keeps expanding, and
+/// skips dedup so distinct paths to equal states are all enumerated.
+fn enumerate_search<H, S, St, O>(
+    ss: &S,
+    heuristic: &H,
+    timeout: Option<f32>,
+    max_len: f64,
+    name: &str,
+    strategy: &mut St,
+    open: &mut O,
+) -> PyResult<EnumerateResult>
+where
+    H: HeuristicTrait,
+    S: SearchSpaceTrait,
+    St: SearchStrategy,
+    O: OpenList<St::Item>,
+{
+    let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
+    let mut plans: Vec<Vec<Action>> = Vec::new();
+    let start = Instant::now();
+    let Some(init) = ss.initial_state(None)? else {
+        metrics.insert("expanded_states", 0.to_string());
+        return Ok((plans, metrics, false));
+    };
+    let init = <St::Payload as StatePayload>::wrap(init);
+    let init_h = match heuristic.eval(init.as_state(), ss)? {
+        Some(v) => v,
+        None => {
+            metrics.insert("expanded_states", 0.to_string());
+            return Ok((plans, metrics, false));
+        }
+    };
+    open.push_item(strategy.root(init, init_h)?);
+
+    let mut bound = max_len;
+    let mut expanded_states: usize = 0;
+    let mut generated_states: usize = 1;
+    let mut timed_out = false;
+    while let Some(current) = open.pop_item() {
+        if let Some(t) = timeout {
+            if start.elapsed().as_secs_f32() > t {
+                timed_out = true;
+                break;
+            }
+        }
+        expanded_states += 1;
+        let state = St::state_of(&current).as_state();
+        if ss.goal_reached(state, None)? {
+            let path = extract_path(state);
+            if (path.len() as f64) <= bound {
+                info!("{}: plan {} of length {}", name, plans.len(), path.len());
+                if bound.is_infinite() {
+                    bound = path.len() as f64;
+                }
+                plans.push(path);
+            }
+        }
+
+        let successors_iter = ss
+            .get_successor_states_iter(state)
+            .filter_map(|rs| match rs {
+                Ok(s) if s.g <= bound => Some(Ok(<St::Payload as StatePayload>::wrap(s))),
+                Ok(_) => None,
+                Err(e) => Some(Err(e)),
+            });
+
+        strategy.begin_expansion();
+
+        for rs in <St::Payload as StatePayload>::eval_gen(heuristic, successors_iter, ss)? {
+            let (s, h) = rs?;
+            if let Some(v) = h {
+                let item = strategy.child(&current, s, v, generated_states)?;
+                open.push_item(item);
+            }
+            generated_states += 1;
+        }
+    }
+    info!(
+        "{}: {} plans, expanded={} timed_out={}",
+        name,
+        plans.len(),
+        expanded_states,
+        timed_out
+    );
+    metrics.insert("expanded_states", expanded_states.to_string());
+    metrics.insert("generated_states", generated_states.to_string());
+    Ok((plans, metrics, timed_out))
+}
+
+/// Weighted-A* plan enumeration (see `enumerate_search`); `memory_bounded`
+/// selects the bounded open list of `wastar_search_memory_bounded`.
+pub fn wastar_search_enumerate<H: HeuristicTrait, S: SearchSpaceTrait>(
+    ss: &S,
+    heuristic: &H,
+    weight: f64,
+    max_len: f64,
+    timeout: Option<f32>,
+    memory_bounded: bool,
+) -> PyResult<EnumerateResult> {
+    info!(
+        "wastar_search_enumerate: weight={} max_len={} timeout={:?} memory_bounded={}",
+        weight, max_len, timeout, memory_bounded
+    );
+    if memory_bounded {
+        let mut strategy = WAStarStrategy::<State>::new(weight);
+        let mut open: BoundedPriorityQueue<PrioritizedItem<State>> =
+            BoundedPriorityQueue::with_bound(QUEUE_BOUND);
+        enumerate_search(
+            ss,
+            heuristic,
+            timeout,
+            max_len,
+            "wastar_search_enumerate",
+            &mut strategy,
+            &mut open,
+        )
+    } else {
+        let mut strategy = WAStarStrategy::<Rc<State>>::new(weight);
+        let mut open: BinaryHeap<PrioritizedItem<Rc<State>>> = BinaryHeap::new();
+        enumerate_search(
+            ss,
+            heuristic,
+            timeout,
+            max_len,
+            "wastar_search_enumerate",
+            &mut strategy,
+            &mut open,
+        )
+    }
+}
+
 /// Strategy for `novbfs_search`: numeric-novelty scoring via `NumericNovelty`,
 /// plus the `prefer_higher_g` cost-tie-break sign flip.
 struct NovBFSStrategy<'a, P> {

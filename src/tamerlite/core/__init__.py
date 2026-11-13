@@ -91,6 +91,10 @@ if not use_rustamer:
     )
     from tamerlite.core.multiqueue import multiqueue_search
     from tamerlite.core.novelty import NumericNovelty
+
+    def wastar_search_enumerate(*args, **kwargs):
+        # Plan enumeration (SearchParams.max_len) is implemented only in rustamer.
+        raise NotImplementedError("max_len plan enumeration requires rustamer")
     from tamerlite.core.search import (
         ExpansionLimitReached,
         astar_search,
@@ -153,6 +157,7 @@ else:
         rustamer_lib.bfs_search,
         rustamer_lib.dfs_search,
     )
+    wastar_search_enumerate = rustamer_lib.wastar_search_enumerate
     multiqueue_search = rustamer_lib.multiqueue_search
     ExpansionLimitReached = rustamer_lib.ExpansionLimitReached
     novbfs_search = rustamer_lib.novbfs_search

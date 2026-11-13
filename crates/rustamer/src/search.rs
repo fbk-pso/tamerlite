@@ -17,7 +17,7 @@
 
 use super::heuristic::Heuristic;
 use pyo3::prelude::*;
-use rustamer_base::SearchResult;
+use rustamer_base::{EnumerateResult, SearchResult};
 
 #[pyfunction]
 #[pyo3(signature = (ss, timeout=None, max_expanded_states=None, early_termination=false))]
@@ -103,6 +103,19 @@ pub fn wastar_search_memory_bounded(
         early_termination,
         weak_equality,
     )
+}
+
+#[pyfunction]
+#[pyo3(signature = (ss, heuristic, weight, max_len, timeout=None, memory_bounded=true))]
+pub fn wastar_search_enumerate(
+    ss: &rustamer_base::SearchSpace,
+    heuristic: &Heuristic,
+    weight: f64,
+    max_len: f64,
+    timeout: Option<f32>,
+    memory_bounded: bool,
+) -> PyResult<EnumerateResult> {
+    rustamer_base::wastar_search_enumerate(ss, heuristic, weight, max_len, timeout, memory_bounded)
 }
 
 #[pyfunction]

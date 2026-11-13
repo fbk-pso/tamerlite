@@ -71,6 +71,7 @@ from tamerlite.core import (
     novbfs_search_memory_bounded,
     search_space,
     wastar_search,
+    wastar_search_enumerate,
     wastar_search_memory_bounded,
 )
 from tamerlite.core.heuristics import Heuristic
@@ -192,6 +193,9 @@ class SearchParams(HeuristicParams):
     compression_safe_actions: bool = True
     relevance_analysis: bool = True
     incomplete_memory_bounded_search: bool = False
+    # Plan enumeration for dataset generation: every plan with at most `max_len`
+    # events goes to `metrics["plans"]`; `inf` bounds by the first plan found.
+    max_len: float | None = None
 
 
 @dataclass(frozen=True)
@@ -1189,6 +1193,66 @@ class TamerLite(
             search_name != "ehc" and not self._params.incomplete_memory_bounded_search
         )
 
+    def _enumerate_plans(
+        self,
+        encoder: Encoder,
+        original_encoder: Encoder,
+        expand_compressed: bool,
+        ss: search_space.SearchSpaceABC,
+        heuristic: Callable[[State], float | None] | None,
+        timeout: float | None,
+    ) -> "up.engines.results.PlanGenerationResult":
+        """Runs `wastar_search_enumerate` and stores every plan in
+        `metrics["plans"]` as ground action names, one name per event (the
+        format of the `rust_anytime` branch). Status is TIMEOUT when the timeout
+        stopped the enumeration, UNSOLVABLE_INCOMPLETELY when the open list
+        emptied; `plan` is always None."""
+        params = self._params
+        assert isinstance(params, SearchParams) and params.max_len is not None
+        if params.search != "wastar" or params.early_termination:
+            raise ValueError(
+                "max_len requires search='wastar' and early_termination=False"
+            )
+        h, weight = self._get_heuristic(
+            params,
+            heuristic,
+            encoder,
+            params.inadmissible_numeric_heuristic_variant,
+            params.internal_heuristic_cache and encoder.search_space.is_temporal,
+        )
+        paths, metrics, timed_out = wastar_search_enumerate(
+            ss,
+            h,
+            weight,
+            float(params.max_len),
+            timeout=timeout,
+            memory_bounded=params.incomplete_memory_bounded_search,
+        )
+        timed_idx = encoder.timed_action.idx if encoder.timed_action else None
+        plans = []
+        for path in paths:
+            names: list[str] = []
+            for action in path:
+                if action.idx == timed_idx:
+                    continue
+                name = encoder.action_names[action.idx]
+                if expand_compressed:
+                    # The classical compilation has one step per action; the
+                    # original encoding has one entry per event.
+                    n_events = len(original_encoder.events[original_encoder.get_action(name)])
+                    names.extend([name] * n_events)
+                else:
+                    names.append(name)
+            plans.append(names)
+        metrics = dict(metrics)
+        metrics["plans"] = plans  # type: ignore[assignment]
+        status = (
+            up.engines.PlanGenerationResultStatus.TIMEOUT
+            if timed_out
+            else up.engines.PlanGenerationResultStatus.UNSOLVABLE_INCOMPLETELY
+        )
+        return up.engines.PlanGenerationResult(status, None, self.name, metrics)
+
     def _solve_ground_problem(
         self,
         problem: "up.model.Problem",
@@ -1303,6 +1367,20 @@ class TamerLite(
                 )
 
             ss = self._make_search_space(encoder)
+
+            if getattr(self._params, "max_len", None) is not None:
+                return (
+                    self._enumerate_plans(
+                        encoder,
+                        original_encoder,
+                        are_all_actions_compression_safe,
+                        ss,
+                        heuristic,
+                        timeout,
+                    ),
+                    True,
+                    is_any_action_compression_safe,
+                )
 
             if self._params.weak_equality and not encoder.search_space.is_temporal:
                 warnings.warn(
