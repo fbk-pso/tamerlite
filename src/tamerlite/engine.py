@@ -664,8 +664,8 @@ class TamerLite(
     def _make_search_space(self, encoder: Encoder) -> search_space.SearchSpaceABC:
         """Return the search space the search runs on.
 
-        Subclasses may return a `SearchSpaceABC` wrapping `encoder.search_space`.
-        A Python wrapper requires the pure-Python core.
+        Returning anything other than the encoder's `SearchSpace` while the
+        Rust core is in use requires changing `rustamer` to accept it.
         """
         return encoder.search_space
 
