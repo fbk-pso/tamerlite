@@ -27,6 +27,7 @@ def main():
     parser.add_argument("--max_len", default="inf")
     parser.add_argument("--weight", default=0.8, type=float)
     parser.add_argument("--symmetry_breaking", action="store_true")
+    parser.add_argument("--keep_only_shortest", action="store_true")
     args = parser.parse_args()
 
     if args.problem.endswith(".anml"):
@@ -42,6 +43,7 @@ def main():
         max_len=float(args.max_len),
         incomplete_memory_bounded_search=True,
         symmetry_breaking=args.symmetry_breaking,
+        keep_only_shortest_plans=args.keep_only_shortest,
     )
     with OneshotPlanner(name="tamerlite", params={"search": params}) as planner:
         res = planner.solve(problem, timeout=args.timeout)
@@ -57,6 +59,8 @@ def main():
         "status": res.status.name,
         "expanded_states": res.metrics.get("expanded_states"),
         "n_plans": len(plans),
+        "plans_found": res.metrics.get("plans_found"),
+        "first_plan_length": res.metrics.get("first_plan_length"),
         "min_length": min(lengths) if lengths else None,
         "max_length": max(lengths) if lengths else None,
     }

@@ -1110,6 +1110,7 @@ fn enumerate_search<H, S, St, O>(
     heuristic: &H,
     timeout: Option<f32>,
     max_len: f64,
+    keep_only_shortest: bool,
     name: &str,
     strategy: &mut St,
     open: &mut O,
@@ -1138,6 +1139,8 @@ where
     open.push_item(strategy.root(init, init_h)?);
 
     let mut bound = max_len;
+    let mut shortest = usize::MAX;
+    let mut plans_found: usize = 0;
     let mut expanded_states: usize = 0;
     let mut generated_states: usize = 1;
     let mut timed_out = false;
@@ -1153,11 +1156,19 @@ where
         if ss.goal_reached(state, None)? {
             let path = extract_path(state);
             if (path.len() as f64) <= bound {
-                info!("{}: plan {} of length {}", name, plans.len(), path.len());
                 if bound.is_infinite() {
                     bound = path.len() as f64;
+                    metrics.insert("first_plan_length", path.len().to_string());
                 }
-                plans.push(path);
+                plans_found += 1;
+                // keep_only_shortest stores only the shortest plans; the search itself is unchanged.
+                if keep_only_shortest && path.len() < shortest {
+                    plans.clear();
+                    shortest = path.len();
+                }
+                if !keep_only_shortest || path.len() == shortest {
+                    plans.push(path);
+                }
             }
         }
 
@@ -1181,14 +1192,16 @@ where
         }
     }
     info!(
-        "{}: {} plans, expanded={} timed_out={}",
+        "{}: {} plans found, {} kept, expanded={} timed_out={}",
         name,
+        plans_found,
         plans.len(),
         expanded_states,
         timed_out
     );
     metrics.insert("expanded_states", expanded_states.to_string());
     metrics.insert("generated_states", generated_states.to_string());
+    metrics.insert("plans_found", plans_found.to_string());
     Ok((plans, metrics, timed_out))
 }
 
@@ -1201,6 +1214,7 @@ pub fn wastar_search_enumerate<H: HeuristicTrait, S: SearchSpaceTrait>(
     max_len: f64,
     timeout: Option<f32>,
     memory_bounded: bool,
+    keep_only_shortest: bool,
 ) -> PyResult<EnumerateResult> {
     info!(
         "wastar_search_enumerate: weight={} max_len={} timeout={:?} memory_bounded={}",
@@ -1215,6 +1229,7 @@ pub fn wastar_search_enumerate<H: HeuristicTrait, S: SearchSpaceTrait>(
             heuristic,
             timeout,
             max_len,
+            keep_only_shortest,
             "wastar_search_enumerate",
             &mut strategy,
             &mut open,
@@ -1227,6 +1242,7 @@ pub fn wastar_search_enumerate<H: HeuristicTrait, S: SearchSpaceTrait>(
             heuristic,
             timeout,
             max_len,
+            keep_only_shortest,
             "wastar_search_enumerate",
             &mut strategy,
             &mut open,

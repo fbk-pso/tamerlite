@@ -196,6 +196,8 @@ class SearchParams(HeuristicParams):
     # Plan enumeration for dataset generation: every plan with at most `max_len`
     # events goes to `metrics["plans"]`; `inf` bounds by the first plan found.
     max_len: float | None = None
+    # With max_len: keep only the shortest plans found (the search is unchanged).
+    keep_only_shortest_plans: bool = False
 
 
 @dataclass(frozen=True)
@@ -1227,6 +1229,7 @@ class TamerLite(
             float(params.max_len),
             timeout=timeout,
             memory_bounded=params.incomplete_memory_bounded_search,
+            keep_only_shortest=params.keep_only_shortest_plans,
         )
         timed_idx = encoder.timed_action.idx if encoder.timed_action else None
         plans = []

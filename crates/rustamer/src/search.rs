@@ -106,7 +106,7 @@ pub fn wastar_search_memory_bounded(
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, heuristic, weight, max_len, timeout=None, memory_bounded=true))]
+#[pyo3(signature = (ss, heuristic, weight, max_len, timeout=None, memory_bounded=true, keep_only_shortest=false))]
 pub fn wastar_search_enumerate(
     ss: &rustamer_base::SearchSpace,
     heuristic: &Heuristic,
@@ -114,8 +114,17 @@ pub fn wastar_search_enumerate(
     max_len: f64,
     timeout: Option<f32>,
     memory_bounded: bool,
+    keep_only_shortest: bool,
 ) -> PyResult<EnumerateResult> {
-    rustamer_base::wastar_search_enumerate(ss, heuristic, weight, max_len, timeout, memory_bounded)
+    rustamer_base::wastar_search_enumerate(
+        ss,
+        heuristic,
+        weight,
+        max_len,
+        timeout,
+        memory_bounded,
+        keep_only_shortest,
+    )
 }
 
 #[pyfunction]
