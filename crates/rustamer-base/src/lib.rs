@@ -35,7 +35,9 @@ pub use expressions::{
     make_interpreted_function_node, make_object_node, make_operator_node,
     make_rational_constant_node, ExpressionNode, PyExpressionNode,
 };
-pub use expressions_utils::{evaluate, py_shift_expression, simplify, FluentValueTrait};
+pub use expressions_utils::{
+    evaluate, internal_evaluate, py_shift_expression, simplify, FluentValueTrait,
+};
 pub use heuristics::{
     extract_fluent_domains, CustomHeuristic, DeleteRelaxationHeuristic,
     DeleteRelaxationHeuristicConfig, FluentDomain, HMaxExplicit, HeuristicKind, HeuristicTrait,
@@ -52,3 +54,6 @@ pub use search::{
 pub use search_space::{py_get_fluents, SearchSpace, SearchSpaceTrait};
 pub use search_state::State;
 pub use structures::{Action, Effect, Event, Fluent, Object, Timing};
+// Named by `SearchSpaceTrait` and `State`: a crate outside this one implementing the trait needs them.
+pub use tn_interpreter::TNInterpreter;
+pub use utils::PersistentList;
