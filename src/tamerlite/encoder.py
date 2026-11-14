@@ -58,7 +58,6 @@ from tamerlite.core import (
     get_fluents,
 )
 from tamerlite.core.search_space import (
-    DEFAULT_EPSILON,
     ConstantNode,
     FluentDomain,
     FluentKind,
@@ -73,6 +72,12 @@ def _format_timing(timing: Timing) -> str:
     if delay == 0:
         return base
     return f"{base} {'+' if delay > 0 else '-'} {abs(delay)}"
+
+
+def _closer_than_epsilon(gap: Fraction, epsilon: Fraction | None) -> bool:
+    """Whether two mutex events `gap` apart are closer than the search keeps
+    them: the problem's `epsilon`, or any positive amount if it is `None`."""
+    return gap <= 0 if epsilon is None else gap < epsilon
 
 
 def has_interpreted_functions(kind: up.model.ProblemKind) -> bool:
@@ -162,7 +167,7 @@ class Encoder:
         relevance_analysis: bool,
         relevant_equality: bool = True,
         full: bool = True,
-        deadline: Fraction | None = None,
+        deadline: Fraction | tuple[Fraction, int] | None = None,
         if_cache: MutableMapping[tuple[InterpretedFunction, tuple], Any] | None = None,
         if_wrappers: dict[InterpretedFunction, Callable] | None = None,
         lifted_problem_kind: up.model.ProblemKind | None = None,
@@ -222,11 +227,10 @@ class Encoder:
         # synthetic action, numbered after every real one. It has no UP
         # counterpart, so it is in `_actions` but not in
         # `_action_names`/`_action_by_name`.
-        # The minimal separation the search keeps between two mutex events
-        # (`SearchSpace`'s `epsilon`), for the encoding-time checks below.
-        self._epsilon: Fraction = (
-            problem.epsilon if problem.epsilon is not None else DEFAULT_EPSILON
-        )
+        # The minimal gap the search keeps between two mutex events, for the
+        # encoding-time checks below: the problem's epsilon, or, without one
+        # (`None`), any positive amount (`SearchSpace`'s `epsilon`).
+        self._epsilon: Fraction | None = problem.epsilon
         self._timed_buckets, self._timed_final_goals = self._group_timed_events(
             problem, self._epsilon
         )
@@ -1443,18 +1447,24 @@ class Encoder:
             self._compression_safe_actions
         )
 
-    def build_plan(self, path: list[Action]) -> Plan:
-        plan = self.search_space.build_plan(path)
+    def build_plan(
+        self, path: list[Action], makespan_bound: Fraction | None = None
+    ) -> tuple[Plan, tuple[Fraction, int] | None]:
+        """The plan of `path`, and its symbolic makespan `(c, k)`, meaning
+        `c + k·δ` (`SearchSpace.build_plan`; `None` on a non-temporal
+        problem). With a `makespan_bound`, the previous anytime plan's
+        reported makespan, the plan's makespan is reported below it."""
+        plan, makespan = self.search_space.build_plan(path, makespan_bound)
         if self._is_temporal:
             actions = []
             for s, a, d in plan:
                 assert s is not None
                 actions.append((s, self._problem.action(self.get_action_name(a))(), d))
-            return TimeTriggeredPlan(actions)
+            return TimeTriggeredPlan(actions), makespan
         else:
             return SequentialPlan(
                 [self._problem.action(self.get_action_name(a))() for _, a, _ in plan]
-            )
+            ), makespan
 
     @cached_property
     def _non_static_fluents(self) -> list[tuple[int, FNode]]:
@@ -1802,14 +1812,21 @@ class Encoder:
         if unplaceable:
             shown = ", ".join(unplaceable[:5])
             more = f", and {len(unplaceable) - 5} more" if len(unplaceable) > 5 else ""
-            warnings.warn(
-                "TamerLite keeps the events of a durative action at least epsilon "
-                f"apart (epsilon = {self._epsilon}), so these actions can never be "
-                f"applied and are ignored: {shown}{more}. Set a smaller "
-                "`Problem.epsilon`, or model them as instantaneous actions, to "
-                "allow them.",
-                stacklevel=2,
-            )
+            if self._epsilon is None:
+                message = (
+                    "TamerLite keeps the events of a durative action apart, so "
+                    f"these actions can never be applied and are ignored: {shown}"
+                    f"{more}. Model them as instantaneous actions to allow them."
+                )
+            else:
+                message = (
+                    "TamerLite keeps the events of a durative action at least "
+                    f"epsilon apart (epsilon = {self._epsilon}), so these actions "
+                    f"can never be applied and are ignored: {shown}{more}. Set a "
+                    "smaller `Problem.epsilon`, or model them as instantaneous "
+                    "actions, to allow them."
+                )
+            warnings.warn(message, stacklevel=2)
 
     def _event_separation_problem(
         self,
@@ -1819,15 +1836,17 @@ class Encoder:
         """Why the search can never place a durative action's `events` (as
         `_events_from_buckets` numbers them), or `None` if it can.
 
-        The search keeps consecutive events of one action at least `epsilon`
-        apart (two events of the same action are mutex). Two consecutive
-        from-start events, or two consecutive from-end ones, closer than that
-        can't be fixed by any duration. The one pair that crosses over, the
-        last from-start event and the first from-end one, needs a duration of
-        at least their delays' gap plus `epsilon`; that is checked only
-        against a constant upper bound on the duration (minus `epsilon` if
-        right-open, as `SearchSpace` does), since any other bound is only
-        known in a state.
+        The search keeps consecutive events of one action apart (two events of
+        the same action are mutex): by any positive amount, or by at least the
+        problem's `epsilon` if it has one. Two consecutive from-start events,
+        or two consecutive from-end ones, closer than that can't be fixed by
+        any duration. The one pair that crosses over, the last from-start event
+        and the first from-end one, is as far apart as the duration minus
+        their delays' gap, so the same `_closer_than_epsilon` test applies to
+        the most room the duration leaves; that is checked only against a
+        constant upper bound on the duration (minus `epsilon` if right-open,
+        as `SearchSpace` does), since any other bound is only known in a
+        state.
 
         Such an action is never applicable rather than a reason to reject the
         problem: grounding routinely produces a few the plan doesn't need,
@@ -1835,7 +1854,7 @@ class Encoder:
         epsilon = self._epsilon
         for (t1, _), (t2, _) in pairwise(events):
             if t1.is_from_start() == t2.is_from_start():
-                if t2.delay - t1.delay < epsilon:
+                if _closer_than_epsilon(t2.delay - t1.delay, epsilon):
                     return (
                         f"events at {_format_timing(t1)} and {_format_timing(t2)} "
                         "are closer than epsilon"
@@ -1846,14 +1865,17 @@ class Encoder:
             upper = self._normalize_expression(a.duration.upper)
             if not upper.is_constant():
                 continue
-            max_duration = Fraction(upper.constant_value())
-            if a.duration.is_right_open():
-                max_duration -= epsilon
-            needed = t1.delay - t2.delay + epsilon
-            if max_duration < needed:
+            # The most room the duration leaves between the two events. Under
+            # strict separation an open bound costs nothing: some duration in
+            # `(gap, upper)` exists exactly when `upper > gap`.
+            room = Fraction(upper.constant_value()) - (t1.delay - t2.delay)
+            if a.duration.is_right_open() and epsilon is not None:
+                room -= epsilon
+            if _closer_than_epsilon(room, epsilon):
                 return (
                     f"events at {_format_timing(t1)} and {_format_timing(t2)} "
-                    f"need a duration of at least {needed}, but it is {a.duration}"
+                    f"are closer than epsilon for every duration {a.duration} "
+                    "allows"
                 )
         return None
 
@@ -1879,7 +1901,7 @@ class Encoder:
 
     @staticmethod
     def _group_timed_events(
-        problem: Problem, epsilon: Fraction
+        problem: Problem, epsilon: Fraction | None
     ) -> tuple[dict[Fraction, Any], list[FNode]]:
         """Buckets the problem's timed effects and timed goals by the absolute
         time they refer to, for the timed action's events (see
@@ -1901,7 +1923,8 @@ class Encoder:
 
         The timed action's events are those of one action, which the search
         always keeps at least `epsilon` apart (two events of the same action
-        are mutex). Two distinct instants closer than that, or one closer than
+        are mutex), the problem's epsilon, or apart by any positive amount if
+        it is `None`. Two distinct instants closer than that, or one closer than
         that to time 0, could never both happen, so they are rejected instead
         of making the problem unsolvable.
 
@@ -1966,7 +1989,7 @@ class Encoder:
             # (see `_build_events`); `SearchSpace.initial_state` fires it.
             bucket(up.model.GlobalStartTiming())
             for t1, t2 in pairwise(sorted(buckets)):
-                if t2 - t1 < epsilon:
+                if _closer_than_epsilon(t2 - t1, epsilon):
                     raise up.exceptions.UPUnsupportedProblemTypeError(
                         "TamerLite keeps the instants of timed effects and timed "
                         "goals at least epsilon apart, from each other and from "

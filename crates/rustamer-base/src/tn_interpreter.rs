@@ -15,7 +15,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 //
 
-use super::stn::DeltaSTN;
+use super::stn::{DeltaSTN, STNWeight};
 use super::structures::*;
 use rustc_hash::{FxBuildHasher, FxHashMap};
 use std::vec::Vec;
@@ -101,7 +101,7 @@ impl TNInterpreter {
         id: u32,
     ) -> Option<Q>
     where
-        Q: num_traits::Num + std::ops::Neg<Output = Q> + PartialOrd + Clone,
+        Q: STNWeight + PartialOrd,
     {
         let id = self.get_action_id(action, is_start, id);
         tn.get_model_value(&id)
@@ -115,7 +115,7 @@ impl TNInterpreter {
         id: u32,
     ) -> Option<Q>
     where
-        Q: num_traits::Num + std::ops::Neg<Output = Q> + PartialOrd + Clone,
+        Q: STNWeight + PartialOrd,
     {
         let id = self.get_event_id(action, pos, id);
         tn.get_model_value(&id)
@@ -123,14 +123,14 @@ impl TNInterpreter {
 
     pub fn get_actions_timings<Q>(&self, tn: &DeltaSTN<u64, Q>) -> Vec<((Action, bool, u32), Q)>
     where
-        Q: num_traits::Num + std::ops::Neg<Output = Q> + PartialOrd + Clone,
+        Q: STNWeight + PartialOrd,
     {
         let mut res: Vec<((Action, bool, u32), Q)> = Vec::new();
         for (id, v) in tn.distances.iter() {
             let (action_id, outer_id) = self.unpack_u64(*id);
             let a = self.actions_ids_map_back.get(&action_id);
             if let Some((action, is_start)) = a {
-                res.push(((*action, *is_start, outer_id), v.clone() * (-Q::one())));
+                res.push(((*action, *is_start, outer_id), -v.clone()));
             }
         }
         res.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -139,14 +139,14 @@ impl TNInterpreter {
 
     pub fn get_events_timings<Q>(&self, tn: &DeltaSTN<u64, Q>) -> Vec<((Action, usize, u32), Q)>
     where
-        Q: num_traits::Num + std::ops::Neg<Output = Q> + PartialOrd + Clone,
+        Q: STNWeight + PartialOrd,
     {
         let mut res = Vec::new();
         for (id, v) in tn.distances.iter() {
             let (event_id, outer_id) = self.unpack_u64(*id);
             let a = self.events_ids_map_back.get(&event_id);
             if let Some((action, pos)) = a {
-                res.push(((*action, *pos, outer_id), v.clone() * (-Q::one())));
+                res.push(((*action, *pos, outer_id), -v.clone()));
             }
         }
         res.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));

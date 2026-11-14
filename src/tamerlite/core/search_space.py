@@ -20,13 +20,175 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
 from fractions import Fraction
+from typing import Any
 
 from unified_planning.model import DeltaSimpleTemporalNetwork
 
-# The minimal separation between two mutex events when the problem sets none
-# (`Problem.epsilon is None`). The Rust core's `SearchSpace::new` hard-codes the
-# same value.
-DEFAULT_EPSILON = Fraction(1, 100)
+# The `δ` a plan's times are reported at unless the plan needs a smaller one
+# (`_RecordingSTN.feasible_delta`), so that a plan whose mutex events are not
+# squeezed is reported with them 1/100 apart. The Rust core's
+# `RecordingSTN::feasible_delta` hard-codes the same value.
+DEFAULT_DELTA = Fraction(1, 100)
+
+
+# `eq=False`: `__eq__`, `__hash__` and the comparisons are written out, since
+# they also compare against plain numbers (UP's network compares with `0`).
+@dataclass(frozen=True, slots=True, eq=False)
+class DeltaTime:
+    """A time `c + k·δ`, where `δ` is a positive infinitesimal: the weights of
+    the temporal networks of a problem without an epsilon.
+
+    A strict separation between two events is `(0, 1)`: "later by some
+    positive amount", which is what UP means when `Problem.epsilon` is unset.
+    Times compare lexicographically, `c` first, then `k`, which is their order
+    for every small enough `δ`, so UP's `DeltaSimpleTemporalNetwork` runs on
+    them unchanged; a concrete `δ` is chosen only when a plan is built
+    (`SearchSpace.build_plan`).
+
+    Only `epsilon` and what it reaches are `DeltaTime`s: durations,
+    delays and the network's own initial distances stay plain numbers, so
+    arithmetic and comparisons treat an `int` or `Fraction` `x` as `(x, 0)`,
+    and a result with `k = 0` is the plain number `c`. With a problem epsilon
+    no `DeltaTime` exists at all."""
+
+    c: Fraction | int
+    k: int
+
+    def __add__(self, other: "TimeValue") -> "TimeValue":
+        c, k = time_parts(other)
+        return _time(self.c + c, self.k + k)
+
+    __radd__ = __add__
+
+    def __sub__(self, other: "TimeValue") -> "TimeValue":
+        c, k = time_parts(other)
+        return _time(self.c - c, self.k - k)
+
+    def __rsub__(self, other: "TimeValue") -> "TimeValue":
+        c, k = time_parts(other)
+        return _time(c - self.c, k - self.k)
+
+    def __neg__(self) -> "DeltaTime":
+        return DeltaTime(-self.c, -self.k)
+
+    def __mul__(self, other: int) -> "TimeValue":
+        # UP's `get_stn_model` negates a distance as `-1 * d`
+        return _time(other * self.c, other * self.k)
+
+    __rmul__ = __mul__
+
+    def __abs__(self) -> "DeltaTime":
+        return -self if (self.c, self.k) < (0, 0) else self
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, (DeltaTime, int, Fraction)):
+            return NotImplemented
+        return (self.c, self.k) == time_parts(other)
+
+    def __hash__(self) -> int:
+        # Equal to `c` when `k = 0`, so must hash like it. `_time` never builds
+        # one, but nothing stops a caller from doing so.
+        return hash((self.c, self.k)) if self.k else hash(self.c)
+
+    def __lt__(self, other: "TimeValue") -> bool:
+        return (self.c, self.k) < time_parts(other)
+
+    def __le__(self, other: "TimeValue") -> bool:
+        return (self.c, self.k) <= time_parts(other)
+
+    def __gt__(self, other: "TimeValue") -> bool:
+        return (self.c, self.k) > time_parts(other)
+
+    def __ge__(self, other: "TimeValue") -> bool:
+        return (self.c, self.k) >= time_parts(other)
+
+
+# A time or bound of a temporal network: a plain number, or a `DeltaTime`
+# without a problem epsilon.
+TimeValue = Fraction | int | DeltaTime
+
+
+def time_parts(t: TimeValue) -> tuple[Fraction | int, int]:
+    """`t` as `(c, k)`, meaning `c + k·δ`."""
+    if isinstance(t, DeltaTime):
+        return t.c, t.k
+    return t, 0
+
+
+def _time(c: Fraction | int, k: int) -> TimeValue:
+    return c if k == 0 else DeltaTime(c, k)
+
+
+def time_at(t: TimeValue, delta: Fraction) -> Fraction:
+    """The value of `t` at a concrete `δ`."""
+    c, k = time_parts(t)
+    return Fraction(c + k * delta)
+
+
+def _delta_below(makespan: TimeValue, bound: Fraction, delta: Fraction) -> Fraction:
+    """`delta`, divided by ten until `makespan` at it is below `bound`.
+
+    `bound` is the previous anytime plan's reported makespan. That plan's
+    symbolic makespan is the deadline the search kept `makespan` below, but
+    only for every small enough `δ`: each plan is reported at its own `δ`, so
+    at this plan's `feasible_delta` it could still come out longer. Returns
+    `delta` unchanged if no `δ` puts `makespan` below `bound`; the deadline
+    excludes that, since the network's bounds have `k <= 0`, so its times,
+    the previous makespan included, have `k >= 0`."""
+    c, k = time_parts(makespan)
+    if c > bound or (c == bound and k >= 0):
+        return delta
+    while time_at(makespan, delta) >= bound:
+        delta /= 10
+    return delta
+
+
+class _RecordingSTN(DeltaSimpleTemporalNetwork):
+    """`build_plan`'s temporal network, which also keeps every constraint
+    added to it. The network itself drops a constraint whose bound is no
+    tighter than one it holds between the same timepoints, but at a concrete
+    `δ` that constraint can still be the tighter one, so `feasible_delta`
+    must see it. Mirrors `RecordingSTN` in the Rust core."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.added: list[tuple[Any, Any, TimeValue]] = []
+
+    def add(self, x: Any, y: Any, b: TimeValue) -> None:
+        super().add(x, y, b)
+        self.added.append((x, y, b))
+
+    def feasible_delta(self) -> Fraction:
+        """The largest power of ten, at most `DEFAULT_DELTA`, at which the
+        network's minimal solution still meets every recorded constraint: the
+        `δ` the plan's times are reported at. A plan without strict
+        separations has no infinitesimal parts, so every `δ` is feasible and
+        it is `DEFAULT_DELTA`.
+
+        The minimal solution `d` meets each constraint `d(y) <= d(x) + b`
+        lexicographically, i.e. for every small enough `δ`: its standard slack
+        `d(x).c + b.c - d(y).c` is non-negative, and positive if the
+        infinitesimal one, `d(x).k + b.k - d(y).k`, is negative, and then the
+        constraint holds for `δ` up to the ratio of the two."""
+        # An inconsistent network stops adding timepoints to `distances`.
+        assert self.check_stn(), "the plan's temporal network is inconsistent"
+        max_delta: Fraction | None = None
+        for x, y, b in self.added:
+            dx_c, dx_k = time_parts(self.distances[x])
+            dy_c, dy_k = time_parts(self.distances[y])
+            b_c, b_k = time_parts(b)
+            k = dx_k + b_k - dy_k
+            if k < 0:
+                c = dx_c + b_c - dy_c
+                assert c > 0, "the plan's temporal network is inconsistent"
+                bound = Fraction(c, -k)
+                if max_delta is None or bound < max_delta:
+                    max_delta = bound
+        delta = DEFAULT_DELTA
+        if max_delta is not None:
+            while delta > max_delta:
+                delta /= 10
+        return delta
 
 
 class IfReturnType(Enum):
@@ -775,8 +937,9 @@ class SearchSpaceABC(ABC):
 
     @property
     @abstractmethod
-    def epsilon(self) -> Fraction:
-        """The minimal separation between two mutex events."""
+    def epsilon(self) -> Fraction | DeltaTime:
+        """The minimal gap between two mutex events: the problem's
+        `epsilon`, or else `DeltaTime(0, 1)`, any positive amount."""
 
     @property
     @abstractmethod
@@ -785,7 +948,7 @@ class SearchSpaceABC(ABC):
         open from the initial state until its last event fires, if any."""
 
     @abstractmethod
-    def makespan(self, state: State) -> Fraction | int:
+    def makespan(self, state: State) -> TimeValue:
         """How far into the plan a temporal state already reaches: a lower
         bound on the makespan of any plan through it, for the
         `DedupPolicy.DOMINANCE` makespan dominance check (`search.py`).
@@ -833,9 +996,15 @@ class SearchSpaceABC(ABC):
 
     @abstractmethod
     def build_plan(
-        self, path: list[Action]
-    ) -> list[tuple[Fraction | None, Action, Fraction | None]]:
-        pass
+        self, path: list[Action], makespan_bound: Fraction | None = None
+    ) -> tuple[
+        list[tuple[Fraction | None, Action, Fraction | None]],
+        tuple[Fraction, int] | None,
+    ]:
+        """The schedule of `path`, sorted, and its symbolic makespan `(c, k)`,
+        meaning `c + k·δ` (`None` on a non-temporal problem). With a
+        `makespan_bound`, the previous anytime plan's reported makespan, the
+        schedule's makespan is reported below it."""
 
 
 class SearchSpace(SearchSpaceABC):
@@ -850,7 +1019,7 @@ class SearchSpace(SearchSpaceABC):
         initial_state: list[ConstantNode] | None = None,
         goal: Expression | None = None,
         relevant_actions: list[Action] | None = None,
-        deadline: Fraction | None = None,
+        deadline: Fraction | tuple[Fraction, int] | None = None,
         epsilon: Fraction | None = None,
         timed_action: Action | None = None,
     ):
@@ -885,10 +1054,18 @@ class SearchSpace(SearchSpaceABC):
         self._obj_to_prev_actions_map = obj_to_prev_actions_map
         self._initial_state = initial_state
         self._goal = goal
-        self._deadline = deadline
+        # A deadline `(c, k)` is a symbolic makespan (`build_plan`).
+        self._deadline: TimeValue | None = (
+            _time(*deadline) if isinstance(deadline, tuple) else deadline
+        )
         self._start_plan = "start_plan"
         self._end_plan = "end_plan"
-        self._epsilon = DEFAULT_EPSILON if epsilon is None else epsilon
+        # Without a problem epsilon, mutex events are strictly apart, by any
+        # positive amount, as UP means it. A problem's own epsilon is a
+        # requirement on the plan.
+        self._epsilon: Fraction | DeltaTime = (
+            DeltaTime(0, 1) if epsilon is None else epsilon
+        )
         self._is_temporal = any(v is not None for v in actions_duration)
         self._counter = 0
 
@@ -940,19 +1117,19 @@ class SearchSpace(SearchSpaceABC):
         return self._deadline is not None
 
     @property
-    def epsilon(self) -> Fraction:
+    def epsilon(self) -> Fraction | DeltaTime:
         return self._epsilon
 
     @property
     def timed_action(self) -> Action | None:
         return self._timed_action
 
-    def makespan(self, state: State) -> Fraction | int:
+    def makespan(self, state: State) -> TimeValue:
         tn = state.temporal_network
         assert tn is not None
         if not state.path:
             return 0
-        bound: Fraction | int = -tn.distances[state.path[-1]]
+        bound: TimeValue = -tn.distances[state.path[-1]]
         return bound
 
     @property
@@ -970,6 +1147,7 @@ class SearchSpace(SearchSpaceABC):
         self,
         initial_state: list[ConstantNode] | None = None,
     ) -> State | None:
+        tn: DeltaSimpleTemporalNetwork | None = None
         if self._is_temporal:
             tn = DeltaSimpleTemporalNetwork()
             if self._deadline is not None:
@@ -979,8 +1157,6 @@ class SearchSpace(SearchSpaceABC):
                     left_bound=self._deadline,
                     right_bound=self._deadline,
                 )
-        else:
-            tn = None
         if initial_state is None:
             # `initial_state` can be None if the initial state was already
             # provided when instantiating the class
@@ -1281,8 +1457,8 @@ class SearchSpace(SearchSpaceABC):
         start = (action, True, action_instance_id)
         end = (action, False, action_instance_id)
         duration = self._actions_duration[action.idx]
-        lower: int | Fraction
-        upper: int | Fraction
+        lower: TimeValue
+        upper: TimeValue
         if duration is None:
             lower, upper = 0, 0
         else:
@@ -1310,12 +1486,22 @@ class SearchSpace(SearchSpaceABC):
                 tn.insert_interval(end, ev, left_bound=t.delay, right_bound=t.delay)
 
     def build_plan(
-        self, path: list[Action]
-    ) -> list[tuple[Fraction | None, Action, Fraction | None]]:
+        self, path: list[Action], makespan_bound: Fraction | None = None
+    ) -> tuple[
+        list[tuple[Fraction | None, Action, Fraction | None]],
+        tuple[Fraction, int] | None,
+    ]:
+        """The schedule's times are reported at `feasible_delta`, lowered
+        further, with a `makespan_bound`, until the makespan is below it
+        (`_delta_below`). The makespan is taken before a concrete `δ` is
+        chosen: the latest end of an action, the timed action's included (UP's
+        makespan covers every timed effect and timed goal), relative to plan
+        start. As the deadline of the next anytime makespan-improvement search,
+        it asks for a plan that is shorter for every small enough `δ`."""
         if not self.is_temporal:
-            return [(None, a, None) for a in path]
+            return [(None, a, None) for a in path], None
 
-        tn = DeltaSimpleTemporalNetwork()
+        tn = _RecordingSTN()
         todo: dict[Action, tuple[int, int]] = {}
         event_path: list[tuple[Event, int]] = []
         counter = 0
@@ -1407,20 +1593,30 @@ class SearchSpace(SearchSpaceABC):
             assert succ_state is not None
             state = succ_state
 
+        delta = tn.feasible_delta()
         res: list[tuple[Fraction | None, Action, Fraction | None]] = []
         start_time: dict[tuple[Action, int], Fraction] = {}
         end_time: dict[tuple[Action, int], Fraction] = {}
-        origin = (
+        symbolic_origin: TimeValue = (
             -tn.distances[self._start_plan] if self._timed_action is not None else 0
         )
+        makespan: TimeValue = 0
         for ev, dist in tn.distances.items():
-            if not isinstance(ev[1], bool) or ev[0] == self._timed_action:
+            if isinstance(ev[1], bool) and not ev[1]:
+                makespan = max(makespan, -dist - symbolic_origin)
+        if makespan_bound is not None:
+            delta = _delta_below(makespan, makespan_bound, delta)
+        origin = time_at(symbolic_origin, delta)
+        for ev, dist in tn.distances.items():
+            if not isinstance(ev[1], bool):
+                continue
+            if ev[0] == self._timed_action:
                 continue
 
             if ev[1]:
-                start_time[(ev[0], ev[2])] = -dist - origin
+                start_time[(ev[0], ev[2])] = time_at(-dist, delta) - origin
             else:
-                end_time[(ev[0], ev[2])] = -dist - origin
+                end_time[(ev[0], ev[2])] = time_at(-dist, delta) - origin
 
         for a_id, st in start_time.items():
             et = end_time[a_id]
@@ -1428,7 +1624,8 @@ class SearchSpace(SearchSpaceABC):
             res.append((st, a_id[0], d))
 
         res.sort()
-        return res
+        c, k = time_parts(makespan)
+        return res, (Fraction(c), k)
 
     def _add_action_to_plan_network(
         self,
@@ -1450,8 +1647,8 @@ class SearchSpace(SearchSpaceABC):
         end = (action, False, counter)
         counter += 1
         duration = self._actions_duration[action.idx]
-        lb: Fraction
-        ub: Fraction
+        lb: TimeValue
+        ub: TimeValue
         if duration is None:
             lb = Fraction(0)
             ub = Fraction(0)

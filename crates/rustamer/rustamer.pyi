@@ -128,8 +128,9 @@ class SearchSpace:
         initial_state: Expression | None = ...,
         goal: Expression | None = ...,
         relevant_actions: list[Action] | None = ...,
-        deadline: Fraction | None = ...,
+        deadline: Fraction | tuple[Fraction, int] | None = ...,
         epsilon: Fraction | None = ...,
+        timed_action: Action | None = ...,
     ) -> None: ...
     @property
     def is_temporal(self) -> bool: ...
@@ -143,8 +144,11 @@ class SearchSpace:
         self, state: State, goal: Expression | None = ...
     ) -> list[Expression]: ...
     def build_plan(
-        self, path: list[Action]
-    ) -> list[tuple[Fraction | None, Action, Fraction | None]] | None: ...
+        self, path: list[Action], makespan_bound: Fraction | None = ...
+    ) -> tuple[
+        list[tuple[Fraction | None, Action, Fraction | None]],
+        tuple[Fraction, int] | None,
+    ]: ...
 
 class Heuristic:
     @staticmethod
