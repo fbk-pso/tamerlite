@@ -1061,10 +1061,13 @@ class SearchSpace(SearchSpaceABC):
             new_state = state.clone(with_tn=False)
             new_state.g = state.g + 1
             new_state = self._open_action(state, new_state, action, events)
+            # Compress only with nothing in progress: the remaining events of
+            # an action in `todo` would bound the compressed action's end
             if (
                 enable_compression_safe_actions
                 and self._compression_safe_actions is not None
                 and self._compression_safe_actions[action.idx]
+                and not state.todo
                 and new_state is not None
                 and len(events) > 1
             ):
