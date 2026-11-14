@@ -3288,3 +3288,294 @@ def get_problem_counter() -> Problem:
     problem.add_action(inc)
     problem.add_goal(GE(x, 10))
     return problem
+
+
+def get_problem_division_by_zero() -> Problem:
+    """A numeric problem whose expressions divide by a fluent `d` that is 0
+    in the initial state, so every one of them starts out undefined.
+
+    Undefined is strict (`evaluate_defined` in `core/search_space.py`):
+    `use_d`'s precondition `10 / d >= 2` does not hold, `copy_d`'s effect
+    `x := 10 / d` makes it inapplicable, and the goal -- including the
+    negated `not (10 / d <= 1)` -- is not reached, all until `set_d` makes
+    `d = 2`. The only plans therefore start with `set_d`. The numeric goal
+    leaf `10 / d <= 5` is also undefined in the initial state for the
+    novelty search. Every heuristic evaluates these undefined expressions
+    on the initial state. Every action is single-use, so the state space is
+    acyclic and `dfs`/`bfs`, which don't deduplicate states, terminate.
+    """
+    problem = Problem("division_by_zero")
+
+    d = Fluent("d", IntType())
+    x = Fluent("x", RealType())
+    p = Fluent("p", BoolType())
+    copied = Fluent("copied", BoolType())
+
+    problem.add_fluent(d, default_initial_value=0)
+    problem.add_fluent(x, default_initial_value=0)
+    problem.add_fluent(p, default_initial_value=False)
+    problem.add_fluent(copied, default_initial_value=False)
+
+    set_d = InstantaneousAction("set_d")
+    set_d.add_precondition(Equals(d, 0))
+    set_d.add_effect(d, 2)
+
+    use_d = InstantaneousAction("use_d")
+    use_d.add_precondition(Not(p))
+    use_d.add_precondition(GE(Div(10, d), 2))
+    use_d.add_effect(p, True)
+
+    copy_d = InstantaneousAction("copy_d")
+    copy_d.add_precondition(Not(copied))
+    copy_d.add_effect(x, Div(10, d))
+    copy_d.add_effect(copied, True)
+
+    problem.add_actions([set_d, use_d, copy_d])
+
+    problem.add_goal(p)
+    problem.add_goal(GE(x, 5))
+    problem.add_goal(LE(Div(10, d), 5))
+    problem.add_goal(Not(LE(Div(10, d), 1)))
+
+    return problem
+
+
+def get_problem_temporal_division_by_zero() -> Problem:
+    """A temporal problem whose only goal achiever `run` has duration
+    `10 / d`, undefined while `d = 0`: `run` can only start once `set_d`
+    has made `d = 2` (see `get_problem_division_by_zero`)."""
+    problem = Problem("temporal_division_by_zero")
+
+    d = Fluent("d", IntType())
+    ready = Fluent("ready")
+    done = Fluent("done")
+
+    problem.add_fluent(d, default_initial_value=0)
+    problem.add_fluent(ready, default_initial_value=True)
+    problem.add_fluent(done, default_initial_value=False)
+
+    set_d = DurativeAction("set_d")
+    set_d.set_fixed_duration(1)
+    set_d.add_condition(StartTiming(), Equals(d, 0))
+    set_d.add_effect(EndTiming(), d, 2)
+
+    run = DurativeAction("run")
+    run.set_fixed_duration(Div(10, d))
+    run.add_condition(StartTiming(), ready)
+    run.add_effect(StartTiming(), ready, False)
+    run.add_effect(EndTiming(), done, True)
+
+    problem.add_actions([set_d, run])
+
+    problem.add_goal(done)
+
+    return problem
+
+
+def get_problem_compression_safe_division_by_zero(
+    interpreted: bool = False,
+) -> Problem:
+    """`get_problem_temporal_division_by_zero` with `set_d`'s effect at
+    start, so both actions pass `Encoder._compute_compression_safe_actions`
+    and the engine compiles the problem with `TimedToSequential`, which drops
+    durations. `run`'s duration `10 / d` is undefined while `d = 0`, so its
+    compiled action gets the precondition `not (d == 0)`
+    (`Encoder.duration_definedness`) and waits for `set_d`: the only plans
+    start with `set_d`. With `interpreted`, the duration is an interpreted
+    function computing `10 / d`, which raises `ZeroDivisionError` while
+    `d = 0`, and the precondition is the self-comparison `ten_over(d) <=
+    ten_over(d)`, which UP's simplifier must not see."""
+    problem = Problem(
+        "compression_safe_if_division_by_zero"
+        if interpreted
+        else "compression_safe_division_by_zero"
+    )
+
+    d = Fluent("d", IntType())
+    ready = Fluent("ready")
+    done = Fluent("done")
+
+    problem.add_fluent(d, default_initial_value=0)
+    problem.add_fluent(ready, default_initial_value=True)
+    problem.add_fluent(done, default_initial_value=False)
+
+    set_d = DurativeAction("set_d")
+    set_d.set_fixed_duration(1)
+    set_d.add_condition(StartTiming(), Equals(d, 0))
+    set_d.add_effect(StartTiming(), d, 2)
+
+    if interpreted:
+
+        def ten_over(x):
+            return Fraction(10, x)
+
+        IF_ten_over = InterpretedFunction(
+            "ten_over", RealType(), OrderedDict(x=IntType()), ten_over
+        )
+        duration = IF_ten_over(d)
+    else:
+        duration = Div(10, d)
+
+    run = DurativeAction("run")
+    run.set_fixed_duration(duration)
+    run.add_condition(StartTiming(), ready)
+    run.add_effect(StartTiming(), ready, False)
+    run.add_effect(EndTiming(), done, True)
+
+    problem.add_actions([set_d, run])
+
+    problem.add_goal(done)
+
+    return problem
+
+
+def get_problem_timed_division_by_zero(at_zero: bool = False) -> Problem:
+    """Timed effects and goals that divide by a fluent `d`, 0 until `set_d`
+    makes it 2 (see `get_problem_division_by_zero`).
+
+    By default, the timed effect `x := 10 / d` at time 3 is undefined, so its
+    timed event is inapplicable, unless `set_d` starts before then, and the
+    goal `x >= 5` needs it: the only plans start `set_d` before time 3.
+    With `at_zero`, the only timed element is instead a goal `10 / d >= 1`
+    checked at time 0, which is undefined in the initial state, so it doesn't
+    hold: there is no valid initial state, and no plan.
+    """
+    problem = Problem(
+        "timed_division_by_zero_at_zero" if at_zero else "timed_division_by_zero"
+    )
+
+    d = Fluent("d", IntType())
+    problem.add_fluent(d, default_initial_value=0)
+
+    set_d = DurativeAction("set_d")
+    set_d.set_fixed_duration(1)
+    # Not repeatable, which keeps the search space finite even without
+    # duplicate detection.
+    set_d.add_condition(StartTiming(), Equals(d, 0))
+    set_d.add_effect(StartTiming(), d, 2)
+    problem.add_action(set_d)
+
+    if at_zero:
+        problem.add_timed_goal(GlobalStartTiming(0), GE(Div(10, d), 1))
+    else:
+        x = Fluent("x", RealType())
+        problem.add_fluent(x, default_initial_value=0)
+        problem.add_timed_effect(GlobalStartTiming(3), x, Div(10, d))
+        problem.add_goal(GE(x, 5))
+
+    return problem
+
+
+def get_problem_timed_unread_division_by_zero() -> Problem:
+    """The timed effect `x := 10 / d` at time 3 of
+    `get_problem_timed_division_by_zero`, but nothing reads `x`: the goal is
+    `done`, which `finish` achieves. The timed effect is still evaluated, and
+    is undefined while `d = 0`, so its timed event is inapplicable unless
+    `set_d` starts before time 3: the only plans do. Relevance analysis must
+    keep `set_d` although `x` is irrelevant (`_compute_relevant_actions`),
+    and compaction drops `x` but keeps `d != 0` on the timed event."""
+    problem = Problem("timed_unread_division_by_zero")
+
+    d = Fluent("d", IntType())
+    x = Fluent("x", RealType())
+    done = Fluent("done", BoolType())
+    problem.add_fluent(d, default_initial_value=0)
+    problem.add_fluent(x, default_initial_value=0)
+    problem.add_fluent(done, default_initial_value=False)
+
+    set_d = DurativeAction("set_d")
+    set_d.set_fixed_duration(1)
+    # Not repeatable, like `finish`, which keeps the search space finite
+    # even without duplicate detection.
+    set_d.add_condition(StartTiming(), Equals(d, 0))
+    set_d.add_effect(StartTiming(), d, 2)
+
+    finish = InstantaneousAction("finish")
+    finish.add_precondition(Not(done))
+    finish.add_effect(done, True)
+
+    problem.add_actions([set_d, finish])
+    problem.add_timed_effect(GlobalStartTiming(3), x, Div(10, d))
+    problem.add_goal(done)
+
+    return problem
+
+
+def get_problem_undefined_unread_effect() -> Problem:
+    """`a`'s effects `f := h / g`, `c += 1 / g` and `p := 1 / g > 0` are
+    undefined while `g = 0`, which makes `a` inapplicable until `set_g` has
+    made `g = 2`: the only plan is `set_g, a`. Nothing reads `f`, `c` or `p`,
+    so relevance analysis drops them, and `a` keeps only the definedness of
+    their values, the condition `g != 0` (`Encoder._convert_effects`);
+    without it, `a` alone would reach the goal. That condition reads the
+    divisor only, so `h`, read nowhere else, is dropped too. Every action is
+    single-use, so the state space is acyclic and `dfs`/`bfs`, which don't
+    deduplicate states, terminate."""
+    problem = Problem("undefined_unread_effect")
+
+    f = Fluent("f", RealType())
+    h = Fluent("h", RealType())
+    c = Fluent("c", RealType())
+    p = Fluent("p", BoolType())
+    g = Fluent("g", RealType())
+    done = Fluent("done", BoolType())
+
+    problem.add_fluent(f, default_initial_value=0)
+    problem.add_fluent(h, default_initial_value=1)
+    problem.add_fluent(c, default_initial_value=0)
+    problem.add_fluent(p, default_initial_value=False)
+    problem.add_fluent(g, default_initial_value=0)
+    problem.add_fluent(done, default_initial_value=False)
+
+    set_g = InstantaneousAction("set_g")
+    set_g.add_precondition(Equals(g, 0))
+    set_g.add_effect(g, 2)
+
+    a = InstantaneousAction("a")
+    a.add_precondition(Not(done))
+    a.add_effect(f, Div(h, g))
+    a.add_increase_effect(c, Div(1, g))
+    a.add_effect(p, GT(Div(1, g), 0))
+    a.add_effect(done, True)
+
+    problem.add_actions([set_g, a])
+
+    problem.add_goal(done)
+
+    return problem
+
+
+def get_problem_undefined_discarded_bool_effect() -> Problem:
+    """`a` assigns both `True` and `1 / g > 0` to `p`. `Encoder._convert_effects`
+    folds the two into `p := True`, discarding the second value, but that value
+    is still evaluated when `a` fires, and is undefined while `g = 0`: `a` is
+    inapplicable until `set_g` has made `g = 2`, so the only plan is
+    `set_g, a`. The discarded value's definedness, `g != 0`, is a condition of
+    `a`'s event, so relevance analysis sees `a` read `g` and keeps `set_g`.
+    Every action is single-use, so the state space is acyclic and `dfs`/`bfs`,
+    which don't deduplicate states, terminate."""
+    problem = Problem("undefined_discarded_bool_effect")
+
+    p = Fluent("p", BoolType())
+    g = Fluent("g", RealType())
+    done = Fluent("done", BoolType())
+
+    problem.add_fluent(p, default_initial_value=False)
+    problem.add_fluent(g, default_initial_value=0)
+    problem.add_fluent(done, default_initial_value=False)
+
+    set_g = InstantaneousAction("set_g")
+    set_g.add_precondition(Equals(g, 0))
+    set_g.add_effect(g, 2)
+
+    a = InstantaneousAction("a")
+    a.add_precondition(Not(done))
+    a.add_effect(p, True)
+    a.add_effect(p, GT(Div(1, g), 0))
+    a.add_effect(done, True)
+
+    problem.add_actions([set_g, a])
+
+    problem.add_goal(done)
+
+    return problem

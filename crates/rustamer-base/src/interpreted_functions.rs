@@ -207,10 +207,12 @@ struct IfCallKey {
 //
 // Errors are never cached (see the `?` before the insert below): a replayed
 // `PyErr` carries a stale traceback and could poison a callable that raises once
-// and later succeeds; the one path that expects errors (`heuristics.rs`'s
-// `for_each_new_value`, reached via `exp_can_be_true`, probing a partial
-// callable) aborts the whole solve on the first one anyway, so there's nothing
-// to amortize.
+// and later succeeds. The cost is that a call raising `ZeroDivisionError` --
+// which `internal_evaluate_into_defined` reports as undefined rather than
+// aborting the solve -- calls into Python again every time it is evaluated:
+// e.g. `heuristics.rs`'s `for_each_new_value` (HMaxExplicit) re-probes the same
+// argument combination on every heuristic evaluation. Any other error still
+// aborts the whole solve on the first one, so there's nothing to amortize there.
 //
 // Capped at `IF_RESULTS_CAPACITY` via a real LRU: entries now persist across a
 // whole solve rather than one encoding, so an unbounded map could grow across an

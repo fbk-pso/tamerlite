@@ -577,6 +577,29 @@ def evaluate(exp: Expression, state: State) -> ConstantNode:
     return res[-1]
 
 
+def evaluate_defined(exp: Expression, state: State) -> ConstantNode | None:
+    """`evaluate(exp, state)`, or `None` if `exp` is undefined in `state`.
+
+    An expression is undefined when evaluating it divides by zero, including
+    inside an interpreted function. Undefinedness is strict: it makes the
+    whole of `exp` undefined, so `not (10 / d <= 1)` with `d = 0` is
+    undefined rather than true. Every search and heuristic site maps an
+    undefined unit the same way -- a condition or goal is not satisfied, and
+    an action with an undefined effect or duration bound is inapplicable.
+    Any other exception propagates."""
+    try:
+        return evaluate(exp, state)
+    except ZeroDivisionError:
+        return None
+
+
+def evaluate_condition(exp: Expression, state: State) -> bool:
+    """Whether the condition `exp` holds in `state`; an undefined `exp`
+    (see `evaluate_defined`) does not hold."""
+    value = evaluate_defined(exp, state)
+    return value is not None and bool(value)
+
+
 def simplify(
     exp: Expression,
     assignments: dict[Fluent, ConstantNode],
@@ -1013,7 +1036,7 @@ class SearchSpace(SearchSpaceABC):
         events = self._events[action]
         # `_expand_event` leaves the event's own conditions and its
         # effect-independent start conditions to its callers
-        if not evaluate(
+        if not evaluate_condition(
             events[0][1].conditions, state
         ) or not self._effect_independent_start_conditions_hold(action, 0, state):
             return None
@@ -1033,7 +1056,7 @@ class SearchSpace(SearchSpaceABC):
             index, id = state.todo[action]
             _, e = events[index]
             # Check if the event is applicable before creating the new state
-            if not evaluate(
+            if not evaluate_condition(
                 e.conditions, state
             ) or not self._effect_independent_start_conditions_hold(
                 action, index, state
@@ -1054,7 +1077,7 @@ class SearchSpace(SearchSpaceABC):
             if not self._symmetry_allows_opening(state, action):
                 return None
             # Check if the action is applicable before creating the new state
-            if not evaluate(
+            if not evaluate_condition(
                 events[0][1].conditions, state
             ) or not self._effect_independent_start_conditions_hold(action, 0, state):
                 return None
@@ -1096,15 +1119,14 @@ class SearchSpace(SearchSpaceABC):
     def goal_reached(self, state: State, goal: Expression | None = None) -> bool:
         if len(state.todo) > 0:
             return False
-        if goal is not None:
-            res = evaluate(goal, state)
-        else:
+        if goal is None:
             # `goal` can be None if the goal was already provided when
             # instantiating the class
             assert self._goal is not None
-            res = evaluate(self._goal, state)
-        assert isinstance(res, bool)
-        return res
+            goal = self._goal
+        res = evaluate_defined(goal, state)
+        assert res is None or isinstance(res, bool)
+        return res is True
 
     def subgoals_sat(
         self, state: State, goal: Expression | None = None
@@ -1118,7 +1140,7 @@ class SearchSpace(SearchSpaceABC):
             goals = split_expression(self._goal)
         res = set()
         for g in goals:
-            if evaluate(g, state):
+            if evaluate_condition(g, state):
                 res.add(g)
         return res
 
@@ -1130,7 +1152,7 @@ class SearchSpace(SearchSpaceABC):
         rejects exactly the successors `_expand_event`'s post-effect check
         would, but before cloning the state or opening the action."""
         return all(
-            evaluate(c, state)
+            evaluate_condition(c, state)
             for c in self._effect_independent_start_conditions[action.idx][index]
         )
 
@@ -1156,9 +1178,11 @@ class SearchSpace(SearchSpaceABC):
         # insert start conditions
         for c in e.start_conditions:
             new_state.active_conditions.add(c)
-        # apply effects
+        # apply effects; an undefined effect makes the event inapplicable
         for eff in e.effects:
-            v = evaluate(eff.value, state)
+            v = evaluate_defined(eff.value, state)
+            if v is None:
+                return None
             new_state.assignments[eff.fluent.idx] = v
         # check active conditions. Without effects the child's assignments are
         # the parent's: the inherited conditions hold on them (see above), and
@@ -1166,7 +1190,7 @@ class SearchSpace(SearchSpaceABC):
         # the caller with `_effect_independent_start_conditions_hold`
         if e.effects:
             for c in new_state.active_conditions:
-                if not evaluate(c, new_state):
+                if not evaluate_condition(c, new_state):
                     return None
         if self._is_temporal:
             # Only now, with the non-temporal checks passed, copy the parent's
@@ -1175,8 +1199,10 @@ class SearchSpace(SearchSpaceABC):
             if new_state.temporal_network is None:
                 assert state.temporal_network is not None
                 new_state.temporal_network = state.temporal_network.copy_stn()
-            if pending_opening is not None:
-                self._add_opening_constraints(state, new_state, *pending_opening)
+            if pending_opening is not None and not self._add_opening_constraints(
+                state, new_state, *pending_opening
+            ):
+                return None
             # update TN
             e_id = (e.action, index)
             # Only two of the edges from past events are needed. The edge from
@@ -1269,13 +1295,15 @@ class SearchSpace(SearchSpaceABC):
         action_instance_id: int,
         events: list[tuple[Timing, Event]],
         pin_to_plan_start: bool,
-    ) -> None:
+    ) -> bool:
         """Adds the constraints of an action opened by `_open_action`: the
         duration bounds, the plan-start/plan-end edges and the rigid edges tying
         each event to its anchor. `action_instance_id` identifies this instance
         of the action (its start/end timepoints) and event `k` gets instance id
         `action_instance_id + 1 + k`. The start is pinned to `start_plan` if
-        `pin_to_plan_start`, otherwise only no earlier than it."""
+        `pin_to_plan_start`, otherwise only no earlier than it. Returns
+        `False`, adding nothing, if a duration bound is undefined in `state`
+        (see `evaluate_defined`): the action can't be opened there."""
         tn = new_state.temporal_network
         assert tn is not None
         start = (action, True, action_instance_id)
@@ -1286,12 +1314,16 @@ class SearchSpace(SearchSpaceABC):
         if duration is None:
             lower, upper = 0, 0
         else:
-            evaluated_lower = evaluate(duration[0], state)
+            evaluated_lower = evaluate_defined(duration[0], state)
+            if evaluated_lower is None:
+                return False
+            evaluated_upper = evaluate_defined(duration[1], state)
+            if evaluated_upper is None:
+                return False
             assert isinstance(evaluated_lower, (int, Fraction))
             lower = evaluated_lower
             if duration[2]:
                 lower += self._epsilon
-            evaluated_upper = evaluate(duration[1], state)
             assert isinstance(evaluated_upper, (int, Fraction))
             upper = evaluated_upper
             if duration[3]:
@@ -1308,6 +1340,7 @@ class SearchSpace(SearchSpaceABC):
                 tn.insert_interval(start, ev, left_bound=t.delay, right_bound=t.delay)
             else:
                 tn.insert_interval(end, ev, left_bound=t.delay, right_bound=t.delay)
+        return True
 
     def build_plan(
         self, path: list[Action]

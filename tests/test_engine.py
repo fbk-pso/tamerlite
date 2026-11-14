@@ -37,7 +37,7 @@ from unified_planning.engines import PlanGenerationResult, ValidationResult
 from unified_planning.engines import PlanGenerationResultStatus as ResultStatus
 from unified_planning.engines.compilers.timed_to_sequential import TimedToSequential
 from unified_planning.exceptions import UPStateMissingFluentError
-from unified_planning.plans import TimeTriggeredPlan
+from unified_planning.plans import SequentialPlan, TimeTriggeredPlan
 from unified_planning.shortcuts import (
     GE,
     LE,
@@ -130,6 +130,16 @@ def _build_problems():
         problems_generator.get_problem_timed_goal_until_end(),
         problems_generator.get_problem_timed_goal_until_end(right_open=True),
         problems_generator.get_problem_timed_goal_with_timed_effect(),
+        problems_generator.get_problem_division_by_zero(),
+        problems_generator.get_problem_temporal_division_by_zero(),
+        problems_generator.get_problem_compression_safe_division_by_zero(),
+        problems_generator.get_problem_compression_safe_division_by_zero(
+            interpreted=True
+        ),
+        problems_generator.get_problem_timed_division_by_zero(),
+        problems_generator.get_problem_timed_unread_division_by_zero(),
+        problems_generator.get_problem_undefined_unread_effect(),
+        problems_generator.get_problem_undefined_discarded_bool_effect(),
     ]
 
     up_example_problems = list(
@@ -2014,6 +2024,59 @@ def test_evaluate_fixed_cases():
             )
 
 
+def test_undefined_goal_is_not_reached():
+    """An undefined goal (one that divides by zero, see `evaluate_defined`
+    in `src/tamerlite/core/search_space.py`) is not reached, on both
+    backends, and undefinedness is strict: `not (10 / d <= 1)` with `d = 0`
+    is undefined, not true. `subgoals_sat` reports only the defined,
+    satisfied subgoals. `evaluate` itself still raises
+    (`test_evaluate_fixed_cases`)."""
+    F_BOOL_T, F_INT_0 = range(2)
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.core import (
+            Fluent,
+            SearchSpace,
+            make_bool_constant_node,
+            make_fluent_node,
+            make_int_constant_node,
+            make_operator_node,
+        )
+
+        search_space = SearchSpace([], {}, [], None, None, None)
+        state = search_space.initial_state(
+            cast(
+                "list[ConstantNode]",
+                [make_bool_constant_node(True), make_int_constant_node(0)],
+            )
+        )
+        assert state is not None
+        backend = "python" if disable_rustamer else "rust"
+
+        op = testing_utils._op_tree
+        f_bool_t = make_fluent_node(Fluent(F_BOOL_T))
+        ten_over_d = op(
+            "/", make_int_constant_node(10), make_fluent_node(Fluent(F_INT_0))
+        )
+        negated = op("not", op("<=", ten_over_d, make_int_constant_node(1)))
+        defined_and_undefined = op(
+            "and", f_bool_t, op("<=", ten_over_d, make_int_constant_node(5))
+        )
+
+        def flatten(tree):
+            return testing_utils._flatten_expression_tree(tree, make_operator_node)
+
+        assert not search_space.goal_reached(state, flatten(negated)), backend
+        assert search_space.goal_reached(state, flatten(f_bool_t)), backend
+        goal = flatten(defined_and_undefined)
+        assert not search_space.goal_reached(state, goal), backend
+        # Rust nodes have no value equality: compare their string forms
+        assert [str(list(g)) for g in search_space.subgoals_sat(state, goal)] == [
+            str(list(flatten(f_bool_t)))
+        ], backend
+
+
 def _check_id_type_contract(id_type: Any, where: str) -> None:
     """The per-type body of `test_id_types_hash_and_order_agree_across_backends`.
 
@@ -2524,6 +2587,129 @@ def test_relevant_equality_excludes_bookkeeping_fluents_from_encoding():
                 assert v.validate(temporal, res.plan)
 
 
+def test_relevance_analysis_keeps_definedness_of_dropped_effects():
+    """An undefined effect makes its action inapplicable, so compaction may
+    drop a fluent that nothing reads only if the definedness of the values
+    written to it survives: `get_problem_undefined_unread_effect`'s `f`, `c`
+    and `p` are dropped, `g` (their values' divisor) is kept, `h` (read only
+    by `f`'s value, outside any divisor) is dropped too, and `a` waits for
+    `set_g` exactly as it does without compaction."""
+    problem = problems_generator.get_problem_undefined_unread_effect()
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+
+        encoder = Encoder(
+            ground_problem,
+            lifted_problem,
+            map_back_action_instance,
+            symmetry_breaking=False,
+            compression_safe_actions=False,
+            relevance_analysis=True,
+        )
+        assert set(encoder.fluents) == {"g", "done"}
+
+        for relevant_equality in [True, False]:
+            search = tamerlite.SearchParams(relevant_equality=relevant_equality)
+            with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+                res: PlanGenerationResult = planner.solve(problem, timeout=None)
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+            assert isinstance(res.plan, SequentialPlan)
+            assert [a.action.name for a in res.plan.actions] == ["set_g", "a"]
+            with PlanValidator(problem_kind=problem.kind) as v:
+                assert v.validate(problem, res.plan)
+
+
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+@pytest.mark.parametrize("relevance_analysis", [True, False])
+@pytest.mark.parametrize("relevant_equality", [True, False])
+def test_definedness_of_discarded_bool_effect_values(
+    disable_rustamer, relevance_analysis, relevant_equality
+):
+    """A bool assignment value that `_convert_effects` folds away still makes
+    its action inapplicable where it is undefined, whatever the relevance
+    settings: `get_problem_undefined_discarded_bool_effect`'s `a` waits for
+    `set_g`. Relevance analysis must not prune `set_g` either, which it would
+    if it only saw the folded `p := True`."""
+    reload_tamerlite(disable_rustamer)
+    problem = problems_generator.get_problem_undefined_discarded_bool_effect()
+    search = tamerlite.SearchParams(
+        relevance_analysis=relevance_analysis, relevant_equality=relevant_equality
+    )
+    with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+        res: PlanGenerationResult = planner.solve(problem, timeout=None)
+    assert res.status == ResultStatus.SOLVED_SATISFICING
+    assert isinstance(res.plan, SequentialPlan)
+    assert [a.action.name for a in res.plan.actions] == ["set_g", "a"]
+    with PlanValidator(problem_kind=problem.kind) as v:
+        assert v.validate(problem, res.plan)
+
+
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+@pytest.mark.parametrize("relevance_analysis", [True, False])
+@pytest.mark.parametrize("relevant_equality", [True, False])
+def test_relevance_keeps_definedness_of_unread_timed_effects(
+    disable_rustamer, relevance_analysis, relevant_equality
+):
+    """The timed action always runs, so an undefined timed effect blocks the
+    plan even when nothing reads its target: in
+    `get_problem_timed_unread_division_by_zero`, relevance analysis must keep
+    `set_d`, which makes the timed effect's divisor nonzero, and every
+    setting must start it before the timed effect at time 3."""
+    reload_tamerlite(disable_rustamer)
+    problem = problems_generator.get_problem_timed_unread_division_by_zero()
+    search = tamerlite.SearchParams(
+        relevance_analysis=relevance_analysis, relevant_equality=relevant_equality
+    )
+    with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+        res: PlanGenerationResult = planner.solve(problem, timeout=None)
+    assert res.status == ResultStatus.SOLVED_SATISFICING
+    assert isinstance(res.plan, TimeTriggeredPlan)
+    starts = {a.action.name: s for s, a, _ in res.plan.timed_actions}
+    assert starts["set_d"] < 3
+    with PlanValidator(problem_kind=problem.kind) as v:
+        assert v.validate(problem, res.plan)
+
+
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+@pytest.mark.parametrize("interpreted", [False, True])
+@pytest.mark.parametrize("relevant_equality", [True, False])
+def test_sequential_compile_keeps_duration_definedness(
+    monkeypatch, disable_rustamer, interpreted, relevant_equality
+):
+    """A duration that may be undefined doesn't keep a compression-safe
+    problem off the `TimedToSequential` compile, which drops durations: its
+    definedness becomes preconditions of the compiled action
+    (`Encoder.duration_definedness`). In
+    `get_problem_compression_safe_division_by_zero`, `run` must therefore
+    still wait for `set_d`, or `build_plan` would evaluate `10 / 0`."""
+    reload_tamerlite(disable_rustamer)
+    compiles = 0
+    compile_ = tamerlite.engine.TimedToSequential.compile
+
+    def counting_compile(self, *args, **kwargs):
+        nonlocal compiles
+        compiles += 1
+        return compile_(self, *args, **kwargs)
+
+    monkeypatch.setattr(tamerlite.engine.TimedToSequential, "compile", counting_compile)
+    problem = problems_generator.get_problem_compression_safe_division_by_zero(
+        interpreted=interpreted
+    )
+    search = tamerlite.SearchParams(relevant_equality=relevant_equality)
+    with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+        res: PlanGenerationResult = planner.solve(problem, timeout=None)
+    assert compiles == 1
+    assert res.status == ResultStatus.SOLVED_SATISFICING
+    assert isinstance(res.plan, TimeTriggeredPlan)
+    starts = {a.action.name: s for s, a, _ in res.plan.timed_actions}
+    assert starts["set_d"] < starts["run"]
+    with PlanValidator(problem_kind=problem.kind) as v:
+        assert v.validate(problem, res.plan)
+
+
 def test_custom_heuristic_get_value_respects_relevant_equality():
     """`StateWrapper.get_value` (`engine.py`) lets a user-supplied custom
     heuristic read any fluent by name. Once `relevant_equality` compacts the
@@ -2931,8 +3117,19 @@ def test_conditional_timed_effects_are_not_supported():
             ),
             ResultStatus.UNSOLVABLE_INCOMPLETELY,
         ),
+        (
+            partial(
+                problems_generator.get_problem_timed_division_by_zero, at_zero=True
+            ),
+            ResultStatus.UNSOLVABLE_PROVEN,
+        ),
     ],
-    ids=["at_start_unsatisfied", "window_too_early", "undefined_unmeasurable"],
+    ids=[
+        "at_start_unsatisfied",
+        "window_too_early",
+        "undefined_unmeasurable",
+        "at_start_undefined",
+    ],
 )
 def test_timed_goals_unsatisfiable(
     disable_rustamer, heuristic, problem_factory, expected_status
@@ -2940,8 +3137,9 @@ def test_timed_goals_unsatisfiable(
     """Timed goals that no plan can satisfy: one checked at time 0 against an
     initial state that falsifies it (no valid initial state, with a single-event
     timed action, so proven unsolvable), a window opening before the goal can
-    possibly hold, and the timed goal `UndefinedInitialNumericRemover` adds for
-    a fluent that never gets a value."""
+    possibly hold, the timed goal `UndefinedInitialNumericRemover` adds for
+    a fluent that never gets a value, and one checked at time 0 that is
+    undefined there (see `evaluate_defined`), so doesn't hold either."""
     reload_tamerlite(disable_rustamer)
     problem = problem_factory()
     assert tamerlite.engine.TamerLite.supports(problem.kind)
