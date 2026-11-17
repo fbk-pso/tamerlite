@@ -1830,8 +1830,10 @@ class Encoder:
         known in a state.
 
         Such an action is never applicable rather than a reason to reject the
-        problem: grounding routinely produces a few the plan doesn't need,
-        such as a zero-duration drive from a place to itself."""
+        problem: the plan may well not need it. UP already rejects a duration
+        whose constant upper bound is not positive (and grounding drops a
+        grounding whose duration simplifies to one), so what reaches here is a
+        positive duration too short for the action's events."""
         epsilon = self._epsilon
         for (t1, _), (t2, _) in pairwise(events):
             if t1.is_from_start() == t2.is_from_start():
