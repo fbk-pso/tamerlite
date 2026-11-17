@@ -1192,31 +1192,56 @@ class Encoder:
         return True
 
     def _compute_compression_safe_actions(self) -> list[bool]:
+        """Mark the durative actions safe to compress, by action id.
+
+        Compressing `A` fires all its events in one successor. This loses no
+        plan if any plan `A-start, W, A-end` can be rewritten as
+        `A-start, A-end, W`. `A` is safe when:
+
+        - its end conditions don't depend on `W`: no intermediate condition,
+          and every end condition is also an `over all` condition;
+        - `W` reads the same values: every later effect (after `start + 0`)
+          assigns a boolean constant to a fluent that is read only by literal
+          conditions (`_extract_reads`), none requiring the opposite value.
+
+        The search compresses only when nothing is in progress, so `W` fits
+        after `A`'s end."""
         actions = [False] * len(self.action_names)
-        fluent_to_conditions, complex_condition_fluents = self._extract_conditions()
+        fluent_to_conditions, complex_read_fluents = self._extract_reads()
         for action in self._problem.actions:
             if (
                 isinstance(action, up.model.DurativeAction)
                 and not self._has_intermediate_conditions(action)
                 and self._end_conditions_contained_in_overall_conditions(action)
-                and not self._effects_interfere_with_conditions(
-                    action, fluent_to_conditions, complex_condition_fluents
+                and not self._effects_interfere_with_reads(
+                    action, fluent_to_conditions, complex_read_fluents
                 )
             ):
                 actions[self.action_by_name[action.name].idx] = True
 
         return actions
 
-    def _extract_conditions(self) -> tuple[dict[UPFluent, set[bool]], set[UPFluent]]:
+    def _extract_reads(self) -> tuple[dict[UPFluent, set[bool]], set[UPFluent]]:
+        """The fluents every action reads: the polarities of the conditions
+        that are a literal `f` or `not f`, per fluent, and the set of every
+        other fluent read, by any other condition, an effect value or a
+        duration bound."""
         fluent_to_conditions: dict[UPFluent, set[bool]] = {}
-        complex_condition_fluents: set[UPFluent] = set()
+        complex_read_fluents: set[UPFluent] = set()
         for action in self._problem.actions:
             action_conditions: list[list[FNode]]
+            action_effects: list[up.model.Effect]
             if isinstance(action, up.model.DurativeAction):
                 action_conditions = list(action.conditions.values())
+                action_effects = [e for es in action.effects.values() for e in es]
+                complex_read_fluents.update(extract_fluents(action.duration.lower))
+                complex_read_fluents.update(extract_fluents(action.duration.upper))
             else:
                 assert isinstance(action, up.model.InstantaneousAction)
                 action_conditions = [action.preconditions]
+                action_effects = action.effects
+            for eff in action_effects:
+                complex_read_fluents.update(extract_fluents(eff.value))
             for conds in action_conditions:
                 for c in extract_and_arguments(conds):
                     f = None
@@ -1227,14 +1252,14 @@ class Encoder:
                         f = c.arg(0).fluent()
                         v = False
                     else:
-                        complex_condition_fluents.update(extract_fluents(c))
+                        complex_read_fluents.update(extract_fluents(c))
 
                     if f is not None:
                         if f not in fluent_to_conditions:
                             fluent_to_conditions[f] = set()
                         fluent_to_conditions[f].add(v)
 
-        return fluent_to_conditions, complex_condition_fluents
+        return fluent_to_conditions, complex_read_fluents
 
     def _has_intermediate_conditions(self, action: "up.model.DurativeAction") -> bool:
         return any(
@@ -1265,11 +1290,11 @@ class Encoder:
 
         return all(condition in overall_conditions for condition in end_conditions)
 
-    def _effects_interfere_with_conditions(
+    def _effects_interfere_with_reads(
         self,
         action: "up.model.DurativeAction",
         fluent_to_conditions: dict[UPFluent, set[bool]],
-        complex_condition_fluents: set[UPFluent],
+        complex_read_fluents: set[UPFluent],
     ) -> bool:
         for timing, effects in action.effects.items():
             if timing.timepoint.kind == TimepointKind.START and timing.delay == 0:
@@ -1282,7 +1307,7 @@ class Encoder:
 
                 negated_value = not eff.value.bool_constant_value()
                 if (
-                    f in complex_condition_fluents
+                    f in complex_read_fluents
                     or negated_value in fluent_to_conditions.get(f, set())
                 ):
                     return True
