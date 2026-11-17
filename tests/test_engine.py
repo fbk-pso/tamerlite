@@ -3342,8 +3342,7 @@ def test_durative_events_closer_than_epsilon_are_dropped(
     so an action whose events can't be, for any duration it allows, could
     never be applied: the encoder leaves it out of the applicable actions,
     with a warning naming it, instead of keeping it silently. The problem
-    isn't rejected, since grounding often makes such actions the plan doesn't
-    need (Depots' zero-duration drives from a depot to itself). A duration
+    isn't rejected, since the plan may not need such an action. A duration
     that isn't constant can't be checked."""
     problem = problems_generator.get_problem_durative_event_gaps(
         start_delays, end_delays, lower, upper, right_open
