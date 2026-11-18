@@ -1202,6 +1202,36 @@ def get_problem_duration_fluent_relevance() -> Problem:
     return problem
 
 
+def get_problem_compressed_empty_duration() -> Problem:
+    """`get_problem_duration_fluent_relevance` with `tune` made durative, so
+    that every action is compression-safe and the problem is solved through
+    `TimedToSequential`. `run`'s duration `[10, charge]` is empty at the
+    initial `charge == 0`, so `run` can only start after `tune` (whose start
+    effect sets `charge` to `10`).
+    """
+    problem = Problem("compressed_empty_duration")
+
+    charge = Fluent("charge", RealType(0, 100))
+    done = Fluent("done")
+
+    tune = DurativeAction("tune")
+    tune.set_fixed_duration(1)
+    tune.add_effect(StartTiming(), charge, 10)
+
+    run = DurativeAction("run")
+    run.set_duration_constraint(DurationInterval(Int(10), charge()))
+    run.add_effect(EndTiming(), done, True)
+
+    problem.add_fluent(charge, default_initial_value=0)
+    problem.add_fluent(done, default_initial_value=False)
+    problem.add_action(tune)
+    problem.add_action(run)
+
+    problem.add_goal(done)
+
+    return problem
+
+
 def get_problem_bookkeeping_fluent_classical() -> Problem:
     """A single-action, non-temporal problem with a pure bookkeeping fluent
     (`cost`, bumped by `turn_on`'s own increase effect and read nowhere else)

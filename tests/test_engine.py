@@ -2389,6 +2389,58 @@ def test_relevance_analysis_keeps_duration_only_writer():
                 assert v.validate(problem, res.plan)
 
 
+def test_compressed_search_respects_empty_duration_interval():
+    """
+    When every action is compression-safe, the search runs on the
+    `TimedToSequential`-compiled problem and the path it finds is replayed
+    by `build_plan` in the uncompressed encoding, which checks each
+    action's duration bounds. The compiled actions must therefore carry the
+    precondition that their duration interval admits a positive value in
+    the state before the start (UP's `TimedToSequential` adds it): without
+    it, the compressed search applies `run` in the initial state, where its
+    duration `[10, charge]` is empty, and replaying that path fails
+    (a `PanicException` in the Rust core, an `AssertionError` in the Python
+    one).
+    """
+    problem = problems_generator.get_problem_compressed_empty_duration()
+    lifted_problem, ground_problem, map_back_action_instance = (
+        testing_utils.compile_problem(problem)
+    )
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+
+        encoder = Encoder(
+            ground_problem,
+            lifted_problem,
+            map_back_action_instance,
+            symmetry_breaking=False,
+            compression_safe_actions=True,
+            relevance_analysis=True,
+        )
+        assert encoder.are_all_actions_compression_safe()
+
+        search = tamerlite.SearchParams(
+            search="wastar",
+            heuristic="hff",
+            weight=0.8,
+            compression_safe_actions=True,
+        )
+        with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+            planner: tamerlite.engine.TamerLite
+            res: PlanGenerationResult = planner.solve(problem, timeout=None)
+            assert res.status == ResultStatus.SOLVED_SATISFICING
+
+            with PlanValidator(problem_kind=problem.kind) as v:
+                assert v.validate(problem, res.plan)
+
+            assert isinstance(res.plan, TimeTriggeredPlan)
+            assert [a.action.name for _, a, _ in res.plan.timed_actions] == [
+                "tune",
+                "run",
+            ]
+
+
 def test_relevant_equality_excludes_bookkeeping_fluents_from_encoding():
     """
     `Encoder._compute_relevant_fluents` decides what `relevant_equality`
