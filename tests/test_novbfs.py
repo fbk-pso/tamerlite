@@ -473,6 +473,10 @@ NOVBFS_PROBLEMS: list[tuple[str, Callable[[], object]]] = [
     ("numeric", problems_generator.get_problem_numeric),
     ("division_by_zero", problems_generator.get_problem_division_by_zero),
     (
+        "temporal_division_by_zero",
+        problems_generator.get_problem_temporal_division_by_zero,
+    ),
+    (
         "undefined_unread_effect",
         problems_generator.get_problem_undefined_unread_effect,
     ),
