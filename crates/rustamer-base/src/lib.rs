@@ -55,5 +55,6 @@ pub use search_space::{py_get_fluents, SearchSpace, SearchSpaceTrait};
 pub use search_state::State;
 pub use structures::{Action, Effect, Event, Fluent, Object, Timing};
 // Named by `SearchSpaceTrait` and `State`: a crate outside this one implementing the trait needs them.
+pub use stn::DeltaTime;
 pub use tn_interpreter::TNInterpreter;
 pub use utils::PersistentList;

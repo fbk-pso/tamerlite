@@ -30,7 +30,14 @@ from min_max_heap import MinMaxHeap
 
 from tamerlite.core.heuristics import Heuristic
 from tamerlite.core.novelty import NumericNovelty
-from tamerlite.core.search_space import Action, ObjectNode, SearchSpaceABC, State
+from tamerlite.core.search_space import (
+    Action,
+    DeltaTime,
+    ObjectNode,
+    SearchSpaceABC,
+    State,
+    TimeValue,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -279,21 +286,22 @@ def state_representation(state: State, ss: SearchSpaceABC) -> State | WeakEqStat
 
 
 def makespan_dominates(
-    recorded: Fraction | int, new: Fraction | int, epsilon: Fraction
+    recorded: TimeValue, new: TimeValue, epsilon: Fraction | DeltaTime
 ) -> bool:
     """Whether every continuation that a state whose `makespan` is `new` can
     schedule, a state whose `makespan` is `recorded` can schedule too.
 
-    A future event must come after each past event by `epsilon` if the two are
-    mutex and by 0 otherwise, and with an empty `todo` that is the only way a
-    state's past constrains its future. With only the timed action in `todo`,
-    its pending events add constraints too, but at fixed times from
-    `start_plan`, the same in both states. So the recorded state forces any future
-    event no later than `recorded + epsilon`, and the new one forces it no
-    earlier than `new`: the recorded state can take over the new one's
-    schedule of any continuation once it is ahead by at least `epsilon`. Being
-    ahead by less is not enough, because the mutex gap depends on which past
-    events sit near the last one, not on the state's fluent values."""
+    A future event must come after each past event by `epsilon`
+    (`SearchSpaceABC.epsilon`) if the two are mutex and by 0 otherwise, and
+    with an empty `todo` that is the only way a state's past constrains its
+    future. With only the timed action in `todo`, its pending events add
+    constraints too, but at fixed times from `start_plan`, the same in both
+    states. So the recorded state forces any future event no later than
+    `recorded + epsilon`, and the new one forces it no earlier than `new`:
+    the recorded state can take over the new one's schedule of any
+    continuation once it is ahead by at least `epsilon`. Being ahead by
+    less is not enough, because the mutex gap depends on which past events sit
+    near the last one, not on the state's fluent values."""
     return recorded + epsilon <= new
 
 
@@ -315,7 +323,7 @@ class VisitedStates:
         self._timed_action = ss.timed_action
         self._seen: set[State | WeakEqState] = set()
         self._epsilon = ss.epsilon
-        self._makespans: dict[State | WeakEqState, Fraction | int] = {}
+        self._makespans: dict[State | WeakEqState, TimeValue] = {}
 
     def is_redundant(self, state: State) -> bool:
         """Whether a recorded state makes `state` redundant."""
