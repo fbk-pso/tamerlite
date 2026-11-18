@@ -1331,6 +1331,13 @@ class Encoder:
 
             for eff in effects:
                 f = eff.fluent.fluent()
+                # Besides interference, this keeps every value after the start
+                # defined: the compression chain in
+                # `get_successor_state_with_compression` (both cores) never
+                # checks the conditions of the events after the first, where
+                # `_convert_effects` puts a value's `definedness_conditions`.
+                # Allowing a value that can be undefined here needs the action
+                # to be rejected in that case too.
                 if not eff.value.is_bool_constant():
                     return True
 

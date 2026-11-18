@@ -1092,6 +1092,12 @@ class SearchSpace(SearchSpaceABC):
                 and len(events) > 1
             ):
                 _, id = new_state.todo.pop(action)
+                # `e.conditions` is not checked: on a compression-safe action
+                # it holds only end conditions, which the overall conditions
+                # contain (`Encoder._compute_compression_safe_actions`). It
+                # holds no definedness condition, since every effect after the
+                # start is a bool constant
+                # (`Encoder._effects_interfere_with_conditions`).
                 for index in range(1, len(events)):
                     _, e = events[index]
                     # `_expand_event` relies on this check having been made

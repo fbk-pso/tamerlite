@@ -1744,9 +1744,14 @@ def _for_each_new_value(
     `(1,)` after that happens, and anything else before.
 
     A combination on which `exp` is undefined (see `evaluate_defined`) is
-    skipped without calling `visit`. That is exact, not an approximation: a
-    real state holding that combination would make the condition false or
-    the effect's action inapplicable, so the combination yields no value.
+    skipped without calling `visit`. A real state holding that combination
+    would make the condition false or the effect's action inapplicable, so
+    the skip loses no reachable value. It doesn't make the action
+    inapplicable in the relaxation, though: each condition and effect is
+    enumerated on its own combinations, so an effect undefined on every
+    relaxed combination still lets the action's other effects apply. That
+    over-approximates reachability, like the rest of the relaxation, so it
+    never reports a false dead end.
     """
     if not isinstance(exp, tuple):
         # A bare constant effect value -- no expression to evaluate at all.

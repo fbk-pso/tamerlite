@@ -510,6 +510,12 @@ impl SearchSpace {
                     && events.len() > 1
                 {
                     let start_id = new_state.todo.remove(&action).unwrap().1;
+                    // `event.1.conditions` is not checked: on a compression-safe
+                    // action it holds only end conditions, which the overall
+                    // conditions contain (`Encoder._compute_compression_safe_actions`).
+                    // It holds no definedness condition, since every effect after
+                    // the start is a bool constant
+                    // (`Encoder._effects_interfere_with_conditions`).
                     for (id, (index, event)) in (start_id..).zip(events.iter().enumerate().skip(1))
                     {
                         // `expand_event` relies on this check having been made

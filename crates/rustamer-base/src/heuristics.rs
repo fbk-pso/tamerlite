@@ -2677,10 +2677,14 @@ fn for_each_combination<'a>(
 /// happens, and anything else (including empty) before.
 ///
 /// A combination on which `exp` is undefined (see
-/// `internal_evaluate_defined`) is skipped without calling `visit`. That is
-/// exact, not an approximation: a real state holding that combination would
-/// make the condition false or the effect's action inapplicable, so the
-/// combination yields no value.
+/// `internal_evaluate_defined`) is skipped without calling `visit`. A real
+/// state holding that combination would make the condition false or the
+/// effect's action inapplicable, so the skip loses no reachable value. It
+/// doesn't make the action inapplicable in the relaxation, though: each
+/// condition and effect is enumerated on its own combinations, so an effect
+/// undefined on every relaxed combination still lets the action's other
+/// effects apply. That over-approximates reachability, like the rest of the
+/// relaxation, so it never reports a false dead end.
 fn for_each_new_value(
     exp: &[ExpressionNode],
     fluents: &[Fluent],

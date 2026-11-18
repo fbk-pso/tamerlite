@@ -425,8 +425,12 @@ The heuristics follow the same rule:
 - hff/hadd/hmax give an undefined condition the "false" cost (1), never `inf`:
   its operands can change, so `inf` would report a false dead end.
 - `HMaxExplicit` skips a relaxed value combination on which an expression is
-  undefined. That is exact, because a real state holding it would make the
-  condition false or the action inapplicable.
+  undefined: a real state holding it would make the condition false or the
+  action inapplicable, so the skip loses no reachable value. It does not make
+  the action inapplicable in the relaxation: conditions and effects are
+  enumerated independently, so an effect undefined on every relaxed
+  combination still lets the action's other effects apply. That only
+  over-approximates reachability, so it never reports a false dead end.
 - `NumericNovelty` treats an undefined leaf as unsatisfied with no distance:
   it is never progress, is never recorded, and is beaten by any defined
   distance.
