@@ -1485,7 +1485,13 @@ class SearchSpace(SearchSpaceABC):
         `action_instance_id + 1 + k`. The start is pinned to `start_plan` if
         `pin_to_plan_start`, otherwise only no earlier than it. Returns
         `False`, adding nothing, if a duration bound is undefined in `state`
-        (see `evaluate_defined`): the action can't be opened there."""
+        (see `evaluate_defined`): the action can't be opened there.
+
+        A durative action other than the timed action lasts at least
+        `epsilon`, whatever its lower bound, so its duration is strictly
+        positive: an action with no event at its end has nothing else keeping
+        its end after its start. The timed action's duration is its last
+        instant, which is 0 when every instant is at time 0."""
         tn = new_state.temporal_network
         assert tn is not None
         start = (action, True, action_instance_id)
@@ -1510,6 +1516,8 @@ class SearchSpace(SearchSpaceABC):
             upper = evaluated_upper
             if duration[3]:
                 upper -= self._epsilon
+            if action != self._timed_action and self._epsilon > lower:
+                lower = self._epsilon
         tn.insert_interval(start, end, left_bound=lower, right_bound=upper)
         if pin_to_plan_start:
             tn.insert_interval(self._start_plan, start, left_bound=0, right_bound=0)
@@ -1659,7 +1667,13 @@ class SearchSpace(SearchSpaceABC):
 
         for a_id, st in start_time.items():
             et = end_time[a_id]
-            d = None if et - st == 0 else et - st
+            d: Fraction | None = None
+            if self._actions_duration[a_id[0].idx] is not None:
+                d = et - st
+                assert d > 0, (
+                    f"durative action {a_id[0]} scheduled with non-positive "
+                    f"duration {d}"
+                )
             res.append((st, a_id[0], d))
 
         res.sort()
@@ -1702,6 +1716,9 @@ class SearchSpace(SearchSpaceABC):
                 lb -= self._epsilon
             if duration[3]:
                 ub -= self._epsilon
+            # At least `epsilon`, as in `_add_opening_constraints`.
+            if action != self._timed_action and lb > -self._epsilon:
+                lb = -self._epsilon
 
         tn.add(start, end, lb)
         tn.add(end, start, ub)

@@ -923,6 +923,12 @@ impl SearchSpace {
             if d.3 {
                 ub = ub - self.epsilon;
             }
+            // A durative action lasts at least `epsilon`, so its duration is
+            // strictly positive, except the timed action, whose duration is
+            // its last instant and is 0 when every instant is at time 0.
+            if Some(action) != self.timed_action && lb > -self.epsilon {
+                lb = -self.epsilon;
+            }
         }
         tn.add(&start, &end, &lb);
         tn.add(&end, &start, &ub);
@@ -1007,6 +1013,11 @@ impl SearchSpace {
                 }
                 if d.3 {
                     ub = ub - self.epsilon_rational.clone();
+                }
+                // At least `epsilon`, as in `add_opening_constraints`.
+                let min_lb = -self.epsilon_rational.clone();
+                if Some(action) != self.timed_action && lb > min_lb {
+                    lb = min_lb;
                 }
                 (lb, ub)
             }
@@ -1361,10 +1372,16 @@ impl SearchSpaceTrait for SearchSpace {
         }
         for (a, st) in start_time {
             let et = &end_time[&a];
-            let d = et - st.clone();
-            let d: Option<BigRational> = if d == mk_rational(0, 1) {
+            let d: Option<BigRational> = if self.actions_duration[a.0.idx].is_none() {
                 None
             } else {
+                let d = et - st.clone();
+                debug_assert!(
+                    d > mk_rational(0, 1),
+                    "durative action {:?} scheduled with non-positive duration {}",
+                    a.0,
+                    d
+                );
                 Some(d)
             };
             res.push((Some(st), a.0, d));

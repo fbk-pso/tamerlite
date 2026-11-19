@@ -462,6 +462,29 @@ def get_problem_timed_effects_at_zero() -> Problem:
     return problem
 
 
+def get_problem_timed_effects_only_at_zero() -> Problem:
+    """A timed effect at time 0 only, which `go` needs: the timed action's
+    duration, its last instant, is 0."""
+    problem = Problem("timed_effects_only_at_zero")
+
+    ready = Fluent("ready", BoolType())
+    done = Fluent("done", BoolType())
+
+    go = InstantaneousAction("go")
+    go.add_precondition(ready)
+    go.add_effect(done, True)
+
+    problem.add_fluent(ready, default_initial_value=False)
+    problem.add_fluent(done, default_initial_value=False)
+    problem.add_action(go)
+
+    problem.add_timed_effect(GlobalStartTiming(0), ready, True)
+
+    problem.add_goal(done)
+
+    return problem
+
+
 def get_problem_timed_effects_fluent_value() -> Problem:
     """
     A timed effect whose value reads a fluent, `snapshot := level` at time 4,
@@ -1545,18 +1568,20 @@ def get_problem_durative_event_gaps(
     lower: Fraction | int | None,
     upper: Fraction | int | None,
     right_open: bool = False,
+    dur_initial: Fraction | int = 1,
 ) -> Problem:
     """One durative action `act` with an effect at `start + d` for each `d` in
     `start_delays` and at `end - d` for each `d` in `end_delays`, and a
     duration in `[lower, upper]` (`[lower, upper)` if `right_open`). Without
-    bounds, the duration is the fluent `dur`, which `set_dur` changes, so it is
-    not static and stays non-constant after grounding. For the encoder's
-    check that an action's events can be `epsilon` apart."""
+    bounds, the duration is the fluent `dur` (initially `dur_initial`), which
+    `set_dur` sets to 2, so it is not static and stays non-constant after
+    grounding. For the encoder's check that an action's events can be
+    `epsilon` apart, and for the positive duration of a durative action."""
     problem = Problem("durative_event_gaps")
     act = DurativeAction("act")
     if lower is None or upper is None:
         dur = Fluent("dur", RealType())
-        problem.add_fluent(dur, default_initial_value=1)
+        problem.add_fluent(dur, default_initial_value=dur_initial)
         set_dur = InstantaneousAction("set_dur")
         set_dur.add_effect(dur, 2)
         problem.add_action(set_dur)

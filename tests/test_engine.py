@@ -3616,7 +3616,8 @@ _EPS = Fraction(1, 100)
         pytest.param([0], [_EPS / 2, 0], 10, 10, False, True, id="close_from_end"),
         pytest.param([0], [0], 0, _EPS, False, False, id="closed_at_epsilon"),
         pytest.param([0], [0], 0, 10, False, False, id="long_interval"),
-        pytest.param([0], [], _EPS / 2, _EPS / 2, False, False, id="no_end_event"),
+        pytest.param([0], [], _EPS / 2, _EPS / 2, False, True, id="short_no_end_event"),
+        pytest.param([0], [], 0, _EPS, False, False, id="no_end_event_at_epsilon"),
         pytest.param([0], [0], None, None, False, False, id="non_constant"),
     ],
 )
@@ -3627,8 +3628,10 @@ def test_durative_events_closer_than_epsilon_are_dropped(
     apart, so an action whose events can't be, for any duration it allows, could
     never be applied: the encoder leaves it out of the applicable actions,
     with a warning naming it, instead of keeping it silently. The problem
-    isn't rejected, since the plan may not need such an action. A duration
-    that isn't constant can't be checked."""
+    isn't rejected, since the plan may not need such an action. An action
+    with no event at its end still lasts at least `Problem.epsilon`, so a
+    shorter duration drops it too. A duration that isn't constant can't be
+    checked."""
     problem = problems_generator.get_problem_durative_event_gaps(
         start_delays, end_delays, lower, upper, right_open
     )
