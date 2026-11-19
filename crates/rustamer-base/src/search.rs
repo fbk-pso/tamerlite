@@ -36,6 +36,7 @@ use super::heuristics::*;
 use super::novelty::NumericNovelty;
 use super::search_space::*;
 use super::search_state::*;
+use super::stn::{DeltaTime, STNWeight};
 use super::structures::Action;
 use super::utils::PersistentList;
 
@@ -468,10 +469,15 @@ trait DedupStore<P> {
 /// earlier than `new`: the recorded state can take over the new one's schedule
 /// of any continuation once it is ahead by at least `epsilon`. Being ahead by
 /// less is not enough, because the mutex gap depends on which past events sit
-/// near the last one, not on the state's fluent values. Times are `f64`s, so
-/// the comparison allows the STN's own `tolerance`.
-fn makespan_dominates(recorded: f64, new: f64, epsilon: f64, tolerance: f64) -> bool {
-    recorded + epsilon <= new + tolerance
+/// near the last one, not on the state's fluent values. Standard parts are `f64`s,
+/// so the comparison allows the STN's own `tolerance`.
+fn makespan_dominates(
+    recorded: DeltaTime<f64>,
+    new: DeltaTime<f64>,
+    epsilon: DeltaTime<f64>,
+    tolerance: f64,
+) -> bool {
+    (recorded + epsilon).cmp_tol(&new, &tolerance) != std::cmp::Ordering::Greater
 }
 
 /// The visited-state store of every non-memory-bounded search (the
@@ -493,22 +499,21 @@ pub(crate) struct VisitedStates<'a, S: SearchSpaceTrait> {
     seen: FxHashSet<WeakEqState>,
     /// The smallest `makespan` recorded per key of the states deduped by
     /// dominance.
-    makespans: FxHashMap<WeakEqState, f64>,
-    epsilon: f64,
+    makespans: FxHashMap<WeakEqState, DeltaTime<f64>>,
+    epsilon: DeltaTime<f64>,
     tolerance: f64,
 }
 
 impl<'a, S: SearchSpaceTrait> VisitedStates<'a, S> {
     pub(crate) fn new(ss: &'a S, weak_equality: bool) -> Self {
-        let epsilon = ss.epsilon();
         Self {
             ss,
             policy: DedupPolicy::new(ss, weak_equality),
             timed_action: ss.timed_action(),
             seen: FxHashSet::with_hasher(FxBuildHasher),
             makespans: FxHashMap::with_hasher(FxBuildHasher),
-            epsilon,
-            tolerance: stn_tolerance(epsilon),
+            epsilon: ss.epsilon(),
+            tolerance: ss.tolerance(),
         }
     }
 
@@ -545,7 +550,7 @@ impl<'a, S: SearchSpaceTrait> VisitedStates<'a, S> {
                     if makespan_dominates(recorded, makespan, self.epsilon, self.tolerance) {
                         return false;
                     }
-                    if recorded <= makespan + self.tolerance {
+                    if recorded.cmp_tol(&makespan, &self.tolerance) != std::cmp::Ordering::Greater {
                         return true;
                     }
                 }
