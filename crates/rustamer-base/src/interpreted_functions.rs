@@ -21,7 +21,7 @@ use std::num::NonZeroUsize;
 use lru::LruCache;
 use num::BigInt;
 use pyo3::{
-    exceptions::{PyRuntimeError, PyValueError},
+    exceptions::{PyRuntimeError, PyValueError, PyZeroDivisionError},
     prelude::*,
     types::{PyBool, PyInt, PyTuple},
 };
@@ -151,19 +151,24 @@ fn interpreted_function_result(
     }
 }
 
+/// Calls the interpreted function registered under `func_id`, or `None` if
+/// the call is undefined: the callable raised `ZeroDivisionError`.
 fn call_interpreted_function_uncached(
     func_id: usize,
     return_type: IfReturnType,
     args: &[&ExpressionNode],
-) -> PyResult<ExpressionNode> {
+) -> PyResult<Option<ExpressionNode>> {
     Python::attach(|py| {
         let callable = get_interpreted_function(py, func_id)?;
         let mut py_args = Vec::with_capacity(args.len());
         for &a in args {
             py_args.push(interpreted_function_arg(a, py)?);
         }
-        let result = callable.call1(py, PyTuple::new(py, py_args)?)?;
-        interpreted_function_result(result.bind(py), return_type)
+        match callable.call1(py, PyTuple::new(py, py_args)?) {
+            Ok(result) => interpreted_function_result(result.bind(py), return_type).map(Some),
+            Err(e) if e.is_instance_of::<PyZeroDivisionError>(py) => Ok(None),
+            Err(e) => Err(e),
+        }
     })
 }
 
@@ -205,12 +210,14 @@ struct IfCallKey {
 // warm across whatever else runs while it's suspended, rather than losing them to
 // an unrelated solve's start-of-run reset the way it used to.
 //
-// Errors are never cached (see the `?` before the insert below): a replayed
-// `PyErr` carries a stale traceback and could poison a callable that raises once
-// and later succeeds; the one path that expects errors (`heuristics.rs`'s
-// `for_each_new_value`, reached via `exp_can_be_true`, probing a partial
-// callable) aborts the whole solve on the first one anyway, so there's nothing
-// to amortize.
+// An undefined call (the callable raised `ZeroDivisionError`) is cached as
+// `None`, like a result: it is an expected outcome, which the search and the
+// heuristics evaluate again and again (e.g. `heuristics.rs`'s
+// `for_each_new_value`, HMaxExplicit, re-probes the same argument combination on
+// every heuristic evaluation). Any other error is never cached (see the `?`
+// before the insert below): a replayed `PyErr` carries a stale traceback, and
+// the error aborts the whole solve on the first one, so there's nothing to
+// amortize.
 //
 // Capped at `IF_RESULTS_CAPACITY` via a real LRU: entries now persist across a
 // whole solve rather than one encoding, so an unbounded map could grow across an
@@ -218,19 +225,20 @@ struct IfCallKey {
 const IF_RESULTS_CAPACITY: usize = 65_536;
 
 thread_local! {
-    static IF_RESULTS: RefCell<LruCache<IfCallKey, ExpressionNode>> =
+    static IF_RESULTS: RefCell<LruCache<IfCallKey, Option<ExpressionNode>>> =
         RefCell::new(LruCache::new(NonZeroUsize::new(IF_RESULTS_CAPACITY).unwrap()));
 }
 
 /// Calls the interpreted function registered under `func_id` with the given
 /// already-evaluated argument nodes, returning its result coerced to
-/// `return_type`. Memoized in `IF_RESULTS`: a hit returns the previously
-/// coerced result without touching Python at all.
+/// `return_type`, or `None` if the call is undefined (it raised
+/// `ZeroDivisionError`). Memoized in `IF_RESULTS`: a hit returns the
+/// previously coerced result, or `None`, without touching Python at all.
 pub fn call_interpreted_function(
     func_id: usize,
     return_type: IfReturnType,
     args: &[&ExpressionNode],
-) -> PyResult<ExpressionNode> {
+) -> PyResult<Option<ExpressionNode>> {
     let key = IfCallKey {
         func_id,
         return_type,
