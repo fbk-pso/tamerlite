@@ -1930,8 +1930,9 @@ class Encoder:
                 )
             else:
                 message = (
-                    "TamerLite keeps the events of a durative action at least "
-                    f"epsilon apart (epsilon = {self._epsilon}), so these actions "
+                    "TamerLite keeps the events of a durative action, and its "
+                    "end after its start, at least epsilon apart (epsilon = "
+                    f"{self._epsilon}), so these actions "
                     f"can never be applied and are ignored: {shown}{more}. Set a "
                     "smaller `Problem.epsilon`, or model them as instantaneous "
                     "actions, to allow them."
@@ -1956,7 +1957,10 @@ class Encoder:
         the most room the duration leaves; that is checked only against a
         constant upper bound on the duration (minus `epsilon` if right-open,
         as `SearchSpace` does), since any other bound is only known in a
-        state.
+        state. An action with no from-end event is held to the same test with
+        a gap of 0, between its start and its end: `SearchSpace` keeps a
+        durative action's end that far after its start too, so that its
+        duration is strictly positive.
 
         Such an action is never applicable rather than a reason to reject the
         problem: the plan may well not need it. UP already rejects a duration
@@ -1964,6 +1968,22 @@ class Encoder:
         grounding whose duration simplifies to one), so what reaches here is a
         positive duration too short for the action's events."""
         epsilon = self._epsilon
+
+        def too_short(gap: Fraction) -> bool:
+            """Whether the duration can't exceed `gap` by `epsilon`."""
+            # A cache hit: `_build_actions_duration` normalized this bound
+            # earlier on the same pass, and it is what the search evaluates.
+            upper = self._normalize_expression(a.duration.upper)
+            if not upper.is_constant():
+                return False
+            # The most room the duration leaves past `gap`. Under strict
+            # separation an open bound costs nothing: some duration in
+            # `(gap, upper)` exists exactly when `upper > gap`.
+            room = Fraction(upper.constant_value()) - gap
+            if a.duration.is_right_open() and epsilon is not None:
+                room -= epsilon
+            return _closer_than_epsilon(room, epsilon)
+
         for (t1, _), (t2, _) in pairwise(events):
             if t1.is_from_start() == t2.is_from_start():
                 if _closer_than_epsilon(t2.delay - t1.delay, epsilon):
@@ -1971,24 +1991,14 @@ class Encoder:
                         f"events at {_format_timing(t1)} and {_format_timing(t2)} "
                         "are closer than epsilon"
                     )
-                continue
-            # A cache hit: `_build_actions_duration` normalized this bound
-            # earlier on the same pass, and it is what the search evaluates.
-            upper = self._normalize_expression(a.duration.upper)
-            if not upper.is_constant():
-                continue
-            # The most room the duration leaves between the two events. Under
-            # strict separation an open bound costs nothing: some duration in
-            # `(gap, upper)` exists exactly when `upper > gap`.
-            room = Fraction(upper.constant_value()) - (t1.delay - t2.delay)
-            if a.duration.is_right_open() and epsilon is not None:
-                room -= epsilon
-            if _closer_than_epsilon(room, epsilon):
+            elif too_short(t1.delay - t2.delay):
                 return (
                     f"events at {_format_timing(t1)} and {_format_timing(t2)} "
                     f"are closer than epsilon for every duration {a.duration} "
                     "allows"
                 )
+        if events[-1][0].is_from_start() and too_short(Fraction(0)):
+            return f"its duration {a.duration} is shorter than epsilon"
         return None
 
     def _events_from_buckets(

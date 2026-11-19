@@ -149,6 +149,10 @@ _HALF = Fraction(1, 2)
             False,
             id="right_open_past_gap",
         ),
+        pytest.param([0], [], 0, Fraction(1, 200), False, False, id="short_no_end"),
+        pytest.param(
+            [0], [], 0, Fraction(1, 200), True, False, id="short_no_end_right_open"
+        ),
     ],
 )
 def test_durative_events_closer_than_epsilon(
@@ -173,6 +177,76 @@ def test_durative_events_closer_than_epsilon(
         if a != encoder.timed_action
     }
     assert ("act" not in names) == dropped
+
+
+@pytest.mark.parametrize("right_open", [False, True], ids=["closed", "right_open"])
+def test_duration_shorter_than_epsilon_is_dropped(backend, right_open):
+    """An action with no event at its end still lasts at least the problem's
+    epsilon, so one whose constant upper bound is below it can never be
+    applied, and is dropped with a warning."""
+    problem = problems_generator.get_problem_durative_event_gaps(
+        [0], [], 0, Fraction(1, 200), right_open
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        encoder = _encode(_with_epsilon(problem, _EPS))
+    messages = [str(w.message) for w in caught if "never be applied" in str(w.message)]
+    assert len(messages) == 1
+    assert "shorter than epsilon" in messages[0]
+    names = {
+        encoder.get_action_name(a)
+        for a in encoder.applicable_actions
+        if a != encoder.timed_action
+    }
+    assert "act" not in names
+
+
+@pytest.mark.parametrize("epsilon", [None, _EPS], ids=["strict", "fixed"])
+@pytest.mark.parametrize("compression", [False, True], ids=["plain", "compressed"])
+@pytest.mark.parametrize("lower", [0, -1], ids=["zero", "negative"])
+def test_durative_action_lasts_more_than_zero(backend, lower, compression, epsilon):
+    """A durative action lasts strictly more than 0. One with no event at its
+    end and a lower bound `<= 0` lasts `δ` (1/100 here) without a problem
+    epsilon, and the problem's epsilon with one."""
+    problem = problems_generator.get_problem_durative_event_gaps([0], [], lower, 5)
+    if epsilon is not None:
+        problem = _with_epsilon(problem, epsilon)
+    res = _solve(problem, compression_safe_actions=compression)
+    assert res.status == ResultStatus.SOLVED_SATISFICING
+    _assert_valid(problem, res.plan)
+    assert _timed_actions(res.plan) == [(0, "act", Fraction(1, 100))]
+
+
+@pytest.mark.parametrize("epsilon", [None, _EPS], ids=["strict", "fixed"])
+def test_fluent_duration_must_be_positive(backend, epsilon):
+    """A duration that is 0 in a state makes the action inapplicable there:
+    `act` (duration `dur`, initially 0) can only start once `set_dur` has set
+    `dur` to 2."""
+    problem = problems_generator.get_problem_durative_event_gaps(
+        [0], [], None, None, dur_initial=0
+    )
+    if epsilon is not None:
+        problem = _with_epsilon(problem, epsilon)
+    res = _solve(problem, compression_safe_actions=False)
+    assert res.status == ResultStatus.SOLVED_SATISFICING
+    _assert_valid(problem, res.plan)
+    [(set_start, set_name, _), (act_start, act_name, act_duration)] = _timed_actions(
+        res.plan
+    )
+    assert (set_name, act_name, act_duration) == ("set_dur", "act", 2)
+    assert set_start < act_start
+
+
+@pytest.mark.parametrize("epsilon", [None, _EPS], ids=["strict", "fixed"])
+def test_timed_action_may_last_zero(backend, epsilon):
+    """The timed action is exempt from the positive duration: with timed
+    effects only at time 0, its duration is 0."""
+    problem = problems_generator.get_problem_timed_effects_only_at_zero()
+    if epsilon is not None:
+        problem = _with_epsilon(problem, epsilon)
+    res = _solve(problem)
+    assert res.status == ResultStatus.SOLVED_SATISFICING
+    _assert_valid(problem, res.plan)
 
 
 def test_open_duration_bounds_are_strict(backend):
@@ -319,6 +393,10 @@ def test_anytime_makespan_terminates_optimally(backend, shortcut, expected):
         ),
         pytest.param(
             problems_generator.get_problem_timed_effects_window, id="timed_window"
+        ),
+        pytest.param(
+            lambda: problems_generator.get_problem_durative_event_gaps([0], [], 0, 5),
+            id="no_end_event",
         ),
     ],
 )
