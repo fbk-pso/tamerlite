@@ -421,6 +421,11 @@ that divides: `not (10 / d <= 1)` with `d = 0` is false, not true. Postfix
 evaluation computes every operand before `and`/`or` combine them, so a guard
 such as `or(d == 0, 10 / d >= 2)` is false too when `d = 0`.
 
+An undefined interpreted-function call is memoized as undefined, in
+`IF_RESULTS` (`None`) and `Converter._if_cache` (`_UNDEFINED`), so it reaches
+Python once per argument combination; any other error from it is never
+cached.
+
 The heuristics follow the same rule:
 - hff/hadd/hmax give an undefined condition the "false" cost (1), never `inf`:
   its operands can change, so `inf` would report a false dead end.

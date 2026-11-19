@@ -74,6 +74,12 @@ def _unresolvable_fluent_error(expression: FNode) -> Exception:
 IF_CACHE_CAPACITY = 65_536
 
 
+# What `Converter._if_cache` holds for an undefined call, one that raised
+# `ZeroDivisionError`: a cache hit raises a fresh one instead of replaying the
+# old exception and its traceback.
+_UNDEFINED = object()
+
+
 def new_if_cache() -> MutableMapping[tuple[InterpretedFunction, tuple], Any]:
     """Fresh, LRU-bounded interpreted-function result cache. A plain `dict`
     also works anywhere this is accepted (only `[]`/`in`/assignment are ever
@@ -353,7 +359,9 @@ class Converter(DagWalker):
         backend's `IF_RESULTS` (keyed on the wrapper's `func_id`) persist
         across re-encodes. Never safe across unrelated problems/solves.
 
-        Assumes interpreted functions are deterministic and side-effect-free.
+        Assumes interpreted functions are deterministic and side-effect-free,
+        which also makes it sound to memoize an undefined call (one raising
+        `ZeroDivisionError`) as `_UNDEFINED`.
         """
         cached = self._if_wrappers.get(interpreted_function)
         if cached is not None:
@@ -399,8 +407,19 @@ class Converter(DagWalker):
                 if cache_key in if_cache:
                     raw_result = if_cache[cache_key]
                 else:
-                    raw_result = interpreted_function.function(*real_args)
+                    try:
+                        raw_result = interpreted_function.function(*real_args)
+                    except ZeroDivisionError:
+                        # Undefined: an expected outcome, memoized like a
+                        # result. Any other error is never cached.
+                        if_cache[cache_key] = _UNDEFINED
+                        raise
                     if_cache[cache_key] = raw_result
+                if raw_result is _UNDEFINED:
+                    raise ZeroDivisionError(
+                        f"interpreted function `{interpreted_function.name}` "
+                        f"is undefined on {real_args}"
+                    )
             if wraps_result:
                 oid = (
                     object_ids.get(raw_result.name)

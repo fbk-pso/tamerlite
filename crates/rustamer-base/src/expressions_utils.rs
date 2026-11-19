@@ -533,6 +533,7 @@ pub fn simplify(
                     let operand_values: Vec<&ExpressionNode> =
                         operands.iter().map(|&p| &res[p]).collect();
                     call_interpreted_function(func_id, return_type, &operand_values)?
+                        .ok_or_else(|| PyZeroDivisionError::new_err("division by zero"))?
                 } else {
                     e.v
                 }
@@ -654,12 +655,12 @@ pub fn internal_evaluate(
     Ok(evaluate_into(exp, fluent_values, &mut res)?)
 }
 
-/// Why an evaluation failed. A division by zero in the expression itself
-/// is `DivByZero`, so `internal_evaluate_defined` can report it as
+/// Why an evaluation failed. A division by zero, in the expression itself
+/// or inside an interpreted function (`call_interpreted_function` returns
+/// `None`), is `DivByZero`, so `internal_evaluate_defined` can report it as
 /// undefined without building, normalizing and type-checking a Python
 /// exception; it only becomes a `PyZeroDivisionError` when converted to a
-/// `PyErr`. Everything else, including a `ZeroDivisionError` raised inside
-/// an interpreted function, is `Py`.
+/// `PyErr`. Everything else is `Py`.
 enum EvalError {
     DivByZero,
     Py(PyErr),
@@ -743,6 +744,7 @@ fn evaluate_into(
             } => {
                 let args: Vec<&ExpressionNode> = operands.iter().map(|&p| &res[p]).collect();
                 call_interpreted_function(*func_id, *return_type, &args)?
+                    .ok_or(EvalError::DivByZero)?
             }
             other => (*other).clone(),
         };
@@ -786,12 +788,6 @@ pub fn internal_evaluate_into_defined(
     match evaluate_into(exp, fluent_values, res) {
         Ok(value) => Ok(Some(value)),
         Err(EvalError::DivByZero) => Ok(None),
-        // Only an interpreted function's own `ZeroDivisionError` gets here
-        Err(EvalError::Py(e))
-            if Python::attach(|py| e.is_instance_of::<PyZeroDivisionError>(py)) =>
-        {
-            Ok(None)
-        }
         Err(EvalError::Py(e)) => Err(e),
     }
 }

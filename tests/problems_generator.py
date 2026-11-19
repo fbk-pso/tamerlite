@@ -2775,6 +2775,40 @@ def get_problem_if_counting_chain(name: str, calls: list) -> Problem:
     return problem
 
 
+def get_problem_if_undefined_counting(calls: list) -> Problem:
+    """`use` needs `ten_over(d) >= 2`, where the interpreted function
+    `ten_over` computes `10 / d` and logs every `d` it's called with into
+    the caller-supplied `calls`. It raises `ZeroDivisionError`, i.e. is
+    undefined, while `d = 0`, the initial value: `use` waits for `set_d`
+    to make `d = 2`. Shows which values `ten_over` was called at, so a test
+    can check that an undefined call is memoized like a defined one."""
+
+    def ten_over(x):
+        calls.append(x)
+        return Fraction(10, x)
+
+    IF_ten_over = InterpretedFunction(
+        "ten_over", RealType(), OrderedDict(x=IntType()), ten_over
+    )
+    d = Fluent("d", IntType())
+    p = Fluent("p", BoolType())
+
+    set_d = InstantaneousAction("set_d")
+    set_d.add_precondition(Equals(d, 0))
+    set_d.add_effect(d, 2)
+
+    use = InstantaneousAction("use")
+    use.add_precondition(GE(IF_ten_over(d), 2))
+    use.add_effect(p, True)
+
+    problem = Problem("if_undefined_counting")
+    problem.add_fluent(d, default_initial_value=0)
+    problem.add_fluent(p, default_initial_value=False)
+    problem.add_actions([set_d, use])
+    problem.add_goal(p)
+    return problem
+
+
 def get_problem_metric_object_taint() -> Problem:
     T = UserType("T")
     t1, t2 = Object("t1", T), Object("t2", T)

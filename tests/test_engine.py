@@ -22,7 +22,7 @@ import re
 import threading
 import warnings
 import weakref
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from collections.abc import Callable
 from fractions import Fraction
 from functools import partial
@@ -4649,6 +4649,64 @@ def test_interpreted_function_cache_avoids_python_call():
             assert calls == [5, 5]
         else:
             assert calls == [5]
+
+
+def test_interpreted_function_cache_memoizes_undefined():
+    """A call that raises `ZeroDivisionError` is undefined, an expected
+    outcome, so `IF_RESULTS` memoizes it too: a second, identical call
+    raises again without touching Python. Any other error is never cached.
+    Like `test_interpreted_function_cache_avoids_python_call`, this
+    registers the raw callable, bypassing `Converter._if_cache`, so the
+    pure-Python core calls it every time."""
+
+    calls = []
+
+    def ten_over(x):
+        calls.append(x)
+        return Fraction(10, x)
+
+    for disable_rustamer in [True, False]:
+        reload_tamerlite(disable_rustamer)
+        from tamerlite.core import (
+            IfReturnType,
+            make_int_constant_node,
+            make_interpreted_function_node,
+            simplify,
+        )
+
+        calls.clear()
+        zero = make_int_constant_node(0)
+        if_node = make_interpreted_function_node(ten_over, IfReturnType.REAL, (0,))
+        exp = (zero, if_node)
+
+        for _ in range(2):
+            with pytest.raises(ZeroDivisionError):
+                simplify(exp, {}, evaluate_interpreted_functions=True)
+
+        assert calls == ([0, 0] if disable_rustamer else [0])
+
+
+@pytest.mark.parametrize("heuristic", ["hff", "hmax_explicit"])
+@pytest.mark.parametrize("disable_rustamer", [True, False])
+def test_undefined_interpreted_function_calls_are_memoized(disable_rustamer, heuristic):
+    """Within one solve, an interpreted function is called at most once per
+    argument value, also where it is undefined: in
+    `get_problem_if_undefined_counting`, `ten_over(0)` raises
+    `ZeroDivisionError` on the initial state, which the search and the
+    heuristic (HMaxExplicit re-probes it on every evaluation) evaluate
+    again and again."""
+    reload_tamerlite(disable_rustamer)
+    calls: list = []
+    problem = problems_generator.get_problem_if_undefined_counting(calls)
+    search = tamerlite.SearchParams(heuristic=heuristic)
+    with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+        res: PlanGenerationResult = planner.solve(problem, timeout=None)
+    assert res.status == ResultStatus.SOLVED_SATISFICING
+    solve_calls = list(calls)
+    with PlanValidator(problem_kind=problem.kind) as v:
+        assert v.validate(problem, res.plan)
+    assert 0 in solve_calls
+    assert max(Counter(solve_calls).values()) == 1, solve_calls
 
 
 def test_interpreted_function_cache_distinguishes_return_type():
