@@ -198,6 +198,8 @@ class SearchParams(HeuristicParams):
     max_len: float | None = None
     # With max_len: keep only the shortest plans found (the search is unchanged).
     keep_only_shortest_plans: bool = False
+    # With max_len: store at most this many plans, shortest first, earliest found on ties.
+    max_plans: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1230,6 +1232,7 @@ class TamerLite(
             timeout=timeout,
             memory_bounded=params.incomplete_memory_bounded_search,
             keep_only_shortest=params.keep_only_shortest_plans,
+            max_plans=params.max_plans,
         )
         timed_idx = encoder.timed_action.idx if encoder.timed_action else None
         plans = []

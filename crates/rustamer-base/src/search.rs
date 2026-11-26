@@ -1102,6 +1102,70 @@ pub fn wastar_search_memory_bounded<H: HeuristicTrait, S: SearchSpaceTrait>(
 /// timeout stopped the search.
 pub type EnumerateResult = (Vec<Vec<Action>>, FxHashMap<&'static str, String>, bool);
 
+/// A plan kept by `enumerate_search`, ordered by (length, discovery order) only.
+struct KeptPlan {
+    len: usize,
+    seq: usize,
+    path: Vec<Action>,
+}
+
+impl PartialEq for KeptPlan {
+    fn eq(&self, other: &Self) -> bool {
+        (self.len, self.seq) == (other.len, other.seq)
+    }
+}
+
+impl Eq for KeptPlan {}
+
+impl PartialOrd for KeptPlan {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for KeptPlan {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.len, self.seq).cmp(&(other.len, other.seq))
+    }
+}
+
+/// Plans stored during enumeration. With `max_plans`, keeps the shortest ones, and
+/// among equal lengths the earliest found: a new plan evicts the longest (latest)
+/// kept plan only if strictly shorter.
+struct PlanStore {
+    heap: BinaryHeap<KeptPlan>,
+    max_plans: Option<usize>,
+    keep_only_shortest: bool,
+}
+
+impl PlanStore {
+    fn offer(&mut self, path: Vec<Action>, seq: usize) {
+        let len = path.len();
+        if self.keep_only_shortest {
+            match self.heap.peek().map(|p| p.len) {
+                Some(l) if len > l => return,
+                Some(l) if len < l => self.heap.clear(),
+                _ => {}
+            }
+        }
+        let plan = KeptPlan { len, seq, path };
+        match self.max_plans {
+            Some(0) => {}
+            Some(k) if self.heap.len() >= k => {
+                if self.heap.peek().is_some_and(|top| len < top.len) {
+                    self.heap.pop();
+                    self.heap.push(plan);
+                }
+            }
+            _ => self.heap.push(plan),
+        }
+    }
+
+    fn into_plans(self) -> Vec<Vec<Action>> {
+        self.heap.into_sorted_vec().into_iter().map(|p| p.path).collect()
+    }
+}
+
 /// Plan enumeration (port of `rust_anytime`): records every goal path with at most
 /// `bound` events (first plan's length if `max_len` is inf), keeps expanding, and
 /// skips dedup so distinct paths to equal states are all enumerated.
@@ -1111,6 +1175,7 @@ fn enumerate_search<H, S, St, O>(
     timeout: Option<f32>,
     max_len: f64,
     keep_only_shortest: bool,
+    max_plans: Option<usize>,
     name: &str,
     strategy: &mut St,
     open: &mut O,
@@ -1122,24 +1187,27 @@ where
     O: OpenList<St::Item>,
 {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
-    let mut plans: Vec<Vec<Action>> = Vec::new();
+    let mut store = PlanStore {
+        heap: BinaryHeap::new(),
+        max_plans,
+        keep_only_shortest,
+    };
     let start = Instant::now();
     let Some(init) = ss.initial_state(None)? else {
         metrics.insert("expanded_states", 0.to_string());
-        return Ok((plans, metrics, false));
+        return Ok((Vec::new(), metrics, false));
     };
     let init = <St::Payload as StatePayload>::wrap(init);
     let init_h = match heuristic.eval(init.as_state(), ss)? {
         Some(v) => v,
         None => {
             metrics.insert("expanded_states", 0.to_string());
-            return Ok((plans, metrics, false));
+            return Ok((Vec::new(), metrics, false));
         }
     };
     open.push_item(strategy.root(init, init_h)?);
 
     let mut bound = max_len;
-    let mut shortest = usize::MAX;
     let mut plans_found: usize = 0;
     let mut expanded_states: usize = 0;
     let mut generated_states: usize = 1;
@@ -1160,15 +1228,9 @@ where
                     bound = path.len() as f64;
                     metrics.insert("first_plan_length", path.len().to_string());
                 }
+                // What is stored never changes the search itself.
+                store.offer(path, plans_found);
                 plans_found += 1;
-                // keep_only_shortest stores only the shortest plans; the search itself is unchanged.
-                if keep_only_shortest && path.len() < shortest {
-                    plans.clear();
-                    shortest = path.len();
-                }
-                if !keep_only_shortest || path.len() == shortest {
-                    plans.push(path);
-                }
             }
         }
 
@@ -1191,6 +1253,7 @@ where
             generated_states += 1;
         }
     }
+    let plans = store.into_plans();
     info!(
         "{}: {} plans found, {} kept, expanded={} timed_out={}",
         name,
@@ -1215,6 +1278,7 @@ pub fn wastar_search_enumerate<H: HeuristicTrait, S: SearchSpaceTrait>(
     timeout: Option<f32>,
     memory_bounded: bool,
     keep_only_shortest: bool,
+    max_plans: Option<usize>,
 ) -> PyResult<EnumerateResult> {
     info!(
         "wastar_search_enumerate: weight={} max_len={} timeout={:?} memory_bounded={}",
@@ -1230,6 +1294,7 @@ pub fn wastar_search_enumerate<H: HeuristicTrait, S: SearchSpaceTrait>(
             timeout,
             max_len,
             keep_only_shortest,
+            max_plans,
             "wastar_search_enumerate",
             &mut strategy,
             &mut open,
@@ -1243,6 +1308,7 @@ pub fn wastar_search_enumerate<H: HeuristicTrait, S: SearchSpaceTrait>(
             timeout,
             max_len,
             keep_only_shortest,
+            max_plans,
             "wastar_search_enumerate",
             &mut strategy,
             &mut open,

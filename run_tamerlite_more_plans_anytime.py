@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Enumerate all plans with at most max_len events (inf: length of the first plan found).
 # Usage: python3 run_tamerlite_more_plans_anytime.py --problem P.anml --heuristic hadd \
-#            --timeout 600 --max_len inf --output plans.csv [--symmetry_breaking]
+#            --timeout 600 --max_len inf --output plans.csv [--symmetry_breaking] [--max_plans 500|inf]
 
 import argparse
 import csv
@@ -28,6 +28,8 @@ def main():
     parser.add_argument("--weight", default=0.8, type=float)
     parser.add_argument("--symmetry_breaking", action="store_true")
     parser.add_argument("--keep_only_shortest", action="store_true")
+    parser.add_argument("--max_plans", default="500",
+                        help="plans stored: shortest first, earliest on ties ('inf' = all)")
     args = parser.parse_args()
 
     if args.problem.endswith(".anml"):
@@ -44,6 +46,7 @@ def main():
         incomplete_memory_bounded_search=True,
         symmetry_breaking=args.symmetry_breaking,
         keep_only_shortest_plans=args.keep_only_shortest,
+        max_plans=None if args.max_plans == "inf" else int(args.max_plans),
     )
     with OneshotPlanner(name="tamerlite", params={"search": params}) as planner:
         res = planner.solve(problem, timeout=args.timeout)
