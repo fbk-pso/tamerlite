@@ -205,6 +205,25 @@ where
         self.is_sat
     }
 
+    /// Every constraint `(x, y, b)`, meaning `t(x) - t(y) <= b`, as added
+    /// (a pair can appear more than once; the tightest bound is the minimum).
+    /// For consumers that need more than the one schedule in `distances`,
+    /// such as all-pairs bounds between selected time points.
+    pub fn constraints(&self) -> impl Iterator<Item = (T, T, Q)> + '_
+    where
+        Q: Clone,
+    {
+        self.constraints.iter().flat_map(|(x, neighbors)| {
+            let mut out = Vec::new();
+            let mut current = neighbors.as_ref();
+            while let Some(n) = current {
+                out.push((*x, n.dst, n.bound.clone()));
+                current = n.next.as_ref();
+            }
+            out
+        })
+    }
+
     pub fn get_model_value(&self, x: &T) -> Option<Q> {
         self.distances.get(x).map(|v| -v.clone())
     }
