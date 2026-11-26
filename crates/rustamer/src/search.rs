@@ -241,7 +241,7 @@ pub fn novbfs_search_memory_bounded(
 }
 
 #[pyfunction]
-#[pyo3(signature = (ss, heuristics, timeout=None, max_expanded_states=None, early_termination=false, weak_equality=false))]
+#[pyo3(signature = (ss, heuristics, timeout=None, max_expanded_states=None, early_termination=false, weak_equality=false, show_expansion_progress=false))]
 pub fn multiqueue_search(
     ss: &rustamer_base::SearchSpace,
     heuristics: Vec<(Heuristic, f64)>,
@@ -249,6 +249,7 @@ pub fn multiqueue_search(
     max_expanded_states: Option<usize>,
     early_termination: bool,
     weak_equality: bool,
+    show_expansion_progress: bool,
 ) -> PyResult<SearchResult> {
     rustamer_base::multiqueue_search(
         ss,
@@ -257,5 +258,6 @@ pub fn multiqueue_search(
         max_expanded_states,
         early_termination,
         weak_equality,
+        show_expansion_progress,
     )
 }

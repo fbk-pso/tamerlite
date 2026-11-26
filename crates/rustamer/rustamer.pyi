@@ -335,6 +335,8 @@ def multiqueue_search(
     ss: SearchSpace,
     heuristics: list[tuple[Heuristic, float]],
     timeout: float | None = ...,
+    max_expanded_states: int | None = ...,
     early_termination: bool = ...,
     weak_equality: bool = ...,
+    show_expansion_progress: bool = ...,
 ) -> SearchResult: ...
