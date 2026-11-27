@@ -567,6 +567,15 @@ impl<S: SearchSpaceTrait> DedupStore<Rc<State>> for VisitedStates<'_, S> {
     }
 }
 
+/// Exact dedup for the owned states of a bounded open list (plan enumeration
+/// without the Bloom filter): each recorded state is a clone, so memory grows
+/// with the visited states however small the open list is kept.
+impl<S: SearchSpaceTrait> DedupStore<State> for VisitedStates<'_, S> {
+    fn insert_new(&mut self, s: &State) -> bool {
+        self.insert(&Rc::new(s.full_clone()))
+    }
+}
+
 struct BloomDedup {
     policy: DedupPolicy,
     timed_action: Option<Action>,
@@ -1162,14 +1171,33 @@ impl PlanStore {
     }
 
     fn into_plans(self) -> Vec<Vec<Action>> {
-        self.heap.into_sorted_vec().into_iter().map(|p| p.path).collect()
+        self.heap
+            .into_sorted_vec()
+            .into_iter()
+            .map(|p| p.path)
+            .collect()
+    }
+}
+
+/// The dedup store of an enumeration that keeps every state, so distinct paths
+/// to equal states are all enumerated.
+struct NoDedup;
+
+impl<P> DedupStore<P> for NoDedup {
+    fn insert_new(&mut self, _: &P) -> bool {
+        true
     }
 }
 
 /// Plan enumeration (port of `rust_anytime`): records every goal path with at most
-/// `bound` events (first plan's length if `max_len` is inf), keeps expanding, and
-/// skips dedup so distinct paths to equal states are all enumerated.
-fn enumerate_search<H, S, St, O>(
+/// `bound` events (first plan's length if `max_len` is inf) and keeps expanding.
+///
+/// `dedup` prunes visited states as in `rust_anytime`: under `DedupPolicy::All`
+/// (a classical problem, or `weak_equality`) it is the store of the oneshot
+/// search, so up to the first plan this is that search; otherwise it is
+/// `NoDedup`. A successor is recorded before the bound check, as `rust_anytime` did.
+#[allow(clippy::too_many_arguments)]
+fn enumerate_search<H, S, St, O, D>(
     ss: &S,
     heuristic: &H,
     timeout: Option<f32>,
@@ -1179,12 +1207,14 @@ fn enumerate_search<H, S, St, O>(
     name: &str,
     strategy: &mut St,
     open: &mut O,
+    dedup: &mut D,
 ) -> PyResult<EnumerateResult>
 where
     H: HeuristicTrait,
     S: SearchSpaceTrait,
     St: SearchStrategy,
     O: OpenList<St::Item>,
+    D: DedupStore<St::Payload>,
 {
     let mut metrics = FxHashMap::with_hasher(FxBuildHasher);
     let mut store = PlanStore {
@@ -1198,6 +1228,8 @@ where
         return Ok((Vec::new(), metrics, false));
     };
     let init = <St::Payload as StatePayload>::wrap(init);
+    // Seed the dedup store; return discarded, the root is never re-checked.
+    dedup.insert_new(&init);
     let init_h = match heuristic.eval(init.as_state(), ss)? {
         Some(v) => v,
         None => {
@@ -1237,8 +1269,11 @@ where
         let successors_iter = ss
             .get_successor_states_iter(state)
             .filter_map(|rs| match rs {
-                Ok(s) if s.g <= bound => Some(Ok(<St::Payload as StatePayload>::wrap(s))),
-                Ok(_) => None,
+                Ok(s) => {
+                    let s = <St::Payload as StatePayload>::wrap(s);
+                    let keep = dedup.insert_new(&s);
+                    (keep && s.as_state().g <= bound).then_some(Ok(s))
+                }
                 Err(e) => Some(Err(e)),
             });
 
@@ -1269,7 +1304,11 @@ where
 }
 
 /// Weighted-A* plan enumeration (see `enumerate_search`); `memory_bounded`
-/// selects the bounded open list of `wastar_search_memory_bounded`.
+/// selects the bounded open list and Bloom dedup of `wastar_search_memory_bounded`,
+/// otherwise the open list and dedup of `wastar_search`. With `memory_bounded`,
+/// `bloom_dedup = false` swaps the Bloom filter for the exact `VisitedStates`
+/// (no false positives, memory unbounded).
+#[allow(clippy::too_many_arguments)]
 pub fn wastar_search_enumerate<H: HeuristicTrait, S: SearchSpaceTrait>(
     ss: &S,
     heuristic: &H,
@@ -1279,40 +1318,93 @@ pub fn wastar_search_enumerate<H: HeuristicTrait, S: SearchSpaceTrait>(
     memory_bounded: bool,
     keep_only_shortest: bool,
     max_plans: Option<usize>,
+    weak_equality: bool,
+    bloom_dedup: bool,
 ) -> PyResult<EnumerateResult> {
+    // `rust_anytime` dedups exactly where the oneshot policy dedups every state.
+    let dedup_all = DedupPolicy::new(ss, weak_equality) == DedupPolicy::All;
     info!(
-        "wastar_search_enumerate: weight={} max_len={} timeout={:?} memory_bounded={}",
-        weight, max_len, timeout, memory_bounded
+        "wastar_search_enumerate: weight={} max_len={} timeout={:?} memory_bounded={} dedup={} bloom_dedup={}",
+        weight, max_len, timeout, memory_bounded, dedup_all, bloom_dedup
     );
+    const NAME: &str = "wastar_search_enumerate";
     if memory_bounded {
         let mut strategy = WAStarStrategy::<State>::new(weight);
         let mut open: BoundedPriorityQueue<PrioritizedItem<State>> =
             BoundedPriorityQueue::with_bound(QUEUE_BOUND);
-        enumerate_search(
-            ss,
-            heuristic,
-            timeout,
-            max_len,
-            keep_only_shortest,
-            max_plans,
-            "wastar_search_enumerate",
-            &mut strategy,
-            &mut open,
-        )
+        if dedup_all && bloom_dedup {
+            let mut dedup = BloomDedup::new(ss, weak_equality);
+            enumerate_search(
+                ss,
+                heuristic,
+                timeout,
+                max_len,
+                keep_only_shortest,
+                max_plans,
+                NAME,
+                &mut strategy,
+                &mut open,
+                &mut dedup,
+            )
+        } else if dedup_all {
+            let mut dedup = VisitedStates::new(ss, weak_equality);
+            enumerate_search(
+                ss,
+                heuristic,
+                timeout,
+                max_len,
+                keep_only_shortest,
+                max_plans,
+                NAME,
+                &mut strategy,
+                &mut open,
+                &mut dedup,
+            )
+        } else {
+            enumerate_search(
+                ss,
+                heuristic,
+                timeout,
+                max_len,
+                keep_only_shortest,
+                max_plans,
+                NAME,
+                &mut strategy,
+                &mut open,
+                &mut NoDedup,
+            )
+        }
     } else {
         let mut strategy = WAStarStrategy::<Rc<State>>::new(weight);
         let mut open: BinaryHeap<PrioritizedItem<Rc<State>>> = BinaryHeap::new();
-        enumerate_search(
-            ss,
-            heuristic,
-            timeout,
-            max_len,
-            keep_only_shortest,
-            max_plans,
-            "wastar_search_enumerate",
-            &mut strategy,
-            &mut open,
-        )
+        if dedup_all {
+            let mut dedup = VisitedStates::new(ss, weak_equality);
+            enumerate_search(
+                ss,
+                heuristic,
+                timeout,
+                max_len,
+                keep_only_shortest,
+                max_plans,
+                NAME,
+                &mut strategy,
+                &mut open,
+                &mut dedup,
+            )
+        } else {
+            enumerate_search(
+                ss,
+                heuristic,
+                timeout,
+                max_len,
+                keep_only_shortest,
+                max_plans,
+                NAME,
+                &mut strategy,
+                &mut open,
+                &mut NoDedup,
+            )
+        }
     }
 }
 

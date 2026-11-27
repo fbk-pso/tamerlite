@@ -17,6 +17,7 @@
 
 import contextlib
 import gc
+import itertools
 import os
 import re
 import threading
@@ -1784,6 +1785,67 @@ def test_anytime_incomplete_search_never_claims_optimality(
 
     assert results[-1].status == expected_status
     assert results[-1].plan is not None
+
+
+def _line_problem(n_cells: int) -> Problem:
+    """A robot walks from the first to the last of `n_cells` cells in a row;
+    every move can be undone, so the search graph has cycles."""
+    cell = UserType("Cell")
+    at = Fluent("at", BoolType(), c=cell)
+    adjacent = Fluent("adjacent", BoolType(), a=cell, b=cell)
+    move = InstantaneousAction("move", a=cell, b=cell)
+    move.add_precondition(at(move.parameter("a")))
+    move.add_precondition(adjacent(move.parameter("a"), move.parameter("b")))
+    move.add_effect(at(move.parameter("a")), False)
+    move.add_effect(at(move.parameter("b")), True)
+    problem = Problem("line")
+    problem.add_fluent(at, default_initial_value=False)
+    problem.add_fluent(adjacent, default_initial_value=False)
+    problem.add_action(move)
+    cells = [Object(f"c{i}", cell) for i in range(n_cells)]
+    problem.add_objects(cells)
+    for a, b in itertools.pairwise(cells):
+        problem.set_initial_value(adjacent(a, b), True)
+        problem.set_initial_value(adjacent(b, a), True)
+    problem.set_initial_value(at(cells[0]), True)
+    problem.add_goal(at(cells[-1]))
+    return problem
+
+
+@pytest.mark.parametrize(
+    "memory_bounded,bloom_dedup", [(False, True), (True, True), (True, False)]
+)
+def test_enumeration_dedups_classical_states(memory_bounded, bloom_dedup):
+    """On a classical problem the plan enumeration dedups visited states as the
+    oneshot search does (as `rust_anytime` did): every state is expanded at
+    most once, and the first plan is the oneshot one. Without dedup, walks that
+    go back and forth inside the bound are expanded too. `bloom_dedup=False`
+    swaps the bounded search's Bloom filter for an exact visited set."""
+    reload_tamerlite(False)
+    if not tamerlite.core.use_rustamer:
+        pytest.skip("plan enumeration requires rustamer")
+    n_cells = 8
+    problem = _line_problem(n_cells)
+    common = {
+        "search": "wastar",
+        "heuristic": "hadd",
+        "incomplete_memory_bounded_search": memory_bounded,
+    }
+    with OneshotPlanner(
+        name="tamerlite", params={"search": tamerlite.SearchParams(**common)}
+    ) as planner:
+        oneshot = planner.solve(problem)
+    assert oneshot.plan is not None
+
+    search = tamerlite.SearchParams(
+        max_len=float("inf"), bloom_dedup=bloom_dedup, **common
+    )
+    with OneshotPlanner(name="tamerlite", params={"search": search}) as planner:
+        res = planner.solve(problem)
+    assert res.metrics is not None
+    assert int(res.metrics["first_plan_length"]) == len(oneshot.plan.actions)
+    assert [len(p) for p in res.metrics["plans"]] == [n_cells - 1]
+    assert int(res.metrics["expanded_states"]) <= n_cells
 
 
 def test_simplify():

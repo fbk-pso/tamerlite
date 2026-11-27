@@ -195,11 +195,17 @@ class SearchParams(HeuristicParams):
     incomplete_memory_bounded_search: bool = False
     # Plan enumeration for dataset generation: every plan with at most `max_len`
     # events goes to `metrics["plans"]`; `inf` bounds by the first plan found.
+    # Visited states are deduped as in the oneshot search on classical problems
+    # (or with `weak_equality`), so distinct paths to equal states are not all kept.
     max_len: float | None = None
     # With max_len: keep only the shortest plans found (the search is unchanged).
     keep_only_shortest_plans: bool = False
     # With max_len: store at most this many plans, shortest first, earliest found on ties.
     max_plans: int | None = None
+    # With max_len and incomplete_memory_bounded_search: False dedups through an
+    # exact visited set instead of the Bloom filter (no false positives; memory
+    # grows with the visited states, the open list stays bounded).
+    bloom_dedup: bool = True
 
 
 @dataclass(frozen=True)
@@ -1208,9 +1214,11 @@ class TamerLite(
     ) -> "up.engines.results.PlanGenerationResult":
         """Runs `wastar_search_enumerate` and stores every plan in
         `metrics["plans"]` as ground action names, one name per event (the
-        format of the `rust_anytime` branch). Status is TIMEOUT when the timeout
-        stopped the enumeration, UNSOLVABLE_INCOMPLETELY when the open list
-        emptied; `plan` is always None."""
+        format of the `rust_anytime` branch). Visited states are deduped as in
+        the oneshot search on classical problems (or with `weak_equality`), and
+        not at all otherwise. Status is TIMEOUT when the timeout stopped the
+        enumeration, UNSOLVABLE_INCOMPLETELY when the open list emptied; `plan`
+        is always None."""
         params = self._params
         assert isinstance(params, SearchParams) and params.max_len is not None
         if params.search != "wastar" or params.early_termination:
@@ -1233,6 +1241,8 @@ class TamerLite(
             memory_bounded=params.incomplete_memory_bounded_search,
             keep_only_shortest=params.keep_only_shortest_plans,
             max_plans=params.max_plans,
+            weak_equality=params.weak_equality,
+            bloom_dedup=params.bloom_dedup,
         )
         timed_idx = encoder.timed_action.idx if encoder.timed_action else None
         plans = []

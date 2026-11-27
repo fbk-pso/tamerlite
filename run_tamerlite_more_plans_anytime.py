@@ -2,6 +2,7 @@
 # Enumerate all plans with at most max_len events (inf: length of the first plan found).
 # Usage: python3 run_tamerlite_more_plans_anytime.py --problem P.anml --heuristic hadd \
 #            --timeout 600 --max_len inf --output plans.csv [--symmetry_breaking] [--max_plans 500|inf]
+#            [--no_memory_bounded] [--no_bloom_dedup]
 
 import argparse
 import csv
@@ -28,6 +29,16 @@ def main():
     parser.add_argument("--weight", default=0.8, type=float)
     parser.add_argument("--symmetry_breaking", action="store_true")
     parser.add_argument("--keep_only_shortest", action="store_true")
+    parser.add_argument(
+        "--no_memory_bounded",
+        action="store_true",
+        help="unbounded open list with exact dedup, as TamerLite's default search",
+    )
+    parser.add_argument(
+        "--no_bloom_dedup",
+        action="store_true",
+        help="exact visited-state dedup instead of the Bloom filter (unbounded memory)",
+    )
     parser.add_argument("--max_plans", default="500",
                         help="plans stored: shortest first, earliest on ties ('inf' = all)")
     args = parser.parse_args()
@@ -43,9 +54,10 @@ def main():
         heuristic=args.heuristic,
         weight=args.weight,
         max_len=float(args.max_len),
-        incomplete_memory_bounded_search=True,
+        incomplete_memory_bounded_search=not args.no_memory_bounded,
         symmetry_breaking=args.symmetry_breaking,
         keep_only_shortest_plans=args.keep_only_shortest,
+        bloom_dedup=not args.no_bloom_dedup,
         max_plans=None if args.max_plans == "inf" else int(args.max_plans),
     )
     with OneshotPlanner(name="tamerlite", params={"search": params}) as planner:
